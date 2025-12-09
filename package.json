@@ -16,7 +16,8 @@
     "build": "react-scripts build",
     "test": "react-scripts test",
     "eject": "react-scripts eject",
-    "serve": "node server.js"
+    "serve": "node server.js",
+    "fix-structure": "mkdir -p src public && [ -f index.html ] && mv index.html public/ || true && [ -f metadata.json ] && mv metadata.json public/ || true && [ -f App.tsx ] && mv *.tsx *.ts components utils src/ || true"
   },
   "eslintConfig": {
     "extends": [

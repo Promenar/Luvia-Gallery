@@ -1,8 +1,8 @@
-import { HTMLAttributes } from 'react';
+import 'react';
 
 // Extend React HTML attributes to support webkitdirectory
 declare module 'react' {
-  interface InputHTMLAttributes<T> extends HTMLAttributes<T> {
+  interface InputHTMLAttributes<T> {
     webkitdirectory?: string;
     directory?: string;
   }
@@ -51,6 +51,8 @@ export interface AppConfig {
   users: User[];
   // We only store source metadata, not the file blobs themselves due to browser security
   userSources: Record<string, {id: string, name: string, count: number}[]>; 
+  // List of relative paths within MEDIA_ROOT to scan
+  libraryPaths?: string[];
   lastModified: number;
 }
 

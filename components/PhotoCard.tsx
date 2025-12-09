@@ -38,7 +38,7 @@ export const MediaCard: React.FC<MediaCardProps> = ({ item, onClick, layout }) =
       exit={{ opacity: 0 }}
       whileHover={{ scale: 1.02, y: -2 }}
       transition={{ duration: 0.2 }}
-      className={`relative group cursor-pointer overflow-hidden rounded-xl bg-gray-200 shadow-sm hover:shadow-lg transition-shadow duration-300 ${layout === 'grid' ? 'aspect-square' : 'mb-4'}`}
+      className={`relative group cursor-pointer overflow-hidden rounded-xl bg-gray-200 dark:bg-gray-800 shadow-sm hover:shadow-lg transition-all duration-300 ${layout === 'grid' ? 'aspect-square' : 'mb-4'}`}
       onClick={() => onClick(item)}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}

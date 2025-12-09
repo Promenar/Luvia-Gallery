@@ -8,11 +8,20 @@ services:
     ports:
       - "3000:80"
     volumes:
-      # Map your NAS photo/video directory here
-      # Format: /path/on/nas:/media
+      # Map your NAS media folders here.
+      # You can map to subfolders of /media OR to arbitrary root folders.
+      # If you map to root folders (e.g. /photos), add "/photos" to Library Scan Paths in settings.
+      
+      # Example 1: Standard /media mapping
       - ./media_test:/media
       
-      # Persistence for config/database
+      # Example 2: Multiple Roots
+      # - /volume1/family_photos:/photos
+      # - /volume1/movies:/movies
+      
+      # Persistence for configuration
       - ./lumina-config.json:/app/lumina-config.json
     environment:
       - NODE_ENV=production
+      # Default fallback root if no paths configured
+      - MEDIA_ROOT=/media

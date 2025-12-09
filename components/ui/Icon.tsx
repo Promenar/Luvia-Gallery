@@ -24,7 +24,9 @@ import {
   Download,
   FileJson,
   RefreshCw,
-  AlertTriangle
+  AlertTriangle,
+  Sun,
+  Moon
 } from 'lucide-react';
 
 export const Icons = {
@@ -53,5 +55,7 @@ export const Icons = {
   Download,
   FileJson,
   Refresh: RefreshCw,
-  Alert: AlertTriangle
+  Alert: AlertTriangle,
+  Sun,
+  Moon
 };
