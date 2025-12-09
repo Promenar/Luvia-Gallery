@@ -1,0 +1,5 @@
+{
+  "name": "Lumina Gallery",
+  "description": "A Material Design inspired photo organizer that allows local folder scanning with masonry and grid layouts.",
+  "requestFramePermissions": []
+}
