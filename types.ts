@@ -56,7 +56,7 @@ export interface AppConfig {
   lastModified: number;
 }
 
-export type ViewMode = 'all' | 'folders';
+export type ViewMode = 'home' | 'all' | 'folders';
 export type GridLayout = 'grid' | 'masonry';
 export type SortOption = 'dateDesc' | 'dateAsc' | 'nameAsc' | 'nameDesc' | 'sizeDesc';
 export type FilterOption = 'all' | 'image' | 'video';

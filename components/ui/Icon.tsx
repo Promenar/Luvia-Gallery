@@ -32,7 +32,10 @@ import {
   Loader2,
   ZoomIn,
   ZoomOut,
-  List
+  List,
+  Home,
+  Minus,
+  Minimize2
 } from 'lucide-react';
 
 export const Icons = {
@@ -46,6 +49,8 @@ export const Icons = {
   ChevronRight,
   Menu,
   Maximize: Maximize2,
+  Minimize: Minimize2,
+  Minus,
   More: MoreVertical,
   Settings,
   Video,
@@ -69,5 +74,6 @@ export const Icons = {
   Loader: Loader2,
   ZoomIn,
   ZoomOut,
-  List
+  List,
+  Home
 };

@@ -64,7 +64,8 @@ const scanDirectoryAsync = async (baseDir, currentSubDir = '', rootAlias = '') =
     let results = [];
     const fullPathToScan = path.join(baseDir, currentSubDir);
     
-    scanJob.currentPath = path.join(rootAlias, currentSubDir);
+    // Safety check for currentPath assignment
+    scanJob.currentPath = path.join(rootAlias || '', currentSubDir || '');
 
     try {
         const dirExists = await fs.promises.access(fullPathToScan).then(() => true).catch(() => false);
@@ -117,21 +118,42 @@ const scanDirectoryAsync = async (baseDir, currentSubDir = '', rootAlias = '') =
     return results;
 };
 
+// Helper to format an item for API response
+const formatItemForClient = (f) => {
+    if (!f || !f.path) return null;
+
+    try {
+        const dir = path.dirname(f.path);
+        // Normalize folderPath to match frontend "path/to/folder" format.
+        const normalizedFolder = (dir === '.' ? '' : dir).replace(/\\/g, '/').replace(/^\//, '');
+        const streamPath = f.streamPath || f.path; // Fallback
+
+        return {
+            id: Buffer.from(streamPath).toString('base64'),
+            url: `/media-stream/${encodeURIComponent(streamPath)}`,
+            name: f.name || 'Unknown',
+            path: f.path,
+            folderPath: normalizedFolder,
+            size: f.size || 0,
+            type: f.type || 'application/octet-stream',
+            lastModified: f.lastModified || Date.now(),
+            mediaType: (f.type && f.type.startsWith('video/')) ? 'video' : 'image',
+            sourceId: 'nas-mixed' 
+        };
+    } catch (e) {
+        console.error("Error formatting item", f, e);
+        return null;
+    }
+};
+
 // --- API Endpoints ---
 
 // File System Autocomplete
 app.get('/api/fs/list', async (req, res) => {
     const queryPath = req.query.path || '/';
     
-    // Security check: In a real app, you might want to restrict this to MEDIA_ROOT
-    // For this app (NAS Viewer), we generally assume the container has access to what it needs.
-    // However, we should ensure we don't crash on permission errors.
-    
     try {
         const resolvedPath = path.normalize(queryPath);
-        
-        // Simple check to prevent traversing up out of root if needed, 
-        // but for a dockerized NAS viewer, usually absolute paths are valid.
         
         const stats = await fs.promises.stat(resolvedPath);
         if (!stats.isDirectory()) {
@@ -147,7 +169,7 @@ app.get('/api/fs/list', async (req, res) => {
         res.json({ dirs });
     } catch (e) {
         console.error(`FS List error for ${queryPath}:`, e.message);
-        res.json({ dirs: [] }); // Return empty on error (permission denied, not found, etc)
+        res.json({ dirs: [] }); 
     }
 });
 
@@ -155,13 +177,24 @@ app.get('/api/fs/list', async (req, res) => {
 app.get('/api/config', (req, res) => {
   if (fs.existsSync(CONFIG_FILE)) {
     try {
-      const config = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+      const content = fs.readFileSync(CONFIG_FILE, 'utf8');
+      // Handle empty file
+      if (!content || content.trim() === '') {
+          return res.json({ configured: false });
+      }
+      const config = JSON.parse(content);
+      // Ensure we never return null if the file content was "null"
+      if (!config || typeof config !== 'object') {
+          return res.json({ configured: false });
+      }
       res.json(config);
     } catch (e) {
-      res.status(500).json({ error: 'Config file corrupted' });
+      console.error("Config read error", e);
+      res.json({ configured: false }); // Return safe default on error instead of 500
     }
   } else {
-    res.json(null);
+    // Return object instead of null to prevent "Unexpected non-whitespace character after JSON at position 4"
+    res.json({ configured: false });
   }
 });
 
@@ -198,7 +231,8 @@ app.post('/api/scan/start', async (req, res) => {
         let config = {};
         try {
             if (fs.existsSync(CONFIG_FILE)) {
-                config = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+                const content = fs.readFileSync(CONFIG_FILE, 'utf8');
+                if (content.trim()) config = JSON.parse(content);
             }
         } catch (e) {}
 
@@ -211,6 +245,8 @@ app.post('/api/scan/start', async (req, res) => {
         for (const pathInput of pathsToScan) {
              await checkControl();
              
+             if (!pathInput) continue;
+
              const isAbsolute = pathInput.startsWith('/');
              const absoluteScanPath = isAbsolute ? pathInput : path.join(MEDIA_ROOT, pathInput);
              const normalized = path.normalize(absoluteScanPath);
@@ -244,11 +280,18 @@ app.post('/api/scan/start', async (req, res) => {
 });
 
 app.get('/api/scan/status', (req, res) => {
-    res.json({
-        status: scanJob.status,
-        count: scanJob.count,
-        currentPath: scanJob.currentPath
-    });
+    // Defensive coding to prevent returning null or undefined which can break JSON parsing on client
+    try {
+        const statusData = {
+            status: (scanJob && scanJob.status) ? scanJob.status : 'idle',
+            count: (scanJob && typeof scanJob.count === 'number') ? scanJob.count : 0,
+            currentPath: (scanJob && scanJob.currentPath) ? scanJob.currentPath : ''
+        };
+        res.json(statusData);
+    } catch(e) {
+        console.error("Error sending status:", e);
+        res.json({ status: 'error', count: 0, currentPath: '' });
+    }
 });
 
 app.post('/api/scan/control', (req, res) => {
@@ -267,52 +310,100 @@ app.post('/api/scan/control', (req, res) => {
 });
 
 app.get('/api/scan/results', (req, res) => {
-    const offset = parseInt(req.query.offset) || 0;
-    const limit = parseInt(req.query.limit) || 1000;
+    try {
+        const offset = parseInt(req.query.offset) || 0;
+        const limit = parseInt(req.query.limit) || 1000;
+        // Distinguish between undefined (all folders) and empty string (root folder)
+        let folderFilter = null;
+        if (req.query.folder !== undefined) {
+            folderFilter = req.query.folder;
+        }
 
-    // Apply simple pagination slice to memory array
-    const slicedItems = scanJob.items.slice(offset, offset + limit);
-    const total = scanJob.items.length;
+        let filteredItems = (scanJob && scanJob.items) ? scanJob.items : [];
+        
+        // Server-side folder filtering to support folder navigation without loading everything
+        if (folderFilter !== null) {
+            filteredItems = filteredItems.filter(f => {
+                if (!f || !f.path) return false;
+                try {
+                    const dir = path.dirname(f.path);
+                    const normalizedFolder = (dir === '.' ? '' : dir).replace(/\\/g, '/').replace(/^\//, '');
+                    return normalizedFolder === folderFilter;
+                } catch(e) { return false; }
+            });
+        }
 
-    // Process items for frontend (generate base64 IDs etc)
-    const processedItems = slicedItems.map(f => {
-        const dir = path.dirname(f.path);
-        // CRITICAL FIX: Normalize folderPath to match frontend "path/to/folder" format.
-        // Node's path.dirname might return "/media" or "media".
-        // Frontend utils split by '/' and filter empty strings, so "/media" becomes "media".
-        // We must remove leading slash and ensure forward slashes.
-        const normalizedFolder = (dir === '.' ? '' : dir).replace(/\\/g, '/').replace(/^\//, '');
+        // Apply simple pagination slice to memory array
+        const slicedItems = filteredItems.slice(offset, offset + limit);
+        const total = filteredItems.length;
 
-        return {
-            id: Buffer.from(f.streamPath).toString('base64'),
-            url: `/media-stream/${encodeURIComponent(f.streamPath)}`,
-            name: f.name,
-            path: f.path,
-            folderPath: normalizedFolder,
-            size: f.size,
-            type: f.type,
-            lastModified: f.lastModified,
-            mediaType: f.type.startsWith('video/') ? 'video' : 'image',
-            // Associate with source based on path prefix logic or simplified assumption
-            sourceId: 'nas-mixed' 
-        };
-    });
+        // Process items for frontend (generate base64 IDs etc)
+        const processedItems = slicedItems.map(formatItemForClient).filter(i => i !== null);
 
-    // Better source association
-    const finalItems = processedItems.map(item => {
-        // Find which source this item belongs to
-        const source = scanJob.sources.find(s => item.path.startsWith(s.name));
-        return { ...item, sourceId: source ? source.id : 'nas-unknown' };
-    });
+        // Better source association
+        const sources = (scanJob && scanJob.sources) ? scanJob.sources : [];
+        const finalItems = processedItems.map(item => {
+            // Find which source this item belongs to
+            const source = sources.find(s => item.path.startsWith(s.name));
+            return { ...item, sourceId: source ? source.id : 'nas-unknown' };
+        });
 
-    res.json({
-        files: finalItems,
-        sources: scanJob.sources,
-        total: total,
-        offset: offset,
-        limit: limit,
-        hasMore: (offset + limit) < total
-    });
+        res.json({
+            files: finalItems,
+            sources: sources,
+            total: total,
+            offset: offset,
+            limit: limit,
+            hasMore: (offset + limit) < total
+        });
+    } catch (e) {
+        console.error("Results API Error", e);
+        res.status(500).json({ error: "Internal Server Error during fetch" });
+    }
+});
+
+// Endpoint to get all folders at once (grouped by directory)
+// This avoids pagination issues in the frontend folder view
+app.get('/api/library/folders', (req, res) => {
+    try {
+        const folderMap = new Map();
+
+        if (scanJob && scanJob.items) {
+            scanJob.items.forEach(item => {
+                if (!item.path) return;
+                const dir = path.dirname(item.path);
+                const folderPath = (dir === '.' ? '' : dir).replace(/\\/g, '/').replace(/^\//, '');
+                
+                if (!folderMap.has(folderPath)) {
+                    folderMap.set(folderPath, {
+                        path: folderPath,
+                        count: 0,
+                        coverItem: null
+                    });
+                }
+                
+                const folderData = folderMap.get(folderPath);
+                folderData.count++;
+                
+                // Pick the first image as cover, or video if no image yet
+                if (item.type) {
+                    if (!folderData.coverItem || (folderData.coverItem.type.startsWith('video/') && item.type.startsWith('image/'))) {
+                        folderData.coverItem = item;
+                    }
+                }
+            });
+        }
+
+        const folders = Array.from(folderMap.values()).map(f => ({
+            ...f,
+            coverItem: f.coverItem ? formatItemForClient(f.coverItem) : null
+        }));
+
+        res.json({ folders });
+    } catch(e) {
+        console.error("Folder List API Error", e);
+        res.status(500).json({ error: "Failed to list folders" });
+    }
 });
 
 // Stream Media Content
@@ -322,7 +413,8 @@ app.get('/media-stream/:filepath', (req, res) => {
   let config = {};
   try {
     if (fs.existsSync(CONFIG_FILE)) {
-        config = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+        const content = fs.readFileSync(CONFIG_FILE, 'utf8');
+        if (content.trim()) config = JSON.parse(content);
     }
   } catch (e) {}
 

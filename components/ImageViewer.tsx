@@ -22,6 +22,10 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
   const containerRef = useRef<HTMLDivElement>(null);
   const [dragConstraints, setDragConstraints] = useState<{ left: number, right: number, top: number, bottom: number } | null>(null);
   
+  // Slideshow State
+  const [isPlaying, setIsPlaying] = useState(false);
+  const slideshowIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
   // Pinch zoom state
   const lastDist = useRef<number | null>(null);
 
@@ -31,6 +35,25 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
     setDragConstraints(null);
     lastDist.current = null;
   }, [item?.id]);
+
+  // Slideshow Logic
+  useEffect(() => {
+    if (isPlaying) {
+      slideshowIntervalRef.current = setInterval(() => {
+        if (onNext) onNext();
+      }, 4000); // 4 seconds per slide
+    } else {
+      if (slideshowIntervalRef.current) clearInterval(slideshowIntervalRef.current);
+    }
+    return () => {
+      if (slideshowIntervalRef.current) clearInterval(slideshowIntervalRef.current);
+    };
+  }, [isPlaying, onNext]);
+
+  // Stop playing if closed or zoomed
+  useEffect(() => {
+      if (transform.scale > 1) setIsPlaying(false);
+  }, [transform.scale]);
 
   // Update drag constraints when scale changes
   useEffect(() => {
@@ -66,8 +89,18 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
       if (e.key === 'Escape') onClose();
       // Only allow navigation if not zoomed in
       if (transform.scale === 1) {
-          if (e.key === 'ArrowRight' && onNext) onNext();
-          if (e.key === 'ArrowLeft' && onPrev) onPrev();
+          if (e.key === 'ArrowRight' && onNext) {
+            setIsPlaying(false); // Stop autoplay on manual nav
+            onNext();
+          }
+          if (e.key === 'ArrowLeft' && onPrev) {
+            setIsPlaying(false);
+            onPrev();
+          }
+          if (e.key === ' ' || e.key === 'Spacebar') {
+             e.preventDefault();
+             setIsPlaying(prev => !prev);
+          }
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -81,14 +114,10 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
     
     // Check if we are zooming
     if (e.ctrlKey || Math.abs(e.deltaY) > 0) {
+        setIsPlaying(false);
         const container = containerRef.current;
         if (!container) return;
 
-        // Prevent default browser zoom or scroll
-        // Note: React's synthetic event might be too late for preventDefault in some browsers for 'wheel', 
-        // but often works for touch pads or if passive is false.
-        // For consistent blocking, one might need a ref and addEventListener('wheel', ..., { passive: false }).
-        
         const rect = container.getBoundingClientRect();
         // Mouse position relative to center of the container
         const pointerX = e.clientX - rect.left - rect.width / 2;
@@ -97,17 +126,11 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
         const delta = -e.deltaY * 0.002;
         const targetScale = Math.min(Math.max(1, transform.scale + delta), 5);
         
-        // Calculate new position to keep the pointer stationary relative to the image
-        // Formula: NewPos = Pointer - (Pointer - OldPos) * (NewScale / OldScale)
         const ratio = targetScale / transform.scale;
         
         let newX = pointerX - (pointerX - transform.x) * ratio;
         let newY = pointerY - (pointerY - transform.y) * ratio;
 
-        // Clamp values if we are zooming out to 1 or close to bounds
-        // (Optional: strict clamping ensures image doesn't fly away, 
-        // but framer motion constraints usually handle the 'resting' place.
-        // We clamp here to prevent getting lost.)
         const xLimit = (rect.width * targetScale - rect.width) / 2;
         const yLimit = (rect.height * targetScale - rect.height) / 2;
         
@@ -130,7 +153,6 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
   };
 
   const handleDrag = (event: any, info: PanInfo) => {
-      // Sync drag position with state so next zoom starts from correct position
       setTransform(prev => ({
           ...prev,
           x: prev.x + info.delta.x,
@@ -138,7 +160,6 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
       }));
   };
 
-  // Pinch Handlers
   const handleTouchStart = (e: React.TouchEvent) => {
     if (e.touches.length === 2) {
       const dist = Math.hypot(
@@ -159,7 +180,6 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
       const sensitivity = 0.01;
       const newScale = Math.min(Math.max(1, transform.scale + delta * sensitivity), 5);
       
-      // Simple center-zoom for pinch (could be improved to pinch-center)
       setTransform(prev => ({
           ...prev,
           scale: newScale,
@@ -176,6 +196,7 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
 
   const toggleZoom = (e: React.MouseEvent) => {
       e.stopPropagation();
+      setIsPlaying(false);
       if (transform.scale > 1) {
           setTransform({ scale: 1, x: 0, y: 0 });
       } else {
@@ -186,12 +207,10 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
               const pointerX = e.clientX - rect.left - rect.width / 2;
               const pointerY = e.clientY - rect.top - rect.height / 2;
               
-              // Target scale 2.5
               const targetScale = 2.5;
               const ratio = targetScale / 1;
               
-              // Initial x,y is 0,0
-              const newX = pointerX - (pointerX - 0) * ratio; // = pointerX * (1 - 2.5) = -1.5 * pointerX
+              const newX = pointerX - (pointerX - 0) * ratio;
               const newY = pointerY - (pointerY - 0) * ratio;
 
               setTransform({ scale: targetScale, x: newX, y: newY });
@@ -213,11 +232,20 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
       >
         {/* Controls Overlay */}
         <div className="absolute top-0 left-0 right-0 p-4 flex justify-between items-center text-white/80 z-50 pointer-events-none">
-          <div className="flex flex-col max-w-[70%] pointer-events-auto">
+          <div className="flex flex-col max-w-[50%] pointer-events-auto">
             <span className="font-medium text-lg truncate">{item.name}</span>
             <span className="text-xs opacity-60 truncate">{item.folderPath || 'Root'}</span>
           </div>
           <div className="flex items-center gap-2 pointer-events-auto">
+             {onNext && (
+                 <button 
+                    onClick={(e) => { e.stopPropagation(); setIsPlaying(!isPlaying); }}
+                    className={`p-2 rounded-full transition-colors ${isPlaying ? 'bg-primary-600 text-white' : 'hover:bg-white/10'}`}
+                    title={isPlaying ? "Pause Slideshow" : "Play Slideshow"}
+                 >
+                     {isPlaying ? <Icons.Pause size={24} /> : <Icons.Play size={24} />}
+                 </button>
+             )}
             {item.mediaType !== 'video' && (
                 <button 
                   onClick={(e) => { 
@@ -252,7 +280,8 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
                 <video 
                   src={item.url}
                   controls
-                  autoPlay
+                  autoPlay={isPlaying}
+                  onEnded={() => { if(isPlaying && onNext) onNext(); }}
                   className="max-w-full max-h-full shadow-2xl rounded-sm focus:outline-none"
                 />
             </div>
@@ -288,7 +317,7 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
         {transform.scale === 1 && onPrev && (
            <button
              className="absolute left-4 top-1/2 -translate-y-1/2 p-3 bg-white/10 hover:bg-white/20 text-white rounded-full backdrop-blur-md transition-all opacity-0 hover:opacity-100 md:opacity-100 z-50 pointer-events-auto"
-             onClick={(e) => { e.stopPropagation(); onPrev(); }}
+             onClick={(e) => { e.stopPropagation(); setIsPlaying(false); onPrev(); }}
            >
              <Icons.Back size={24} />
            </button>
@@ -297,7 +326,7 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
         {transform.scale === 1 && onNext && (
            <button
              className="absolute right-4 top-1/2 -translate-y-1/2 p-3 bg-white/10 hover:bg-white/20 text-white rounded-full backdrop-blur-md transition-all opacity-0 hover:opacity-100 md:opacity-100 rotate-180 z-50 pointer-events-auto"
-             onClick={(e) => { e.stopPropagation(); onNext(); }}
+             onClick={(e) => { e.stopPropagation(); setIsPlaying(false); onNext(); }}
            >
              <Icons.Back size={24} />
            </button>

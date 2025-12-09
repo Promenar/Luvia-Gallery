@@ -86,12 +86,28 @@ export const Navigation: React.FC<NavigationProps> = ({
         <div className="p-4 flex-1 overflow-y-auto">
           <div className="space-y-6">
             
+            {/* Main Nav */}
+             <div>
+                <p className="px-4 text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2">Menu</p>
+                <button
+                    onClick={() => handleNavClick('home')}
+                    className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all mb-1 ${
+                        viewMode === 'home' 
+                        ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-700 dark:text-primary-400 font-medium shadow-sm' 
+                        : 'text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800'
+                    }`}
+                >
+                    <Icons.Home size={20} className={viewMode === 'home' ? 'text-primary-600 dark:text-primary-400' : 'text-gray-400 dark:text-gray-500'} />
+                    <span>Home</span>
+                </button>
+            </div>
+
             {/* Library Section */}
             <div>
                 <p className="px-4 text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2">Library</p>
                 <button
                 onClick={() => handleNavClick('all')}
-                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${
+                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all mb-1 ${
                     viewMode === 'all' 
                     ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-700 dark:text-primary-400 font-medium shadow-sm' 
                     : 'text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800'
@@ -101,11 +117,7 @@ export const Navigation: React.FC<NavigationProps> = ({
                 <span>All Photos</span>
                 <span className={`ml-auto text-xs px-2 py-0.5 rounded-full transition-colors ${viewMode === 'all' ? 'bg-white/50 dark:bg-black/20 text-primary-700 dark:text-primary-300' : 'bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400'}`}>{totalPhotos}</span>
                 </button>
-            </div>
 
-            {/* Folders Section */}
-            <div>
-                <p className="px-4 text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2">Organization</p>
                 <button
                 onClick={() => handleNavClick('folders')}
                 className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${
