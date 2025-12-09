@@ -264,11 +264,32 @@ export default function App() {
       await fetchServerFiles(currentUser.username, allUserData, serverOffset, false);
   };
 
+  const startPolling = () => {
+    if (scanIntervalRef.current) clearInterval(scanIntervalRef.current);
+    scanIntervalRef.current = setInterval(async () => {
+        try {
+            const statusRes = await fetch('/api/scan/status');
+            const statusData = await statusRes.json();
+            
+            setScanStatus(statusData.status);
+            setScanProgress({ 
+                count: statusData.count, 
+                currentPath: statusData.currentPath 
+            });
+
+            if (statusData.status === 'completed' || statusData.status === 'error' || statusData.status === 'cancelled') {
+                if (scanIntervalRef.current) clearInterval(scanIntervalRef.current);
+            }
+        } catch (e) {
+            console.error("Poll failed", e);
+        }
+    }, 1000);
+  };
+
   const startServerScan = async () => {
       if (!isServerMode || !currentUser) return;
       
       try {
-          // 1. Start Scan
           const startRes = await fetch('/api/scan/start', { method: 'POST' });
           if (!startRes.ok && startRes.status !== 409) {
               alert("Failed to start scan");
@@ -277,36 +298,38 @@ export default function App() {
 
           setIsScanModalOpen(true);
           setScanStatus('scanning');
-          
-          // 2. Poll Status
-          if (scanIntervalRef.current) clearInterval(scanIntervalRef.current);
-          scanIntervalRef.current = setInterval(async () => {
-              try {
-                  const statusRes = await fetch('/api/scan/status');
-                  const statusData = await statusRes.json();
-                  
-                  setScanStatus(statusData.status);
-                  setScanProgress({ 
-                      count: statusData.count, 
-                      currentPath: statusData.currentPath 
-                  });
-
-                  if (statusData.status === 'completed' || statusData.status === 'error' || statusData.status === 'cancelled') {
-                      if (scanIntervalRef.current) clearInterval(scanIntervalRef.current);
-                      if (statusData.status === 'completed') {
-                           // Reset data and start fresh fetch
-                           fetchServerFiles(currentUser.username, allUserData, 0, true);
-                      }
-                  }
-              } catch (e) {
-                  console.error("Poll failed", e);
-              }
-          }, 1000);
+          startPolling();
 
       } catch (e) {
           console.error("Scan init failed", e);
       }
   };
+
+  // Resume scanning UI if server is working in background on reload
+  useEffect(() => {
+    if (isServerMode && currentUser) {
+        fetch('/api/scan/status')
+            .then(r => r.json())
+            .then(d => {
+                // If the server is currently busy or just finished a scan we didn't see
+                if (d.status === 'scanning' || d.status === 'paused') {
+                    setIsScanModalOpen(true);
+                    setScanStatus(d.status);
+                    setScanProgress({ count: d.count, currentPath: d.currentPath });
+                    startPolling();
+                }
+            })
+            .catch(e => console.error("Failed to check status", e));
+    }
+  }, [isServerMode, currentUser]);
+
+  // Effect to handle scan completion logic (refresh library)
+  useEffect(() => {
+    if (scanStatus === 'completed' && currentUser) {
+        // Refresh the library when scan completes
+        fetchServerFiles(currentUser.username, allUserData, 0, true);
+    }
+  }, [scanStatus]);
 
   const handleScanControl = async (action: 'pause' | 'resume' | 'cancel') => {
       try {
@@ -319,6 +342,8 @@ export default function App() {
           if (action === 'pause') setScanStatus('paused');
           if (action === 'resume') setScanStatus('scanning');
           if (action === 'cancel') setScanStatus('cancelled');
+          
+          if (action === 'resume') startPolling();
       } catch(e) {
           console.error(e);
       }

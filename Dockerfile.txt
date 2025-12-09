@@ -1,0 +1,58 @@
+# Build Stage
+FROM node:18-alpine as build
+WORKDIR /app
+
+# Copy dependency definitions
+COPY package*.json ./
+RUN npm install
+
+# Install additional build tools (react-scripts, typescript, vite, etc.)
+RUN npm install --save-dev react-scripts @types/react @types/react-dom typescript vite @vitejs/plugin-react || true
+
+# Copy all project files
+COPY . .
+
+# Save server.js before restructuring (it needs to stay in root for production stage)
+RUN cp server.js server.js.bak
+
+# --- FIX STRUCTURE FOR REACT-SCRIPTS ---
+# The project files are in the root, but react-scripts expects 'src' and 'public' folders.
+# We restructure them before building.
+
+# 1. Prepare directories
+RUN mkdir -p public src
+
+# 2. Move static assets to public
+RUN if [ -f metadata.json ]; then mv metadata.json public/; fi
+
+# 3. Move source code to src (but exclude server.js)
+# We move .tsx, .ts files and component directories.
+# We verify files exist to avoid errors if the structure changes slightly.
+RUN for file in *.tsx; do [ -f "$file" ] && [ "$file" != "server.js" ] && mv "$file" src/; done && \
+    for file in *.ts; do [ -f "$file" ] && [ "$file" != "server.js" ] && mv "$file" src/; done && \
+    [ -d components ] && mv components src/ || true && \
+    [ -d utils ] && mv utils src/ || true
+
+# ---------------------------------------
+# Build the React application using Vite
+RUN npx vite build --outDir build
+
+# Production Stage
+FROM node:18-alpine
+WORKDIR /app
+
+# Install production dependencies only
+COPY package*.json ./
+RUN npm install --production
+
+# Copy built assets from build stage
+COPY --from=build /app/build ./build
+
+# Copy server script from build stage (preserved during restructuring)
+COPY --from=build /app/server.js.bak ./server.js
+
+# Create a placeholder for the config file
+RUN touch lumina-config.json
+
+EXPOSE 80
+CMD ["node", "server.js"]

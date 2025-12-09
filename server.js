@@ -79,6 +79,7 @@ const scanDirectoryAsync = async (baseDir, currentSubDir = '', rootAlias = '') =
             await checkControl();
 
             const fullFilePath = path.join(fullPathToScan, file);
+            // relativePath: used for Unique ID generation and streaming
             const relativePath = path.join(rootAlias, currentSubDir, file);
             
             try {
@@ -274,19 +275,28 @@ app.get('/api/scan/results', (req, res) => {
     const total = scanJob.items.length;
 
     // Process items for frontend (generate base64 IDs etc)
-    const processedItems = slicedItems.map(f => ({
-        id: Buffer.from(f.streamPath).toString('base64'),
-        url: `/media-stream/${encodeURIComponent(f.streamPath)}`,
-        name: f.name,
-        path: f.path,
-        folderPath: path.dirname(f.path) === '.' ? '' : path.dirname(f.path),
-        size: f.size,
-        type: f.type,
-        lastModified: f.lastModified,
-        mediaType: f.type.startsWith('video/') ? 'video' : 'image',
-        // Associate with source based on path prefix logic or simplified assumption
-        sourceId: 'nas-mixed' 
-    }));
+    const processedItems = slicedItems.map(f => {
+        const dir = path.dirname(f.path);
+        // CRITICAL FIX: Normalize folderPath to match frontend "path/to/folder" format.
+        // Node's path.dirname might return "/media" or "media".
+        // Frontend utils split by '/' and filter empty strings, so "/media" becomes "media".
+        // We must remove leading slash and ensure forward slashes.
+        const normalizedFolder = (dir === '.' ? '' : dir).replace(/\\/g, '/').replace(/^\//, '');
+
+        return {
+            id: Buffer.from(f.streamPath).toString('base64'),
+            url: `/media-stream/${encodeURIComponent(f.streamPath)}`,
+            name: f.name,
+            path: f.path,
+            folderPath: normalizedFolder,
+            size: f.size,
+            type: f.type,
+            lastModified: f.lastModified,
+            mediaType: f.type.startsWith('video/') ? 'video' : 'image',
+            // Associate with source based on path prefix logic or simplified assumption
+            sourceId: 'nas-mixed' 
+        };
+    });
 
     // Better source association
     const finalItems = processedItems.map(item => {
