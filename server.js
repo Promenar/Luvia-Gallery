@@ -7,64 +7,148 @@ const mime = require('mime-types');
 const app = express();
 const PORT = process.env.PORT || 80;
 const MEDIA_ROOT = process.env.MEDIA_ROOT || '/media'; 
-const CONFIG_FILE = path.join(__dirname, 'lumina-config.json');
+
+// Data persistence setup
+const DATA_DIR = path.join(__dirname, 'data');
+const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
+
+// Ensure data directory exists on startup
+if (!fs.existsSync(DATA_DIR)) {
+    try {
+        fs.mkdirSync(DATA_DIR, { recursive: true });
+        console.log(`Created data directory at ${DATA_DIR}`);
+    } catch (e) {
+        console.error(`Failed to create data directory: ${e.message}`);
+    }
+}
 
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 
 app.use(express.static(path.join(__dirname, 'build')));
 
+// --- Global Scan State ---
+let scanJob = {
+    status: 'idle', // idle, scanning, paused, completed, cancelled, error
+    count: 0,
+    currentPath: '',
+    items: [],
+    sources: [],
+    control: {
+        pause: false,
+        cancel: false
+    }
+};
+
 // --- Helper Functions ---
 
-// Recursively scan directory
-// baseDir: The physical absolute path on the server/container (e.g. /photos)
-// currentSubDir: The traversal path relative to baseDir (e.g. 2023/Holidays)
-// rootAlias: The logical name to show in frontend (e.g. /photos)
-const scanDirectory = (baseDir, currentSubDir = '', rootAlias = '') => {
-  let results = [];
-  const fullPathToScan = path.join(baseDir, currentSubDir);
+// Promisified sleep for async pause
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-  try {
-    if (!fs.existsSync(fullPathToScan)) return results;
+// Helper to check pause/cancel status during scan
+const checkControl = async () => {
+    if (scanJob.control.cancel) throw new Error('CANCELLED');
+    
+    while (scanJob.control.pause) {
+        if (scanJob.control.cancel) throw new Error('CANCELLED');
+        await sleep(500);
+    }
+    // Allow event loop to breathe
+    await sleep(0);
+};
 
-    const list = fs.readdirSync(fullPathToScan);
-    list.forEach(file => {
-      if (file.startsWith('.')) return;
+// Async recursive scan
+const scanDirectoryAsync = async (baseDir, currentSubDir = '', rootAlias = '') => {
+    await checkControl();
+    
+    let results = [];
+    const fullPathToScan = path.join(baseDir, currentSubDir);
+    
+    scanJob.currentPath = path.join(rootAlias, currentSubDir);
 
-      const fullFilePath = path.join(fullPathToScan, file);
-      // Logical path for frontend: join rootAlias + subDir + file
-      // If rootAlias is "/photos", result is "/photos/2023/img.jpg"
-      const relativePath = path.join(rootAlias, currentSubDir, file);
-      
-      try {
-        const stat = fs.statSync(fullFilePath);
-        if (stat.isDirectory()) {
-          results = results.concat(scanDirectory(baseDir, path.join(currentSubDir, file), rootAlias));
-        } else {
-          const mimeType = mime.lookup(fullFilePath);
-          if (mimeType && (mimeType.startsWith('image/') || mimeType.startsWith('video/'))) {
-            results.push({
-              name: file,
-              path: relativePath,
-              // We use the absolute path for streaming to support multiple roots
-              streamPath: fullFilePath, 
-              size: stat.size,
-              lastModified: stat.mtimeMs,
-              type: mimeType
-            });
-          }
+    try {
+        const dirExists = await fs.promises.access(fullPathToScan).then(() => true).catch(() => false);
+        if (!dirExists) return [];
+
+        const list = await fs.promises.readdir(fullPathToScan);
+        
+        for (const file of list) {
+            if (file.startsWith('.')) continue;
+
+            // Check control before processing each file/folder
+            await checkControl();
+
+            const fullFilePath = path.join(fullPathToScan, file);
+            const relativePath = path.join(rootAlias, currentSubDir, file);
+            
+            try {
+                const stat = await fs.promises.stat(fullFilePath);
+                
+                if (stat.isDirectory()) {
+                    const subResults = await scanDirectoryAsync(baseDir, path.join(currentSubDir, file), rootAlias);
+                    results = results.concat(subResults);
+                } else {
+                    const mimeType = mime.lookup(fullFilePath);
+                    if (mimeType && (mimeType.startsWith('image/') || mimeType.startsWith('video/'))) {
+                        const item = {
+                            name: file,
+                            path: relativePath,
+                            streamPath: fullFilePath,
+                            size: stat.size,
+                            lastModified: stat.mtimeMs,
+                            type: mimeType
+                        };
+                        results.push(item);
+                        
+                        // Update global live stats
+                        scanJob.count++;
+                        scanJob.items.push(item); // We accumulate in global state for simplicity here
+                    }
+                }
+            } catch (err) {
+                // Ignore individual file errors
+            }
         }
-      } catch (err) {
-        // Ignore permission errors
-      }
-    });
-  } catch (e) {
-    console.error(`Error reading directory ${fullPathToScan}:`, e);
-  }
-  return results;
+    } catch (e) {
+        if (e.message === 'CANCELLED') throw e;
+        console.error(`Error reading directory ${fullPathToScan}:`, e.message);
+    }
+    return results;
 };
 
 // --- API Endpoints ---
+
+// File System Autocomplete
+app.get('/api/fs/list', async (req, res) => {
+    const queryPath = req.query.path || '/';
+    
+    // Security check: In a real app, you might want to restrict this to MEDIA_ROOT
+    // For this app (NAS Viewer), we generally assume the container has access to what it needs.
+    // However, we should ensure we don't crash on permission errors.
+    
+    try {
+        const resolvedPath = path.normalize(queryPath);
+        
+        // Simple check to prevent traversing up out of root if needed, 
+        // but for a dockerized NAS viewer, usually absolute paths are valid.
+        
+        const stats = await fs.promises.stat(resolvedPath);
+        if (!stats.isDirectory()) {
+             return res.json({ dirs: [] });
+        }
+
+        const items = await fs.promises.readdir(resolvedPath, { withFileTypes: true });
+        
+        const dirs = items
+            .filter(item => item.isDirectory() && !item.name.startsWith('.'))
+            .map(item => item.name);
+            
+        res.json({ dirs });
+    } catch (e) {
+        console.error(`FS List error for ${queryPath}:`, e.message);
+        res.json({ dirs: [] }); // Return empty on error (permission denied, not found, etc)
+    }
+});
 
 // Get Configuration
 app.get('/api/config', (req, res) => {
@@ -90,79 +174,141 @@ app.post('/api/config', (req, res) => {
   }
 });
 
-// Scan Media Files
-app.get('/api/scan', (req, res) => {
-  let config = {};
-  try {
-    if (fs.existsSync(CONFIG_FILE)) {
-      config = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+// Scan Control & Status API
+app.post('/api/scan/start', async (req, res) => {
+    if (scanJob.status === 'scanning' || scanJob.status === 'paused') {
+        return res.status(409).json({ error: 'Scan already in progress' });
     }
-  } catch (e) { console.error("Config read error", e); }
 
-  // Determine paths to scan
-  // If config.libraryPaths is set, use those. 
-  // Otherwise default to scanning MEDIA_ROOT.
-  const pathsToScan = (config.libraryPaths && config.libraryPaths.length > 0) 
-    ? config.libraryPaths 
-    : [MEDIA_ROOT];
+    // Reset Job
+    scanJob = {
+        status: 'scanning',
+        count: 0,
+        currentPath: '',
+        items: [],
+        sources: [],
+        control: { pause: false, cancel: false }
+    };
 
-  console.log(`Starting media scan. Roots: ${JSON.stringify(pathsToScan)}`);
-  
-  let allMediaItems = [];
-  const sources = [];
+    res.json({ success: true, message: 'Scan started' });
 
-  pathsToScan.forEach(pathInput => {
-     // Determine absolute path
-     // If input starts with '/', treat as absolute container path.
-     // Otherwise treat as relative to default MEDIA_ROOT.
-     const isAbsolute = pathInput.startsWith('/');
-     const absoluteScanPath = isAbsolute ? pathInput : path.join(MEDIA_ROOT, pathInput);
-     
-     // Sanitization to prevent traversing out if using relative paths (simple check)
-     const normalized = path.normalize(absoluteScanPath);
-     
-     if (!fs.existsSync(normalized)) {
-         console.warn(`Path not found: ${normalized}`);
-         return;
-     }
+    // Start background scan
+    try {
+        let config = {};
+        try {
+            if (fs.existsSync(CONFIG_FILE)) {
+                config = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+            }
+        } catch (e) {}
 
-     const items = scanDirectory(normalized, '', pathInput); 
-     
-     if (items.length > 0) {
-         const processedItems = items.map(f => ({
-            id: Buffer.from(f.streamPath).toString('base64'),
-            url: `/media-stream/${encodeURIComponent(f.streamPath)}`,
-            name: f.name,
-            path: f.path, // Logical path shown in UI
-            folderPath: path.dirname(f.path) === '.' ? '' : path.dirname(f.path),
-            size: f.size,
-            type: f.type,
-            lastModified: f.lastModified,
-            mediaType: f.type.startsWith('video/') ? 'video' : 'image',
-            sourceId: `nas-${Buffer.from(pathInput).toString('base64')}`
-         }));
-         
-         allMediaItems = allMediaItems.concat(processedItems);
-         sources.push({
-             id: `nas-${Buffer.from(pathInput).toString('base64')}`,
-             name: pathInput,
-             count: processedItems.length
-         });
-     }
-  });
+        const pathsToScan = (config.libraryPaths && config.libraryPaths.length > 0) 
+            ? config.libraryPaths 
+            : [MEDIA_ROOT];
+        
+        console.log(`Starting background scan: ${JSON.stringify(pathsToScan)}`);
 
-  console.log(`Scan complete. Found ${allMediaItems.length} items.`);
-  res.json({ files: allMediaItems, sources });
+        for (const pathInput of pathsToScan) {
+             await checkControl();
+             
+             const isAbsolute = pathInput.startsWith('/');
+             const absoluteScanPath = isAbsolute ? pathInput : path.join(MEDIA_ROOT, pathInput);
+             const normalized = path.normalize(absoluteScanPath);
+             
+             const exists = await fs.promises.access(normalized).then(() => true).catch(() => false);
+             if (exists) {
+                 const startIndex = scanJob.items.length;
+                 await scanDirectoryAsync(normalized, '', pathInput);
+                 const endIndex = scanJob.items.length;
+                 
+                 scanJob.sources.push({
+                     id: `nas-${Buffer.from(pathInput).toString('base64')}`,
+                     name: pathInput,
+                     count: endIndex - startIndex
+                 });
+             }
+        }
+        
+        scanJob.status = 'completed';
+        console.log(`Scan completed. Found ${scanJob.count} items.`);
+
+    } catch (e) {
+        if (e.message === 'CANCELLED') {
+            scanJob.status = 'cancelled';
+            console.log('Scan cancelled by user.');
+        } else {
+            scanJob.status = 'error';
+            console.error('Scan failed:', e);
+        }
+    }
+});
+
+app.get('/api/scan/status', (req, res) => {
+    res.json({
+        status: scanJob.status,
+        count: scanJob.count,
+        currentPath: scanJob.currentPath
+    });
+});
+
+app.post('/api/scan/control', (req, res) => {
+    const { action } = req.body;
+    if (action === 'pause') {
+        scanJob.control.pause = true;
+        scanJob.status = 'paused';
+    } else if (action === 'resume') {
+        scanJob.control.pause = false;
+        scanJob.status = 'scanning';
+    } else if (action === 'cancel') {
+        scanJob.control.cancel = true;
+        scanJob.control.pause = false; // ensure loop breaks
+    }
+    res.json({ success: true, status: scanJob.status });
+});
+
+app.get('/api/scan/results', (req, res) => {
+    const offset = parseInt(req.query.offset) || 0;
+    const limit = parseInt(req.query.limit) || 1000;
+
+    // Apply simple pagination slice to memory array
+    const slicedItems = scanJob.items.slice(offset, offset + limit);
+    const total = scanJob.items.length;
+
+    // Process items for frontend (generate base64 IDs etc)
+    const processedItems = slicedItems.map(f => ({
+        id: Buffer.from(f.streamPath).toString('base64'),
+        url: `/media-stream/${encodeURIComponent(f.streamPath)}`,
+        name: f.name,
+        path: f.path,
+        folderPath: path.dirname(f.path) === '.' ? '' : path.dirname(f.path),
+        size: f.size,
+        type: f.type,
+        lastModified: f.lastModified,
+        mediaType: f.type.startsWith('video/') ? 'video' : 'image',
+        // Associate with source based on path prefix logic or simplified assumption
+        sourceId: 'nas-mixed' 
+    }));
+
+    // Better source association
+    const finalItems = processedItems.map(item => {
+        // Find which source this item belongs to
+        const source = scanJob.sources.find(s => item.path.startsWith(s.name));
+        return { ...item, sourceId: source ? source.id : 'nas-unknown' };
+    });
+
+    res.json({
+        files: finalItems,
+        sources: scanJob.sources,
+        total: total,
+        offset: offset,
+        limit: limit,
+        hasMore: (offset + limit) < total
+    });
 });
 
 // Stream Media Content
 app.get('/media-stream/:filepath', (req, res) => {
   const reqPath = decodeURIComponent(req.params.filepath);
-  // reqPath is now the Absolute Path on the server
   
-  // Security Validation: 
-  // Ensure the requested path is within one of the allowed library paths (or MEDIA_ROOT)
-  // to prevent reading arbitrary system files.
   let config = {};
   try {
     if (fs.existsSync(CONFIG_FILE)) {
@@ -174,15 +320,13 @@ app.get('/media-stream/:filepath', (req, res) => {
     ? config.libraryPaths.map(p => p.startsWith('/') ? p : path.join(MEDIA_ROOT, p))
     : [MEDIA_ROOT];
 
-  // Add MEDIA_ROOT to valid roots fallback if strictly empty config
   if (validRoots.length === 0) validRoots.push(MEDIA_ROOT);
 
   const normalizedReqPath = path.normalize(reqPath);
   const isAllowed = validRoots.some(root => normalizedReqPath.startsWith(path.normalize(root)));
 
   if (!isAllowed) {
-      console.warn(`Blocked access to: ${normalizedReqPath}`);
-      return res.status(403).send('Access Denied: File not in allowed library paths');
+      return res.status(403).send('Access Denied');
   }
 
   if (!fs.existsSync(normalizedReqPath)) {
@@ -224,5 +368,5 @@ app.get('*', (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
-  console.log(`Default Media Root: ${MEDIA_ROOT}`);
+  console.log(`Data Directory: ${DATA_DIR}`);
 });

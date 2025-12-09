@@ -13,6 +13,7 @@ interface NavigationProps {
   totalPhotos: number;
   theme: 'light' | 'dark';
   toggleTheme: () => void;
+  isServerMode: boolean;
 }
 
 export const Navigation: React.FC<NavigationProps> = ({ 
@@ -24,7 +25,8 @@ export const Navigation: React.FC<NavigationProps> = ({
   toggleSidebar,
   totalPhotos,
   theme,
-  toggleTheme
+  toggleTheme,
+  isServerMode
 }) => {
   const handleNavClick = (mode: ViewMode) => {
       setViewMode(mode);
@@ -45,17 +47,19 @@ export const Navigation: React.FC<NavigationProps> = ({
             <button onClick={toggleTheme} className="p-2 text-primary-600 dark:text-primary-400 hover:bg-primary-50 dark:hover:bg-gray-800 rounded-full transition-colors">
                 {theme === 'dark' ? <Icons.Sun size={24} /> : <Icons.Moon size={24} />}
             </button>
-            <label className="p-2 text-primary-600 dark:text-primary-400 hover:bg-primary-50 dark:hover:bg-gray-800 rounded-full cursor-pointer transition-colors">
-                <Icons.Upload size={24} />
-                <input
-                    type="file"
-                    multiple
-                    webkitdirectory="true"
-                    directory=""
-                    onChange={onUpload}
-                    className="hidden"
-                />
-            </label>
+            {!isServerMode && (
+              <label className="p-2 text-primary-600 dark:text-primary-400 hover:bg-primary-50 dark:hover:bg-gray-800 rounded-full cursor-pointer transition-colors">
+                  <Icons.Upload size={24} />
+                  <input
+                      type="file"
+                      multiple
+                      webkitdirectory="true"
+                      directory=""
+                      onChange={onUpload}
+                      className="hidden"
+                  />
+              </label>
+            )}
         </div>
       </div>
 
@@ -127,24 +131,26 @@ export const Navigation: React.FC<NavigationProps> = ({
 
           </div>
 
-          <div className="mt-8 px-4">
-            <div className="border-t border-gray-100 dark:border-gray-800 pt-6">
-                <label className="flex flex-col items-center justify-center gap-2 w-full px-4 py-6 rounded-xl bg-gray-50 dark:bg-gray-800 border-2 border-dashed border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 hover:border-primary-300 dark:hover:border-primary-600 hover:text-primary-600 dark:hover:text-primary-400 transition-all cursor-pointer active:scale-95 group">
-                    <div className="p-3 bg-white dark:bg-gray-700 rounded-full shadow-sm group-hover:shadow-md transition-all">
-                        <Icons.Upload size={20} />
-                    </div>
-                    <span className="text-sm font-medium">Load Folder</span>
-                    <input
-                        type="file"
-                        multiple
-                        webkitdirectory="true"
-                        directory=""
-                        onChange={onUpload}
-                        className="hidden"
-                    />
-                </label>
+          {!isServerMode && (
+            <div className="mt-8 px-4">
+              <div className="border-t border-gray-100 dark:border-gray-800 pt-6">
+                  <label className="flex flex-col items-center justify-center gap-2 w-full px-4 py-6 rounded-xl bg-gray-50 dark:bg-gray-800 border-2 border-dashed border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 hover:border-primary-300 dark:hover:border-primary-600 hover:text-primary-600 dark:hover:text-primary-400 transition-all cursor-pointer active:scale-95 group">
+                      <div className="p-3 bg-white dark:bg-gray-700 rounded-full shadow-sm group-hover:shadow-md transition-all">
+                          <Icons.Upload size={20} />
+                      </div>
+                      <span className="text-sm font-medium">Load Folder</span>
+                      <input
+                          type="file"
+                          multiple
+                          webkitdirectory="true"
+                          directory=""
+                          onChange={onUpload}
+                          className="hidden"
+                      />
+                  </label>
+              </div>
             </div>
-          </div>
+          )}
         </div>
       </motion.aside>
 

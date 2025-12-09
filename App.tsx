@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { MediaItem, ViewMode, GridLayout, User, UserData, SortOption, FilterOption, AppConfig, FolderNode } from './types';
 import { buildFolderTree, generateId, isVideo, sortMedia } from './utils/fileUtils';
@@ -7,13 +7,18 @@ import { Navigation } from './components/Navigation';
 import { MediaCard } from './components/PhotoCard';
 import { FolderCard } from './components/FolderCard';
 import { ImageViewer } from './components/ImageViewer';
+import { ScanProgressModal, ScanStatus } from './components/ScanProgressModal';
+import { VirtualGallery } from './components/VirtualGallery';
+import { PathAutocomplete } from './components/PathAutocomplete';
 
 const CONFIG_FILE_NAME = 'lumina-config.json';
 const USERS_STORAGE_KEY = 'lumina_users';
 const VIEW_MODE_KEY = 'lumina_view_mode';
+const LAYOUT_MODE_KEY = 'lumina_layout_mode';
 const APP_TITLE_KEY = 'lumina_app_title';
 const SOURCES_STORAGE_KEY = 'lumina_sources'; 
 const THEME_STORAGE_KEY = 'lumina_theme';
+const AUTH_USER_KEY = 'lumina_auth_user';
 
 export default function App() {
   // --- Authentication State ---
@@ -26,9 +31,20 @@ export default function App() {
   
   // --- Server Mode State ---
   const [isServerMode, setIsServerMode] = useState(false);
-  const [isSyncing, setIsSyncing] = useState(false);
   const [libraryPaths, setLibraryPaths] = useState<string[]>([]);
   const [newPathInput, setNewPathInput] = useState('');
+  
+  // --- Server Pagination State ---
+  const [serverTotal, setServerTotal] = useState(0);
+  const [serverOffset, setServerOffset] = useState(0);
+  const [isFetchingMore, setIsFetchingMore] = useState(false);
+  const [hasMoreServer, setHasMoreServer] = useState(true);
+
+  // --- Scanning State ---
+  const [isScanModalOpen, setIsScanModalOpen] = useState(false);
+  const [scanStatus, setScanStatus] = useState<ScanStatus>('idle');
+  const [scanProgress, setScanProgress] = useState({ count: 0, currentPath: '' });
+  const scanIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // --- App Data State ---
   const [allUserData, setAllUserData] = useState<Record<string, UserData>>({});
@@ -39,14 +55,10 @@ export default function App() {
     currentUser ? (allUserData[currentUser.username]?.files || []) : [], 
     [currentUser, allUserData]
   );
-  const folderSources = useMemo(() => 
-    currentUser ? (allUserData[currentUser.username]?.sources || []) : [],
-    [currentUser, allUserData]
-  );
   
   // --- View State ---
   const [viewMode, setViewMode] = useState<ViewMode>('all');
-  const [folderViewLayout, setFolderViewLayout] = useState<GridLayout>('masonry');
+  const [layoutMode, setLayoutMode] = useState<GridLayout>('masonry'); // 'grid' (Virtual) or 'masonry' (CSS)
   const [currentPath, setCurrentPath] = useState<string>('');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [selectedItem, setSelectedItem] = useState<MediaItem | null>(null);
@@ -129,24 +141,26 @@ export default function App() {
   // 1. Initial Load & Mode Detection
   useEffect(() => {
     const initApp = async () => {
+      let loadedUsers: User[] = [];
+      let loadedData: Record<string, UserData> = {};
+      let loadedTitle = 'Lumina Gallery';
+      let serverMode = false;
+
       try {
         const res = await fetch('/api/config');
         if (res.ok) {
+           serverMode = true;
            setIsServerMode(true);
            const config = await res.json();
            
            if (config && config.users && config.users.length > 0) {
-              setUsers(config.users);
-              setAppTitle(config.title || 'Lumina Gallery');
+              loadedUsers = config.users;
+              loadedTitle = config.title || 'Lumina Gallery';
               setLibraryPaths(config.libraryPaths || []);
               
-              const hydratedData: Record<string, UserData> = {};
               config.users.forEach((u: User) => {
-                  hydratedData[u.username] = { sources: [], files: [] };
+                  loadedData[u.username] = { sources: [], files: [] };
               });
-              setAllUserData(hydratedData);
-              setAuthStep('login');
-              return; 
            } else if (config === null) {
                setAuthStep('setup');
                return;
@@ -154,61 +168,159 @@ export default function App() {
         }
       } catch (e) {}
 
-      // Fallback
-      const storedUsers = localStorage.getItem(USERS_STORAGE_KEY);
-      const storedTitle = localStorage.getItem(APP_TITLE_KEY);
-      const storedSources = localStorage.getItem(SOURCES_STORAGE_KEY);
-      
-      if (storedUsers) {
-        const parsedUsers = JSON.parse(storedUsers);
-        setUsers(parsedUsers);
-        setAuthStep('login');
-        if (storedTitle) setAppTitle(storedTitle);
+      // Fallback or Local
+      if (!serverMode || loadedUsers.length === 0) {
+          const storedUsers = localStorage.getItem(USERS_STORAGE_KEY);
+          const storedTitle = localStorage.getItem(APP_TITLE_KEY);
+          const storedSources = localStorage.getItem(SOURCES_STORAGE_KEY);
+          
+          if (storedUsers) {
+            loadedUsers = JSON.parse(storedUsers);
+            if (storedTitle) loadedTitle = storedTitle;
 
-        const hydratedData: Record<string, UserData> = {};
-        if (storedSources) {
-            const parsedSources = JSON.parse(storedSources);
-            Object.keys(parsedSources).forEach(username => {
-                hydratedData[username] = { sources: parsedSources[username], files: [] };
-            });
-        } else {
-            parsedUsers.forEach((u: User) => hydratedData[u.username] = { sources: [], files: [] });
-        }
-        setAllUserData(hydratedData);
-      } else {
-        setAuthStep('setup');
+            if (storedSources) {
+                const parsedSources = JSON.parse(storedSources);
+                Object.keys(parsedSources).forEach(username => {
+                    loadedData[username] = { sources: parsedSources[username], files: [] };
+                });
+            } else {
+                loadedUsers.forEach((u: User) => loadedData[u.username] = { sources: [], files: [] });
+            }
+          } else {
+            setAuthStep('setup');
+            return;
+          }
       }
+
+      setUsers(loadedUsers);
+      setAppTitle(loadedTitle);
+      setAllUserData(loadedData);
+
+      // Check Persistent Login
+      const savedUser = localStorage.getItem(AUTH_USER_KEY);
+      if (savedUser) {
+          const user = loadedUsers.find(u => u.username === savedUser);
+          if (user) {
+              setCurrentUser(user);
+              setAuthStep('app');
+              if (serverMode) {
+                  // We delay the sync slightly to ensure state is ready
+                  setTimeout(() => fetchServerFiles(user.username, loadedData, 0, true), 100);
+              }
+              return;
+          }
+      }
+
+      setAuthStep('login');
     };
     
     initApp();
 
     const savedViewMode = localStorage.getItem(VIEW_MODE_KEY) as ViewMode;
     if (savedViewMode) setViewMode(savedViewMode);
+
+    const savedLayout = localStorage.getItem(LAYOUT_MODE_KEY) as GridLayout;
+    if (savedLayout) setLayoutMode(savedLayout);
   }, []);
 
-  // --- Server Logic: Scan Files ---
-  const syncServerFiles = async (username: string) => {
-      if (!isServerMode) return;
-      setIsSyncing(true);
+  // --- Server Logic: Scan & Poll ---
+  
+  // Fetch files with pagination
+  const fetchServerFiles = async (
+      username: string, 
+      currentData: Record<string, UserData>,
+      offset: number = 0,
+      reset: boolean = false
+  ) => {
       try {
-          const res = await fetch('/api/scan');
-          const data = await res.json() as { files: MediaItem[], sources: any[] };
+          setIsFetchingMore(true);
+          const limit = 500; // Chunk size
+          const res = await fetch(`/api/scan/results?offset=${offset}&limit=${limit}`);
+          const data = await res.json() as { files: MediaItem[], sources: any[], total: number, hasMore: boolean };
           
-          if (data.files) {
-              const updatedUserData = {
-                  ...allUserData,
-                  [username]: {
-                      files: data.files,
-                      sources: data.sources
-                  }
-              };
-              setAllUserData(updatedUserData);
-          }
+          const newFiles = reset ? data.files : [...(currentData[username]?.files || []), ...data.files];
+          
+          setAllUserData({
+              ...currentData,
+              [username]: {
+                  files: newFiles,
+                  sources: data.sources
+              }
+          });
+          
+          setServerTotal(data.total);
+          setServerOffset(offset + limit);
+          setHasMoreServer(data.hasMore);
+          setIsFetchingMore(false);
+
       } catch (e) {
-          console.error("Scan failed", e);
-          alert("Failed to scan NAS files.");
-      } finally {
-          setIsSyncing(false);
+          console.error("Fetch files failed", e);
+          setIsFetchingMore(false);
+      }
+  };
+
+  const loadMoreServerFiles = async () => {
+      if (!isServerMode || !currentUser || !hasMoreServer || isFetchingMore) return;
+      await fetchServerFiles(currentUser.username, allUserData, serverOffset, false);
+  };
+
+  const startServerScan = async () => {
+      if (!isServerMode || !currentUser) return;
+      
+      try {
+          // 1. Start Scan
+          const startRes = await fetch('/api/scan/start', { method: 'POST' });
+          if (!startRes.ok && startRes.status !== 409) {
+              alert("Failed to start scan");
+              return;
+          }
+
+          setIsScanModalOpen(true);
+          setScanStatus('scanning');
+          
+          // 2. Poll Status
+          if (scanIntervalRef.current) clearInterval(scanIntervalRef.current);
+          scanIntervalRef.current = setInterval(async () => {
+              try {
+                  const statusRes = await fetch('/api/scan/status');
+                  const statusData = await statusRes.json();
+                  
+                  setScanStatus(statusData.status);
+                  setScanProgress({ 
+                      count: statusData.count, 
+                      currentPath: statusData.currentPath 
+                  });
+
+                  if (statusData.status === 'completed' || statusData.status === 'error' || statusData.status === 'cancelled') {
+                      if (scanIntervalRef.current) clearInterval(scanIntervalRef.current);
+                      if (statusData.status === 'completed') {
+                           // Reset data and start fresh fetch
+                           fetchServerFiles(currentUser.username, allUserData, 0, true);
+                      }
+                  }
+              } catch (e) {
+                  console.error("Poll failed", e);
+              }
+          }, 1000);
+
+      } catch (e) {
+          console.error("Scan init failed", e);
+      }
+  };
+
+  const handleScanControl = async (action: 'pause' | 'resume' | 'cancel') => {
+      try {
+          await fetch('/api/scan/control', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ action })
+          });
+          // Optimistic update
+          if (action === 'pause') setScanStatus('paused');
+          if (action === 'resume') setScanStatus('scanning');
+          if (action === 'cancel') setScanStatus('cancelled');
+      } catch(e) {
+          console.error(e);
       }
   };
 
@@ -218,12 +330,18 @@ export default function App() {
     setCurrentPath(''); 
   };
 
+  const toggleLayoutMode = () => {
+      const newMode = layoutMode === 'grid' ? 'masonry' : 'grid';
+      setLayoutMode(newMode);
+      localStorage.setItem(LAYOUT_MODE_KEY, newMode);
+  };
+
   const handleUpdateTitle = (newTitle: string) => {
     persistData(undefined, newTitle, undefined, undefined);
   };
 
-  const handleAddLibraryPath = (e: React.FormEvent) => {
-      e.preventDefault();
+  const handleAddLibraryPath = (e?: React.FormEvent) => {
+      if (e) e.preventDefault();
       if (!newPathInput.trim()) return;
       const newPaths = [...libraryPaths, newPathInput.trim()];
       persistData(undefined, undefined, undefined, newPaths);
@@ -295,8 +413,9 @@ export default function App() {
     const newUserData = { [adminUser.username]: { files: [], sources: [] } };
     persistData(newUsers, undefined, newUserData, []);
     setCurrentUser(adminUser);
+    localStorage.setItem(AUTH_USER_KEY, adminUser.username); // Auto-login next time
     setAuthStep('app');
-    if (isServerMode) syncServerFiles(adminUser.username);
+    if (isServerMode) fetchServerFiles(adminUser.username, newUserData, 0, true);
   };
 
   const handleLogin = (e: React.FormEvent) => {
@@ -304,13 +423,16 @@ export default function App() {
     const user = users.find(u => u.username === loginForm.username && u.password === loginForm.password);
     if (user) {
       setCurrentUser(user);
+      localStorage.setItem(AUTH_USER_KEY, user.username); // Persist login
+      
+      let newData = allUserData;
       if (!allUserData[user.username]) {
-          const newData = { ...allUserData, [user.username]: { files: [], sources: [] } };
+          newData = { ...allUserData, [user.username]: { files: [], sources: [] } };
           setAllUserData(newData);
       }
       setAuthStep('app');
       setAuthError('');
-      if (isServerMode) syncServerFiles(user.username);
+      if (isServerMode) fetchServerFiles(user.username, newData, 0, true);
     } else {
       setAuthError('Invalid credentials');
     }
@@ -318,6 +440,7 @@ export default function App() {
 
   const handleLogout = () => {
     setCurrentUser(null);
+    localStorage.removeItem(AUTH_USER_KEY); // Clear persistence
     setAuthStep('login');
     setLoginForm({ username: '', password: '' });
     setCurrentPath('');
@@ -384,23 +507,12 @@ export default function App() {
     }
   };
 
-  const handleRemoveSource = (id: string) => {
-     if (!currentUser) return;
-     const updatedUserData = {
-        ...allUserData,
-        [currentUser.username]: {
-            files: allUserData[currentUser.username].files.filter(f => f.sourceId !== id),
-            sources: allUserData[currentUser.username].sources.filter(s => s.id !== id)
-        }
-    };
-    persistData(undefined, undefined, updatedUserData, undefined);
-  };
-
   const processedFiles = useMemo(() => {
     let result = files;
     if (filterOption !== 'all') {
       result = result.filter(f => f.mediaType === filterOption);
     }
+    // Sort logic
     return sortMedia(result, sortOption);
   }, [files, filterOption, sortOption]);
 
@@ -516,9 +628,10 @@ export default function App() {
         onUpload={handleFileUpload}
         isSidebarOpen={isSidebarOpen}
         toggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)}
-        totalPhotos={files.length}
+        totalPhotos={isServerMode ? serverTotal : files.length}
         theme={theme}
         toggleTheme={toggleTheme}
+        isServerMode={isServerMode}
       />
 
       <main className="flex-1 flex flex-col h-full overflow-hidden relative">
@@ -537,6 +650,14 @@ export default function App() {
             )}
           </div>
           <div className="flex items-center gap-2">
+            <button 
+                onClick={toggleLayoutMode} 
+                className="p-2 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors hidden sm:block" 
+                title={layoutMode === 'grid' ? "Switch to Waterfall Masonry (Aesthetic)" : "Switch to Grid (Performance)"}
+            >
+                {layoutMode === 'grid' ? <Icons.Masonry size={20} /> : <Icons.Grid size={20} />}
+            </button>
+
             <div className="relative group z-30">
                 <button className="p-2 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full flex items-center gap-1 transition-colors"><Icons.Filter size={18} /><Icons.Sort size={14} /></button>
                 <div className="absolute right-0 top-full mt-2 w-52 bg-white dark:bg-gray-800 rounded-xl shadow-xl border border-gray-100 dark:border-gray-700 p-2 hidden group-focus-within:block group-hover:block z-50">
@@ -553,7 +674,7 @@ export default function App() {
         </header>
 
         <div className="flex-1 overflow-y-auto p-4 md:p-8 no-scrollbar bg-gray-50/50 dark:bg-gray-900/50 transition-colors">
-          {files.length === 0 && (
+          {files.length === 0 && !isFetchingMore && (
             <div className="h-full flex flex-col items-center justify-center text-center p-8">
               <div className="w-24 h-24 bg-indigo-50 dark:bg-indigo-900/30 rounded-full flex items-center justify-center mb-6 text-indigo-400"><Icons.Upload size={40} /></div>
               <h2 className="text-2xl font-bold text-gray-800 dark:text-white mb-2">Welcome, {currentUser?.username}</h2>
@@ -566,27 +687,53 @@ export default function App() {
             </div>
           )}
 
-          {files.length > 0 && (
-             <div className="animate-in fade-in slide-in-from-bottom-2 duration-500">
-                {(viewMode === 'folders' && content.folders && content.folders.length > 0) && (
-                    <div className="mb-10">
-                    <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2"><Icons.Folder size={14} />{currentPath ? 'Subfolders' : 'Folders'}</h3>
-                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">{content.folders.map((folder) => (<FolderCard key={folder.path} folder={folder} onClick={(path) => setCurrentPath(path)} />))}</div>
+          {(files.length > 0 || isFetchingMore) && (
+             <div className="h-full w-full"> 
+                {/* 
+                   Render Logic:
+                   1. If layoutMode is 'grid', use VirtualGallery (FixedSizeGrid).
+                   2. If layoutMode is 'masonry', use CSS Columns with VirtualGallery internal pass-through or simple map if small.
+                   
+                   Updated: VirtualGallery now handles the switch internally or we swap here.
+                   To keep VirtualGallery clean, we will swap components here.
+                */}
+                
+                {viewMode === 'folders' && content.folders.length > 0 && (
+                    <div className="mb-10 animate-in fade-in slide-in-from-bottom-2 duration-500">
+                        <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2"><Icons.Folder size={14} />{currentPath ? 'Subfolders' : 'Folders'}</h3>
+                        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">{content.folders.map((folder) => (<FolderCard key={folder.path} folder={folder} onClick={(path) => setCurrentPath(path)} />))}</div>
                     </div>
                 )}
-                {(content.data || (content.photos && content.photos.length > 0)) ? (
-                    <div>
-                        <motion.div layout className={folderViewLayout === 'masonry' ? 'columns-2 md:columns-3 lg:columns-4 xl:columns-5 gap-4 space-y-4' : 'grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4'}>
-                            {(content.data || content.photos || []).map((item) => (<div key={item.id} className="break-inside-avoid"><MediaCard item={item} onClick={setSelectedItem} layout={folderViewLayout} /></div>))}
-                        </motion.div>
-                    </div>
-                ) : null}
+
+                {(viewMode === 'all' || (viewMode === 'folders' && currentPath !== '')) && (
+                   <VirtualGallery 
+                        layout={layoutMode}
+                        items={viewMode === 'all' ? processedFiles : (content.photos || [])}
+                        onItemClick={setSelectedItem}
+                        hasNextPage={isServerMode ? hasMoreServer : false}
+                        isNextPageLoading={isFetchingMore}
+                        loadNextPage={loadMoreServerFiles}
+                        itemCount={isServerMode && viewMode === 'all' ? serverTotal : processedFiles.length}
+                   />
+                )}
              </div>
           )}
         </div>
       </main>
 
       <ImageViewer item={selectedItem} onClose={() => setSelectedItem(null)} onNext={handleNext} onPrev={handlePrev} />
+      
+      {/* Scan Progress Modal */}
+      <ScanProgressModal 
+        isOpen={isScanModalOpen}
+        status={scanStatus}
+        count={scanProgress.count}
+        currentPath={scanProgress.currentPath}
+        onPause={() => handleScanControl('pause')}
+        onResume={() => handleScanControl('resume')}
+        onCancel={() => handleScanControl('cancel')}
+        onClose={() => setIsScanModalOpen(false)}
+      />
 
       <AnimatePresence>
         {isSettingsOpen && (
@@ -605,18 +752,29 @@ export default function App() {
                                         <input type="text" value={appTitle} onChange={(e) => handleUpdateTitle(e.target.value)} className="w-full px-3 py-2 text-sm border rounded-lg focus:ring-2 focus:ring-primary-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white border-gray-200 dark:border-gray-600 placeholder-gray-400 dark:placeholder-gray-500" />
                                     </div>
                                     
-                                    {/* Debug Toggle */}
-                                    <div className="flex items-center justify-between bg-gray-50 dark:bg-gray-700/50 p-3 rounded-lg border border-gray-200 dark:border-gray-700">
-                                        <span className="text-sm font-medium text-gray-700 dark:text-gray-300 flex items-center gap-2">
-                                            <Icons.Alert size={14} className="text-amber-500" />
-                                            Force Server Mode (Debug)
-                                        </span>
-                                        <button 
-                                            onClick={() => setIsServerMode(!isServerMode)} 
-                                            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${isServerMode ? 'bg-primary-600' : 'bg-gray-300 dark:bg-gray-600'}`}
-                                        >
-                                            <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${isServerMode ? 'translate-x-6' : 'translate-x-1'}`} />
-                                        </button>
+                                    {/* Connection Mode Toggle */}
+                                    <div className="space-y-3">
+                                        <label className="text-sm font-medium text-gray-600 dark:text-gray-400 block">Connection Mode</label>
+                                        <div className="flex bg-gray-100 dark:bg-gray-700/50 p-1 rounded-lg">
+                                            <button 
+                                                onClick={() => setIsServerMode(false)}
+                                                className={`flex-1 py-2 text-sm font-medium rounded-md transition-all ${!isServerMode ? 'bg-white dark:bg-gray-600 shadow-sm text-gray-900 dark:text-white' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700'}`}
+                                            >
+                                                Client Mode (Local Browser)
+                                            </button>
+                                            <button 
+                                                onClick={() => setIsServerMode(true)}
+                                                className={`flex-1 py-2 text-sm font-medium rounded-md transition-all ${isServerMode ? 'bg-primary-600 shadow-sm text-white' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700'}`}
+                                            >
+                                                Server Mode (NAS)
+                                            </button>
+                                        </div>
+                                        <p className="text-xs text-gray-400 dark:text-gray-500">
+                                            {isServerMode 
+                                                ? "Server Mode connects to the backend API to read files from the server's filesystem. Ideal for NAS and large libraries."
+                                                : "Client Mode runs entirely in your browser. You manually import folders, and data is stored in LocalStorage."
+                                            }
+                                        </p>
                                     </div>
                                 </div>
                             </section>
@@ -645,13 +803,13 @@ export default function App() {
                                             </div>
 
                                             <form onSubmit={handleAddLibraryPath} className="flex gap-2">
-                                                <input value={newPathInput} onChange={e => setNewPathInput(e.target.value)} placeholder="/my/mapped/folder" className="flex-1 px-3 py-2 text-sm border rounded-lg focus:ring-2 focus:ring-primary-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white border-gray-200 dark:border-gray-600 placeholder-gray-400 dark:placeholder-gray-500" />
+                                                <PathAutocomplete value={newPathInput} onChange={setNewPathInput} onAdd={handleAddLibraryPath} />
                                                 <button type="submit" className="bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-200 px-3 py-2 rounded-lg text-sm font-medium hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors">Add Path</button>
                                             </form>
                                         </div>
 
-                                        <button onClick={() => currentUser && syncServerFiles(currentUser.username)} disabled={isSyncing} className="w-full py-2 bg-primary-50 dark:bg-primary-900/30 border border-primary-200 dark:border-primary-800 text-primary-700 dark:text-primary-300 rounded-lg text-sm font-medium hover:bg-primary-100 dark:hover:bg-primary-900/50 flex items-center justify-center gap-2 transition-colors">
-                                            <Icons.Refresh size={14} className={isSyncing ? 'animate-spin' : ''} />{isSyncing ? 'Scanning...' : 'Scan Now'}
+                                        <button onClick={() => startServerScan()} disabled={scanStatus === 'scanning'} className="w-full py-2 bg-primary-50 dark:bg-primary-900/30 border border-primary-200 dark:border-primary-800 text-primary-700 dark:text-primary-300 rounded-lg text-sm font-medium hover:bg-primary-100 dark:hover:bg-primary-900/50 flex items-center justify-center gap-2 transition-colors">
+                                            <Icons.Refresh size={14} className={scanStatus === 'scanning' ? 'animate-spin' : ''} />{scanStatus === 'scanning' ? 'Scanning in progress...' : 'Scan NAS Library'}
                                         </button>
                                     </div>
                                 ) : (

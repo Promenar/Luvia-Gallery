@@ -1,5 +1,6 @@
-import React, { useEffect } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+
+import React, { useEffect, useState, useRef } from 'react';
+import { motion, AnimatePresence, PanInfo } from 'framer-motion';
 import { MediaItem } from '../types';
 import { Icons } from './ui/Icon';
 
@@ -10,20 +11,195 @@ interface ImageViewerProps {
   onPrev?: () => void;
 }
 
+interface TransformState {
+  scale: number;
+  x: number;
+  y: number;
+}
+
 export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext, onPrev }) => {
+  const [transform, setTransform] = useState<TransformState>({ scale: 1, x: 0, y: 0 });
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [dragConstraints, setDragConstraints] = useState<{ left: number, right: number, top: number, bottom: number } | null>(null);
+  
+  // Pinch zoom state
+  const lastDist = useRef<number | null>(null);
+
+  // Reset zoom state when item changes
+  useEffect(() => {
+    setTransform({ scale: 1, x: 0, y: 0 });
+    setDragConstraints(null);
+    lastDist.current = null;
+  }, [item?.id]);
+
+  // Update drag constraints when scale changes
+  useEffect(() => {
+    if (transform.scale === 1) {
+      setDragConstraints(null);
+      return;
+    }
+
+    const updateConstraints = () => {
+      if (!containerRef.current) return;
+      // Calculate allowed drag range based on viewport size and scale
+      const { width, height } = containerRef.current.getBoundingClientRect();
+      const xLimit = (width * transform.scale - width) / 2;
+      const yLimit = (height * transform.scale - height) / 2;
+      
+      setDragConstraints({
+        left: -xLimit,
+        right: xLimit,
+        top: -yLimit,
+        bottom: yLimit
+      });
+    };
+
+    updateConstraints();
+    window.addEventListener('resize', updateConstraints);
+    return () => window.removeEventListener('resize', updateConstraints);
+  }, [transform.scale]);
+
   // Handle keyboard navigation
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (!item) return;
       if (e.key === 'Escape') onClose();
-      if (e.key === 'ArrowRight' && onNext) onNext();
-      if (e.key === 'ArrowLeft' && onPrev) onPrev();
+      // Only allow navigation if not zoomed in
+      if (transform.scale === 1) {
+          if (e.key === 'ArrowRight' && onNext) onNext();
+          if (e.key === 'ArrowLeft' && onPrev) onPrev();
+      }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [item, onClose, onNext, onPrev]);
+  }, [item, onClose, onNext, onPrev, transform.scale]);
 
   if (!item) return null;
+
+  const handleWheel = (e: React.WheelEvent) => {
+    if (item.mediaType === 'video') return;
+    
+    // Check if we are zooming
+    if (e.ctrlKey || Math.abs(e.deltaY) > 0) {
+        const container = containerRef.current;
+        if (!container) return;
+
+        // Prevent default browser zoom or scroll
+        // Note: React's synthetic event might be too late for preventDefault in some browsers for 'wheel', 
+        // but often works for touch pads or if passive is false.
+        // For consistent blocking, one might need a ref and addEventListener('wheel', ..., { passive: false }).
+        
+        const rect = container.getBoundingClientRect();
+        // Mouse position relative to center of the container
+        const pointerX = e.clientX - rect.left - rect.width / 2;
+        const pointerY = e.clientY - rect.top - rect.height / 2;
+
+        const delta = -e.deltaY * 0.002;
+        const targetScale = Math.min(Math.max(1, transform.scale + delta), 5);
+        
+        // Calculate new position to keep the pointer stationary relative to the image
+        // Formula: NewPos = Pointer - (Pointer - OldPos) * (NewScale / OldScale)
+        const ratio = targetScale / transform.scale;
+        
+        let newX = pointerX - (pointerX - transform.x) * ratio;
+        let newY = pointerY - (pointerY - transform.y) * ratio;
+
+        // Clamp values if we are zooming out to 1 or close to bounds
+        // (Optional: strict clamping ensures image doesn't fly away, 
+        // but framer motion constraints usually handle the 'resting' place.
+        // We clamp here to prevent getting lost.)
+        const xLimit = (rect.width * targetScale - rect.width) / 2;
+        const yLimit = (rect.height * targetScale - rect.height) / 2;
+        
+        if (targetScale === 1) {
+            newX = 0;
+            newY = 0;
+        } else {
+            if (newX > xLimit) newX = xLimit;
+            if (newX < -xLimit) newX = -xLimit;
+            if (newY > yLimit) newY = yLimit;
+            if (newY < -yLimit) newY = -yLimit;
+        }
+
+        setTransform({
+            scale: targetScale,
+            x: newX,
+            y: newY
+        });
+    }
+  };
+
+  const handleDrag = (event: any, info: PanInfo) => {
+      // Sync drag position with state so next zoom starts from correct position
+      setTransform(prev => ({
+          ...prev,
+          x: prev.x + info.delta.x,
+          y: prev.y + info.delta.y
+      }));
+  };
+
+  // Pinch Handlers
+  const handleTouchStart = (e: React.TouchEvent) => {
+    if (e.touches.length === 2) {
+      const dist = Math.hypot(
+        e.touches[0].clientX - e.touches[1].clientX,
+        e.touches[0].clientY - e.touches[1].clientY
+      );
+      lastDist.current = dist;
+    }
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    if (e.touches.length === 2 && lastDist.current !== null) {
+      const dist = Math.hypot(
+        e.touches[0].clientX - e.touches[1].clientX,
+        e.touches[0].clientY - e.touches[1].clientY
+      );
+      const delta = dist - lastDist.current;
+      const sensitivity = 0.01;
+      const newScale = Math.min(Math.max(1, transform.scale + delta * sensitivity), 5);
+      
+      // Simple center-zoom for pinch (could be improved to pinch-center)
+      setTransform(prev => ({
+          ...prev,
+          scale: newScale,
+          x: newScale === 1 ? 0 : prev.x,
+          y: newScale === 1 ? 0 : prev.y
+      }));
+      lastDist.current = dist;
+    }
+  };
+
+  const handleTouchEnd = () => {
+    lastDist.current = null;
+  };
+
+  const toggleZoom = (e: React.MouseEvent) => {
+      e.stopPropagation();
+      if (transform.scale > 1) {
+          setTransform({ scale: 1, x: 0, y: 0 });
+      } else {
+          // Zoom to 2.5x at the clicked position
+          const container = containerRef.current;
+          if (container) {
+              const rect = container.getBoundingClientRect();
+              const pointerX = e.clientX - rect.left - rect.width / 2;
+              const pointerY = e.clientY - rect.top - rect.height / 2;
+              
+              // Target scale 2.5
+              const targetScale = 2.5;
+              const ratio = targetScale / 1;
+              
+              // Initial x,y is 0,0
+              const newX = pointerX - (pointerX - 0) * ratio; // = pointerX * (1 - 2.5) = -1.5 * pointerX
+              const newY = pointerY - (pointerY - 0) * ratio;
+
+              setTransform({ scale: targetScale, x: newX, y: newY });
+          } else {
+              setTransform({ scale: 2.5, x: 0, y: 0 });
+          }
+      }
+  };
 
   return (
     <AnimatePresence>
@@ -31,59 +207,96 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
-        className="fixed inset-0 z-50 bg-black/95 backdrop-blur-sm flex items-center justify-center"
+        className="fixed inset-0 z-50 bg-black/95 backdrop-blur-sm flex items-center justify-center overflow-hidden"
         onClick={onClose}
+        onWheel={handleWheel}
       >
-        {/* Controls */}
-        <div className="absolute top-0 left-0 right-0 p-4 flex justify-between items-center text-white/80 z-50">
-          <div className="flex flex-col max-w-[70%]">
+        {/* Controls Overlay */}
+        <div className="absolute top-0 left-0 right-0 p-4 flex justify-between items-center text-white/80 z-50 pointer-events-none">
+          <div className="flex flex-col max-w-[70%] pointer-events-auto">
             <span className="font-medium text-lg truncate">{item.name}</span>
             <span className="text-xs opacity-60 truncate">{item.folderPath || 'Root'}</span>
           </div>
-          <button 
-            onClick={(e) => { e.stopPropagation(); onClose(); }}
-            className="p-2 hover:bg-white/10 rounded-full transition-colors"
-          >
-            <Icons.Close size={24} />
-          </button>
+          <div className="flex items-center gap-2 pointer-events-auto">
+            {item.mediaType !== 'video' && (
+                <button 
+                  onClick={(e) => { 
+                      e.stopPropagation(); 
+                      setTransform(prev => prev.scale > 1 ? { scale: 1, x: 0, y: 0 } : { scale: 2.5, x: 0, y: 0 }); 
+                  }}
+                  className="p-2 hover:bg-white/10 rounded-full transition-colors hidden md:block"
+                  title={transform.scale > 1 ? "Zoom Out" : "Zoom In"}
+                >
+                  {transform.scale > 1 ? <Icons.ZoomOut size={24} /> : <Icons.ZoomIn size={24} />}
+                </button>
+            )}
+            <button 
+              onClick={(e) => { e.stopPropagation(); onClose(); }}
+              className="p-2 hover:bg-white/10 rounded-full transition-colors"
+            >
+              <Icons.Close size={24} />
+            </button>
+          </div>
         </div>
 
-        {/* Content */}
-        <motion.div 
-          className="relative w-full h-full flex items-center justify-center p-4 md:p-10"
-          initial={{ scale: 0.9, opacity: 0 }}
-          animate={{ scale: 1, opacity: 1 }}
-          onClick={(e) => e.stopPropagation()}
+        {/* Content Container */}
+        <div 
+          ref={containerRef}
+          className={`relative w-full h-full flex items-center justify-center transition-all duration-300 ${transform.scale === 1 ? 'p-4 md:p-10' : 'p-0'}`}
+          onTouchStart={handleTouchStart}
+          onTouchMove={handleTouchMove}
+          onTouchEnd={handleTouchEnd}
         >
           {item.mediaType === 'video' ? (
-            <video 
-              src={item.url}
-              controls
-              autoPlay
-              className="max-w-full max-h-full shadow-2xl rounded-sm focus:outline-none"
-            />
+            <div className="w-full h-full flex items-center justify-center" onClick={(e) => e.stopPropagation()}>
+                <video 
+                  src={item.url}
+                  controls
+                  autoPlay
+                  className="max-w-full max-h-full shadow-2xl rounded-sm focus:outline-none"
+                />
+            </div>
           ) : (
-            <img
+            <motion.img
               src={item.url}
               alt={item.name}
               className="max-w-full max-h-full object-contain shadow-2xl rounded-sm"
+              style={{ cursor: transform.scale > 1 ? 'grab' : 'zoom-in' }}
+              onClick={(e) => e.stopPropagation()}
+              onDoubleClick={toggleZoom}
+              
+              // Smooth Zoom Animation
+              animate={{ 
+                  scale: transform.scale,
+                  x: transform.x,
+                  y: transform.y 
+              }}
+              transition={{ type: 'spring', stiffness: 300, damping: 30 }}
+
+              // Pan Dragging
+              drag={transform.scale > 1}
+              dragConstraints={dragConstraints || undefined}
+              dragElastic={0.05}
+              dragMomentum={false} // Disable momentum to prevent conflict with state sync
+              onDrag={handleDrag}
+              whileDrag={{ cursor: 'grabbing' }}
             />
           )}
-        </motion.div>
+        </div>
 
-        {/* Navigation Overlays */}
-        {onPrev && (
+        {/* Navigation Overlays (Hidden when zoomed) */}
+        {transform.scale === 1 && onPrev && (
            <button
-             className="absolute left-4 top-1/2 -translate-y-1/2 p-3 bg-white/10 hover:bg-white/20 text-white rounded-full backdrop-blur-md transition-all opacity-0 hover:opacity-100 md:opacity-100"
+             className="absolute left-4 top-1/2 -translate-y-1/2 p-3 bg-white/10 hover:bg-white/20 text-white rounded-full backdrop-blur-md transition-all opacity-0 hover:opacity-100 md:opacity-100 z-50 pointer-events-auto"
              onClick={(e) => { e.stopPropagation(); onPrev(); }}
            >
              <Icons.Back size={24} />
            </button>
         )}
         
-        {onNext && (
+        {transform.scale === 1 && onNext && (
            <button
-             className="absolute right-4 top-1/2 -translate-y-1/2 p-3 bg-white/10 hover:bg-white/20 text-white rounded-full backdrop-blur-md transition-all opacity-0 hover:opacity-100 md:opacity-100 rotate-180"
+             className="absolute right-4 top-1/2 -translate-y-1/2 p-3 bg-white/10 hover:bg-white/20 text-white rounded-full backdrop-blur-md transition-all opacity-0 hover:opacity-100 md:opacity-100 rotate-180 z-50 pointer-events-auto"
              onClick={(e) => { e.stopPropagation(); onNext(); }}
            >
              <Icons.Back size={24} />

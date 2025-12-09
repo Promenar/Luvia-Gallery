@@ -26,7 +26,13 @@ import {
   RefreshCw,
   AlertTriangle,
   Sun,
-  Moon
+  Moon,
+  Pause,
+  Square,
+  Loader2,
+  ZoomIn,
+  ZoomOut,
+  List
 } from 'lucide-react';
 
 export const Icons = {
@@ -57,5 +63,11 @@ export const Icons = {
   Refresh: RefreshCw,
   Alert: AlertTriangle,
   Sun,
-  Moon
+  Moon,
+  Pause,
+  Stop: Square,
+  Loader: Loader2,
+  ZoomIn,
+  ZoomOut,
+  List
 };

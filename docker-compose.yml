@@ -19,8 +19,8 @@ services:
       # - /volume1/family_photos:/photos
       # - /volume1/movies:/movies
       
-      # Persistence for configuration
-      - ./lumina-config.json:/app/lumina-config.json
+      # Persistence for configuration - Mapped to a directory to avoid 'touch' requirements
+      - ./data:/app/data
     environment:
       - NODE_ENV=production
       # Default fallback root if no paths configured
