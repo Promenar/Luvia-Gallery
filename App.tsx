@@ -12,7 +12,7 @@ const CONFIG_FILE_NAME = 'lumina-config.json';
 const USERS_STORAGE_KEY = 'lumina_users';
 const VIEW_MODE_KEY = 'lumina_view_mode';
 const APP_TITLE_KEY = 'lumina_app_title';
-const SOURCES_STORAGE_KEY = 'lumina_sources'; // New key for persisting folder metadata
+const SOURCES_STORAGE_KEY = 'lumina_sources'; 
 
 export default function App() {
   // --- Authentication State ---
@@ -22,6 +22,10 @@ export default function App() {
   const [loginForm, setLoginForm] = useState({ username: '', password: '' });
   const [setupForm, setSetupForm] = useState({ username: '', password: '', confirmPassword: '' });
   const [authError, setAuthError] = useState('');
+  
+  // --- Server Mode State ---
+  const [isServerMode, setIsServerMode] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
 
   // --- App Data State ---
   const [allUserData, setAllUserData] = useState<Record<string, UserData>>({});
@@ -52,103 +56,141 @@ export default function App() {
   const [newUserForm, setNewUserForm] = useState({ username: '', password: '' });
 
   // --- Persistence Helper ---
-  // This functions acts as the "Real-time Database Write" to the local environment.
-  const persistData = (newUsers?: User[], newTitle?: string, newAllUserData?: Record<string, UserData>) => {
+  // Handles saving data either to LocalStorage (Client Mode) or Server API (Server Mode)
+  const persistData = async (newUsers?: User[], newTitle?: string, newAllUserData?: Record<string, UserData>) => {
       const u = newUsers || users;
       const t = newTitle || appTitle;
       const d = newAllUserData || allUserData;
 
-      // Save to React State
+      // Update React State
       if (newUsers) setUsers(newUsers);
       if (newTitle) setAppTitle(newTitle);
       if (newAllUserData) setAllUserData(newAllUserData);
 
-      // Save to LocalStorage (The Browser DB)
-      localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(u));
-      localStorage.setItem(APP_TITLE_KEY, t);
-      
-      // We only save the sources metadata, not the full file objects (which can't be stringified)
-      const sourcesPayload: Record<string, any[]> = {};
+      // Construct Config Object
+      const userSources: Record<string, any[]> = {};
       Object.keys(d).forEach(k => {
-          sourcesPayload[k] = d[k].sources;
+          userSources[k] = d[k].sources;
       });
-      localStorage.setItem(SOURCES_STORAGE_KEY, JSON.stringify(sourcesPayload));
+
+      const config: AppConfig = {
+          title: t,
+          users: u,
+          userSources: userSources,
+          lastModified: Date.now()
+      };
+
+      if (isServerMode) {
+          // POST to Server
+          try {
+              await fetch('/api/config', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify(config)
+              });
+          } catch (e) {
+              console.error("Failed to sync to server", e);
+          }
+      } else {
+          // Save to LocalStorage
+          localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(u));
+          localStorage.setItem(APP_TITLE_KEY, t);
+          localStorage.setItem(SOURCES_STORAGE_KEY, JSON.stringify(userSources));
+      }
   };
 
-  // 1. Initial Load
+  // 1. Initial Load & Mode Detection
   useEffect(() => {
     const initApp = async () => {
-      let configLoaded = false;
-      let hydratedData: Record<string, UserData> = {};
-
-      // 1. Try to load from "Server" (Root directory file)
       try {
-        const response = await fetch(`/${CONFIG_FILE_NAME}`);
-        if (response.ok) {
-          const config: AppConfig = await response.json();
-          console.log("Loaded config from file:", config);
-          if (config.users && config.users.length > 0) {
-             setUsers(config.users);
-             setAppTitle(config.title || 'Lumina Gallery');
-             
-             // Hydrate sources from JSON
-             config.users.forEach(u => {
-                 const sources = config.userSources?.[u.username] || [];
-                 hydratedData[u.username] = {
-                     sources: sources,
-                     files: [] 
-                 };
-             });
-             setAllUserData(hydratedData);
-             setAuthStep('login');
-             configLoaded = true;
-          }
+        // Try to connect to backend API
+        const res = await fetch('/api/config');
+        if (res.ok) {
+           // --- SERVER MODE DETECTED ---
+           setIsServerMode(true);
+           const config = await res.json();
+           
+           if (config && config.users && config.users.length > 0) {
+              setUsers(config.users);
+              setAppTitle(config.title || 'Lumina Gallery');
+              
+              // Hydrate user buckets (files are loaded separately via scan)
+              const hydratedData: Record<string, UserData> = {};
+              config.users.forEach((u: User) => {
+                  hydratedData[u.username] = { sources: [], files: [] };
+              });
+              setAllUserData(hydratedData);
+              setAuthStep('login');
+              return; 
+           } else if (config === null) {
+               // Server exists but no config yet
+               setAuthStep('setup');
+               return;
+           }
         }
       } catch (e) {
-        console.log("No default config file found, falling back to local storage.");
+          // Backend not reachable, assume Client Mode
       }
 
-      // 2. Fallback to LocalStorage (Browser DB) if config file didn't fully initialize
-      if (!configLoaded) {
-          const storedUsers = localStorage.getItem(USERS_STORAGE_KEY);
-          const storedTitle = localStorage.getItem(APP_TITLE_KEY);
-          const storedSources = localStorage.getItem(SOURCES_STORAGE_KEY);
+      // --- CLIENT MODE FALLBACK ---
+      const storedUsers = localStorage.getItem(USERS_STORAGE_KEY);
+      const storedTitle = localStorage.getItem(APP_TITLE_KEY);
+      const storedSources = localStorage.getItem(SOURCES_STORAGE_KEY);
+      
+      if (storedUsers) {
+        const parsedUsers = JSON.parse(storedUsers);
+        setUsers(parsedUsers);
+        setAuthStep('login');
+        if (storedTitle) setAppTitle(storedTitle);
 
-          if (storedUsers) {
-            const parsedUsers = JSON.parse(storedUsers);
-            setUsers(parsedUsers);
-            setAuthStep('login');
-            
-            if (storedTitle) setAppTitle(storedTitle);
-
-            // Hydrate sources from LocalStorage
-            if (storedSources) {
-                const parsedSources = JSON.parse(storedSources);
-                Object.keys(parsedSources).forEach(username => {
-                    hydratedData[username] = {
-                        sources: parsedSources[username],
-                        files: []
-                    };
-                });
-                setAllUserData(hydratedData);
-            } else {
-                // Initialize empty buckets for existing users
-                parsedUsers.forEach((u: User) => {
-                    hydratedData[u.username] = { sources: [], files: [] };
-                });
-                setAllUserData(hydratedData);
-            }
-          } else {
-            setAuthStep('setup');
-          }
+        const hydratedData: Record<string, UserData> = {};
+        if (storedSources) {
+            const parsedSources = JSON.parse(storedSources);
+            Object.keys(parsedSources).forEach(username => {
+                hydratedData[username] = { sources: parsedSources[username], files: [] };
+            });
+        } else {
+            parsedUsers.forEach((u: User) => hydratedData[u.username] = { sources: [], files: [] });
+        }
+        setAllUserData(hydratedData);
+      } else {
+        setAuthStep('setup');
       }
-
-      const savedViewMode = localStorage.getItem(VIEW_MODE_KEY) as ViewMode;
-      if (savedViewMode) setViewMode(savedViewMode);
     };
-
+    
     initApp();
+
+    const savedViewMode = localStorage.getItem(VIEW_MODE_KEY) as ViewMode;
+    if (savedViewMode) setViewMode(savedViewMode);
   }, []);
+
+  // --- Server Logic: Scan Files ---
+  const syncServerFiles = async (username: string) => {
+      if (!isServerMode) return;
+      setIsSyncing(true);
+      try {
+          const res = await fetch('/api/scan');
+          const data = await res.json();
+          
+          if (data.files) {
+              const updatedUserData = {
+                  ...allUserData,
+                  [username]: {
+                      files: data.files,
+                      sources: data.sources
+                  }
+              };
+              setAllUserData(updatedUserData);
+              // We don't need to persist the file list itself to config.json, just sources metadata if we wanted to
+          }
+      } catch (e) {
+          console.error("Scan failed", e);
+          alert("Failed to scan NAS files.");
+      } finally {
+          setIsSyncing(false);
+      }
+  };
+
 
   const handleSetViewMode = (mode: ViewMode) => {
     setViewMode(mode);
@@ -157,14 +199,10 @@ export default function App() {
   };
 
   const handleUpdateTitle = (newTitle: string) => {
-    // Real-time update
     persistData(undefined, newTitle, undefined);
   };
 
-  // --- Configuration Management ---
-  
   const handleExportConfig = () => {
-      // Construct config object representing the "Database"
       const userSources: Record<string, any[]> = {};
       Object.keys(allUserData).forEach(key => {
           userSources[key] = allUserData[key].sources;
@@ -187,6 +225,7 @@ export default function App() {
   };
 
   const handleImportConfig = (event: React.ChangeEvent<HTMLInputElement>) => {
+      // Logic for importing config file (mostly for backup restore)
       const file = event.target.files?.[0];
       if (!file) return;
 
@@ -195,25 +234,16 @@ export default function App() {
           try {
               const json = JSON.parse(e.target?.result as string) as AppConfig;
               if (json.users && json.title) {
-                  // Restore User Data Sources
                   const hydratedData: Record<string, UserData> = {};
                   json.users.forEach(u => {
-                      const sources = json.userSources?.[u.username] || [];
-                      // Preserve existing files if username matches, otherwise reset files
-                      const existingFiles = allUserData[u.username]?.files || [];
-                      hydratedData[u.username] = {
-                          sources: sources,
-                          files: existingFiles 
-                      };
+                       // Preserve existing loaded files if possible
+                       const existingFiles = allUserData[u.username]?.files || [];
+                       hydratedData[u.username] = { sources: json.userSources?.[u.username] || [], files: existingFiles };
                   });
                   
-                  // Commit to DB (LocalStorage + State)
                   persistData(json.users, json.title, hydratedData);
-
-                  alert("Configuration loaded & Database updated!");
+                  alert("Configuration restored.");
                   if (authStep === 'loading' || authStep === 'setup') setAuthStep('login');
-              } else {
-                  alert("Invalid configuration file format.");
               }
           } catch (err) {
               alert("Failed to parse configuration file.");
@@ -230,11 +260,6 @@ export default function App() {
       setAuthError("Passwords do not match");
       return;
     }
-    if (!setupForm.username || !setupForm.password) {
-      setAuthError("Please fill all fields");
-      return;
-    }
-
     const adminUser: User = {
       username: setupForm.username,
       password: setupForm.password,
@@ -244,11 +269,12 @@ export default function App() {
     const newUsers = [adminUser];
     const newUserData = { [adminUser.username]: { files: [], sources: [] } };
     
-    // Commit to DB
     persistData(newUsers, undefined, newUserData);
-    
     setCurrentUser(adminUser);
     setAuthStep('app');
+    
+    // Auto-scan if on server
+    if (isServerMode) syncServerFiles(adminUser.username);
   };
 
   const handleLogin = (e: React.FormEvent) => {
@@ -257,12 +283,14 @@ export default function App() {
     if (user) {
       setCurrentUser(user);
       if (!allUserData[user.username]) {
-          // Initialize user data bucket if missing
           const newData = { ...allUserData, [user.username]: { files: [], sources: [] } };
-          persistData(undefined, undefined, newData);
+          setAllUserData(newData);
       }
       setAuthStep('app');
       setAuthError('');
+      
+      // Auto-scan if on server
+      if (isServerMode) syncServerFiles(user.username);
     } else {
       setAuthError('Invalid credentials');
     }
@@ -275,36 +303,36 @@ export default function App() {
     setCurrentPath('');
   };
 
-  // 3. Admin: Add User
   const handleAddUser = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newUserForm.username || !newUserForm.password) return;
-    
     if (users.find(u => u.username === newUserForm.username)) {
       alert("User already exists");
       return;
     }
-
     const newUser: User = {
       username: newUserForm.username,
       password: newUserForm.password,
       isAdmin: false
     };
-
     const updatedUsers = [...users, newUser];
     const updatedUserData = {
         ...allUserData,
         [newUser.username]: { files: [], sources: [] }
     };
-
-    // Commit to DB
     persistData(updatedUsers, undefined, updatedUserData);
-
     setNewUserForm({ username: '', password: '' });
   };
 
-  // 4. File Handling
+  // 4. File Handling (Local vs Server)
   const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+    // If in Server Mode, disable local upload or treat it as temporary
+    // The main flow for Server Mode is 'syncServerFiles'
+    if (isServerMode) {
+        alert("In Server Mode, please place files in the mapped NAS directory and click 'Scan NAS Library'.");
+        return;
+    }
+
     if (!currentUser) return;
     const fileList = event.target.files;
     if (!fileList || fileList.length === 0) return;
@@ -344,41 +372,31 @@ export default function App() {
               sources: [...(allUserData[currentUser.username]?.sources || []), { id: sourceId, name: sourceName, count: newItems.length }]
           }
       };
-      
-      // Commit Metadata to DB (Files themselves stay in memory)
-      persistData(undefined, undefined, updatedUserData);
-      
+      setAllUserData(updatedUserData);
+      // Only persist metadata locally
+      persistData(undefined, undefined, updatedUserData); 
       setIsSettingsOpen(false);
     }
   };
 
   const handleRemoveSource = (id: string) => {
-    if (!currentUser) return;
-
-    // Cleanup URLs
-    const filesToRemove = files.filter(f => f.sourceId === id);
-    filesToRemove.forEach(f => URL.revokeObjectURL(f.url));
-
-    const updatedUserData = {
+     if (!currentUser) return;
+     const updatedUserData = {
         ...allUserData,
         [currentUser.username]: {
             files: allUserData[currentUser.username].files.filter(f => f.sourceId !== id),
             sources: allUserData[currentUser.username].sources.filter(s => s.id !== id)
         }
     };
-
-    // Commit to DB
     persistData(undefined, undefined, updatedUserData);
   };
 
   // 5. Data Processing & Folder Tree
   const processedFiles = useMemo(() => {
     let result = files;
-
     if (filterOption !== 'all') {
       result = result.filter(f => f.mediaType === filterOption);
     }
-
     return sortMedia(result, sortOption);
   }, [files, filterOption, sortOption]);
 
@@ -388,10 +406,8 @@ export default function App() {
     if (viewMode === 'all') {
       return { type: 'media', data: processedFiles, title: 'Library' };
     }
-
     let targetNode = folderTree;
     let title = 'Folders';
-
     if (currentPath) {
        const parts = currentPath.split('/');
        for (const part of parts) {
@@ -401,43 +417,30 @@ export default function App() {
        }
        title = parts[parts.length - 1];
     }
-
     const subfolders = Object.values(targetNode.children).sort((a, b) => a.name.localeCompare(b.name));
     const media = processedFiles.filter(f => f.folderPath === currentPath);
-    
-    return { 
-      type: 'mixed', 
-      folders: subfolders, 
-      photos: media,
-      title: title 
-    };
-
+    return { type: 'mixed', folders: subfolders, photos: media, title: title };
   }, [viewMode, currentPath, processedFiles, folderTree]);
 
   // Cleanup
   useEffect(() => {
     return () => {
+      // Only revoke Blob URLs (local uploads), not server URLs
       Object.values(allUserData).forEach(userData => {
           userData.files.forEach(f => {
-              if (f.url) URL.revokeObjectURL(f.url);
+              if (f.file && f.url && f.url.startsWith('blob:')) URL.revokeObjectURL(f.url);
           });
       });
     };
   }, []);
 
-  // Lightbox Helpers
-  const getLightboxList = () => {
-      if (viewMode === 'all') return processedFiles;
-      return content.photos || [];
-  };
-  
+  const getLightboxList = () => viewMode === 'all' ? processedFiles : (content.photos || []);
   const handleNext = () => {
       if (!selectedItem) return;
       const list = getLightboxList();
       const idx = list.findIndex(p => p.id === selectedItem.id);
       if (idx !== -1 && idx < list.length - 1) setSelectedItem(list[idx + 1]);
   };
-
   const handlePrev = () => {
       if (!selectedItem) return;
       const list = getLightboxList();
@@ -447,15 +450,15 @@ export default function App() {
 
 
   // --- RENDER ---
+  if (authStep === 'loading') return <div className="h-screen flex items-center justify-center text-gray-400">Loading {isServerMode ? 'Server Data' : 'Database'}...</div>;
 
-  if (authStep === 'loading') return <div className="h-screen flex items-center justify-center text-gray-400">Loading Database...</div>;
-
+  // Setup Screen
   if (authStep === 'setup') {
     return (
       <div className="h-screen flex items-center justify-center bg-gray-50 p-4">
         <div className="bg-white p-8 rounded-2xl shadow-xl w-full max-w-md">
           <h1 className="text-3xl font-bold text-primary-600 mb-2 text-center">Welcome</h1>
-          <p className="text-gray-500 mb-8 text-center">Set up your admin account to start.</p>
+          <p className="text-gray-500 mb-8 text-center">{isServerMode ? 'Initialize your NAS Gallery.' : 'Set up your admin account.'}</p>
           <form onSubmit={handleSetup} className="space-y-4">
             <input type="text" placeholder="Username" value={setupForm.username} onChange={e => setSetupForm({...setupForm, username: e.target.value})} className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 outline-none" />
             <input type="password" placeholder="Password" value={setupForm.password} onChange={e => setSetupForm({...setupForm, password: e.target.value})} className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 outline-none" />
@@ -464,19 +467,22 @@ export default function App() {
             <button type="submit" className="w-full bg-primary-600 text-white py-2 rounded-lg font-semibold hover:bg-primary-700">Create Admin</button>
           </form>
           
-          <div className="mt-8 pt-6 border-t border-gray-100">
-             <p className="text-xs text-gray-400 text-center mb-2">Already have a {CONFIG_FILE_NAME}?</p>
-             <label className="flex items-center justify-center gap-2 w-full py-2 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-lg cursor-pointer transition-colors text-sm font-medium">
-                <Icons.Upload size={16} />
-                <span>Import Database File</span>
-                <input type="file" accept=".json" onChange={handleImportConfig} className="hidden" />
-             </label>
-          </div>
+          {!isServerMode && (
+             <div className="mt-8 pt-6 border-t border-gray-100">
+                <p className="text-xs text-gray-400 text-center mb-2">Already have a {CONFIG_FILE_NAME}?</p>
+                <label className="flex items-center justify-center gap-2 w-full py-2 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-lg cursor-pointer transition-colors text-sm font-medium">
+                    <Icons.Upload size={16} />
+                    <span>Import Database File</span>
+                    <input type="file" accept=".json" onChange={handleImportConfig} className="hidden" />
+                </label>
+             </div>
+          )}
         </div>
       </div>
     );
   }
 
+  // Login Screen
   if (authStep === 'login') {
     return (
       <div className="h-screen flex items-center justify-center bg-gray-50 p-4">
@@ -484,14 +490,14 @@ export default function App() {
            <div className="flex justify-center mb-6">
              <div className="w-12 h-12 bg-primary-600 rounded-xl flex items-center justify-center"><Icons.User className="text-white" /></div>
            </div>
-          <h1 className="text-2xl font-bold text-gray-800 text-center mb-8">{appTitle}</h1>
+          <h1 className="text-2xl font-bold text-gray-800 text-center mb-2">{appTitle}</h1>
+          {isServerMode && <p className="text-xs text-center text-primary-600 bg-primary-50 py-1 rounded mb-6">NAS Server Connected</p>}
           <form onSubmit={handleLogin} className="space-y-4">
             <input type="text" placeholder="Username" value={loginForm.username} onChange={e => setLoginForm({...loginForm, username: e.target.value})} className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 outline-none" />
             <input type="password" placeholder="Password" value={loginForm.password} onChange={e => setLoginForm({...loginForm, password: e.target.value})} className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 outline-none" />
             {authError && <p className="text-red-500 text-sm text-center">{authError}</p>}
             <button type="submit" className="w-full bg-primary-600 text-white py-2 rounded-lg font-semibold hover:bg-primary-700">Sign In</button>
           </form>
-          {/* Removed Import Config from Login for Security */}
         </div>
       </div>
     );
@@ -553,27 +559,14 @@ export default function App() {
                     <Icons.Sort size={14} />
                 </button>
                 <div className="absolute right-0 top-full mt-2 w-52 bg-white rounded-xl shadow-xl border border-gray-100 p-2 hidden group-focus-within:block group-hover:block z-50">
-                    <p className="text-xs font-semibold text-gray-400 uppercase px-2 py-1">Sort By</p>
-                    <button onClick={() => setSortOption('dateDesc')} className={`w-full text-left px-2 py-1.5 text-sm rounded-lg flex justify-between ${sortOption === 'dateDesc' ? 'bg-primary-50 text-primary-600' : 'hover:bg-gray-50'}`}>Date (Newest) {sortOption === 'dateDesc' && <Icons.Check size={14} />}</button>
-                    <button onClick={() => setSortOption('dateAsc')} className={`w-full text-left px-2 py-1.5 text-sm rounded-lg flex justify-between ${sortOption === 'dateAsc' ? 'bg-primary-50 text-primary-600' : 'hover:bg-gray-50'}`}>Date (Oldest) {sortOption === 'dateAsc' && <Icons.Check size={14} />}</button>
-                    <button onClick={() => setSortOption('nameAsc')} className={`w-full text-left px-2 py-1.5 text-sm rounded-lg flex justify-between ${sortOption === 'nameAsc' ? 'bg-primary-50 text-primary-600' : 'hover:bg-gray-50'}`}>Name (A-Z) {sortOption === 'nameAsc' && <Icons.Check size={14} />}</button>
-                    
+                    <p className="text-xs font-semibold text-gray-400 uppercase px-2 py-1">Sort & Filter</p>
+                    <button onClick={() => setSortOption('dateDesc')} className={`w-full text-left px-2 py-1.5 text-sm rounded-lg flex justify-between ${sortOption === 'dateDesc' ? 'bg-primary-50 text-primary-600' : 'hover:bg-gray-50'}`}>Newest First {sortOption === 'dateDesc' && <Icons.Check size={14} />}</button>
+                    <button onClick={() => setSortOption('dateAsc')} className={`w-full text-left px-2 py-1.5 text-sm rounded-lg flex justify-between ${sortOption === 'dateAsc' ? 'bg-primary-50 text-primary-600' : 'hover:bg-gray-50'}`}>Oldest First {sortOption === 'dateAsc' && <Icons.Check size={14} />}</button>
                     <div className="my-1 border-t border-gray-100" />
-                    <p className="text-xs font-semibold text-gray-400 uppercase px-2 py-1">Filter</p>
                     <button onClick={() => setFilterOption('all')} className={`w-full text-left px-2 py-1.5 text-sm rounded-lg flex justify-between ${filterOption === 'all' ? 'bg-primary-50 text-primary-600' : 'hover:bg-gray-50'}`}>All Types {filterOption === 'all' && <Icons.Check size={14} />}</button>
-                    <button onClick={() => setFilterOption('image')} className={`w-full text-left px-2 py-1.5 text-sm rounded-lg flex justify-between ${filterOption === 'image' ? 'bg-primary-50 text-primary-600' : 'hover:bg-gray-50'}`}>Images Only {filterOption === 'image' && <Icons.Check size={14} />}</button>
                     <button onClick={() => setFilterOption('video')} className={`w-full text-left px-2 py-1.5 text-sm rounded-lg flex justify-between ${filterOption === 'video' ? 'bg-primary-50 text-primary-600' : 'hover:bg-gray-50'}`}>Videos Only {filterOption === 'video' && <Icons.Check size={14} />}</button>
                 </div>
             </div>
-
-             <div className="flex bg-gray-100 p-1 rounded-lg">
-                <button onClick={() => setFolderViewLayout('grid')} className={`p-2 rounded-md transition-all ${folderViewLayout === 'grid' ? 'bg-white shadow-sm text-primary-600' : 'text-gray-400 hover:text-gray-600'}`}>
-                    <Icons.Grid size={18} />
-                </button>
-                <button onClick={() => setFolderViewLayout('masonry')} className={`p-2 rounded-md transition-all ${folderViewLayout === 'masonry' ? 'bg-white shadow-sm text-primary-600' : 'text-gray-400 hover:text-gray-600'}`}>
-                    <Icons.Masonry size={18} />
-                </button>
-             </div>
 
              <button onClick={() => setIsSettingsOpen(true)} className="p-2 ml-2 text-gray-500 hover:bg-gray-100 rounded-full">
                 <Icons.Settings size={20} />
@@ -583,32 +576,34 @@ export default function App() {
 
         {/* Content Area */}
         <div className="flex-1 overflow-y-auto p-4 md:p-8 no-scrollbar bg-gray-50/50">
-          
-          {/* Empty State / Welcome */}
           {files.length === 0 && (
-            <div className="h-full flex flex-col items-center justify-center text-center p-8 animate-in fade-in duration-700">
+            <div className="h-full flex flex-col items-center justify-center text-center p-8">
               <div className="w-24 h-24 bg-indigo-50 rounded-full flex items-center justify-center mb-6 text-indigo-400">
                 <Icons.Upload size={40} />
               </div>
               <h2 className="text-2xl font-bold text-gray-800 mb-2">Welcome, {currentUser?.username}</h2>
               <p className="text-gray-500 max-w-md mb-8">
-                {folderSources.length > 0 
-                  ? "Your directory structure is loaded from the database. Due to browser security, please re-select your folders to view content." 
-                  : "Your gallery is ready. Import local folders to begin organizing your photos and videos."}
+                {isServerMode 
+                 ? "Connected to NAS. Click below to scan your mapped media volume." 
+                 : "Your gallery is empty. Import local folders to begin."}
               </p>
               
               <div className="space-y-4">
-                  <label className="bg-primary-600 text-white px-8 py-3 rounded-xl font-medium shadow-lg hover:shadow-xl hover:bg-primary-700 transition-all cursor-pointer flex items-center justify-center gap-2 transform hover:-translate-y-0.5">
-                    <Icons.Upload size={20} />
-                    <span>Import Folder</span>
-                    <input type="file" multiple webkitdirectory="true" directory="" onChange={handleFileUpload} className="hidden" />
-                  </label>
-                  
-                  {folderSources.length > 0 && (
-                     <div className="text-xs text-orange-500 flex items-center gap-1 justify-center bg-orange-50 px-3 py-1 rounded-full">
-                        <Icons.Alert size={12} />
-                        <span>{folderSources.length} sources linked in Database (Require Re-auth)</span>
-                     </div>
+                  {isServerMode ? (
+                      <button 
+                        onClick={() => currentUser && syncServerFiles(currentUser.username)}
+                        disabled={isSyncing}
+                        className="bg-primary-600 text-white px-8 py-3 rounded-xl font-medium shadow-lg hover:shadow-xl hover:bg-primary-700 transition-all cursor-pointer flex items-center justify-center gap-2"
+                      >
+                         <Icons.Refresh size={20} className={isSyncing ? "animate-spin" : ""} />
+                         <span>{isSyncing ? "Scanning NAS..." : "Scan NAS Library"}</span>
+                      </button>
+                  ) : (
+                    <label className="bg-primary-600 text-white px-8 py-3 rounded-xl font-medium shadow-lg hover:shadow-xl hover:bg-primary-700 transition-all cursor-pointer flex items-center justify-center gap-2">
+                        <Icons.Upload size={20} />
+                        <span>Import Local Folder</span>
+                        <input type="file" multiple webkitdirectory="true" directory="" onChange={handleFileUpload} className="hidden" />
+                    </label>
                   )}
               </div>
             </div>
@@ -636,13 +631,6 @@ export default function App() {
 
                 {(content.data || (content.photos && content.photos.length > 0)) ? (
                     <div>
-                        {(viewMode === 'folders' && content.photos) && (
-                            <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2">
-                                <Icons.Image size={14} />
-                                Files
-                            </h3>
-                        )}
-                        
                         <motion.div 
                         layout
                         className={folderViewLayout === 'masonry' ? 'columns-2 md:columns-3 lg:columns-4 xl:columns-5 gap-4 space-y-4' : 'grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4'}
@@ -658,14 +646,7 @@ export default function App() {
                             ))}
                         </motion.div>
                     </div>
-                ) : (
-                    (viewMode === 'folders' && (!content.folders || content.folders.length === 0) && currentPath) && (
-                        <div className="flex flex-col items-center justify-center py-20 text-gray-400">
-                             <Icons.Folder size={48} className="mb-4 opacity-20" />
-                             <p>This folder is empty.</p>
-                        </div>
-                    )
-                )}
+                ) : null}
              </div>
           )}
         </div>
@@ -701,79 +682,54 @@ export default function App() {
                         {currentUser?.isAdmin && (
                             <>
                             <section className="pb-6 border-b border-gray-100">
-                                <div className="flex justify-between items-center mb-4">
-                                     <h3 className="font-bold text-gray-800 flex items-center gap-2"><Icons.Settings size={18} /> General Settings</h3>
-                                </div>
+                                <h3 className="font-bold text-gray-800 flex items-center gap-2 mb-4"><Icons.Settings size={18} /> General</h3>
                                 <div className="space-y-2">
                                     <label className="text-sm font-medium text-gray-600">Website Title</label>
-                                     <div className="flex gap-2">
-                                        <input 
-                                            type="text"
-                                            value={appTitle} 
-                                            onChange={(e) => handleUpdateTitle(e.target.value)}
-                                            className="w-full px-3 py-2 text-sm border rounded-lg focus:ring-2 focus:ring-primary-500 outline-none bg-white border-gray-200"
-                                            placeholder="Enter website title"
-                                        />
-                                    </div>
+                                    <input 
+                                        type="text"
+                                        value={appTitle} 
+                                        onChange={(e) => handleUpdateTitle(e.target.value)}
+                                        className="w-full px-3 py-2 text-sm border rounded-lg focus:ring-2 focus:ring-primary-500 outline-none bg-white border-gray-200"
+                                    />
                                 </div>
                             </section>
 
                             <section className="pb-6 border-b border-gray-100">
-                                <div className="flex justify-between items-center mb-4">
-                                     <h3 className="font-bold text-gray-800 flex items-center gap-2"><Icons.FileJson size={18} /> Database Management</h3>
-                                </div>
-                                <div className="bg-blue-50 p-4 rounded-xl mb-4 border border-blue-100">
-                                    <h4 className="text-blue-800 font-semibold text-sm mb-1 flex items-center gap-2"><Icons.Refresh size={14} /> Real-time Sync Active</h4>
-                                    <p className="text-sm text-blue-600">
-                                        All changes (users, settings, directory structure) are automatically saved to your local database. 
-                                        To persist these changes to the server, download the database file and overwrite <code>/{CONFIG_FILE_NAME}</code> in your application root.
-                                    </p>
-                                </div>
-                                <div className="flex gap-3">
-                                    <button onClick={handleExportConfig} className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors font-medium text-sm shadow-md">
-                                        <Icons.Download size={16} /> Download Database File
-                                    </button>
-                                    <label className="flex items-center gap-2 px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors font-medium text-sm cursor-pointer">
-                                        <Icons.Upload size={16} /> Restore Database
-                                        <input type="file" accept=".json" onChange={handleImportConfig} className="hidden" />
-                                    </label>
-                                </div>
+                                <h3 className="font-bold text-gray-800 flex items-center gap-2 mb-4"><Icons.FileJson size={18} /> Storage & Database</h3>
+                                {isServerMode ? (
+                                    <div className="bg-green-50 p-4 rounded-xl border border-green-100 space-y-3">
+                                        <div className="flex items-center gap-2 text-green-800 font-semibold text-sm">
+                                            <Icons.Check size={16} /> Server Persistence Active
+                                        </div>
+                                        <p className="text-sm text-green-700">
+                                            Your configuration and user data are automatically saved to the <code>{CONFIG_FILE_NAME}</code> on the NAS.
+                                        </p>
+                                        <button 
+                                            onClick={() => currentUser && syncServerFiles(currentUser.username)} 
+                                            disabled={isSyncing}
+                                            className="w-full py-2 bg-white border border-green-200 text-green-700 rounded-lg text-sm font-medium hover:bg-green-100 flex items-center justify-center gap-2"
+                                        >
+                                            <Icons.Refresh size={14} className={isSyncing ? 'animate-spin' : ''} />
+                                            {isSyncing ? 'Scanning...' : 'Rescan NAS Media Library'}
+                                        </button>
+                                    </div>
+                                ) : (
+                                    <div className="bg-yellow-50 p-4 rounded-xl border border-yellow-100">
+                                        <p className="text-sm text-yellow-800 font-medium mb-2">Running in Client Mode</p>
+                                        <p className="text-xs text-yellow-700 mb-3">Deploy via Docker to enable NAS persistence.</p>
+                                        <button onClick={handleExportConfig} className="flex items-center gap-2 px-3 py-1.5 bg-white border border-yellow-200 text-yellow-800 rounded-lg text-xs font-medium">
+                                            <Icons.Download size={12} /> Backup Config
+                                        </button>
+                                    </div>
+                                )}
                             </section>
                             </>
                         )}
 
-                        <section>
-                             <div className="flex items-center justify-between mb-4">
-                                <h3 className="font-bold text-gray-800 flex items-center gap-2"><Icons.Folder size={18} /> Active Folders</h3>
-                             </div>
-                             <div className="space-y-3">
-                                {folderSources.length === 0 && <p className="text-sm text-gray-400 italic">No folders imported.</p>}
-                                {folderSources.map(source => (
-                                    <div key={source.id} className="flex items-center justify-between p-3 bg-white rounded-lg border border-gray-100 shadow-sm">
-                                        <div className="flex items-center gap-3">
-                                            <div className="bg-orange-100 p-2 rounded-lg text-orange-600"><Icons.Folder size={20} /></div>
-                                            <div>
-                                                <p className="text-sm font-medium text-gray-800">{source.name}</p>
-                                                <p className="text-xs text-gray-500">{source.count} files</p>
-                                            </div>
-                                        </div>
-                                        <button onClick={() => handleRemoveSource(source.id)} className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors">
-                                            <Icons.Trash size={18} />
-                                        </button>
-                                    </div>
-                                ))}
-                                <label className="flex items-center justify-center gap-2 w-full p-4 border-2 border-dashed border-gray-200 rounded-xl text-gray-500 hover:border-primary-400 hover:text-primary-600 hover:bg-primary-50 cursor-pointer transition-all">
-                                    <Icons.Plus size={20} />
-                                    <span className="font-medium">Import another folder</span>
-                                    <input type="file" multiple webkitdirectory="true" directory="" onChange={handleFileUpload} className="hidden" />
-                                </label>
-                             </div>
-                        </section>
-
                         {currentUser?.isAdmin && (
                             <section className="pt-6 border-t border-gray-100">
                                 <div className="flex justify-between items-center mb-4">
-                                     <h3 className="font-bold text-gray-800 flex items-center gap-2"><Icons.User size={18} /> User Management</h3>
+                                     <h3 className="font-bold text-gray-800 flex items-center gap-2"><Icons.User size={18} /> Users</h3>
                                      <button onClick={() => setIsUserPanelOpen(!isUserPanelOpen)} className="text-xs font-medium text-primary-600 hover:underline">{isUserPanelOpen ? 'Hide' : 'Manage'}</button>
                                 </div>
                                 {isUserPanelOpen && (
@@ -784,20 +740,14 @@ export default function App() {
                                                     <span className="font-medium flex items-center gap-2">{u.username} {u.isAdmin && <span className="text-[10px] bg-primary-100 text-primary-700 px-1.5 py-0.5 rounded font-bold">ADMIN</span>}</span>
                                                     <div className="text-xs flex gap-2">
                                                         <span className="text-gray-400">Pass: {u.password}</span>
-                                                        <span className="text-gray-300">|</span>
-                                                        <span className="text-gray-500">{u.username === currentUser.username ? 'You' : 'User'}</span>
                                                     </div>
                                                 </div>
                                             ))}
                                         </div>
                                         <form onSubmit={handleAddUser} className="flex gap-2 items-end pt-2">
-                                            <div className="flex-1">
-                                                <input placeholder="New username" value={newUserForm.username} onChange={e => setNewUserForm({...newUserForm, username: e.target.value})} className="w-full px-3 py-2 text-sm border rounded-lg focus:ring-2 focus:ring-primary-500 outline-none" />
-                                            </div>
-                                            <div className="flex-1">
-                                                <input type="password" placeholder="Password" value={newUserForm.password} onChange={e => setNewUserForm({...newUserForm, password: e.target.value})} className="w-full px-3 py-2 text-sm border rounded-lg focus:ring-2 focus:ring-primary-500 outline-none" />
-                                            </div>
-                                            <button type="submit" className="bg-gray-900 text-white p-2 rounded-lg hover:bg-black transition-colors"><Icons.Plus size={18}/></button>
+                                            <input placeholder="Username" value={newUserForm.username} onChange={e => setNewUserForm({...newUserForm, username: e.target.value})} className="w-full px-3 py-2 text-sm border rounded-lg" />
+                                            <input type="password" placeholder="Pass" value={newUserForm.password} onChange={e => setNewUserForm({...newUserForm, password: e.target.value})} className="w-full px-3 py-2 text-sm border rounded-lg" />
+                                            <button type="submit" className="bg-gray-900 text-white p-2 rounded-lg"><Icons.Plus size={18}/></button>
                                         </form>
                                     </div>
                                 )}

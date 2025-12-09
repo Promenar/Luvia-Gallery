@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  lumina-gallery:
+    build: .
+    container_name: lumina-gallery
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    volumes:
+      # Map your NAS photo/video directory here
+      # Format: /path/on/nas:/media
+      - ./media_test:/media
+      
+      # Persistence for config/database
+      - ./lumina-config.json:/app/lumina-config.json
+    environment:
+      - NODE_ENV=production
