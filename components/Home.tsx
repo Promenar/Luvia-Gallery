@@ -7,9 +7,10 @@ interface HomeProps {
     items: MediaItem[];
     onEnterLibrary: () => void;
     onJumpToFolder: (item: MediaItem) => void;
+    subtitle: string;
 }
 
-export const Home: React.FC<HomeProps> = ({ items, onEnterLibrary, onJumpToFolder }) => {
+export const Home: React.FC<HomeProps> = ({ items, onEnterLibrary, onJumpToFolder, subtitle }) => {
     const [currentIndex, setCurrentIndex] = useState(0);
     const [featured, setFeatured] = useState<MediaItem[]>([]);
 
@@ -69,7 +70,7 @@ export const Home: React.FC<HomeProps> = ({ items, onEnterLibrary, onJumpToFolde
                         Lumina Gallery
                     </h1>
                     <p className="text-lg md:text-xl text-gray-200 mb-6 max-w-2xl mx-auto font-light drop-shadow-md">
-                        Your memories, beautifully organized. Rediscover your collection.
+                        {subtitle}
                     </p>
 
                     {currentItem && (

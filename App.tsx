@@ -17,6 +17,7 @@ const USERS_STORAGE_KEY = 'lumina_users';
 const VIEW_MODE_KEY = 'lumina_view_mode';
 const LAYOUT_MODE_KEY = 'lumina_layout_mode';
 const APP_TITLE_KEY = 'lumina_app_title';
+const APP_SUBTITLE_KEY = 'lumina_app_subtitle';
 const SOURCES_STORAGE_KEY = 'lumina_sources'; 
 const THEME_STORAGE_KEY = 'lumina_theme';
 const AUTH_USER_KEY = 'lumina_auth_user';
@@ -36,7 +37,8 @@ export default function App() {
   const [newPathInput, setNewPathInput] = useState('');
   
   // --- Server Pagination State ---
-  const [serverTotal, setServerTotal] = useState(0);
+  const [serverTotal, setServerTotal] = useState(0); // Count for CURRENT view (folder or all)
+  const [libraryTotalCount, setLibraryTotalCount] = useState(0); // Count for "All Photos" in sidebar
   const [serverOffset, setServerOffset] = useState(0);
   const [isFetchingMore, setIsFetchingMore] = useState(false);
   const [hasMoreServer, setHasMoreServer] = useState(true);
@@ -53,6 +55,7 @@ export default function App() {
   // --- App Data State ---
   const [allUserData, setAllUserData] = useState<Record<string, UserData>>({});
   const [appTitle, setAppTitle] = useState('Lumina Gallery');
+  const [homeSubtitle, setHomeSubtitle] = useState('Your memories, beautifully organized. Rediscover your collection.');
   
   // Derived state for current user
   const files = useMemo(() => 
@@ -74,6 +77,10 @@ export default function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isUserPanelOpen, setIsUserPanelOpen] = useState(false); 
   const [newUserForm, setNewUserForm] = useState({ username: '', password: '' });
+
+  // --- Random Sort Stability ---
+  // Store the randomized list separately so it doesn't reshuffle on every render
+  const [randomizedFiles, setRandomizedFiles] = useState<MediaItem[]>([]);
 
   // --- Theme Logic ---
   useEffect(() => {
@@ -99,15 +106,17 @@ export default function App() {
   };
 
   // --- Persistence Helper ---
-  const persistData = async (newUsers?: User[], newTitle?: string, newAllUserData?: Record<string, UserData>, newLibraryPaths?: string[]) => {
+  const persistData = async (newUsers?: User[], newTitle?: string, newAllUserData?: Record<string, UserData>, newLibraryPaths?: string[], newHomeSubtitle?: string) => {
       const u = newUsers || users;
       const t = newTitle || appTitle;
+      const s = newHomeSubtitle || homeSubtitle;
       const d = newAllUserData || allUserData;
       const l = newLibraryPaths || libraryPaths;
 
       // Update React State
       if (newUsers) setUsers(newUsers);
       if (newTitle) setAppTitle(newTitle);
+      if (newHomeSubtitle) setHomeSubtitle(newHomeSubtitle);
       if (newAllUserData) setAllUserData(newAllUserData);
       if (newLibraryPaths) setLibraryPaths(newLibraryPaths);
 
@@ -119,6 +128,7 @@ export default function App() {
 
       const config: AppConfig = {
           title: t,
+          homeSubtitle: s,
           users: u,
           userSources: userSources,
           libraryPaths: l,
@@ -138,6 +148,7 @@ export default function App() {
       } else {
           localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(u));
           localStorage.setItem(APP_TITLE_KEY, t);
+          localStorage.setItem(APP_SUBTITLE_KEY, s);
           localStorage.setItem(SOURCES_STORAGE_KEY, JSON.stringify(userSources));
       }
   };
@@ -148,6 +159,7 @@ export default function App() {
       let loadedUsers: User[] = [];
       let loadedData: Record<string, UserData> = {};
       let loadedTitle = 'Lumina Gallery';
+      let loadedSubtitle = 'Your memories, beautifully organized. Rediscover your collection.';
       let serverMode = false;
 
       try {
@@ -166,6 +178,7 @@ export default function App() {
            if (config && typeof config === 'object' && config.users && config.users.length > 0) {
               loadedUsers = config.users;
               loadedTitle = config.title || 'Lumina Gallery';
+              if (config.homeSubtitle) loadedSubtitle = config.homeSubtitle;
               setLibraryPaths(config.libraryPaths || []);
               
               config.users.forEach((u: User) => {
@@ -182,11 +195,13 @@ export default function App() {
       if (!serverMode || loadedUsers.length === 0) {
           const storedUsers = localStorage.getItem(USERS_STORAGE_KEY);
           const storedTitle = localStorage.getItem(APP_TITLE_KEY);
+          const storedSubtitle = localStorage.getItem(APP_SUBTITLE_KEY);
           const storedSources = localStorage.getItem(SOURCES_STORAGE_KEY);
           
           if (storedUsers) {
             loadedUsers = JSON.parse(storedUsers);
             if (storedTitle) loadedTitle = storedTitle;
+            if (storedSubtitle) loadedSubtitle = storedSubtitle;
 
             if (storedSources) {
                 const parsedSources = JSON.parse(storedSources);
@@ -204,6 +219,7 @@ export default function App() {
 
       setUsers(loadedUsers);
       setAppTitle(loadedTitle);
+      setHomeSubtitle(loadedSubtitle);
       setAllUserData(loadedData);
 
       // Check Persistent Login
@@ -216,7 +232,8 @@ export default function App() {
               if (serverMode) {
                   // We delay the sync slightly to ensure state is ready
                   setTimeout(() => {
-                      fetchServerFiles(user.username, loadedData, 0, true);
+                      // Fetch for 'all' to set sidebar count, even if we are not in 'all' view yet
+                      fetchServerFiles(user.username, loadedData, 0, true, null);
                       fetchServerFolders();
                   }, 100);
               }
@@ -235,6 +252,38 @@ export default function App() {
     const savedLayout = localStorage.getItem(LAYOUT_MODE_KEY) as GridLayout;
     if (savedLayout) setLayoutMode(savedLayout);
   }, []);
+
+  // --- Browser History Integration ---
+  useEffect(() => {
+      // Handle browser back button
+      const onPopState = (event: PopStateEvent) => {
+          // If we have state with path, restore it
+          if (event.state && typeof event.state.path === 'string') {
+               const path = event.state.path;
+               setCurrentPath(path);
+               // If viewMode wasn't folders, maybe switch? 
+               // For now assume user stays in current viewMode if simply popping state in folders
+               if(viewMode === 'folders') {
+                   // Trigger fetch if in server mode
+                   if(isServerMode && currentUser) {
+                        fetchServerFiles(currentUser.username, allUserData, 0, true, path);
+                   }
+               }
+          } else {
+               // If popping to root (no state), and we are deep in folders
+               if (currentPath !== '') {
+                   setCurrentPath('');
+                   if(isServerMode && currentUser) {
+                       fetchServerFiles(currentUser.username, allUserData, 0, true, '');
+                   }
+               }
+          }
+      };
+
+      window.addEventListener('popstate', onPopState);
+      return () => window.removeEventListener('popstate', onPopState);
+  }, [viewMode, currentPath, isServerMode, currentUser, allUserData]);
+
 
   // --- Server Logic: Scan & Poll ---
 
@@ -272,9 +321,6 @@ export default function App() {
           const limit = 500; // Chunk size
           let url = `/api/scan/results?offset=${offset}&limit=${limit}`;
           
-          // Explicitly handle empty string for root folder.
-          // folderFilter === '' means Root folder.
-          // folderFilter === null means "All Files" (no filter).
           if (folderFilter !== null && folderFilter !== undefined) {
               url += `&folder=${encodeURIComponent(folderFilter)}`;
           }
@@ -282,7 +328,6 @@ export default function App() {
           const res = await fetch(url);
           if (!res.ok) throw new Error("API Error");
           
-          // Use text() -> JSON.parse() to avoid ReadableStream 'close' error and handle nulls safely
           const text = await res.text();
           let data;
           try {
@@ -303,7 +348,15 @@ export default function App() {
               }
           });
           
+          // Update total count for CURRENT view
           setServerTotal(data.total);
+
+          // Update library total count for sidebar ONLY if we are fetching "All Photos" (folderFilter === null)
+          // This fixes the issue where navigating to a subfolder (which returns a smaller total) wipes out the global count.
+          if (folderFilter === null) {
+              setLibraryTotalCount(data.total);
+          }
+
           setServerOffset(offset + limit);
           setHasMoreServer(data.hasMore);
           setIsFetchingMore(false);
@@ -336,15 +389,11 @@ export default function App() {
         try {
             const statusRes = await fetch('/api/scan/status');
             if (statusRes.ok) {
-                // Safer parsing to prevent crashing on "unexpected non-whitespace character"
                 const text = await statusRes.text();
                 let statusData;
                 try {
                     statusData = JSON.parse(text);
-                } catch(e) {
-                    // Ignore parsing error, likely network blip or intermediate state
-                    console.warn("Status parse error, retrying...", e);
-                }
+                } catch(e) {}
                 
                 if (statusData) {
                     setScanStatus(statusData.status);
@@ -354,24 +403,18 @@ export default function App() {
                     });
 
                     if (statusData.status === 'scanning' || statusData.status === 'paused') {
-                        // Schedule next poll only if still active
                         scanTimeoutRef.current = setTimeout(poll, 1000);
                         return;
                     }
                 }
             }
-            
-            // If we fall through (not scanning/paused, or error), stop or retry slowly
-            // If it was just an error, retry slowly
             if (!statusRes.ok) {
                 scanTimeoutRef.current = setTimeout(poll, 2000);
             } else {
-                // Finished
                 stopPolling();
             }
         } catch (e) {
             console.error("Poll failed", e);
-            // Retry safely on network error
             scanTimeoutRef.current = setTimeout(poll, 2000);
         }
     };
@@ -398,7 +441,6 @@ export default function App() {
       }
   };
 
-  // Resume scanning UI if server is working in background on reload
   useEffect(() => {
     let isMounted = true;
     if (isServerMode && currentUser) {
@@ -409,7 +451,7 @@ export default function App() {
                 try {
                     return JSON.parse(text);
                 } catch(e) {
-                    return { status: 'idle' }; // Safe fallback
+                    return { status: 'idle' }; 
                 }
             })
             .then(d => {
@@ -430,11 +472,10 @@ export default function App() {
     };
   }, [isServerMode, currentUser]);
 
-  // Effect to handle scan completion logic (refresh library)
   useEffect(() => {
     if (scanStatus === 'completed' && currentUser) {
         // Refresh the library when scan completes
-        fetchServerFiles(currentUser.username, allUserData, 0, true);
+        fetchServerFiles(currentUser.username, allUserData, 0, true, null); // Fetch ALL to update count
         fetchServerFolders();
     }
   }, [scanStatus]);
@@ -446,7 +487,6 @@ export default function App() {
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ action })
           });
-          // Optimistic update
           if (action === 'pause') setScanStatus('paused');
           if (action === 'resume') setScanStatus('scanning');
           if (action === 'cancel') setScanStatus('cancelled');
@@ -464,21 +504,31 @@ export default function App() {
     
     // Reset file view when switching modes in server mode
     if (isServerMode && currentUser) {
-        // If switching to all/folders, fetch relevant data. 
-        // Note: fetchServerFiles is called on folder click for specific folders.
-        // For 'all', we might want to reset to all files.
         if (mode === 'all') {
              fetchServerFiles(currentUser.username, allUserData, 0, true, null);
         }
     }
   };
 
-  const handleFolderClick = (path: string) => {
+  const handleFolderClick = (path: string, pushState = true) => {
       setCurrentPath(path);
+      
+      // Update browser history
+      if (pushState) {
+         window.history.pushState({ path }, '', '#folder=' + encodeURIComponent(path));
+      }
+
       // In server mode, specifically fetch files for this folder to reset pagination
       if (isServerMode && currentUser) {
           fetchServerFiles(currentUser.username, allUserData, 0, true, path);
       }
+  };
+
+  const handleGoBackFolder = () => {
+       const parts = currentPath.split('/');
+       parts.pop();
+       const parentPath = parts.join('/');
+       handleFolderClick(parentPath); // Defaults to pushState=true, which is fine for navigation
   };
 
   // Jump to specific folder logic
@@ -487,13 +537,7 @@ export default function App() {
       setViewMode('folders');
       localStorage.setItem(VIEW_MODE_KEY, 'folders');
       
-      // Set path
-      setCurrentPath(item.folderPath);
-      
-      // Load data for that folder
-      if (isServerMode && currentUser) {
-          fetchServerFiles(currentUser.username, allUserData, 0, true, item.folderPath);
-      }
+      handleFolderClick(item.folderPath);
   };
 
   // Rename File
@@ -502,7 +546,6 @@ export default function App() {
 
       if(isServerMode) {
           try {
-              // Extract the stream path from the item URL for safety
               const pathPart = item.url.split('/media-stream/')[1];
               if(!pathPart) return;
 
@@ -530,7 +573,7 @@ export default function App() {
           });
           const updatedUserData = { ...allUserData, [currentUser.username]: { ...allUserData[currentUser.username], files: updatedFiles } };
           setAllUserData(updatedUserData);
-          persistData(undefined, undefined, updatedUserData, undefined);
+          persistData(undefined, undefined, updatedUserData, undefined, undefined);
       }
   };
 
@@ -565,7 +608,7 @@ export default function App() {
            const updatedFiles = files.filter(f => f.id !== item.id);
            const updatedUserData = { ...allUserData, [currentUser.username]: { ...allUserData[currentUser.username], files: updatedFiles } };
            setAllUserData(updatedUserData);
-           persistData(undefined, undefined, updatedUserData, undefined);
+           persistData(undefined, undefined, updatedUserData, undefined, undefined);
            setSelectedItem(null);
       }
   };
@@ -577,20 +620,24 @@ export default function App() {
   };
 
   const handleUpdateTitle = (newTitle: string) => {
-    persistData(undefined, newTitle, undefined, undefined);
+    persistData(undefined, newTitle, undefined, undefined, undefined);
+  };
+
+  const handleUpdateSubtitle = (newSubtitle: string) => {
+    persistData(undefined, undefined, undefined, undefined, newSubtitle);
   };
 
   const handleAddLibraryPath = (e?: React.FormEvent) => {
       if (e) e.preventDefault();
       if (!newPathInput.trim()) return;
       const newPaths = [...libraryPaths, newPathInput.trim()];
-      persistData(undefined, undefined, undefined, newPaths);
+      persistData(undefined, undefined, undefined, newPaths, undefined);
       setNewPathInput('');
   };
 
   const handleRemoveLibraryPath = (pathToRemove: string) => {
       const newPaths = libraryPaths.filter(p => p !== pathToRemove);
-      persistData(undefined, undefined, undefined, newPaths);
+      persistData(undefined, undefined, undefined, newPaths, undefined);
   };
 
   const handleExportConfig = () => {
@@ -601,6 +648,7 @@ export default function App() {
 
     const config: AppConfig = {
         title: appTitle,
+        homeSubtitle: homeSubtitle,
         users: users,
         userSources: userSources,
         libraryPaths: libraryPaths,
@@ -631,7 +679,7 @@ export default function App() {
                        hydratedData[u.username] = { sources: json.userSources?.[u.username] || [], files: existingFiles };
                   });
                   
-                  persistData(json.users, json.title, hydratedData, json.libraryPaths);
+                  persistData(json.users, json.title, hydratedData, json.libraryPaths, json.homeSubtitle);
                   alert("Configuration restored.");
                   if (authStep === 'loading' || authStep === 'setup') setAuthStep('login');
               }
@@ -651,7 +699,7 @@ export default function App() {
     const adminUser: User = { username: setupForm.username, password: setupForm.password, isAdmin: true };
     const newUsers = [adminUser];
     const newUserData = { [adminUser.username]: { files: [], sources: [] } };
-    persistData(newUsers, undefined, newUserData, []);
+    persistData(newUsers, undefined, newUserData, [], undefined);
     setCurrentUser(adminUser);
     localStorage.setItem(AUTH_USER_KEY, adminUser.username); // Auto-login next time
     setAuthStep('app');
@@ -676,7 +724,7 @@ export default function App() {
       setAuthStep('app');
       setAuthError('');
       if (isServerMode) {
-          fetchServerFiles(user.username, newData, 0, true);
+          fetchServerFiles(user.username, newData, 0, true, null); // Load sidebar count
           fetchServerFolders();
       }
     } else {
@@ -699,7 +747,7 @@ export default function App() {
     const newUser: User = { username: newUserForm.username, password: newUserForm.password, isAdmin: false };
     const updatedUsers = [...users, newUser];
     const updatedUserData = { ...allUserData, [newUser.username]: { files: [], sources: [] } };
-    persistData(updatedUsers, undefined, updatedUserData, undefined);
+    persistData(updatedUsers, undefined, updatedUserData, undefined, undefined);
     setNewUserForm({ username: '', password: '' });
   };
 
@@ -752,19 +800,33 @@ export default function App() {
           }
       };
       setAllUserData(updatedUserData);
-      persistData(undefined, undefined, updatedUserData, undefined); 
+      persistData(undefined, undefined, updatedUserData, undefined, undefined); 
       setIsSettingsOpen(false);
     }
   };
 
+  // Sorting logic with Random support
   const processedFiles = useMemo(() => {
     let result = files;
     if (filterOption !== 'all') {
       result = result.filter(f => f.mediaType === filterOption);
     }
-    // Sort logic
+    
+    // If Random, check if we have already randomized this set. 
+    // If files changed, re-randomize.
+    if (sortOption === 'random') {
+        // If length changed or randomizedFiles is empty, re-shuffle
+        if (randomizedFiles.length !== result.length) {
+            const shuffled = sortMedia(result, 'random');
+            setRandomizedFiles(shuffled);
+            return shuffled;
+        }
+        return randomizedFiles;
+    }
+    
+    // Normal sorting
     return sortMedia(result, sortOption);
-  }, [files, filterOption, sortOption]);
+  }, [files, filterOption, sortOption, randomizedFiles]);
 
   // Construct Folder Tree
   const folderTree = useMemo(() => {
@@ -923,10 +985,12 @@ export default function App() {
         onUpload={handleFileUpload}
         isSidebarOpen={isSidebarOpen}
         toggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)}
-        totalPhotos={isServerMode ? serverTotal : files.length}
+        // Use consistent library count. In server mode use libraryTotalCount, in client mode use array length.
+        totalPhotos={isServerMode ? libraryTotalCount : files.length} 
         theme={theme}
         toggleTheme={toggleTheme}
         isServerMode={isServerMode}
+        onOpenSettings={() => setIsSettingsOpen(true)}
       />
 
       <main className="flex-1 flex flex-col h-full overflow-hidden relative">
@@ -935,13 +999,26 @@ export default function App() {
                 items={files} 
                 onEnterLibrary={() => handleSetViewMode('folders')} 
                 onJumpToFolder={handleJumpToFolder}
+                subtitle={homeSubtitle}
              />
         ) : (
         <>
             <header className="h-16 mt-16 md:mt-0 flex items-center justify-between px-6 border-b border-gray-50 dark:border-gray-800 bg-white/80 dark:bg-gray-900/80 backdrop-blur-sm z-20 shrink-0 transition-colors">
             <div className="flex items-center gap-2 overflow-hidden flex-1 mr-4">
                 {viewMode === 'folders' ? (
-                    <div className="flex items-center gap-1 text-sm text-gray-600 dark:text-gray-400 overflow-hidden whitespace-nowrap mask-linear-fade">
+                    <div className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400 overflow-hidden whitespace-nowrap mask-linear-fade">
+                         {/* Back / Up Button */}
+                         {currentPath && (
+                            <button 
+                                onClick={handleGoBackFolder} 
+                                className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-md transition-colors mr-1 flex items-center gap-1 text-gray-500"
+                                title="Go Up"
+                            >
+                                <Icons.Up size={18} />
+                                <span className="text-xs font-bold hidden sm:block">UP</span>
+                            </button>
+                         )}
+
                         <button onClick={() => handleFolderClick('')} className={`hover:bg-gray-100 dark:hover:bg-gray-800 px-2 py-1 rounded-md flex items-center gap-1 transition-colors ${currentPath === '' ? 'font-bold text-gray-900 dark:text-white bg-gray-50 dark:bg-gray-800' : ''}`}><Icons.Folder size={16} />Root</button>
                         {currentPath && currentPath.split('/').map((part, index, arr) => {
                             const path = arr.slice(0, index + 1).join('/');
@@ -967,13 +1044,15 @@ export default function App() {
                         <p className="text-xs font-semibold text-gray-400 uppercase px-2 py-1">Sort & Filter</p>
                         <button onClick={() => setSortOption('dateDesc')} className={`w-full text-left px-2 py-1.5 text-sm rounded-lg flex justify-between transition-colors ${sortOption === 'dateDesc' ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}`}>Newest First {sortOption === 'dateDesc' && <Icons.Check size={14} />}</button>
                         <button onClick={() => setSortOption('dateAsc')} className={`w-full text-left px-2 py-1.5 text-sm rounded-lg flex justify-between transition-colors ${sortOption === 'dateAsc' ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}`}>Oldest First {sortOption === 'dateAsc' && <Icons.Check size={14} />}</button>
+                        {viewMode === 'all' && (
+                             <button onClick={() => setSortOption('random')} className={`w-full text-left px-2 py-1.5 text-sm rounded-lg flex justify-between transition-colors ${sortOption === 'random' ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}`}>Shuffle Random {sortOption === 'random' && <Icons.Check size={14} />}</button>
+                        )}
                         <div className="my-1 border-t border-gray-100 dark:border-gray-700" />
                         <button onClick={() => setFilterOption('all')} className={`w-full text-left px-2 py-1.5 text-sm rounded-lg flex justify-between transition-colors ${filterOption === 'all' ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}`}>All Types {filterOption === 'all' && <Icons.Check size={14} />}</button>
                         <button onClick={() => setFilterOption('video')} className={`w-full text-left px-2 py-1.5 text-sm rounded-lg flex justify-between transition-colors ${filterOption === 'video' ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}`}>Videos Only {filterOption === 'video' && <Icons.Check size={14} />}</button>
                         <button onClick={() => setFilterOption('audio')} className={`w-full text-left px-2 py-1.5 text-sm rounded-lg flex justify-between transition-colors ${filterOption === 'audio' ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}`}>Audio Only {filterOption === 'audio' && <Icons.Check size={14} />}</button>
                     </div>
                 </div>
-                <button onClick={() => setIsSettingsOpen(true)} className="p-2 ml-2 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors"><Icons.Settings size={20} /></button>
             </div>
             </header>
 
@@ -998,7 +1077,7 @@ export default function App() {
                         <div className="mb-10 animate-in fade-in slide-in-from-bottom-2 duration-500">
                             <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2"><Icons.Folder size={14} />{currentPath ? 'Subfolders' : 'Folders'}</h3>
                             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
-                                {content.folders.map((folder) => (<FolderCard key={folder.path} folder={folder} onClick={handleFolderClick} />))}
+                                {content.folders.map((folder) => (<FolderCard key={folder.path} folder={folder} onClick={(path) => handleFolderClick(path)} />))}
                             </div>
                         </div>
                     )}
@@ -1058,6 +1137,11 @@ export default function App() {
                                     <div className="space-y-2">
                                         <label className="text-sm font-medium text-gray-600 dark:text-gray-400">Website Title</label>
                                         <input type="text" value={appTitle} onChange={(e) => handleUpdateTitle(e.target.value)} className="w-full px-3 py-2 text-sm border rounded-lg focus:ring-2 focus:ring-primary-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white border-gray-200 dark:border-gray-600 placeholder-gray-400 dark:placeholder-gray-500" />
+                                    </div>
+
+                                    <div className="space-y-2">
+                                        <label className="text-sm font-medium text-gray-600 dark:text-gray-400">Home Subtitle</label>
+                                        <input type="text" value={homeSubtitle} onChange={(e) => handleUpdateSubtitle(e.target.value)} className="w-full px-3 py-2 text-sm border rounded-lg focus:ring-2 focus:ring-primary-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white border-gray-200 dark:border-gray-600 placeholder-gray-400 dark:placeholder-gray-500" />
                                     </div>
                                     
                                     {/* Connection Mode Toggle */}

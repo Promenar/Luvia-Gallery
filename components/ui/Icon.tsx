@@ -38,7 +38,11 @@ import {
   Minimize2,
   Music,
   Edit2,
-  ExternalLink
+  ExternalLink,
+  Info,
+  Clock,
+  Shuffle,
+  CornerUpLeft
 } from 'lucide-react';
 
 export const Icons = {
@@ -81,5 +85,9 @@ export const Icons = {
   Home,
   Music,
   Edit: Edit2,
-  Jump: ExternalLink
+  Jump: ExternalLink,
+  Info,
+  Clock,
+  Shuffle,
+  Up: CornerUpLeft
 };

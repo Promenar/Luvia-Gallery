@@ -74,6 +74,16 @@ export const getImmediateSubfolders = (root: FolderNode, currentPath: string): F
   return Object.values(currentNode.children);
 };
 
+// Fisher-Yates shuffle
+const shuffleArray = (array: MediaItem[]): MediaItem[] => {
+    const arr = [...array];
+    for (let i = arr.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    return arr;
+};
+
 export const sortMedia = (items: MediaItem[], sortOption: SortOption): MediaItem[] => {
   const sorted = [...items];
   switch (sortOption) {
@@ -87,6 +97,8 @@ export const sortMedia = (items: MediaItem[], sortOption: SortOption): MediaItem
       return sorted.sort((a, b) => b.name.localeCompare(a.name));
     case 'sizeDesc':
       return sorted.sort((a, b) => b.size - a.size);
+    case 'random':
+      return shuffleArray(sorted);
     default:
       return sorted;
   }

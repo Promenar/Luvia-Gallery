@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
 import { FolderNode } from '../types';
 import { Icons } from './ui/Icon';
@@ -9,23 +9,41 @@ interface FolderCardProps {
 }
 
 export const FolderCard: React.FC<FolderCardProps> = ({ folder, onClick }) => {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
 
   // Resolve thumbnail URL for cover
   const thumbUrl = useMemo(() => {
     if (!folder.coverMedia) return null;
     
-    // Always use API thumbnail if available in server mode
-    if (folder.coverMedia.url.startsWith('/media-stream/')) {
+    // Always use API thumbnail if available in server mode AND it's an image
+    // For videos, the server thumbnail API (sharp) usually fails without ffmpeg, 
+    // so we skip it to prevent broken images unless we have a specific thumbnail service.
+    if (folder.coverMedia.url.startsWith('/media-stream/') && folder.coverMedia.mediaType === 'image') {
             const pathPart = folder.coverMedia.url.split('/media-stream/')[1];
             return `/api/thumbnail?path=${pathPart}`;
     }
     
-    // Fallback for client mode or direct video/image
+    // Fallback for client mode or direct image
     if (folder.coverMedia.mediaType === 'image') {
         return folder.coverMedia.url;
     }
     return null;
   }, [folder.coverMedia]);
+
+  const handleMouseEnter = () => {
+      if (folder.coverMedia?.mediaType === 'video' && videoRef.current) {
+          videoRef.current.play().catch(() => {});
+          setIsPlaying(true);
+      }
+  };
+
+  const handleMouseLeave = () => {
+      if (folder.coverMedia?.mediaType === 'video' && videoRef.current) {
+          videoRef.current.pause();
+          setIsPlaying(false);
+      }
+  };
 
   return (
     <motion.div
@@ -35,6 +53,8 @@ export const FolderCard: React.FC<FolderCardProps> = ({ folder, onClick }) => {
       whileTap={{ scale: 0.98 }}
       className="relative group cursor-pointer"
       onClick={() => onClick(folder.path)}
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
     >
       {/* Stack Effect (Pseudo-cards behind) */}
       <div className="absolute top-1 left-1 w-full h-full bg-gray-200 dark:bg-gray-700 rounded-xl opacity-0 group-hover:opacity-100 transition-opacity duration-300 transform translate-y-1" />
@@ -45,14 +65,25 @@ export const FolderCard: React.FC<FolderCardProps> = ({ folder, onClick }) => {
         <div className="aspect-[4/3] bg-gray-100 dark:bg-gray-900 relative overflow-hidden flex items-center justify-center">
           {folder.coverMedia ? (
               folder.coverMedia.mediaType === 'video' ? (
-                  <div className="w-full h-full bg-gray-800 flex items-center justify-center group-hover:scale-105 transition-transform duration-700">
-                      <Icons.Video className="text-white/50 absolute z-10" size={32} />
-                       {/* Use thumbnail for video cover if possible */}
-                       <img 
-                           src={thumbUrl || folder.coverMedia.url} 
-                           className="w-full h-full object-cover opacity-60" 
-                           alt={folder.name}
-                       />
+                  <div className="w-full h-full bg-gray-800 flex items-center justify-center group-hover:scale-105 transition-transform duration-700 relative overflow-hidden">
+                      {/* Video Pattern / Placeholder */}
+                      <div className="absolute inset-0 bg-gradient-to-tr from-gray-900 to-gray-700 opacity-100" />
+                      
+                      {/* Video Preview on Hover */}
+                      <video 
+                          ref={videoRef}
+                          src={folder.coverMedia.url}
+                          muted
+                          loop
+                          playsInline
+                          className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-300 ${isPlaying ? 'opacity-100' : 'opacity-0'}`}
+                      />
+
+                      <div className={`absolute inset-0 flex items-center justify-center z-10 transition-opacity ${isPlaying ? 'opacity-0' : 'opacity-100'}`}>
+                        <div className="w-12 h-12 rounded-full bg-white/10 backdrop-blur-sm flex items-center justify-center border border-white/20">
+                             <Icons.Video className="text-white/90" size={24} />
+                        </div>
+                      </div>
                   </div>
               ) : folder.coverMedia.mediaType === 'audio' ? (
                  <div className="w-full h-full bg-gradient-to-br from-pink-500 to-orange-400 flex items-center justify-center">

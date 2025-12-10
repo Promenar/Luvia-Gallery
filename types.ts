@@ -1,8 +1,9 @@
-import 'react';
+import React from 'react';
 
 // Extend React HTML attributes to support webkitdirectory
+// We need to extend the interface within the React namespace correctly
 declare module 'react' {
-  interface InputHTMLAttributes<T> {
+  interface InputHTMLAttributes<T> extends React.HTMLAttributes<T> {
     webkitdirectory?: string;
     directory?: string;
   }
@@ -22,6 +23,19 @@ export interface MediaItem {
   lastModified: number;
   mediaType: MediaType;
   sourceId: string;   // To identify which "import" this came from
+}
+
+export interface ExifData {
+    Make?: string;
+    Model?: string;
+    ExposureTime?: number;
+    FNumber?: number;
+    ISO?: number;
+    FocalLength?: number;
+    LensModel?: string;
+    DateTimeOriginal?: Date;
+    width?: number;
+    height?: number;
 }
 
 export interface FolderNode {
@@ -48,6 +62,7 @@ export interface UserData {
 // The serializable configuration structure
 export interface AppConfig {
   title: string;
+  homeSubtitle?: string;
   users: User[];
   // We only store source metadata, not the file blobs themselves due to browser security
   userSources: Record<string, {id: string, name: string, count: number}[]>; 
@@ -58,5 +73,5 @@ export interface AppConfig {
 
 export type ViewMode = 'home' | 'all' | 'folders';
 export type GridLayout = 'grid' | 'masonry';
-export type SortOption = 'dateDesc' | 'dateAsc' | 'nameAsc' | 'nameDesc' | 'sizeDesc';
+export type SortOption = 'dateDesc' | 'dateAsc' | 'nameAsc' | 'nameDesc' | 'sizeDesc' | 'random';
 export type FilterOption = 'all' | 'image' | 'video' | 'audio';

@@ -1,6 +1,8 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { motion, AnimatePresence, PanInfo } from 'framer-motion';
-import { MediaItem } from '../types';
+// @ts-ignore - exifr is loaded via importmap
+import exifr from 'exifr';
+import { MediaItem, ExifData } from '../types';
 import { Icons } from './ui/Icon';
 
 interface ImageViewerProps {
@@ -22,11 +24,20 @@ interface TransformState {
 export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext, onPrev, onDelete, onRename, onJumpToFolder }) => {
   const [transform, setTransform] = useState<TransformState>({ scale: 1, x: 0, y: 0 });
   const containerRef = useRef<HTMLDivElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
   const [dragConstraints, setDragConstraints] = useState<{ left: number, right: number, top: number, bottom: number } | null>(null);
   
   // Slideshow State
   const [isPlaying, setIsPlaying] = useState(false);
   const slideshowIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Video Controls
+  const [playbackRate, setPlaybackRate] = useState(1.0);
+
+  // Info Panel
+  const [showInfo, setShowInfo] = useState(false);
+  const [exifData, setExifData] = useState<ExifData | null>(null);
+  const [isExifLoading, setIsExifLoading] = useState(false);
 
   // Pinch zoom state
   const lastDist = useRef<number | null>(null);
@@ -35,13 +46,52 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState('');
 
-  // Reset zoom state when item changes
+  // Reset state when item changes
   useEffect(() => {
     setTransform({ scale: 1, x: 0, y: 0 });
     setDragConstraints(null);
     lastDist.current = null;
     setIsRenaming(false);
+    setPlaybackRate(1.0);
+    // Don't reset showInfo preferably, but user might want it closed on next
+    // Clear EXIF
+    setExifData(null);
   }, [item?.id]);
+
+  // Handle Video Speed Change
+  useEffect(() => {
+    if (videoRef.current) {
+        videoRef.current.playbackRate = playbackRate;
+    }
+  }, [playbackRate, item]);
+
+  // EXIF Parsing Logic
+  useEffect(() => {
+      if (showInfo && item && item.mediaType === 'image') {
+          const fetchExif = async () => {
+              setIsExifLoading(true);
+              try {
+                  // exifr can parse File object (Client Mode) or URL (Server Mode)
+                  // It uses Range requests for URLs to be efficient
+                  const input = item.file || item.url;
+                  const output = await exifr.parse(input, {
+                      // Only fetch fields we care about to save bandwidth/time
+                      pick: ['Make', 'Model', 'ExposureTime', 'FNumber', 'ISO', 'FocalLength', 'LensModel', 'DateTimeOriginal', 'ExifImageWidth', 'ExifImageHeight'],
+                      tiff: true,
+                      exif: true,
+                  });
+                  setExifData(output);
+              } catch (e) {
+                  console.warn("Failed to parse EXIF", e);
+                  setExifData(null);
+              } finally {
+                  setIsExifLoading(false);
+              }
+          };
+          fetchExif();
+      }
+  }, [showInfo, item]);
+
 
   // Slideshow Logic
   useEffect(() => {
@@ -108,7 +158,12 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
           }
           if (e.key === ' ' || e.key === 'Spacebar') {
              e.preventDefault();
-             setIsPlaying(prev => !prev);
+             if (item.mediaType === 'video' && videoRef.current) {
+                 if (videoRef.current.paused) videoRef.current.play();
+                 else videoRef.current.pause();
+             } else {
+                 setIsPlaying(prev => !prev);
+             }
           }
       }
     };
@@ -257,6 +312,22 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
       }
   };
 
+  const formatDate = (ts: number | Date | undefined) => {
+      if (!ts) return '-';
+      return new Date(ts).toLocaleString();
+  };
+
+  const formatSize = (bytes: number) => {
+      const mb = bytes / 1024 / 1024;
+      return mb < 1 ? `${(bytes / 1024).toFixed(1)} KB` : `${mb.toFixed(1)} MB`;
+  };
+
+  const formatExposure = (t: number | undefined) => {
+      if (!t) return '-';
+      if (t >= 1) return t + 's';
+      return '1/' + Math.round(1/t);
+  };
+
   return (
     <AnimatePresence>
       <motion.div
@@ -268,7 +339,7 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
         onWheel={handleWheel}
       >
         {/* Controls Overlay */}
-        <div className="absolute top-0 left-0 right-0 p-4 flex justify-between items-center text-white/80 z-50 pointer-events-none">
+        <div className="absolute top-0 left-0 right-0 p-4 flex justify-between items-center text-white/80 z-50 pointer-events-none bg-gradient-to-b from-black/70 to-transparent">
           <div className="flex flex-col max-w-[50%] pointer-events-auto">
             {isRenaming ? (
                  <input 
@@ -289,10 +360,19 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
             <span className="text-xs opacity-60 truncate">{item.folderPath || 'Root'}</span>
           </div>
           <div className="flex items-center gap-2 pointer-events-auto">
+             {/* Info Button */}
+             <button
+                onClick={(e) => { e.stopPropagation(); setShowInfo(!showInfo); }}
+                className={`p-2 rounded-full transition-colors ${showInfo ? 'bg-white/20' : 'hover:bg-white/10'}`}
+                title="File Info"
+             >
+                 <Icons.Info size={20} />
+             </button>
+
              {onJumpToFolder && (
                  <button 
                     onClick={handleJumpClick}
-                    className="p-2 hover:bg-white/10 rounded-full transition-colors hidden md:block"
+                    className="p-2 hover:bg-white/10 rounded-full transition-colors block"
                     title="Jump to Folder"
                  >
                      <Icons.Jump size={20} />
@@ -307,7 +387,7 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
                      <Icons.Trash size={20} />
                  </button>
              )}
-             {onNext && (
+             {onNext && item.mediaType === 'image' && (
                  <button 
                     onClick={(e) => { e.stopPropagation(); setIsPlaying(!isPlaying); }}
                     className={`p-2 rounded-full transition-colors ${isPlaying ? 'bg-primary-600 text-white' : 'hover:bg-white/10'}`}
@@ -336,6 +416,117 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
             </button>
           </div>
         </div>
+        
+        {/* Info Panel Overlay */}
+        <AnimatePresence>
+            {showInfo && (
+                <motion.div
+                    initial={{ x: '100%' }}
+                    animate={{ x: 0 }}
+                    exit={{ x: '100%' }}
+                    className="absolute top-0 right-0 bottom-0 w-80 bg-black/80 backdrop-blur-md z-40 p-6 pt-20 border-l border-white/10 text-white overflow-y-auto"
+                    onClick={(e) => e.stopPropagation()}
+                >
+                    <h3 className="text-xl font-bold mb-6 flex items-center gap-2"><Icons.Info size={20}/> Info</h3>
+                    <div className="space-y-6 text-sm">
+                        <section>
+                            <h4 className="text-white/60 text-xs font-bold uppercase tracking-wider mb-3 border-b border-white/10 pb-1">File Details</h4>
+                            <div className="space-y-3">
+                                <div>
+                                    <p className="text-white/40 uppercase text-[10px] tracking-wider mb-0.5">Name</p>
+                                    <p className="font-medium break-all">{item.name}</p>
+                                </div>
+                                <div>
+                                    <p className="text-white/40 uppercase text-[10px] tracking-wider mb-0.5">Path</p>
+                                    <p className="text-white/80 break-all text-xs font-mono">{item.path}</p>
+                                </div>
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div>
+                                        <p className="text-white/40 uppercase text-[10px] tracking-wider mb-0.5">Size</p>
+                                        <p className="text-white/80">{formatSize(item.size)}</p>
+                                    </div>
+                                    <div>
+                                        <p className="text-white/40 uppercase text-[10px] tracking-wider mb-0.5">Type</p>
+                                        <p className="text-white/80">{item.mediaType.toUpperCase()}</p>
+                                    </div>
+                                </div>
+                                <div>
+                                    <p className="text-white/40 uppercase text-[10px] tracking-wider mb-0.5">Date Modified</p>
+                                    <p className="text-white/80">{formatDate(item.lastModified)}</p>
+                                </div>
+                            </div>
+                        </section>
+
+                        {/* EXIF Section */}
+                        {item.mediaType === 'image' && (
+                             <section>
+                                <h4 className="text-white/60 text-xs font-bold uppercase tracking-wider mb-3 border-b border-white/10 pb-1 mt-6">Camera Details</h4>
+                                {isExifLoading ? (
+                                    <div className="flex items-center gap-2 text-white/50 text-xs">
+                                        <Icons.Loader size={12} className="animate-spin" /> Loading metadata...
+                                    </div>
+                                ) : exifData ? (
+                                    <div className="space-y-3">
+                                        {(exifData.Make || exifData.Model) && (
+                                            <div>
+                                                <p className="text-white/40 uppercase text-[10px] tracking-wider mb-0.5">Camera</p>
+                                                <p className="text-white/80">{exifData.Make} {exifData.Model}</p>
+                                            </div>
+                                        )}
+                                        {exifData.LensModel && (
+                                            <div>
+                                                <p className="text-white/40 uppercase text-[10px] tracking-wider mb-0.5">Lens</p>
+                                                <p className="text-white/80">{exifData.LensModel}</p>
+                                            </div>
+                                        )}
+                                        <div className="grid grid-cols-2 gap-4">
+                                            {exifData.FNumber && (
+                                                <div>
+                                                    <p className="text-white/40 uppercase text-[10px] tracking-wider mb-0.5">Aperture</p>
+                                                    <p className="text-white/80">f/{exifData.FNumber}</p>
+                                                </div>
+                                            )}
+                                            {exifData.ExposureTime && (
+                                                <div>
+                                                    <p className="text-white/40 uppercase text-[10px] tracking-wider mb-0.5">Shutter</p>
+                                                    <p className="text-white/80">{formatExposure(exifData.ExposureTime)}</p>
+                                                </div>
+                                            )}
+                                            {exifData.ISO && (
+                                                <div>
+                                                    <p className="text-white/40 uppercase text-[10px] tracking-wider mb-0.5">ISO</p>
+                                                    <p className="text-white/80">{exifData.ISO}</p>
+                                                </div>
+                                            )}
+                                            {exifData.FocalLength && (
+                                                <div>
+                                                    <p className="text-white/40 uppercase text-[10px] tracking-wider mb-0.5">Focal Length</p>
+                                                    <p className="text-white/80">{exifData.FocalLength}mm</p>
+                                                </div>
+                                            )}
+                                             {(exifData.width || exifData.height) && (
+                                                <div>
+                                                    <p className="text-white/40 uppercase text-[10px] tracking-wider mb-0.5">Dimensions</p>
+                                                    <p className="text-white/80">{exifData.width || '?'} x {exifData.height || '?'}</p>
+                                                </div>
+                                            )}
+                                        </div>
+                                         {exifData.DateTimeOriginal && (
+                                            <div>
+                                                <p className="text-white/40 uppercase text-[10px] tracking-wider mb-0.5">Date Taken</p>
+                                                <p className="text-white/80">{formatDate(exifData.DateTimeOriginal)}</p>
+                                            </div>
+                                        )}
+                                    </div>
+                                ) : (
+                                    <p className="text-xs text-white/40 italic">No EXIF data found.</p>
+                                )}
+                             </section>
+                        )}
+                    </div>
+                </motion.div>
+            )}
+        </AnimatePresence>
 
         {/* Content Container */}
         <div 
@@ -346,14 +537,28 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
           onTouchEnd={handleTouchEnd}
         >
           {item.mediaType === 'video' ? (
-            <div className="w-full h-full flex items-center justify-center" onClick={(e) => e.stopPropagation()}>
+            <div className="w-full h-full flex flex-col items-center justify-center relative group" onClick={(e) => e.stopPropagation()}>
                 <video 
+                  ref={videoRef}
                   src={item.url}
                   controls
-                  autoPlay={isPlaying}
+                  autoPlay
                   onEnded={() => { if(isPlaying && onNext) onNext(); }}
                   className="max-w-full max-h-full shadow-2xl rounded-sm focus:outline-none"
                 />
+                {/* Custom Video Controls overlay for Speed */}
+                <div className="absolute top-1/2 right-4 -translate-y-1/2 bg-black/60 rounded-lg backdrop-blur px-2 py-3 flex flex-col items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <Icons.Clock size={16} className="text-white/70 mb-1" />
+                    {[0.5, 1.0, 1.5, 2.0].map(speed => (
+                        <button 
+                            key={speed}
+                            onClick={() => setPlaybackRate(speed)}
+                            className={`text-xs font-bold w-full text-center hover:text-primary-400 ${playbackRate === speed ? 'text-primary-400' : 'text-white/60'}`}
+                        >
+                            {speed}x
+                        </button>
+                    ))}
+                </div>
             </div>
           ) : item.mediaType === 'audio' ? (
              <div className="w-full max-w-md bg-white/10 backdrop-blur-md p-8 rounded-3xl flex flex-col items-center gap-6" onClick={(e) => e.stopPropagation()}>
@@ -367,7 +572,7 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
                  <audio 
                     src={item.url}
                     controls
-                    autoPlay={isPlaying}
+                    autoPlay
                     onEnded={() => { if(isPlaying && onNext) onNext(); }}
                     className="w-full"
                  />
