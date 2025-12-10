@@ -2,9 +2,7 @@ version: '3.8'
 
 services:
   lumina-gallery:
-    build:
-      context: .
-      dockerfile: Dockerfile.txt
+    image: promenarleng/luminapronar:latest
     container_name: lumina-gallery
     restart: unless-stopped
     ports:

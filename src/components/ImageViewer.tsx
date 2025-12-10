@@ -299,7 +299,7 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
 
   const handleDeleteClick = (e: React.MouseEvent) => {
       e.stopPropagation();
-      if (onDelete && confirm(`Are you sure you want to delete ${item.name}?`)) {
+      if (onDelete && window.confirm(`Are you sure you want to delete ${item.name}?`)) {
           onDelete(item);
       }
   };
