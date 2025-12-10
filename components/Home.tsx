@@ -6,9 +6,10 @@ import { Icons } from './ui/Icon';
 interface HomeProps {
     items: MediaItem[];
     onEnterLibrary: () => void;
+    onJumpToFolder: (item: MediaItem) => void;
 }
 
-export const Home: React.FC<HomeProps> = ({ items, onEnterLibrary }) => {
+export const Home: React.FC<HomeProps> = ({ items, onEnterLibrary, onJumpToFolder }) => {
     const [currentIndex, setCurrentIndex] = useState(0);
     const [featured, setFeatured] = useState<MediaItem[]>([]);
 
@@ -67,9 +68,22 @@ export const Home: React.FC<HomeProps> = ({ items, onEnterLibrary }) => {
                     <h1 className="text-5xl md:text-7xl font-bold text-white mb-6 tracking-tight drop-shadow-2xl">
                         Lumina Gallery
                     </h1>
-                    <p className="text-lg md:text-xl text-gray-200 mb-10 max-w-2xl mx-auto font-light drop-shadow-md">
+                    <p className="text-lg md:text-xl text-gray-200 mb-6 max-w-2xl mx-auto font-light drop-shadow-md">
                         Your memories, beautifully organized. Rediscover your collection.
                     </p>
+
+                    {currentItem && (
+                        <div className="mb-8 flex flex-col items-center gap-2">
+                             <div className="bg-black/40 backdrop-blur-md px-3 py-1 rounded-full text-xs text-white/70 font-mono border border-white/10 flex items-center gap-2">
+                                 <Icons.Image size={10} />
+                                 {currentItem.name}
+                             </div>
+                             <button onClick={() => onJumpToFolder(currentItem)} className="text-xs text-primary-300 hover:text-white flex items-center gap-1 hover:underline">
+                                 <Icons.Folder size={12} />
+                                 <span>View in {currentItem.folderPath || 'Root'}</span>
+                             </button>
+                        </div>
+                    )}
 
                     <button
                         onClick={onEnterLibrary}
@@ -83,7 +97,7 @@ export const Home: React.FC<HomeProps> = ({ items, onEnterLibrary }) => {
                     
                     {items.length > 0 && (
                         <p className="mt-8 text-white/40 text-sm tracking-widest uppercase">
-                            {items.length.toLocaleString()} Photos & Videos
+                            {items.length.toLocaleString()} Items
                         </p>
                     )}
                 </motion.div>

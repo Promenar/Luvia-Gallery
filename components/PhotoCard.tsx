@@ -18,8 +18,8 @@ export const MediaCard: React.FC<MediaCardProps> = React.memo(({ item, onClick, 
 
   // Determine thumbnail URL for server mode
   const thumbnailSrc = useMemo(() => {
-    // If it's a video, use the original stream (video tags handle buffering)
-    if (item.mediaType === 'video') return item.url;
+    // Audio has no thumbnail
+    if (item.mediaType === 'audio') return '';
     
     // Check if we are in Server Mode (URL starts with /media-stream/)
     if (item.url.startsWith('/media-stream/')) {
@@ -72,15 +72,18 @@ export const MediaCard: React.FC<MediaCardProps> = React.memo(({ item, onClick, 
       onMouseLeave={handleMouseLeave}
     >
       {/* Skeleton / Loading Placeholder */}
-      {!isLoaded && (
+      {!isLoaded && item.mediaType !== 'audio' && (
           <div className="absolute inset-0 bg-gray-300 dark:bg-gray-700 animate-pulse z-0" />
       )}
 
       {item.mediaType === 'video' ? (
         <div className={`relative w-full ${isGrid ? 'h-full absolute inset-0' : 'aspect-video'} flex items-center justify-center bg-gray-900`}>
+           {/* Use thumbnail for video poster/preview if possible, else video tag */}
+           {/* In masonry we prefer the video tag for preview on hover, but use thumbnail for initial load speed */}
            <video 
              ref={videoRef}
              src={item.url} 
+             poster={thumbnailSrc}
              className={`w-full h-full object-cover transition-opacity duration-500 ${isLoaded ? 'opacity-100' : 'opacity-0'}`}
              muted
              preload="metadata"
@@ -99,6 +102,14 @@ export const MediaCard: React.FC<MediaCardProps> = React.memo(({ item, onClick, 
            <div className={`absolute top-2 right-2 bg-black/60 backdrop-blur-sm px-2 py-0.5 rounded text-[10px] text-white font-medium flex items-center gap-1 z-10 transition-opacity duration-300 ${isLoaded ? 'opacity-100' : 'opacity-0'}`}>
              <Icons.Video size={10} />
              <span>VIDEO</span>
+           </div>
+        </div>
+      ) : item.mediaType === 'audio' ? (
+        <div className={`relative w-full ${isGrid ? 'h-full absolute inset-0' : 'aspect-square min-h-[150px]'} flex items-center justify-center bg-gradient-to-br from-pink-500 to-orange-400`}>
+            <Icons.Music size={48} className="text-white opacity-80" />
+            <div className={`absolute top-2 right-2 bg-black/40 backdrop-blur-sm px-2 py-0.5 rounded text-[10px] text-white font-medium flex items-center gap-1 z-10`}>
+             <Icons.Music size={10} />
+             <span>AUDIO</span>
            </div>
         </div>
       ) : (

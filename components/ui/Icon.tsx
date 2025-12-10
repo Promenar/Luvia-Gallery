@@ -35,7 +35,10 @@ import {
   List,
   Home,
   Minus,
-  Minimize2
+  Minimize2,
+  Music,
+  Edit2,
+  ExternalLink
 } from 'lucide-react';
 
 export const Icons = {
@@ -75,5 +78,8 @@ export const Icons = {
   ZoomIn,
   ZoomOut,
   List,
-  Home
+  Home,
+  Music,
+  Edit: Edit2,
+  Jump: ExternalLink
 };

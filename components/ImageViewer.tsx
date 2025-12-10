@@ -1,4 +1,3 @@
-
 import React, { useEffect, useState, useRef } from 'react';
 import { motion, AnimatePresence, PanInfo } from 'framer-motion';
 import { MediaItem } from '../types';
@@ -9,6 +8,9 @@ interface ImageViewerProps {
   onClose: () => void;
   onNext?: () => void;
   onPrev?: () => void;
+  onDelete?: (item: MediaItem) => void;
+  onRename?: (item: MediaItem, newName: string) => void;
+  onJumpToFolder?: (item: MediaItem) => void;
 }
 
 interface TransformState {
@@ -17,7 +19,7 @@ interface TransformState {
   y: number;
 }
 
-export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext, onPrev }) => {
+export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext, onPrev, onDelete, onRename, onJumpToFolder }) => {
   const [transform, setTransform] = useState<TransformState>({ scale: 1, x: 0, y: 0 });
   const containerRef = useRef<HTMLDivElement>(null);
   const [dragConstraints, setDragConstraints] = useState<{ left: number, right: number, top: number, bottom: number } | null>(null);
@@ -29,11 +31,16 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
   // Pinch zoom state
   const lastDist = useRef<number | null>(null);
 
+  // Rename State
+  const [isRenaming, setIsRenaming] = useState(false);
+  const [renameValue, setRenameValue] = useState('');
+
   // Reset zoom state when item changes
   useEffect(() => {
     setTransform({ scale: 1, x: 0, y: 0 });
     setDragConstraints(null);
     lastDist.current = null;
+    setIsRenaming(false);
   }, [item?.id]);
 
   // Slideshow Logic
@@ -86,6 +93,8 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (!item) return;
+      if (isRenaming) return; // Don't handle nav keys while typing
+      
       if (e.key === 'Escape') onClose();
       // Only allow navigation if not zoomed in
       if (transform.scale === 1) {
@@ -105,12 +114,12 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [item, onClose, onNext, onPrev, transform.scale]);
+  }, [item, onClose, onNext, onPrev, transform.scale, isRenaming]);
 
   if (!item) return null;
 
   const handleWheel = (e: React.WheelEvent) => {
-    if (item.mediaType === 'video') return;
+    if (item.mediaType === 'video' || item.mediaType === 'audio') return;
     
     // Check if we are zooming
     if (e.ctrlKey || Math.abs(e.deltaY) > 0) {
@@ -220,6 +229,34 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
       }
   };
 
+  const handleStartRename = (e: React.MouseEvent) => {
+      e.stopPropagation();
+      setRenameValue(item.name);
+      setIsRenaming(true);
+  };
+
+  const submitRename = () => {
+      if (onRename && renameValue.trim() && renameValue !== item.name) {
+          onRename(item, renameValue.trim());
+      }
+      setIsRenaming(false);
+  };
+
+  const handleDeleteClick = (e: React.MouseEvent) => {
+      e.stopPropagation();
+      if (onDelete && confirm(`Are you sure you want to delete ${item.name}?`)) {
+          onDelete(item);
+      }
+  };
+
+  const handleJumpClick = (e: React.MouseEvent) => {
+      e.stopPropagation();
+      if (onJumpToFolder) {
+          onJumpToFolder(item);
+          onClose();
+      }
+  };
+
   return (
     <AnimatePresence>
       <motion.div
@@ -233,10 +270,43 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
         {/* Controls Overlay */}
         <div className="absolute top-0 left-0 right-0 p-4 flex justify-between items-center text-white/80 z-50 pointer-events-none">
           <div className="flex flex-col max-w-[50%] pointer-events-auto">
-            <span className="font-medium text-lg truncate">{item.name}</span>
+            {isRenaming ? (
+                 <input 
+                    autoFocus
+                    value={renameValue}
+                    onChange={(e) => setRenameValue(e.target.value)}
+                    onKeyDown={(e) => { if(e.key === 'Enter') submitRename(); if(e.key === 'Escape') setIsRenaming(false); }}
+                    onBlur={submitRename}
+                    onClick={(e) => e.stopPropagation()}
+                    className="bg-white/10 text-white border-b border-white outline-none p-1 rounded"
+                 />
+            ) : (
+                 <span className="font-medium text-lg truncate flex items-center gap-2">
+                     {item.name}
+                     {onRename && <button onClick={handleStartRename} className="p-1 hover:bg-white/20 rounded opacity-50 hover:opacity-100"><Icons.Edit size={14}/></button>}
+                 </span>
+            )}
             <span className="text-xs opacity-60 truncate">{item.folderPath || 'Root'}</span>
           </div>
           <div className="flex items-center gap-2 pointer-events-auto">
+             {onJumpToFolder && (
+                 <button 
+                    onClick={handleJumpClick}
+                    className="p-2 hover:bg-white/10 rounded-full transition-colors hidden md:block"
+                    title="Jump to Folder"
+                 >
+                     <Icons.Jump size={20} />
+                 </button>
+             )}
+             {onDelete && (
+                 <button 
+                    onClick={handleDeleteClick}
+                    className="p-2 hover:bg-red-900/50 hover:text-red-400 rounded-full transition-colors mr-2"
+                    title="Delete File"
+                 >
+                     <Icons.Trash size={20} />
+                 </button>
+             )}
              {onNext && (
                  <button 
                     onClick={(e) => { e.stopPropagation(); setIsPlaying(!isPlaying); }}
@@ -246,7 +316,7 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
                      {isPlaying ? <Icons.Pause size={24} /> : <Icons.Play size={24} />}
                  </button>
              )}
-            {item.mediaType !== 'video' && (
+            {item.mediaType === 'image' && (
                 <button 
                   onClick={(e) => { 
                       e.stopPropagation(); 
@@ -285,6 +355,23 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
                   className="max-w-full max-h-full shadow-2xl rounded-sm focus:outline-none"
                 />
             </div>
+          ) : item.mediaType === 'audio' ? (
+             <div className="w-full max-w-md bg-white/10 backdrop-blur-md p-8 rounded-3xl flex flex-col items-center gap-6" onClick={(e) => e.stopPropagation()}>
+                 <div className="w-48 h-48 bg-gradient-to-br from-pink-500 to-orange-400 rounded-2xl flex items-center justify-center shadow-2xl">
+                     <Icons.Music size={80} className="text-white" />
+                 </div>
+                 <div className="text-center w-full">
+                     <h3 className="text-white text-xl font-bold truncate mb-1">{item.name}</h3>
+                     <p className="text-white/60 text-sm">{item.folderPath}</p>
+                 </div>
+                 <audio 
+                    src={item.url}
+                    controls
+                    autoPlay={isPlaying}
+                    onEnded={() => { if(isPlaying && onNext) onNext(); }}
+                    className="w-full"
+                 />
+             </div>
           ) : (
             <motion.img
               src={item.url}

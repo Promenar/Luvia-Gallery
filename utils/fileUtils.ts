@@ -8,6 +8,10 @@ export const isVideo = (mimeType: string): boolean => {
   return mimeType.startsWith('video/');
 };
 
+export const isAudio = (mimeType: string): boolean => {
+    return mimeType.startsWith('audio/');
+};
+
 export const buildFolderTree = (items: MediaItem[]): FolderNode => {
   const root: FolderNode = {
     name: 'Root',
@@ -19,6 +23,9 @@ export const buildFolderTree = (items: MediaItem[]): FolderNode => {
   items.forEach((item) => {
     const parts = item.folderPath.split('/').filter(p => p);
     let currentNode = root;
+
+    // Increment root count
+    currentNode.mediaCount++;
 
     parts.forEach((part, index) => {
       if (!currentNode.children[part]) {
@@ -33,14 +40,13 @@ export const buildFolderTree = (items: MediaItem[]): FolderNode => {
       currentNode = currentNode.children[part];
       currentNode.mediaCount++;
       
-      // Set a cover photo if none exists (prefer images over videos for covers)
-      if (!currentNode.coverMedia || (currentNode.coverMedia.mediaType === 'video' && item.mediaType === 'image')) {
+      // Set a cover photo if none exists (prefer images over videos/audio for covers)
+      if (!currentNode.coverMedia || (currentNode.coverMedia.mediaType !== 'image' && item.mediaType === 'image')) {
         currentNode.coverMedia = item;
+      } else if (!currentNode.coverMedia) {
+         currentNode.coverMedia = item;
       }
     });
-    
-    // Update root count
-    root.mediaCount++;
   });
 
   return root;

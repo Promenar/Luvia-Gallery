@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { MediaItem, ViewMode, GridLayout, User, UserData, SortOption, FilterOption, AppConfig, FolderNode } from './types';
-import { buildFolderTree, generateId, isVideo, sortMedia } from './utils/fileUtils';
+import { buildFolderTree, generateId, isVideo, isAudio, sortMedia } from './utils/fileUtils';
 import { Icons } from './components/ui/Icon';
 import { Navigation } from './components/Navigation';
 import { MediaCard } from './components/PhotoCard';
@@ -481,6 +481,95 @@ export default function App() {
       }
   };
 
+  // Jump to specific folder logic
+  const handleJumpToFolder = (item: MediaItem) => {
+      // Switch to folder view
+      setViewMode('folders');
+      localStorage.setItem(VIEW_MODE_KEY, 'folders');
+      
+      // Set path
+      setCurrentPath(item.folderPath);
+      
+      // Load data for that folder
+      if (isServerMode && currentUser) {
+          fetchServerFiles(currentUser.username, allUserData, 0, true, item.folderPath);
+      }
+  };
+
+  // Rename File
+  const handleRename = async (item: MediaItem, newName: string) => {
+      if(!currentUser) return;
+
+      if(isServerMode) {
+          try {
+              // Extract the stream path from the item URL for safety
+              const pathPart = item.url.split('/media-stream/')[1];
+              if(!pathPart) return;
+
+              const res = await fetch('/api/file/rename', {
+                  method: 'POST',
+                  headers: {'Content-Type': 'application/json'},
+                  body: JSON.stringify({ oldPath: pathPart, newName: newName })
+              });
+              const data = await res.json();
+              if(data.success) {
+                  // Refresh Current View
+                  if (viewMode === 'all') fetchServerFiles(currentUser.username, allUserData, 0, true, null);
+                  else if (viewMode === 'folders') fetchServerFiles(currentUser.username, allUserData, 0, true, currentPath);
+              } else {
+                  alert("Rename failed: " + data.error);
+              }
+          } catch(e) {
+              alert("Network error during rename");
+          }
+      } else {
+          // Client mode rename (Mock - just update state)
+          const updatedFiles = files.map(f => {
+              if (f.id === item.id) return { ...f, name: newName };
+              return f;
+          });
+          const updatedUserData = { ...allUserData, [currentUser.username]: { ...allUserData[currentUser.username], files: updatedFiles } };
+          setAllUserData(updatedUserData);
+          persistData(undefined, undefined, updatedUserData, undefined);
+      }
+  };
+
+  // Delete File
+  const handleDelete = async (item: MediaItem) => {
+      if(!currentUser) return;
+      
+      if(isServerMode) {
+           try {
+              const pathPart = item.url.split('/media-stream/')[1];
+              if(!pathPart) return;
+
+              const res = await fetch('/api/file/delete', {
+                  method: 'POST',
+                  headers: {'Content-Type': 'application/json'},
+                  body: JSON.stringify({ filePath: pathPart })
+              });
+              const data = await res.json();
+              if(data.success) {
+                  setSelectedItem(null); // Close lightbox
+                   // Refresh Current View
+                  if (viewMode === 'all') fetchServerFiles(currentUser.username, allUserData, 0, true, null);
+                  else if (viewMode === 'folders') fetchServerFiles(currentUser.username, allUserData, 0, true, currentPath);
+              } else {
+                  alert("Delete failed: " + data.error);
+              }
+           } catch(e) {
+              alert("Network error during delete");
+           }
+      } else {
+           // Client mode delete
+           const updatedFiles = files.filter(f => f.id !== item.id);
+           const updatedUserData = { ...allUserData, [currentUser.username]: { ...allUserData[currentUser.username], files: updatedFiles } };
+           setAllUserData(updatedUserData);
+           persistData(undefined, undefined, updatedUserData, undefined);
+           setSelectedItem(null);
+      }
+  };
+
   const toggleLayoutMode = () => {
       const newMode = layoutMode === 'grid' ? 'masonry' : 'grid';
       setLayoutMode(newMode);
@@ -629,11 +718,15 @@ export default function App() {
 
     const newItems: MediaItem[] = [];
     Array.from(fileList).forEach((file: File) => {
-      if (file.type.startsWith('image/') || file.type.startsWith('video/')) {
+      if (file.type.startsWith('image/') || file.type.startsWith('video/') || file.type.startsWith('audio/')) {
         const path = file.webkitRelativePath || file.name;
         const pathParts = path.split('/');
         const folderPath = pathParts.length > 1 ? pathParts.slice(0, -1).join('/') : '';
         
+        let mediaType: 'image' | 'video' | 'audio' = 'image';
+        if (isVideo(file.type)) mediaType = 'video';
+        if (isAudio(file.type)) mediaType = 'audio';
+
         newItems.push({
           id: generateId(),
           file,
@@ -644,7 +737,7 @@ export default function App() {
           size: file.size,
           type: file.type,
           lastModified: file.lastModified,
-          mediaType: isVideo(file.type) ? 'video' : 'image',
+          mediaType: mediaType,
           sourceId
         });
       }
@@ -696,7 +789,7 @@ export default function App() {
                         name: part,
                         path: currentPath,
                         children: {},
-                        mediaCount: match ? match.count : 0,
+                        mediaCount: match ? match.count : 0, // Using server calculated count
                         coverMedia: match ? match.coverItem : undefined
                     };
                 }
@@ -838,7 +931,11 @@ export default function App() {
 
       <main className="flex-1 flex flex-col h-full overflow-hidden relative">
         {viewMode === 'home' ? (
-             <Home items={files} onEnterLibrary={() => handleSetViewMode('folders')} />
+             <Home 
+                items={files} 
+                onEnterLibrary={() => handleSetViewMode('folders')} 
+                onJumpToFolder={handleJumpToFolder}
+             />
         ) : (
         <>
             <header className="h-16 mt-16 md:mt-0 flex items-center justify-between px-6 border-b border-gray-50 dark:border-gray-800 bg-white/80 dark:bg-gray-900/80 backdrop-blur-sm z-20 shrink-0 transition-colors">
@@ -873,6 +970,7 @@ export default function App() {
                         <div className="my-1 border-t border-gray-100 dark:border-gray-700" />
                         <button onClick={() => setFilterOption('all')} className={`w-full text-left px-2 py-1.5 text-sm rounded-lg flex justify-between transition-colors ${filterOption === 'all' ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}`}>All Types {filterOption === 'all' && <Icons.Check size={14} />}</button>
                         <button onClick={() => setFilterOption('video')} className={`w-full text-left px-2 py-1.5 text-sm rounded-lg flex justify-between transition-colors ${filterOption === 'video' ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}`}>Videos Only {filterOption === 'video' && <Icons.Check size={14} />}</button>
+                        <button onClick={() => setFilterOption('audio')} className={`w-full text-left px-2 py-1.5 text-sm rounded-lg flex justify-between transition-colors ${filterOption === 'audio' ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}`}>Audio Only {filterOption === 'audio' && <Icons.Check size={14} />}</button>
                     </div>
                 </div>
                 <button onClick={() => setIsSettingsOpen(true)} className="p-2 ml-2 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors"><Icons.Settings size={20} /></button>
@@ -923,7 +1021,15 @@ export default function App() {
         )}
       </main>
 
-      <ImageViewer item={selectedItem} onClose={() => setSelectedItem(null)} onNext={handleNext} onPrev={handlePrev} />
+      <ImageViewer 
+        item={selectedItem} 
+        onClose={() => setSelectedItem(null)} 
+        onNext={handleNext} 
+        onPrev={handlePrev}
+        onDelete={handleDelete}
+        onRename={handleRename}
+        onJumpToFolder={handleJumpToFolder}
+      />
       
       {/* Scan Progress Modal */}
       <ScanProgressModal 

@@ -8,7 +8,7 @@ declare module 'react' {
   }
 }
 
-export type MediaType = 'image' | 'video';
+export type MediaType = 'image' | 'video' | 'audio';
 
 export interface MediaItem {
   id: string;
@@ -59,4 +59,4 @@ export interface AppConfig {
 export type ViewMode = 'home' | 'all' | 'folders';
 export type GridLayout = 'grid' | 'masonry';
 export type SortOption = 'dateDesc' | 'dateAsc' | 'nameAsc' | 'nameDesc' | 'sizeDesc';
-export type FilterOption = 'all' | 'image' | 'video';
+export type FilterOption = 'all' | 'image' | 'video' | 'audio';

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { motion } from 'framer-motion';
 import { FolderNode } from '../types';
 import { Icons } from './ui/Icon';
@@ -9,6 +9,24 @@ interface FolderCardProps {
 }
 
 export const FolderCard: React.FC<FolderCardProps> = ({ folder, onClick }) => {
+
+  // Resolve thumbnail URL for cover
+  const thumbUrl = useMemo(() => {
+    if (!folder.coverMedia) return null;
+    
+    // Always use API thumbnail if available in server mode
+    if (folder.coverMedia.url.startsWith('/media-stream/')) {
+            const pathPart = folder.coverMedia.url.split('/media-stream/')[1];
+            return `/api/thumbnail?path=${pathPart}`;
+    }
+    
+    // Fallback for client mode or direct video/image
+    if (folder.coverMedia.mediaType === 'image') {
+        return folder.coverMedia.url;
+    }
+    return null;
+  }, [folder.coverMedia]);
+
   return (
     <motion.div
       initial={{ opacity: 0, scale: 0.95 }}
@@ -29,15 +47,20 @@ export const FolderCard: React.FC<FolderCardProps> = ({ folder, onClick }) => {
               folder.coverMedia.mediaType === 'video' ? (
                   <div className="w-full h-full bg-gray-800 flex items-center justify-center group-hover:scale-105 transition-transform duration-700">
                       <Icons.Video className="text-white/50 absolute z-10" size={32} />
-                       <video 
-                           src={folder.coverMedia.url} 
+                       {/* Use thumbnail for video cover if possible */}
+                       <img 
+                           src={thumbUrl || folder.coverMedia.url} 
                            className="w-full h-full object-cover opacity-60" 
-                           muted 
+                           alt={folder.name}
                        />
                   </div>
+              ) : folder.coverMedia.mediaType === 'audio' ? (
+                 <div className="w-full h-full bg-gradient-to-br from-pink-500 to-orange-400 flex items-center justify-center">
+                     <Icons.Music className="text-white" size={48} />
+                 </div>
               ) : (
                   <img 
-                      src={folder.coverMedia.url} 
+                      src={thumbUrl || folder.coverMedia.url} 
                       alt={folder.name} 
                       className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700" 
                   />

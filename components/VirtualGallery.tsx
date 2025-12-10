@@ -1,9 +1,12 @@
-import React from 'react';
-import { FixedSizeGrid as Grid } from 'react-window';
+import React, { useMemo } from 'react';
+import * as ReactWindow from 'react-window';
 import AutoSizer from 'react-virtualized-auto-sizer';
 import { MediaItem } from '../types';
 import { MediaCard } from './PhotoCard';
 import { Icons } from './ui/Icon';
+
+// Workaround for potential type definition mismatch or missing types for named export
+const FixedSizeGrid = (ReactWindow as any).FixedSizeGrid;
 
 interface VirtualGalleryProps {
   items: MediaItem[];
@@ -26,36 +29,68 @@ export const VirtualGallery: React.FC<VirtualGalleryProps> = ({
   layout
 }) => {
   
-  // -- MASONRY LAYOUT (Standard CSS Columns with content-visibility for performance) --
-  // This is better for "Client Mode" or smaller sets where aesthetic aspect ratios matter.
-  // We use content-visibility: auto to prevent rendering offscreen items.
+  // -- MASONRY LAYOUT (Deterministic JS Columns) --
+  // We distribute items into columns in JS. This ensures that new items (appended to 'items')
+  // fall into the bottom of columns and do not cause the top items to reshuffle (reflow),
+  // which happens with CSS columns when height changes.
+  
+  // Memoize column distribution to avoid recalculation on every render unless items change
+  const columns = useMemo(() => {
+    if (layout !== 'masonry') return [];
+    
+    // Determine column count based on window width (approximation for SSR/Initial)
+    // In a real app we might use a resize observer hook, but media queries match tailwind breakpoints.
+    const width = typeof window !== 'undefined' ? window.innerWidth : 1200;
+    let numCols = 2;
+    if (width >= 768) numCols = 3;
+    if (width >= 1024) numCols = 4;
+    if (width >= 1280) numCols = 5;
+
+    const cols: MediaItem[][] = Array.from({ length: numCols }, () => []);
+    
+    // Simple round-robin distribution. 
+    // For a true "shortest column" masonry, we'd need aspect ratios known ahead of time.
+    // Round-robin is stable and O(n).
+    items.forEach((item, i) => {
+        cols[i % numCols].push(item);
+    });
+    
+    return cols;
+  }, [items, layout]);
+
+
   if (layout === 'masonry') {
       return (
           <div className="w-full h-full pb-20">
-              <div style={{ contentVisibility: 'auto', containIntrinsicSize: '1000px' }} className="columns-2 md:columns-3 lg:columns-4 xl:columns-5 gap-4 space-y-4 p-1">
-                  {items.map((item) => (
-                      <div key={item.id} className="break-inside-avoid mb-4" style={{ willChange: 'transform' }}>
-                          <MediaCard 
-                              item={item} 
-                              onClick={onItemClick} 
-                              layout="masonry"
-                              isVirtual={false} 
-                          />
+              <div className="flex gap-4 p-1 items-start">
+                  {columns.map((colItems, colIndex) => (
+                      <div key={colIndex} className="flex-1 flex flex-col gap-4">
+                          {colItems.map((item) => (
+                              <MediaCard 
+                                  key={item.id}
+                                  item={item} 
+                                  onClick={onItemClick} 
+                                  layout="masonry"
+                                  isVirtual={false} 
+                              />
+                          ))}
                       </div>
                   ))}
-                  {/* Load More Sentinel */}
-                  {hasNextPage && (
-                      <div className="w-full py-8 flex justify-center items-center break-inside-avoid">
-                         <button 
-                             onClick={() => loadNextPage(items.length, items.length + 50)} 
-                             className="px-6 py-2 bg-gray-100 dark:bg-gray-800 rounded-full text-sm font-medium text-gray-500"
-                             disabled={isNextPageLoading}
-                         >
-                             {isNextPageLoading ? 'Loading more...' : 'Load More'}
-                         </button>
-                      </div>
-                  )}
               </div>
+              
+              {/* Load More Sentinel */}
+              {hasNextPage && (
+                  <div className="w-full py-8 flex justify-center items-center">
+                     <button 
+                         onClick={() => loadNextPage(items.length, items.length + 50)} 
+                         className="px-6 py-2 bg-gray-100 dark:bg-gray-800 rounded-full text-sm font-medium text-gray-500 flex items-center gap-2"
+                         disabled={isNextPageLoading}
+                     >
+                         {isNextPageLoading && <Icons.Loader className="animate-spin" size={14} />}
+                         {isNextPageLoading ? 'Loading more...' : 'Load More'}
+                     </button>
+                  </div>
+              )}
           </div>
       );
   }
@@ -77,7 +112,7 @@ export const VirtualGallery: React.FC<VirtualGalleryProps> = ({
   return (
     <div className="flex-1 w-full h-full">
       <AutoSizer>
-        {({ height, width }) => {
+        {({ height, width }: { height: number, width: number }) => {
           // Calculate columns based on width
           const columnCount = Math.floor((width + GUTTER_SIZE) / (COLUMN_WIDTH + GUTTER_SIZE));
           const safeColumnCount = Math.max(1, columnCount);
@@ -88,7 +123,7 @@ export const VirtualGallery: React.FC<VirtualGalleryProps> = ({
           const cellHeight = cellWidth; // Square aspect ratio for performance
 
           return (
-             <Grid
+             <FixedSizeGrid
                 className="no-scrollbar"
                 columnCount={safeColumnCount}
                 columnWidth={cellWidth + GUTTER_SIZE}
@@ -97,7 +132,7 @@ export const VirtualGallery: React.FC<VirtualGalleryProps> = ({
                 rowHeight={cellHeight + GUTTER_SIZE}
                 width={width}
                 overscanRowCount={5} // Keep more rows rendered to prevent white flickering
-                onItemsRendered={({ visibleRowStopIndex }) => {
+                onItemsRendered={({ visibleRowStopIndex }: { visibleRowStopIndex: number }) => {
                      // Check if we need to load more
                      if (hasNextPage && !isNextPageLoading) {
                          const visibleEndIndex = (visibleRowStopIndex + 1) * safeColumnCount;
@@ -107,7 +142,7 @@ export const VirtualGallery: React.FC<VirtualGalleryProps> = ({
                      }
                 }}
             >
-                {({ columnIndex, rowIndex, style }) => {
+                {({ columnIndex, rowIndex, style }: { columnIndex: number, rowIndex: number, style: React.CSSProperties }) => {
                     const index = rowIndex * safeColumnCount + columnIndex;
                     
                     // Adjust style for gutter
@@ -143,7 +178,7 @@ export const VirtualGallery: React.FC<VirtualGalleryProps> = ({
                         </div>
                     );
                 }}
-            </Grid>
+            </FixedSizeGrid>
           );
         }}
       </AutoSizer>

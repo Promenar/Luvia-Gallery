@@ -55,6 +55,7 @@ let scanJob = {
     currentPath: '',
     items: [],
     sources: [],
+    folders: [], // Cached folder structure with counts
     control: {
         pause: false,
         cancel: false
@@ -112,7 +113,7 @@ const scanDirectoryAsync = async (baseDir, currentSubDir = '', rootAlias = '') =
                     results = results.concat(subResults);
                 } else {
                     const mimeType = mime.lookup(fullFilePath);
-                    if (mimeType && (mimeType.startsWith('image/') || mimeType.startsWith('video/'))) {
+                    if (mimeType && (mimeType.startsWith('image/') || mimeType.startsWith('video/') || mimeType.startsWith('audio/'))) {
                         const item = {
                             name: file,
                             path: relativePath,
@@ -148,6 +149,10 @@ const formatItemForClient = (f) => {
         // Normalize folderPath to match frontend "path/to/folder" format.
         const normalizedFolder = (dir === '.' ? '' : dir).replace(/\\/g, '/').replace(/^\//, '');
         const streamPath = f.streamPath || f.path; // Fallback
+        
+        let mediaType = 'image';
+        if (f.type && f.type.startsWith('video/')) mediaType = 'video';
+        if (f.type && f.type.startsWith('audio/')) mediaType = 'audio';
 
         return {
             id: Buffer.from(streamPath).toString('base64'),
@@ -158,7 +163,7 @@ const formatItemForClient = (f) => {
             size: f.size || 0,
             type: f.type || 'application/octet-stream',
             lastModified: f.lastModified || Date.now(),
-            mediaType: (f.type && f.type.startsWith('video/')) ? 'video' : 'image',
+            mediaType: mediaType,
             sourceId: 'nas-mixed' 
         };
     } catch (e) {
@@ -167,7 +172,157 @@ const formatItemForClient = (f) => {
     }
 };
 
+// Helper to validate and resolve paths (shared logic)
+const resolveValidPath = (reqPath) => {
+    const decodedPath = decodeURIComponent(reqPath);
+    let config = {};
+    try {
+        if (fs.existsSync(CONFIG_FILE)) {
+            const content = fs.readFileSync(CONFIG_FILE, 'utf8');
+            if (content.trim()) config = JSON.parse(content);
+        }
+    } catch (e) {}
+
+    const validRoots = (config.libraryPaths && config.libraryPaths.length > 0) 
+        ? config.libraryPaths.map(p => p.startsWith('/') ? p : path.join(MEDIA_ROOT, p))
+        : [MEDIA_ROOT];
+
+    if (validRoots.length === 0) validRoots.push(MEDIA_ROOT);
+
+    const normalizedReqPath = path.normalize(decodedPath);
+    
+    // Security check: ensure path is within one of the valid roots
+    const isAllowed = validRoots.some(root => normalizedReqPath.startsWith(path.normalize(root)));
+
+    if (!isAllowed) return { error: 403, message: 'Access Denied' };
+    if (!fs.existsSync(normalizedReqPath)) return { error: 404, message: 'Not found' };
+    
+    return { path: normalizedReqPath };
+};
+
+// Calculate folders from scanned items (used at end of scan)
+const calculateFolderStats = (items) => {
+    const folderMap = new Map();
+
+    // 1. First Pass: Aggregate direct counts and identify covers
+    items.forEach(item => {
+        if (!item.path) return;
+        const dir = path.dirname(item.path);
+        const folderPath = (dir === '.' ? '' : dir).replace(/\\/g, '/').replace(/^\//, '');
+        
+        if (!folderMap.has(folderPath)) {
+            folderMap.set(folderPath, {
+                path: folderPath,
+                directCount: 0,
+                totalCount: 0, 
+                coverItem: null
+            });
+        }
+        
+        const folderData = folderMap.get(folderPath);
+        folderData.directCount++;
+        
+        // Pick cover: Prefer image over video/audio.
+        if (item.type) {
+            if (!folderData.coverItem) {
+                 folderData.coverItem = item;
+            } else if (folderData.coverItem.type.startsWith('video/') && item.type.startsWith('image/')) {
+                 folderData.coverItem = item; // Upgrade to image
+            }
+        }
+    });
+
+    // 2. Second Pass: Calculate Recursive Counts
+    const allFolders = Array.from(folderMap.values());
+    allFolders.forEach(f => f.totalCount = f.directCount); // Init
+
+    allFolders.forEach(child => {
+        if (child.directCount > 0) {
+                let currentPath = child.path;
+                while(currentPath.includes('/')) {
+                    currentPath = path.dirname(currentPath);
+                    const parentKey = currentPath === '.' ? '' : currentPath; 
+                    if (folderMap.has(parentKey)) {
+                        folderMap.get(parentKey).totalCount += child.directCount;
+                    }
+                }
+                // Handle root files if root key exists (often empty string '')
+                if (child.path !== '' && folderMap.has('')) {
+                     folderMap.get('').totalCount += child.directCount;
+                }
+        }
+    });
+
+    return allFolders.map(f => ({
+        path: f.path,
+        count: f.totalCount, 
+        coverItem: f.coverItem ? formatItemForClient(f.coverItem) : null
+    }));
+};
+
 // --- API Endpoints ---
+
+// File Rename
+app.post('/api/file/rename', async (req, res) => {
+    const { oldPath, newName } = req.body;
+    if (!oldPath || !newName) return res.status(400).json({ error: 'Missing parameters' });
+
+    const result = resolveValidPath(oldPath);
+    if (result.error) return res.status(result.error).json({ error: result.message });
+    
+    const oldFilePath = result.path;
+    const dir = path.dirname(oldFilePath);
+    const newFilePath = path.join(dir, newName);
+
+    try {
+        await fs.promises.rename(oldFilePath, newFilePath);
+        
+        // Update memory cache (scanJob)
+        const foundItem = scanJob.items.find(i => i.streamPath === oldFilePath);
+        if (foundItem) {
+            foundItem.name = newName;
+            foundItem.streamPath = newFilePath;
+            // Update the display path too
+            const parts = foundItem.path.split('/');
+            parts.pop();
+            parts.push(newName);
+            foundItem.path = parts.join('/');
+        }
+        
+        // Invalidate folder stats slightly (recalc would be better but expensive)
+        // ideally re-run calc but let's assume next scan fixes it or we live with slight mismatch
+        
+        res.json({ success: true, newPath: foundItem ? foundItem.path : newName });
+    } catch (e) {
+        console.error("Rename error", e);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// File Delete
+app.post('/api/file/delete', async (req, res) => {
+    const { filePath } = req.body;
+    if (!filePath) return res.status(400).json({ error: 'Path required' });
+
+    const result = resolveValidPath(filePath);
+    if (result.error) return res.status(result.error).json({ error: result.message });
+
+    try {
+        await fs.promises.unlink(result.path);
+        
+        // Remove from memory cache
+        const idx = scanJob.items.findIndex(i => i.streamPath === result.path);
+        if (idx !== -1) {
+            scanJob.items.splice(idx, 1);
+            scanJob.count--;
+        }
+        
+        res.json({ success: true });
+    } catch (e) {
+        console.error("Delete error", e);
+        res.status(500).json({ error: e.message });
+    }
+});
 
 // File System Autocomplete
 app.get('/api/fs/list', async (req, res) => {
@@ -242,6 +397,7 @@ app.post('/api/scan/start', async (req, res) => {
         currentPath: '',
         items: [],
         sources: [],
+        folders: [],
         control: { pause: false, cancel: false }
     };
 
@@ -286,8 +442,11 @@ app.post('/api/scan/start', async (req, res) => {
              }
         }
         
+        // Post-Scan: Calculate Folders Structure immediately
+        scanJob.folders = calculateFolderStats(scanJob.items);
+
         scanJob.status = 'completed';
-        console.log(`Scan completed. Found ${scanJob.count} items.`);
+        console.log(`Scan completed. Found ${scanJob.count} items. Folders processed.`);
 
     } catch (e) {
         if (e.message === 'CANCELLED') {
@@ -384,74 +543,20 @@ app.get('/api/scan/results', (req, res) => {
 });
 
 // Endpoint to get all folders at once (grouped by directory)
-// This avoids pagination issues in the frontend folder view
 app.get('/api/library/folders', (req, res) => {
     try {
-        const folderMap = new Map();
-
-        if (scanJob && scanJob.items) {
-            scanJob.items.forEach(item => {
-                if (!item.path) return;
-                const dir = path.dirname(item.path);
-                const folderPath = (dir === '.' ? '' : dir).replace(/\\/g, '/').replace(/^\//, '');
-                
-                if (!folderMap.has(folderPath)) {
-                    folderMap.set(folderPath, {
-                        path: folderPath,
-                        count: 0,
-                        coverItem: null
-                    });
-                }
-                
-                const folderData = folderMap.get(folderPath);
-                folderData.count++;
-                
-                // Pick the first image as cover, or video if no image yet
-                if (item.type) {
-                    if (!folderData.coverItem || (folderData.coverItem.type.startsWith('video/') && item.type.startsWith('image/'))) {
-                        folderData.coverItem = item;
-                    }
-                }
-            });
+        // Return pre-calculated folders from scan job if available
+        if (scanJob.folders && scanJob.folders.length > 0) {
+            return res.json({ folders: scanJob.folders });
         }
-
-        const folders = Array.from(folderMap.values()).map(f => ({
-            ...f,
-            coverItem: f.coverItem ? formatItemForClient(f.coverItem) : null
-        }));
-
-        res.json({ folders });
+        
+        // Fallback for empty state
+        res.json({ folders: [] });
     } catch(e) {
         console.error("Folder List API Error", e);
         res.status(500).json({ error: "Failed to list folders" });
     }
 });
-
-// Helper to validate and resolve paths (shared logic)
-const resolveValidPath = (reqPath) => {
-    const decodedPath = decodeURIComponent(reqPath);
-    let config = {};
-    try {
-        if (fs.existsSync(CONFIG_FILE)) {
-            const content = fs.readFileSync(CONFIG_FILE, 'utf8');
-            if (content.trim()) config = JSON.parse(content);
-        }
-    } catch (e) {}
-
-    const validRoots = (config.libraryPaths && config.libraryPaths.length > 0) 
-        ? config.libraryPaths.map(p => p.startsWith('/') ? p : path.join(MEDIA_ROOT, p))
-        : [MEDIA_ROOT];
-
-    if (validRoots.length === 0) validRoots.push(MEDIA_ROOT);
-
-    const normalizedReqPath = path.normalize(decodedPath);
-    const isAllowed = validRoots.some(root => normalizedReqPath.startsWith(path.normalize(root)));
-
-    if (!isAllowed) return { error: 403, message: 'Access Denied' };
-    if (!fs.existsSync(normalizedReqPath)) return { error: 404, message: 'Not found' };
-    
-    return { path: normalizedReqPath };
-};
 
 // --- Thumbnail Endpoint (Persisted) ---
 app.get('/api/thumbnail', async (req, res) => {
@@ -478,7 +583,8 @@ app.get('/api/thumbnail', async (req, res) => {
             return res.status(404).send('Source file not found');
         }
 
-        const cacheKey = crypto.createHash('md5').update(sourcePath + stat.mtimeMs).digest('hex');
+        // Added 'v2' to cache key to invalidate old square thumbnails
+        const cacheKey = crypto.createHash('md5').update(sourcePath + stat.mtimeMs + 'v2').digest('hex');
         const cacheFilename = `${cacheKey}.jpg`;
         const cacheFilePath = path.join(CACHE_DIR, cacheFilename);
 
@@ -496,15 +602,14 @@ app.get('/api/thumbnail', async (req, res) => {
 
         // 3. Generate and Save
         // We use sharp to resize, save to file, and then stream the file to response.
-        // This ensures the file is fully written for next time.
-        // We could also pipe to res AND file, but logic is simpler this way.
+        // Removed fixed height to preserve aspect ratio for masonry.
         
         await sharp(sourcePath)
             .resize({ 
                 width: 300, 
-                height: 300, 
-                fit: 'cover',
-                position: 'center' 
+                // height: 300, // Removed to allow auto height
+                withoutEnlargement: true,
+                fit: 'inside' // Preserves aspect ratio inside width constraint
             })
             .jpeg({ quality: 80, mozjpeg: true })
             .toFile(cacheFilePath);

@@ -2,7 +2,9 @@ version: '3.8'
 
 services:
   lumina-gallery:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile.txt
     container_name: lumina-gallery
     restart: unless-stopped
     ports:
