@@ -72,6 +72,6 @@ export interface AppConfig {
 }
 
 export type ViewMode = 'home' | 'all' | 'folders';
-export type GridLayout = 'grid' | 'masonry';
+export type GridLayout = 'grid' | 'masonry' | 'timeline';
 export type SortOption = 'dateDesc' | 'dateAsc' | 'nameAsc' | 'nameDesc' | 'sizeDesc' | 'random';
 export type FilterOption = 'all' | 'image' | 'video' | 'audio';

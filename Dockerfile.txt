@@ -41,6 +41,9 @@ RUN npx vite build --outDir build
 FROM node:18-alpine
 WORKDIR /app
 
+# Install system dependencies (FFmpeg)
+RUN apk add --no-cache ffmpeg
+
 # Install production dependencies only
 COPY package*.json ./
 RUN npm install --production

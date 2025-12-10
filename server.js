@@ -5,12 +5,20 @@ const cors = require('cors');
 const mime = require('mime-types');
 const crypto = require('crypto');
 
-// Try to require sharp, but don't crash if it fails (fallback mode could be implemented, but we assume it's there)
+// Try to require sharp
 let sharp;
 try {
   sharp = require('sharp');
 } catch (e) {
-  console.warn("Module 'sharp' not found. Thumbnail generation will fail. Please run 'npm install sharp'.");
+  console.warn("Module 'sharp' not found. Image thumbnail generation will fail.");
+}
+
+// Try to require fluent-ffmpeg
+let ffmpeg;
+try {
+  ffmpeg = require('fluent-ffmpeg');
+} catch (e) {
+  console.warn("Module 'fluent-ffmpeg' not found. Video thumbnail generation will fail.");
 }
 
 const app = express();
@@ -62,6 +70,15 @@ let scanJob = {
     }
 };
 
+// --- Thumbnail Gen State ---
+let thumbJob = {
+    status: 'idle',
+    count: 0,
+    total: 0,
+    currentPath: '',
+    control: { pause: false, cancel: false }
+};
+
 // --- Helper Functions ---
 
 // Promisified sleep for async pause
@@ -78,6 +95,63 @@ const checkControl = async () => {
     // Allow event loop to breathe
     await sleep(0);
 };
+
+const checkThumbControl = async () => {
+    if (thumbJob.control.cancel) throw new Error('CANCELLED');
+    while (thumbJob.control.pause) {
+        if (thumbJob.control.cancel) throw new Error('CANCELLED');
+        await sleep(500);
+    }
+    await sleep(0);
+}
+
+// --- Video Thumbnail Helper ---
+const generateVideoThumbnail = (sourcePath, outputPath) => {
+    return new Promise((resolve, reject) => {
+        if (!ffmpeg) return reject(new Error("FFmpeg not available"));
+
+        // 1. Probe for duration to pick a good timestamp (e.g. 20%)
+        ffmpeg.ffprobe(sourcePath, (err, metadata) => {
+            if (err) return reject(err);
+
+            const duration = metadata.format.duration || 0;
+            const timestamp = duration > 10 ? duration * 0.2 : 1; // 20% mark or 1st second
+
+            // Helper to run ffmpeg command
+            const runFfmpeg = (useHardwareAccel) => {
+                return new Promise((innerResolve, innerReject) => {
+                    let command = ffmpeg(sourcePath);
+
+                    if (useHardwareAccel) {
+                        // Attempt NVIDIA Hardware Acceleration
+                        command = command.inputOptions(['-hwaccel cuda']);
+                    }
+
+                    command
+                        .screenshots({
+                            timestamps: [timestamp],
+                            filename: path.basename(outputPath),
+                            folder: path.dirname(outputPath),
+                            size: '300x?', // Resize to width 300, auto height
+                        })
+                        .on('end', () => innerResolve())
+                        .on('error', (err) => innerReject(err));
+                });
+            };
+
+            // Strategy: Try GPU first, fallback to CPU
+            runFfmpeg(true)
+                .then(() => resolve())
+                .catch((hwErr) => {
+                    // console.warn(`HW Accel failed for ${path.basename(sourcePath)}, falling back to CPU. Error: ${hwErr.message}`);
+                    runFfmpeg(false)
+                        .then(() => resolve())
+                        .catch((cpuErr) => reject(cpuErr));
+                });
+        });
+    });
+};
+
 
 // Async recursive scan
 const scanDirectoryAsync = async (baseDir, currentSubDir = '', rootAlias = '') => {
@@ -113,7 +187,9 @@ const scanDirectoryAsync = async (baseDir, currentSubDir = '', rootAlias = '') =
                     results = results.concat(subResults);
                 } else {
                     const mimeType = mime.lookup(fullFilePath);
-                    if (mimeType && (mimeType.startsWith('image/') || mimeType.startsWith('video/') || mimeType.startsWith('audio/'))) {
+                    // Check if mimeType is a string before checking startsWith, as lookup can return false
+                    if (mimeType && typeof mimeType === 'string' && 
+                       (mimeType.startsWith('image/') || mimeType.startsWith('video/') || mimeType.startsWith('audio/'))) {
                         const item = {
                             name: file,
                             path: relativePath,
@@ -151,8 +227,11 @@ const formatItemForClient = (f) => {
         const streamPath = f.streamPath || f.path; // Fallback
         
         let mediaType = 'image';
-        if (f.type && f.type.startsWith('video/')) mediaType = 'video';
-        if (f.type && f.type.startsWith('audio/')) mediaType = 'audio';
+        // Ensure f.type is string
+        const typeStr = (typeof f.type === 'string') ? f.type : 'application/octet-stream';
+        
+        if (typeStr.startsWith('video/')) mediaType = 'video';
+        else if (typeStr.startsWith('audio/')) mediaType = 'audio';
 
         return {
             id: Buffer.from(streamPath).toString('base64'),
@@ -161,7 +240,7 @@ const formatItemForClient = (f) => {
             path: f.path,
             folderPath: normalizedFolder,
             size: f.size || 0,
-            type: f.type || 'application/octet-stream',
+            type: typeStr,
             lastModified: f.lastModified || Date.now(),
             mediaType: mediaType,
             sourceId: 'nas-mixed' 
@@ -223,7 +302,7 @@ const calculateFolderStats = (items) => {
         folderData.directCount++;
         
         // Pick cover: Prefer image over video/audio.
-        if (item.type) {
+        if (item.type && typeof item.type === 'string') {
             if (!folderData.coverItem) {
                  folderData.coverItem = item;
             } else if (folderData.coverItem.type.startsWith('video/') && item.type.startsWith('image/')) {
@@ -499,7 +578,12 @@ app.get('/api/scan/results', (req, res) => {
             folderFilter = req.query.folder;
         }
 
-        let filteredItems = (scanJob && scanJob.items) ? scanJob.items : [];
+        // Ensure scanJob is valid
+        if (!scanJob) {
+            return res.json({ files: [], sources: [], total: 0, offset, limit, hasMore: false });
+        }
+
+        let filteredItems = (scanJob.items) ? scanJob.items : [];
         
         // Server-side folder filtering to support folder navigation without loading everything
         if (folderFilter !== null) {
@@ -521,10 +605,11 @@ app.get('/api/scan/results', (req, res) => {
         const processedItems = slicedItems.map(formatItemForClient).filter(i => i !== null);
 
         // Better source association
-        const sources = (scanJob && scanJob.sources) ? scanJob.sources : [];
+        const sources = (scanJob.sources) ? scanJob.sources : [];
         const finalItems = processedItems.map(item => {
             // Find which source this item belongs to
-            const source = sources.find(s => item.path.startsWith(s.name));
+            // item.path is the relative path stored in memory, safe to compare
+            const source = sources.find(s => item.path && item.path.startsWith(s.name));
             return { ...item, sourceId: source ? source.id : 'nas-unknown' };
         });
 
@@ -546,7 +631,7 @@ app.get('/api/scan/results', (req, res) => {
 app.get('/api/library/folders', (req, res) => {
     try {
         // Return pre-calculated folders from scan job if available
-        if (scanJob.folders && scanJob.folders.length > 0) {
+        if (scanJob && scanJob.folders && scanJob.folders.length > 0) {
             return res.json({ folders: scanJob.folders });
         }
         
@@ -558,6 +643,108 @@ app.get('/api/library/folders', (req, res) => {
     }
 });
 
+// --- Thumbnail Gen API ---
+
+app.post('/api/thumb-gen/start', async (req, res) => {
+    if (thumbJob.status === 'scanning' || thumbJob.status === 'paused') {
+        return res.status(409).json({ error: 'Thumbnail generation already in progress' });
+    }
+    
+    if (!scanJob.items || scanJob.items.length === 0) {
+        return res.status(400).json({ error: 'Library is empty. Please scan library first.' });
+    }
+
+    if (!sharp && !ffmpeg) {
+        return res.status(500).json({ error: 'No thumbnail generators (Sharp/FFmpeg) installed.' });
+    }
+
+    // Reset Job
+    thumbJob = {
+        status: 'scanning',
+        count: 0,
+        total: scanJob.items.length,
+        currentPath: '',
+        control: { pause: false, cancel: false }
+    };
+    
+    res.json({ success: true, message: 'Thumbnail generation started' });
+    
+    // Background Process
+    const processThumbnails = async () => {
+        try {
+            console.log("Starting thumbnail generation...");
+            const items = scanJob.items;
+            
+            for (const item of items) {
+                await checkThumbControl();
+                
+                thumbJob.currentPath = item.path;
+                thumbJob.count++;
+                
+                const sourcePath = item.streamPath;
+                const cacheKey = crypto.createHash('md5').update(sourcePath + item.lastModified + 'v2').digest('hex');
+                const cacheFilename = `${cacheKey}.jpg`;
+                const cacheFilePath = path.join(CACHE_DIR, cacheFilename);
+
+                if (!fs.existsSync(cacheFilePath)) {
+                    // IMAGE
+                    if (sharp && item.type && item.type.startsWith('image/')) {
+                        try {
+                            await sharp(sourcePath)
+                                .resize({ width: 300, withoutEnlargement: true, fit: 'inside' })
+                                .jpeg({ quality: 80, mozjpeg: true })
+                                .toFile(cacheFilePath);
+                        } catch(e) { /* ignore */ }
+                    }
+                    // VIDEO
+                    else if (ffmpeg && item.type && item.type.startsWith('video/')) {
+                        try {
+                            await generateVideoThumbnail(sourcePath, cacheFilePath);
+                        } catch(e) { /* ignore */ }
+                    }
+                }
+            }
+            thumbJob.status = 'completed';
+            console.log("Thumbnail generation completed.");
+        } catch(e) {
+            if (e.message === 'CANCELLED') {
+                thumbJob.status = 'cancelled';
+                console.log('Thumbnail generation cancelled.');
+            } else {
+                thumbJob.status = 'error';
+                console.error("Thumbnail generation failed:", e);
+            }
+        }
+    };
+    
+    processThumbnails();
+});
+
+app.get('/api/thumb-gen/status', (req, res) => {
+    res.json({
+        status: thumbJob.status,
+        count: thumbJob.count,
+        total: thumbJob.total,
+        currentPath: thumbJob.currentPath
+    });
+});
+
+app.post('/api/thumb-gen/control', (req, res) => {
+    const { action } = req.body;
+    if (action === 'pause') {
+        thumbJob.control.pause = true;
+        thumbJob.status = 'paused';
+    } else if (action === 'resume') {
+        thumbJob.control.pause = false;
+        thumbJob.status = 'scanning';
+    } else if (action === 'cancel') {
+        thumbJob.control.cancel = true;
+        thumbJob.control.pause = false;
+    }
+    res.json({ success: true, status: thumbJob.status });
+});
+
+
 // --- Thumbnail Endpoint (Persisted) ---
 app.get('/api/thumbnail', async (req, res) => {
     const filePath = req.query.path;
@@ -566,16 +753,9 @@ app.get('/api/thumbnail', async (req, res) => {
     const result = resolveValidPath(filePath);
     if (result.error) return res.status(result.error).send(result.message);
 
-    if (!sharp) {
-        // Fallback if sharp isn't installed: redirect to original stream
-        return res.redirect(`/media-stream/${encodeURIComponent(filePath)}`);
-    }
-
     try {
         const sourcePath = result.path;
         
-        // 1. Generate unique cache key
-        // We include mtimeMs so if the source image is edited, the hash changes and we regen thumbnail.
         let stat;
         try {
             stat = await fs.promises.stat(sourcePath);
@@ -583,7 +763,6 @@ app.get('/api/thumbnail', async (req, res) => {
             return res.status(404).send('Source file not found');
         }
 
-        // Added 'v2' to cache key to invalidate old square thumbnails
         const cacheKey = crypto.createHash('md5').update(sourcePath + stat.mtimeMs + 'v2').digest('hex');
         const cacheFilename = `${cacheKey}.jpg`;
         const cacheFilePath = path.join(CACHE_DIR, cacheFilename);
@@ -592,33 +771,47 @@ app.get('/api/thumbnail', async (req, res) => {
         res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
         res.setHeader('Content-Type', 'image/jpeg');
 
-        // 2. Check if cached file exists
+        // Check if cached file exists
         if (fs.existsSync(cacheFilePath)) {
-             // Stream from cache
              const stream = fs.createReadStream(cacheFilePath);
              stream.pipe(res);
              return;
         }
 
-        // 3. Generate and Save
-        // We use sharp to resize, save to file, and then stream the file to response.
-        // Removed fixed height to preserve aspect ratio for masonry.
-        
-        await sharp(sourcePath)
-            .resize({ 
-                width: 300, 
-                // height: 300, // Removed to allow auto height
-                withoutEnlargement: true,
-                fit: 'inside' // Preserves aspect ratio inside width constraint
-            })
-            .jpeg({ quality: 80, mozjpeg: true })
-            .toFile(cacheFilePath);
+        const mimeType = mime.lookup(sourcePath) || '';
 
-        fs.createReadStream(cacheFilePath).pipe(res);
+        // VIDEO ON-DEMAND GEN
+        if (ffmpeg && mimeType.startsWith('video/')) {
+            try {
+                await generateVideoThumbnail(sourcePath, cacheFilePath);
+                fs.createReadStream(cacheFilePath).pipe(res);
+                return;
+            } catch(e) {
+                // console.error("Video thumb gen failed", e);
+                return res.redirect(`/media-stream/${encodeURIComponent(filePath)}`);
+            }
+        }
+
+        // IMAGE ON-DEMAND GEN
+        if (sharp && mimeType.startsWith('image/')) {
+            await sharp(sourcePath)
+                .resize({ 
+                    width: 300, 
+                    withoutEnlargement: true,
+                    fit: 'inside' 
+                })
+                .jpeg({ quality: 80, mozjpeg: true })
+                .toFile(cacheFilePath);
+
+            fs.createReadStream(cacheFilePath).pipe(res);
+            return;
+        }
+
+        // Fallback
+        res.redirect(`/media-stream/${encodeURIComponent(filePath)}`);
 
     } catch (e) {
         console.error("Thumbnail error:", e);
-        // Fallback to original image in case of error, or 500
         res.redirect(`/media-stream/${encodeURIComponent(filePath)}`);
     }
 });

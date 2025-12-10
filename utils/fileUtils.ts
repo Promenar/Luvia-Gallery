@@ -103,3 +103,21 @@ export const sortMedia = (items: MediaItem[], sortOption: SortOption): MediaItem
       return sorted;
   }
 };
+
+export const groupMediaByDate = (items: MediaItem[]): Record<string, MediaItem[]> => {
+  const groups: Record<string, MediaItem[]> = {};
+  
+  // Sort by date descending first to ensure groups are in order if iterated
+  const sorted = [...items].sort((a, b) => b.lastModified - a.lastModified);
+
+  sorted.forEach(item => {
+    const date = new Date(item.lastModified);
+    const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+    if (!groups[key]) {
+      groups[key] = [];
+    }
+    groups[key].push(item);
+  });
+
+  return groups;
+};

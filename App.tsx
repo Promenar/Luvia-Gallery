@@ -44,10 +44,11 @@ export default function App() {
   const [hasMoreServer, setHasMoreServer] = useState(true);
   const [serverFolders, setServerFolders] = useState<any[]>([]); // Full list of folders from server
 
-  // --- Scanning State ---
+  // --- Scanning & Thumbnail Gen State ---
   const [isScanModalOpen, setIsScanModalOpen] = useState(false);
   const [scanStatus, setScanStatus] = useState<ScanStatus>('idle');
   const [scanProgress, setScanProgress] = useState({ count: 0, currentPath: '' });
+  const [jobType, setJobType] = useState<'scan' | 'thumb'>('scan');
   
   // Use timeout ref for recursive polling instead of interval to prevent congestion
   const scanTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -65,7 +66,7 @@ export default function App() {
   
   // --- View State ---
   const [viewMode, setViewMode] = useState<ViewMode>('home');
-  const [layoutMode, setLayoutMode] = useState<GridLayout>('masonry'); // 'grid' (Virtual) or 'masonry' (CSS)
+  const [layoutMode, setLayoutMode] = useState<GridLayout>('timeline'); // Default to timeline
   const [currentPath, setCurrentPath] = useState<string>('');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [selectedItem, setSelectedItem] = useState<MediaItem | null>(null);
@@ -79,7 +80,6 @@ export default function App() {
   const [newUserForm, setNewUserForm] = useState({ username: '', password: '' });
 
   // --- Random Sort Stability ---
-  // Store the randomized list separately so it doesn't reshuffle on every render
   const [randomizedFiles, setRandomizedFiles] = useState<MediaItem[]>([]);
 
   // --- Theme Logic ---
@@ -232,7 +232,6 @@ export default function App() {
               if (serverMode) {
                   // We delay the sync slightly to ensure state is ready
                   setTimeout(() => {
-                      // Fetch for 'all' to set sidebar count, even if we are not in 'all' view yet
                       fetchServerFiles(user.username, loadedData, 0, true, null);
                       fetchServerFolders();
                   }, 100);
@@ -255,22 +254,14 @@ export default function App() {
 
   // --- Browser History Integration ---
   useEffect(() => {
-      // Handle browser back button
       const onPopState = (event: PopStateEvent) => {
-          // If we have state with path, restore it
           if (event.state && typeof event.state.path === 'string') {
                const path = event.state.path;
                setCurrentPath(path);
-               // If viewMode wasn't folders, maybe switch? 
-               // For now assume user stays in current viewMode if simply popping state in folders
-               if(viewMode === 'folders') {
-                   // Trigger fetch if in server mode
-                   if(isServerMode && currentUser) {
-                        fetchServerFiles(currentUser.username, allUserData, 0, true, path);
-                   }
+               if(viewMode === 'folders' && isServerMode && currentUser) {
+                    fetchServerFiles(currentUser.username, allUserData, 0, true, path);
                }
           } else {
-               // If popping to root (no state), and we are deep in folders
                if (currentPath !== '') {
                    setCurrentPath('');
                    if(isServerMode && currentUser) {
@@ -287,28 +278,21 @@ export default function App() {
 
   // --- Server Logic: Scan & Poll ---
 
-  // Fetch complete folder structure from server (no pagination)
   const fetchServerFolders = async () => {
     try {
         const res = await fetch('/api/library/folders');
         if (res.ok) {
-            // Robust parsing
             const text = await res.text();
             try {
                 const data = JSON.parse(text);
                 if (data && data.folders) {
                     setServerFolders(data.folders);
                 }
-            } catch(e) {
-                console.error("Failed to parse folders JSON", e);
-            }
+            } catch(e) {}
         }
-    } catch(e) {
-        console.error("Failed to fetch folders", e);
-    }
+    } catch(e) {}
   };
   
-  // Fetch files with pagination
   const fetchServerFiles = async (
       username: string, 
       currentData: Record<string, UserData>,
@@ -318,7 +302,7 @@ export default function App() {
   ) => {
       try {
           setIsFetchingMore(true);
-          const limit = 500; // Chunk size
+          const limit = 500;
           let url = `/api/scan/results?offset=${offset}&limit=${limit}`;
           
           if (folderFilter !== null && folderFilter !== undefined) {
@@ -326,7 +310,7 @@ export default function App() {
           }
 
           const res = await fetch(url);
-          if (!res.ok) throw new Error("API Error");
+          if (!res.ok) throw new Error(`API Error: ${res.status}`);
           
           const text = await res.text();
           let data;
@@ -348,29 +332,23 @@ export default function App() {
               }
           });
           
-          // Update total count for CURRENT view
           setServerTotal(data.total);
-
-          // Update library total count for sidebar ONLY if we are fetching "All Photos" (folderFilter === null)
-          // This fixes the issue where navigating to a subfolder (which returns a smaller total) wipes out the global count.
           if (folderFilter === null) {
               setLibraryTotalCount(data.total);
           }
 
           setServerOffset(offset + limit);
           setHasMoreServer(data.hasMore);
-          setIsFetchingMore(false);
 
       } catch (e) {
           console.error("Fetch files failed", e);
+      } finally {
           setIsFetchingMore(false);
       }
   };
 
   const loadMoreServerFiles = async () => {
       if (!isServerMode || !currentUser || !hasMoreServer || isFetchingMore) return;
-      // If we are in folders view, pass the current path. If current path is '', pass ''.
-      // If we are in 'all' view, pass null.
       const filter = viewMode === 'folders' ? currentPath : null;
       await fetchServerFiles(currentUser.username, allUserData, serverOffset, false, filter);
   };
@@ -382,12 +360,14 @@ export default function App() {
       }
   };
 
-  const startPolling = () => {
+  const startPolling = (type: 'scan' | 'thumb' = 'scan') => {
     stopPolling();
     
+    const apiEndpoint = type === 'scan' ? '/api/scan/status' : '/api/thumb-gen/status';
+
     const poll = async () => {
         try {
-            const statusRes = await fetch('/api/scan/status');
+            const statusRes = await fetch(apiEndpoint);
             if (statusRes.ok) {
                 const text = await statusRes.text();
                 let statusData;
@@ -424,46 +404,50 @@ export default function App() {
 
   const startServerScan = async () => {
       if (!isServerMode || !currentUser) return;
-      
       try {
           const startRes = await fetch('/api/scan/start', { method: 'POST' });
           if (!startRes.ok && startRes.status !== 409) {
               alert("Failed to start scan");
               return;
           }
-
+          setJobType('scan');
           setIsScanModalOpen(true);
           setScanStatus('scanning');
-          startPolling();
+          startPolling('scan');
+      } catch (e) {}
+  };
 
-      } catch (e) {
-          console.error("Scan init failed", e);
-      }
+  const startThumbnailGen = async () => {
+      if (!isServerMode || !currentUser) return;
+      try {
+          const startRes = await fetch('/api/thumb-gen/start', { method: 'POST' });
+          if (!startRes.ok) {
+              const data = await startRes.json();
+              alert("Failed to start thumbnail generation: " + (data.error || 'Unknown error'));
+              return;
+          }
+          setJobType('thumb');
+          setIsScanModalOpen(true);
+          setScanStatus('scanning');
+          startPolling('thumb');
+      } catch (e) { console.error(e); }
   };
 
   useEffect(() => {
     let isMounted = true;
     if (isServerMode && currentUser) {
+        // Check Scan Status on Mount
         fetch('/api/scan/status')
             .then(async r => {
-                if (!r.ok) throw new Error("Status check failed");
-                const text = await r.text();
-                try {
-                    return JSON.parse(text);
-                } catch(e) {
-                    return { status: 'idle' }; 
-                }
-            })
-            .then(d => {
+                if (!r.ok) return;
+                const d = await r.json();
                 if (isMounted && d && (d.status === 'scanning' || d.status === 'paused')) {
+                    setJobType('scan');
                     setIsScanModalOpen(true);
                     setScanStatus(d.status);
                     setScanProgress({ count: d.count, currentPath: d.currentPath });
-                    startPolling();
+                    startPolling('scan');
                 }
-            })
-            .catch(e => {
-                if (isMounted) console.warn("Failed to check status", e.message);
             });
     }
     return () => { 
@@ -473,16 +457,16 @@ export default function App() {
   }, [isServerMode, currentUser]);
 
   useEffect(() => {
-    if (scanStatus === 'completed' && currentUser) {
-        // Refresh the library when scan completes
-        fetchServerFiles(currentUser.username, allUserData, 0, true, null); // Fetch ALL to update count
+    if (scanStatus === 'completed' && currentUser && jobType === 'scan') {
+        fetchServerFiles(currentUser.username, allUserData, 0, true, null);
         fetchServerFolders();
     }
-  }, [scanStatus]);
+  }, [scanStatus, jobType]);
 
   const handleScanControl = async (action: 'pause' | 'resume' | 'cancel') => {
+      const apiEndpoint = jobType === 'scan' ? '/api/scan/control' : '/api/thumb-gen/control';
       try {
-          await fetch('/api/scan/control', {
+          await fetch(apiEndpoint, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ action })
@@ -491,10 +475,8 @@ export default function App() {
           if (action === 'resume') setScanStatus('scanning');
           if (action === 'cancel') setScanStatus('cancelled');
           
-          if (action === 'resume') startPolling();
-      } catch(e) {
-          console.error(e);
-      }
+          if (action === 'resume') startPolling(jobType);
+      } catch(e) {}
   };
 
   const handleSetViewMode = (mode: ViewMode) => {
@@ -502,7 +484,6 @@ export default function App() {
     localStorage.setItem(VIEW_MODE_KEY, mode);
     setCurrentPath(''); 
     
-    // Reset file view when switching modes in server mode
     if (isServerMode && currentUser) {
         if (mode === 'all') {
              fetchServerFiles(currentUser.username, allUserData, 0, true, null);
@@ -512,13 +493,9 @@ export default function App() {
 
   const handleFolderClick = (path: string, pushState = true) => {
       setCurrentPath(path);
-      
-      // Update browser history
       if (pushState) {
          window.history.pushState({ path }, '', '#folder=' + encodeURIComponent(path));
       }
-
-      // In server mode, specifically fetch files for this folder to reset pagination
       if (isServerMode && currentUser) {
           fetchServerFiles(currentUser.username, allUserData, 0, true, path);
       }
@@ -528,19 +505,15 @@ export default function App() {
        const parts = currentPath.split('/');
        parts.pop();
        const parentPath = parts.join('/');
-       handleFolderClick(parentPath); // Defaults to pushState=true, which is fine for navigation
+       handleFolderClick(parentPath);
   };
 
-  // Jump to specific folder logic
   const handleJumpToFolder = (item: MediaItem) => {
-      // Switch to folder view
       setViewMode('folders');
       localStorage.setItem(VIEW_MODE_KEY, 'folders');
-      
       handleFolderClick(item.folderPath);
   };
 
-  // Rename File
   const handleRename = async (item: MediaItem, newName: string) => {
       if(!currentUser) return;
 
@@ -556,7 +529,6 @@ export default function App() {
               });
               const data = await res.json();
               if(data.success) {
-                  // Refresh Current View
                   if (viewMode === 'all') fetchServerFiles(currentUser.username, allUserData, 0, true, null);
                   else if (viewMode === 'folders') fetchServerFiles(currentUser.username, allUserData, 0, true, currentPath);
               } else {
@@ -566,7 +538,6 @@ export default function App() {
               alert("Network error during rename");
           }
       } else {
-          // Client mode rename (Mock - just update state)
           const updatedFiles = files.map(f => {
               if (f.id === item.id) return { ...f, name: newName };
               return f;
@@ -577,7 +548,6 @@ export default function App() {
       }
   };
 
-  // Delete File
   const handleDelete = async (item: MediaItem) => {
       if(!currentUser) return;
       
@@ -593,8 +563,7 @@ export default function App() {
               });
               const data = await res.json();
               if(data.success) {
-                  setSelectedItem(null); // Close lightbox
-                   // Refresh Current View
+                  setSelectedItem(null);
                   if (viewMode === 'all') fetchServerFiles(currentUser.username, allUserData, 0, true, null);
                   else if (viewMode === 'folders') fetchServerFiles(currentUser.username, allUserData, 0, true, currentPath);
               } else {
@@ -604,7 +573,6 @@ export default function App() {
               alert("Network error during delete");
            }
       } else {
-           // Client mode delete
            const updatedFiles = files.filter(f => f.id !== item.id);
            const updatedUserData = { ...allUserData, [currentUser.username]: { ...allUserData[currentUser.username], files: updatedFiles } };
            setAllUserData(updatedUserData);
@@ -614,7 +582,11 @@ export default function App() {
   };
 
   const toggleLayoutMode = () => {
-      const newMode = layoutMode === 'grid' ? 'masonry' : 'grid';
+      let newMode: GridLayout = 'grid';
+      if (layoutMode === 'grid') newMode = 'masonry';
+      else if (layoutMode === 'masonry') newMode = 'timeline';
+      else if (layoutMode === 'timeline') newMode = 'grid';
+      
       setLayoutMode(newMode);
       localStorage.setItem(LAYOUT_MODE_KEY, newMode);
   };
@@ -805,17 +777,12 @@ export default function App() {
     }
   };
 
-  // Sorting logic with Random support
   const processedFiles = useMemo(() => {
     let result = files;
     if (filterOption !== 'all') {
       result = result.filter(f => f.mediaType === filterOption);
     }
-    
-    // If Random, check if we have already randomized this set. 
-    // If files changed, re-randomize.
     if (sortOption === 'random') {
-        // If length changed or randomizedFiles is empty, re-shuffle
         if (randomizedFiles.length !== result.length) {
             const shuffled = sortMedia(result, 'random');
             setRandomizedFiles(shuffled);
@@ -823,26 +790,15 @@ export default function App() {
         }
         return randomizedFiles;
     }
-    
-    // Normal sorting
     return sortMedia(result, sortOption);
   }, [files, filterOption, sortOption, randomizedFiles]);
 
-  // Construct Folder Tree
   const folderTree = useMemo(() => {
     if (isServerMode && serverFolders.length > 0) {
-        // Build folder tree from flat server list
-        const root: FolderNode = {
-            name: 'Root',
-            path: '',
-            children: {},
-            mediaCount: 0,
-        };
-        
+        const root: FolderNode = { name: 'Root', path: '', children: {}, mediaCount: 0 };
         serverFolders.forEach(sf => {
             const parts = sf.path.split('/').filter((p: string) => p);
             let currentNode = root;
-
             parts.forEach((part: string, index: number) => {
                 if (!currentNode.children[part]) {
                     const currentPath = parts.slice(0, index + 1).join('/');
@@ -851,7 +807,7 @@ export default function App() {
                         name: part,
                         path: currentPath,
                         children: {},
-                        mediaCount: match ? match.count : 0, // Using server calculated count
+                        mediaCount: match ? match.count : 0, 
                         coverMedia: match ? match.coverItem : undefined
                     };
                 }
@@ -870,7 +826,6 @@ export default function App() {
     if (viewMode === 'home') {
         return { type: 'home' };
     }
-    // Folders Mode
     let targetNode = folderTree;
     let title = 'Folders';
     if (currentPath) {
@@ -883,13 +838,11 @@ export default function App() {
        title = parts[parts.length - 1];
     }
     const subfolders = (Object.values(targetNode.children) as FolderNode[]).sort((a, b) => a.name.localeCompare(b.name));
-    
-    // In Server mode, media for a specific folder is fetched into 'files' when clicking a folder.
     const media = processedFiles.filter(f => f.folderPath === currentPath);
     return { type: 'mixed', folders: subfolders, photos: media, title: title };
   }, [viewMode, currentPath, processedFiles, folderTree]);
 
-  // Helpers (Lightbox, etc)
+  // Helpers
   useEffect(() => {
     return () => {
       (Object.values(allUserData) as UserData[]).forEach(userData => {
@@ -910,74 +863,31 @@ export default function App() {
       const list = getLightboxList();
       const idx = list.findIndex(p => p.id === selectedItem.id);
       if (idx !== -1 && idx < list.length - 1) setSelectedItem(list[idx + 1]);
-      else if (idx === list.length - 1) setSelectedItem(list[0]); // Loop
+      else if (idx === list.length - 1) setSelectedItem(list[0]);
   };
   const handlePrev = () => {
       if (!selectedItem) return;
       const list = getLightboxList();
       const idx = list.findIndex(p => p.id === selectedItem.id);
       if (idx > 0) setSelectedItem(list[idx - 1]);
-      else if (idx === 0) setSelectedItem(list[list.length - 1]); // Loop
+      else if (idx === 0) setSelectedItem(list[list.length - 1]);
   };
 
   // --- RENDER ---
-  if (authStep === 'loading') return <div className="h-screen flex items-center justify-center text-gray-400 bg-gray-50 dark:bg-gray-900">Loading...</div>;
+  if (authStep === 'loading') return <div className="h-[100dvh] flex items-center justify-center text-gray-400 bg-gray-50 dark:bg-gray-900">Loading...</div>;
 
   if (authStep === 'setup') {
-    return (
-      <div className="h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900 p-4 transition-colors">
-        <div className="bg-white dark:bg-gray-800 p-8 rounded-2xl shadow-xl w-full max-w-md transition-colors">
-          <div className="flex justify-end mb-2">
-            <button onClick={toggleTheme} className="p-2 text-gray-400 hover:text-primary-500 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">
-                {theme === 'dark' ? <Icons.Sun size={20} /> : <Icons.Moon size={20} />}
-            </button>
-          </div>
-          <h1 className="text-3xl font-bold text-primary-600 mb-2 text-center">Welcome</h1>
-          <p className="text-gray-500 dark:text-gray-400 mb-8 text-center">{isServerMode ? 'Initialize your NAS Gallery.' : 'Set up your admin account.'}</p>
-          <form onSubmit={handleSetup} className="space-y-4">
-            <input type="text" placeholder="Username" value={setupForm.username} onChange={e => setSetupForm({...setupForm, username: e.target.value})} className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white border-gray-300 dark:border-gray-600 placeholder-gray-400 dark:placeholder-gray-500" />
-            <input type="password" placeholder="Password" value={setupForm.password} onChange={e => setSetupForm({...setupForm, password: e.target.value})} className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white border-gray-300 dark:border-gray-600 placeholder-gray-400 dark:placeholder-gray-500" />
-            <input type="password" placeholder="Confirm Password" value={setupForm.confirmPassword} onChange={e => setSetupForm({...setupForm, confirmPassword: e.target.value})} className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white border-gray-300 dark:border-gray-600 placeholder-gray-400 dark:placeholder-gray-500" />
-            {authError && <p className="text-red-500 text-sm text-center">{authError}</p>}
-            <button type="submit" className="w-full bg-primary-600 text-white py-2 rounded-lg font-semibold hover:bg-primary-700 transition-colors">Create Admin</button>
-          </form>
-          {!isServerMode && (
-             <div className="mt-8 pt-6 border-t border-gray-100 dark:border-gray-700">
-                <label className="flex items-center justify-center gap-2 w-full py-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-600 dark:text-gray-300 rounded-lg cursor-pointer transition-colors text-sm font-medium">
-                    <Icons.Upload size={16} /><span>Import Database File</span><input type="file" accept=".json" onChange={handleImportConfig} className="hidden" />
-                </label>
-             </div>
-          )}
-        </div>
-      </div>
-    );
+      // (Setup Code Omitted for Brevity - unchanged)
+      return (/* ... same as existing ... */ <div className="h-[100dvh] flex items-center justify-center bg-gray-50 dark:bg-gray-900 p-4 transition-colors"><div className="bg-white dark:bg-gray-800 p-8 rounded-2xl shadow-xl w-full max-w-md transition-colors"><div className="flex justify-end mb-2"><button onClick={toggleTheme} className="p-2 text-gray-400 hover:text-primary-500 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">{theme === 'dark' ? <Icons.Sun size={20} /> : <Icons.Moon size={20} />}</button></div><h1 className="text-3xl font-bold text-primary-600 mb-2 text-center">Welcome</h1><p className="text-gray-500 dark:text-gray-400 mb-8 text-center">{isServerMode ? 'Initialize your NAS Gallery.' : 'Set up your admin account.'}</p><form onSubmit={handleSetup} className="space-y-4"><input type="text" placeholder="Username" value={setupForm.username} onChange={e => setSetupForm({...setupForm, username: e.target.value})} className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white border-gray-300 dark:border-gray-600 placeholder-gray-400 dark:placeholder-gray-500" /><input type="password" placeholder="Password" value={setupForm.password} onChange={e => setSetupForm({...setupForm, password: e.target.value})} className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white border-gray-300 dark:border-gray-600 placeholder-gray-400 dark:placeholder-gray-500" /><input type="password" placeholder="Confirm Password" value={setupForm.confirmPassword} onChange={e => setSetupForm({...setupForm, confirmPassword: e.target.value})} className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white border-gray-300 dark:border-gray-600 placeholder-gray-400 dark:placeholder-gray-500" />{authError && <p className="text-red-500 text-sm text-center">{authError}</p>}<button type="submit" className="w-full bg-primary-600 text-white py-2 rounded-lg font-semibold hover:bg-primary-700 transition-colors">Create Admin</button></form>{!isServerMode && (<div className="mt-8 pt-6 border-t border-gray-100 dark:border-gray-700"><label className="flex items-center justify-center gap-2 w-full py-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-600 dark:text-gray-300 rounded-lg cursor-pointer transition-colors text-sm font-medium"><Icons.Upload size={16} /><span>Import Database File</span><input type="file" accept=".json" onChange={handleImportConfig} className="hidden" /></label></div>)}</div></div>);
   }
 
   if (authStep === 'login') {
-    return (
-      <div className="h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900 p-4 transition-colors">
-        <div className="bg-white dark:bg-gray-800 p-8 rounded-2xl shadow-xl w-full max-w-sm transition-colors">
-           <div className="flex justify-between items-start mb-4">
-              <div className="w-12 h-12 bg-primary-600 rounded-xl flex items-center justify-center"><Icons.User className="text-white" /></div>
-              <button onClick={toggleTheme} className="p-2 text-gray-400 hover:text-primary-500 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">
-                {theme === 'dark' ? <Icons.Sun size={20} /> : <Icons.Moon size={20} />}
-              </button>
-           </div>
-          <h1 className="text-2xl font-bold text-gray-800 dark:text-white text-center mb-2">{appTitle}</h1>
-          {isServerMode && <p className="text-xs text-center text-primary-600 dark:text-primary-400 bg-primary-50 dark:bg-primary-900/30 py-1 rounded mb-6">NAS Server Connected</p>}
-          <form onSubmit={handleLogin} className="space-y-4">
-            <input type="text" placeholder="Username" value={loginForm.username} onChange={e => setLoginForm({...loginForm, username: e.target.value})} className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white border-gray-300 dark:border-gray-600 placeholder-gray-400 dark:placeholder-gray-500" />
-            <input type="password" placeholder="Password" value={loginForm.password} onChange={e => setLoginForm({...loginForm, password: e.target.value})} className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white border-gray-300 dark:border-gray-600 placeholder-gray-400 dark:placeholder-gray-500" />
-            {authError && <p className="text-red-500 text-sm text-center">{authError}</p>}
-            <button type="submit" className="w-full bg-primary-600 text-white py-2 rounded-lg font-semibold hover:bg-primary-700 transition-colors">Sign In</button>
-          </form>
-        </div>
-      </div>
-    );
+      // (Login Code Omitted for Brevity - unchanged)
+      return (/* ... same as existing ... */ <div className="h-[100dvh] flex items-center justify-center bg-gray-50 dark:bg-gray-900 p-4 transition-colors"><div className="bg-white dark:bg-gray-800 p-8 rounded-2xl shadow-xl w-full max-w-sm transition-colors"><div className="flex justify-between items-start mb-4"><div className="w-12 h-12 bg-primary-600 rounded-xl flex items-center justify-center"><Icons.User className="text-white" /></div><button onClick={toggleTheme} className="p-2 text-gray-400 hover:text-primary-500 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">{theme === 'dark' ? <Icons.Sun size={20} /> : <Icons.Moon size={20} />}</button></div><h1 className="text-2xl font-bold text-gray-800 dark:text-white text-center mb-2">{appTitle}</h1>{isServerMode && <p className="text-xs text-center text-primary-600 dark:text-primary-400 bg-primary-50 dark:bg-primary-900/30 py-1 rounded mb-6">NAS Server Connected</p>}<form onSubmit={handleLogin} className="space-y-4"><input type="text" placeholder="Username" value={loginForm.username} onChange={e => setLoginForm({...loginForm, username: e.target.value})} className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white border-gray-300 dark:border-gray-600 placeholder-gray-400 dark:placeholder-gray-500" /><input type="password" placeholder="Password" value={loginForm.password} onChange={e => setLoginForm({...loginForm, password: e.target.value})} className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white border-gray-300 dark:border-gray-600 placeholder-gray-400 dark:placeholder-gray-500" />{authError && <p className="text-red-500 text-sm text-center">{authError}</p>}<button type="submit" className="w-full bg-primary-600 text-white py-2 rounded-lg font-semibold hover:bg-primary-700 transition-colors">Sign In</button></form></div></div>);
   }
 
   return (
-    <div className="flex h-screen bg-white dark:bg-gray-900 transition-colors">
+    <div className="flex flex-col md:flex-row h-[100dvh] bg-white dark:bg-gray-900 transition-colors">
       <Navigation 
         appTitle={appTitle}
         viewMode={viewMode}
@@ -985,7 +895,6 @@ export default function App() {
         onUpload={handleFileUpload}
         isSidebarOpen={isSidebarOpen}
         toggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)}
-        // Use consistent library count. In server mode use libraryTotalCount, in client mode use array length.
         totalPhotos={isServerMode ? libraryTotalCount : files.length} 
         theme={theme}
         toggleTheme={toggleTheme}
@@ -1003,11 +912,10 @@ export default function App() {
              />
         ) : (
         <>
-            <header className="h-16 mt-16 md:mt-0 flex items-center justify-between px-6 border-b border-gray-50 dark:border-gray-800 bg-white/80 dark:bg-gray-900/80 backdrop-blur-sm z-20 shrink-0 transition-colors">
+            <header className="h-16 flex items-center justify-between px-6 border-b border-gray-50 dark:border-gray-800 bg-white/80 dark:bg-gray-900/80 backdrop-blur-sm z-20 shrink-0 transition-colors">
             <div className="flex items-center gap-2 overflow-hidden flex-1 mr-4">
                 {viewMode === 'folders' ? (
                     <div className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400 overflow-hidden whitespace-nowrap mask-linear-fade">
-                         {/* Back / Up Button */}
                          {currentPath && (
                             <button 
                                 onClick={handleGoBackFolder} 
@@ -1033,14 +941,17 @@ export default function App() {
                 <button 
                     onClick={toggleLayoutMode} 
                     className="p-2 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors hidden sm:block" 
-                    title={layoutMode === 'grid' ? "Switch to Waterfall Masonry (Aesthetic)" : "Switch to Grid (Performance)"}
+                    title={layoutMode === 'grid' ? "Switch to Waterfall Masonry" : layoutMode === 'masonry' ? "Switch to Timeline" : "Switch to Grid"}
                 >
-                    {layoutMode === 'grid' ? <Icons.Masonry size={20} /> : <Icons.Grid size={20} />}
+                    {layoutMode === 'grid' ? <Icons.Masonry size={20} /> : layoutMode === 'masonry' ? <Icons.List size={20} /> : <Icons.Grid size={20} />}
                 </button>
 
                 <div className="relative group z-30">
-                    <button className="p-2 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full flex items-center gap-1 transition-colors"><Icons.Filter size={18} /><Icons.Sort size={14} /></button>
-                    <div className="absolute right-0 top-full mt-2 w-52 bg-white dark:bg-gray-800 rounded-xl shadow-xl border border-gray-100 dark:border-gray-700 p-2 hidden group-focus-within:block group-hover:block z-50">
+                    <button className="p-2 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full flex items-center gap-1 transition-colors group-hover:bg-gray-100 dark:group-hover:bg-gray-800"><Icons.Filter size={18} /><Icons.Sort size={14} /></button>
+                    {/* Transparent Bridge to prevent mouse falling through */}
+                    <div className="absolute top-full right-0 h-2 w-full bg-transparent hidden group-hover:block" />
+                    
+                    <div className="absolute right-0 top-[calc(100%+0.5rem)] w-52 bg-white dark:bg-gray-800 rounded-xl shadow-xl border border-gray-100 dark:border-gray-700 p-2 hidden group-hover:block z-50 animate-in fade-in zoom-in-95 duration-200">
                         <p className="text-xs font-semibold text-gray-400 uppercase px-2 py-1">Sort & Filter</p>
                         <button onClick={() => setSortOption('dateDesc')} className={`w-full text-left px-2 py-1.5 text-sm rounded-lg flex justify-between transition-colors ${sortOption === 'dateDesc' ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}`}>Newest First {sortOption === 'dateDesc' && <Icons.Check size={14} />}</button>
                         <button onClick={() => setSortOption('dateAsc')} className={`w-full text-left px-2 py-1.5 text-sm rounded-lg flex justify-between transition-colors ${sortOption === 'dateAsc' ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}`}>Oldest First {sortOption === 'dateAsc' && <Icons.Check size={14} />}</button>
@@ -1120,6 +1031,8 @@ export default function App() {
         onResume={() => handleScanControl('resume')}
         onCancel={() => handleScanControl('cancel')}
         onClose={() => setIsScanModalOpen(false)}
+        title={jobType === 'scan' ? 'Scanning Library' : 'Generating Thumbnails'}
+        type={jobType}
       />
 
       <AnimatePresence>
@@ -1144,29 +1057,12 @@ export default function App() {
                                         <input type="text" value={homeSubtitle} onChange={(e) => handleUpdateSubtitle(e.target.value)} className="w-full px-3 py-2 text-sm border rounded-lg focus:ring-2 focus:ring-primary-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white border-gray-200 dark:border-gray-600 placeholder-gray-400 dark:placeholder-gray-500" />
                                     </div>
                                     
-                                    {/* Connection Mode Toggle */}
                                     <div className="space-y-3">
                                         <label className="text-sm font-medium text-gray-600 dark:text-gray-400 block">Connection Mode</label>
                                         <div className="flex bg-gray-100 dark:bg-gray-700/50 p-1 rounded-lg">
-                                            <button 
-                                                onClick={() => setIsServerMode(false)}
-                                                className={`flex-1 py-2 text-sm font-medium rounded-md transition-all ${!isServerMode ? 'bg-white dark:bg-gray-600 shadow-sm text-gray-900 dark:text-white' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700'}`}
-                                            >
-                                                Client Mode (Local Browser)
-                                            </button>
-                                            <button 
-                                                onClick={() => setIsServerMode(true)}
-                                                className={`flex-1 py-2 text-sm font-medium rounded-md transition-all ${isServerMode ? 'bg-primary-600 shadow-sm text-white' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700'}`}
-                                            >
-                                                Server Mode (NAS)
-                                            </button>
+                                            <button onClick={() => setIsServerMode(false)} className={`flex-1 py-2 text-sm font-medium rounded-md transition-all ${!isServerMode ? 'bg-white dark:bg-gray-600 shadow-sm text-gray-900 dark:text-white' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700'}`}>Client Mode</button>
+                                            <button onClick={() => setIsServerMode(true)} className={`flex-1 py-2 text-sm font-medium rounded-md transition-all ${isServerMode ? 'bg-primary-600 shadow-sm text-white' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700'}`}>Server Mode (NAS)</button>
                                         </div>
-                                        <p className="text-xs text-gray-400 dark:text-gray-500">
-                                            {isServerMode 
-                                                ? "Server Mode connects to the backend API to read files from the server's filesystem. Ideal for NAS and large libraries."
-                                                : "Client Mode runs entirely in your browser. You manually import folders, and data is stored in LocalStorage."
-                                            }
-                                        </p>
                                     </div>
                                 </div>
                             </section>
@@ -1182,8 +1078,6 @@ export default function App() {
 
                                         <div>
                                             <label className="text-sm font-medium text-gray-600 dark:text-gray-400 mb-2 block">Library Scan Paths</label>
-                                            <p className="text-xs text-gray-400 dark:text-gray-500 mb-2">Enter absolute mapped paths (e.g. "/photos") or paths relative to default /media.</p>
-                                            
                                             <div className="space-y-2 mb-3">
                                                 {libraryPaths.length === 0 && <div className="text-sm text-gray-400 italic bg-gray-50 dark:bg-gray-700/50 p-2 rounded">Scanning Default: /media</div>}
                                                 {libraryPaths.map(path => (
@@ -1199,10 +1093,17 @@ export default function App() {
                                                 <button type="submit" className="bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-200 px-3 py-2 rounded-lg text-sm font-medium hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors">Add Path</button>
                                             </form>
                                         </div>
-
-                                        <button onClick={() => startServerScan()} disabled={scanStatus === 'scanning'} className="w-full py-2 bg-primary-50 dark:bg-primary-900/30 border border-primary-200 dark:border-primary-800 text-primary-700 dark:text-primary-300 rounded-lg text-sm font-medium hover:bg-primary-100 dark:hover:bg-primary-900/50 flex items-center justify-center gap-2 transition-colors">
-                                            <Icons.Refresh size={14} className={scanStatus === 'scanning' ? 'animate-spin' : ''} />{scanStatus === 'scanning' ? 'Scanning in progress...' : 'Scan NAS Library'}
-                                        </button>
+                                        
+                                        <div className="grid grid-cols-2 gap-3">
+                                            <button onClick={() => startServerScan()} disabled={scanStatus === 'scanning'} className="py-2 bg-primary-50 dark:bg-primary-900/30 border border-primary-200 dark:border-primary-800 text-primary-700 dark:text-primary-300 rounded-lg text-sm font-medium hover:bg-primary-100 dark:hover:bg-primary-900/50 flex items-center justify-center gap-2 transition-colors">
+                                                <Icons.Refresh size={14} className={scanStatus === 'scanning' && jobType === 'scan' ? 'animate-spin' : ''} />
+                                                {scanStatus === 'scanning' && jobType === 'scan' ? 'Scanning...' : 'Scan Library'}
+                                            </button>
+                                            <button onClick={() => startThumbnailGen()} disabled={scanStatus === 'scanning'} className="py-2 bg-purple-50 dark:bg-purple-900/30 border border-purple-200 dark:border-purple-800 text-purple-700 dark:text-purple-300 rounded-lg text-sm font-medium hover:bg-purple-100 dark:hover:bg-purple-900/50 flex items-center justify-center gap-2 transition-colors">
+                                                <Icons.Image size={14} className={scanStatus === 'scanning' && jobType === 'thumb' ? 'animate-spin' : ''} />
+                                                {scanStatus === 'scanning' && jobType === 'thumb' ? 'Generating...' : 'Generate Thumbs'}
+                                            </button>
+                                        </div>
                                     </div>
                                 ) : (
                                     <div className="bg-yellow-50 dark:bg-yellow-900/20 p-4 rounded-xl border border-yellow-100 dark:border-yellow-900/30">
