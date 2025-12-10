@@ -1,6 +1,8 @@
+
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Icons } from './ui/Icon';
+import { useLanguage } from '../contexts/LanguageContext';
 
 export type ScanStatus = 'idle' | 'scanning' | 'paused' | 'completed' | 'error' | 'cancelled';
 
@@ -29,11 +31,23 @@ export const ScanProgressModal: React.FC<ScanProgressModalProps> = ({
   title = "Scanning Library",
   type = 'scan'
 }) => {
+  const { t } = useLanguage();
   const [isMinimized, setIsMinimized] = useState(false);
 
   if (!isOpen) return null;
 
   const isThumb = type === 'thumb';
+
+  const getStatusText = (s: ScanStatus) => {
+      switch(s) {
+          case 'scanning': return t('processing');
+          case 'paused': return t('paused');
+          case 'completed': return t('complete');
+          case 'cancelled': return t('stopped');
+          case 'error': return 'Error';
+          default: return s;
+      }
+  };
 
   return (
     <AnimatePresence>
@@ -49,7 +63,7 @@ export const ScanProgressModal: React.FC<ScanProgressModalProps> = ({
                     <div className="flex items-center gap-2">
                         <Icons.Loader size={16} className={status === 'scanning' ? 'animate-spin text-primary-600' : 'text-gray-400'} />
                         <span className="font-semibold text-sm text-gray-800 dark:text-gray-200">
-                            {status === 'scanning' ? 'Processing...' : status}
+                            {getStatusText(status)}
                         </span>
                     </div>
                     <div className="flex items-center gap-1">
@@ -61,7 +75,7 @@ export const ScanProgressModal: React.FC<ScanProgressModalProps> = ({
                 </div>
                 <div className="space-y-1">
                     <div className="flex justify-between text-xs text-gray-500">
-                        <span>{isThumb ? 'Processed' : 'Found'}</span>
+                        <span>{isThumb ? t('processed') : t('found')}</span>
                         <span>{count}</span>
                     </div>
                     <div className="h-1 w-full bg-gray-100 dark:bg-gray-700 rounded-full overflow-hidden">
@@ -103,19 +117,17 @@ export const ScanProgressModal: React.FC<ScanProgressModalProps> = ({
                             </div>
                             <div>
                                 <h3 className="font-bold text-lg text-gray-900 dark:text-white">
-                                    {status === 'scanning' ? title : 
-                                    status === 'paused' ? 'Paused' : 
-                                    status === 'completed' ? 'Complete' : 'Stopped'}
+                                    {status === 'scanning' ? title : getStatusText(status)}
                                 </h3>
                                 <p className="text-sm text-gray-500 dark:text-gray-400">
-                                    {status === 'completed' ? 'Operation finished successfully' : 'Processing in background'}
+                                    {status === 'completed' ? t('operation_finished') : t('processing_bg')}
                                 </p>
                             </div>
                         </div>
 
                         <div className="bg-gray-50 dark:bg-gray-900/50 rounded-xl p-4 mb-6 border border-gray-100 dark:border-gray-800">
                             <div className="flex justify-between items-end mb-2">
-                                <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">{isThumb ? 'Thumbnails Generated' : 'Items Found'}</span>
+                                <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">{isThumb ? t('processed') : t('found')}</span>
                                 <span className="text-2xl font-bold text-primary-600 dark:text-primary-400">{count}</span>
                             </div>
                             <div className="h-1.5 w-full bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
@@ -129,7 +141,7 @@ export const ScanProgressModal: React.FC<ScanProgressModalProps> = ({
                                 )}
                             </div>
                             <div className="mt-3">
-                                <p className="text-xs text-gray-400 mb-1">Current File</p>
+                                <p className="text-xs text-gray-400 mb-1">{t('current_file')}</p>
                                 <p className="text-xs font-mono text-gray-600 dark:text-gray-300 truncate" title={currentPath}>
                                     {currentPath || 'Initializing...'}
                                 </p>
@@ -139,20 +151,20 @@ export const ScanProgressModal: React.FC<ScanProgressModalProps> = ({
                         <div className="flex gap-3">
                             {status === 'scanning' && (
                                 <>
-                                    <button onClick={onPause} className="flex-1 py-2.5 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200 rounded-xl font-medium transition-colors flex items-center justify-center gap-2"><Icons.Pause size={18} /> Pause</button>
-                                    <button onClick={onCancel} className="flex-1 py-2.5 bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/30 text-red-600 dark:text-red-400 rounded-xl font-medium transition-colors flex items-center justify-center gap-2"><Icons.Stop size={18} /> Stop</button>
+                                    <button onClick={onPause} className="flex-1 py-2.5 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200 rounded-xl font-medium transition-colors flex items-center justify-center gap-2"><Icons.Pause size={18} /> {t('pause')}</button>
+                                    <button onClick={onCancel} className="flex-1 py-2.5 bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/30 text-red-600 dark:text-red-400 rounded-xl font-medium transition-colors flex items-center justify-center gap-2"><Icons.Stop size={18} /> {t('stop')}</button>
                                 </>
                             )}
                             
                             {status === 'paused' && (
                                 <>
-                                    <button onClick={onResume} className="flex-1 py-2.5 bg-primary-600 hover:bg-primary-700 text-white rounded-xl font-medium transition-colors flex items-center justify-center gap-2"><Icons.Play size={18} /> Resume</button>
-                                    <button onClick={onCancel} className="flex-1 py-2.5 bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/30 text-red-600 dark:text-red-400 rounded-xl font-medium transition-colors flex items-center justify-center gap-2"><Icons.Stop size={18} /> Stop</button>
+                                    <button onClick={onResume} className="flex-1 py-2.5 bg-primary-600 hover:bg-primary-700 text-white rounded-xl font-medium transition-colors flex items-center justify-center gap-2"><Icons.Play size={18} /> {t('resume')}</button>
+                                    <button onClick={onCancel} className="flex-1 py-2.5 bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/30 text-red-600 dark:text-red-400 rounded-xl font-medium transition-colors flex items-center justify-center gap-2"><Icons.Stop size={18} /> {t('stop')}</button>
                                 </>
                             )}
 
                             {(status === 'completed' || status === 'cancelled' || status === 'error') && (
-                                <button onClick={onClose} className="w-full py-2.5 bg-primary-600 hover:bg-primary-700 text-white rounded-xl font-medium transition-colors">Close</button>
+                                <button onClick={onClose} className="w-full py-2.5 bg-primary-600 hover:bg-primary-700 text-white rounded-xl font-medium transition-colors">{t('close')}</button>
                             )}
                         </div>
                     </div>

@@ -1,7 +1,9 @@
+
 import React from 'react';
 import { motion } from 'framer-motion';
 import { ViewMode } from '../types';
 import { Icons } from './ui/Icon';
+import { useLanguage } from '../contexts/LanguageContext';
 
 interface NavigationProps {
   appTitle: string;
@@ -11,7 +13,7 @@ interface NavigationProps {
   isSidebarOpen: boolean;
   toggleSidebar: () => void;
   totalPhotos: number;
-  theme: 'light' | 'dark';
+  theme: 'light' | 'dark' | 'system';
   toggleTheme: () => void;
   isServerMode: boolean;
   onOpenSettings: () => void;
@@ -30,6 +32,7 @@ export const Navigation: React.FC<NavigationProps> = ({
   isServerMode,
   onOpenSettings
 }) => {
+  const { t } = useLanguage();
   const isHome = viewMode === 'home';
 
   const handleNavClick = (mode: ViewMode) => {
@@ -83,7 +86,7 @@ export const Navigation: React.FC<NavigationProps> = ({
         </div>
         <div className="flex items-center gap-2 pointer-events-auto">
             <button onClick={toggleTheme} className={`p-2 rounded-full transition-colors ${isHome ? 'text-white hover:bg-white/10' : 'text-primary-600 dark:text-primary-400 hover:bg-primary-50 dark:hover:bg-gray-800'}`}>
-                {theme === 'dark' ? <Icons.Sun size={24} /> : <Icons.Moon size={24} />}
+                {theme === 'system' ? <Icons.Monitor size={24} /> : (theme === 'dark' ? <Icons.Moon size={24} /> : <Icons.Sun size={24} />)}
             </button>
             {!isServerMode && (
               <label className={`p-2 rounded-full cursor-pointer transition-colors ${isHome ? 'text-white hover:bg-white/10' : 'text-primary-600 dark:text-primary-400 hover:bg-primary-50 dark:hover:bg-gray-800'}`}>
@@ -126,25 +129,25 @@ export const Navigation: React.FC<NavigationProps> = ({
             
             {/* Main Nav */}
              <div>
-                <p className={`px-4 text-xs font-semibold uppercase tracking-wider mb-2 ${sectionTitleClass}`}>Menu</p>
+                <p className={`px-4 text-xs font-semibold uppercase tracking-wider mb-2 ${sectionTitleClass}`}>{t('menu')}</p>
                 <button
                     onClick={() => handleNavClick('home')}
                     className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all mb-1 ${navItemClass(viewMode === 'home')}`}
                 >
                     <Icons.Home size={20} className={iconColorClass(viewMode === 'home')} />
-                    <span>Home</span>
+                    <span>{t('home')}</span>
                 </button>
             </div>
 
             {/* Library Section */}
             <div>
-                <p className={`px-4 text-xs font-semibold uppercase tracking-wider mb-2 ${sectionTitleClass}`}>Library</p>
+                <p className={`px-4 text-xs font-semibold uppercase tracking-wider mb-2 ${sectionTitleClass}`}>{t('library')}</p>
                 <button
                 onClick={() => handleNavClick('all')}
                 className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all mb-1 ${navItemClass(viewMode === 'all')}`}
                 >
                 <Icons.Image size={20} className={iconColorClass(viewMode === 'all')} />
-                <span>All Photos</span>
+                <span>{t('all_photos')}</span>
                 <span className={`ml-auto text-xs px-2 py-0.5 rounded-full transition-colors ${
                     isHome 
                         ? 'bg-gray-800 text-gray-400'
@@ -157,26 +160,26 @@ export const Navigation: React.FC<NavigationProps> = ({
                 className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${navItemClass(viewMode === 'folders')}`}
                 >
                 <Icons.Folder size={20} className={iconColorClass(viewMode === 'folders')} />
-                <span>Folders</span>
+                <span>{t('folders')}</span>
                 </button>
             </div>
 
             {/* System Section */}
             <div>
-                <p className={`px-4 text-xs font-semibold uppercase tracking-wider mb-2 ${sectionTitleClass}`}>System</p>
+                <p className={`px-4 text-xs font-semibold uppercase tracking-wider mb-2 ${sectionTitleClass}`}>{t('system')}</p>
                 <button 
                   onClick={toggleTheme}
                   className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-colors mb-1 ${navItemClass(false)}`}
                 >
-                    {theme === 'dark' ? <Icons.Sun size={20} /> : <Icons.Moon size={20} />}
-                    <span>{theme === 'dark' ? 'Light Mode' : 'Dark Mode'}</span>
+                    {theme === 'system' ? <Icons.Monitor size={20} /> : (theme === 'dark' ? <Icons.Moon size={20} /> : <Icons.Sun size={20} />)}
+                    <span>{theme === 'system' ? t('follow_system') : (theme === 'dark' ? t('dark_mode') : t('light_mode'))}</span>
                 </button>
                 <button 
                   onClick={handleSettingsClick}
                   className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-colors ${navItemClass(false)}`}
                 >
                     <Icons.Settings size={20} />
-                    <span>Settings</span>
+                    <span>{t('settings')}</span>
                 </button>
             </div>
 
@@ -193,7 +196,7 @@ export const Navigation: React.FC<NavigationProps> = ({
                       <div className={`p-3 rounded-full shadow-sm group-hover:shadow-md transition-all ${isHome ? 'bg-gray-700' : 'bg-white dark:bg-gray-700'}`}>
                           <Icons.Upload size={20} />
                       </div>
-                      <span className="text-sm font-medium">Load Folder</span>
+                      <span className="text-sm font-medium">{t('load_folder')}</span>
                       <input
                           type="file"
                           multiple

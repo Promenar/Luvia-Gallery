@@ -1,7 +1,9 @@
+
 import React, { useRef, useState, useMemo } from 'react';
 import { motion } from 'framer-motion';
 import { MediaItem } from '../types';
 import { Icons } from './ui/Icon';
+import { useLanguage } from '../contexts/LanguageContext';
 
 interface MediaCardProps {
   item: MediaItem;
@@ -12,6 +14,7 @@ interface MediaCardProps {
 
 // Memoize the card to prevent re-renders when parent list updates
 export const MediaCard: React.FC<MediaCardProps> = React.memo(({ item, onClick, layout, isVirtual }) => {
+  const { t } = useLanguage();
   const videoRef = useRef<HTMLVideoElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isLoaded, setIsLoaded] = useState(false);
@@ -101,7 +104,7 @@ export const MediaCard: React.FC<MediaCardProps> = React.memo(({ item, onClick, 
            {/* Badge */}
            <div className={`absolute top-2 right-2 bg-black/60 backdrop-blur-sm px-2 py-0.5 rounded text-[10px] text-white font-medium flex items-center gap-1 z-10 transition-opacity duration-300 ${isLoaded ? 'opacity-100' : 'opacity-0'}`}>
              <Icons.Video size={10} />
-             <span>VIDEO</span>
+             <span>{t('video_badge')}</span>
            </div>
         </div>
       ) : item.mediaType === 'audio' ? (
@@ -109,7 +112,7 @@ export const MediaCard: React.FC<MediaCardProps> = React.memo(({ item, onClick, 
             <Icons.Music size={48} className="text-white opacity-80" />
             <div className={`absolute top-2 right-2 bg-black/40 backdrop-blur-sm px-2 py-0.5 rounded text-[10px] text-white font-medium flex items-center gap-1 z-10`}>
              <Icons.Music size={10} />
-             <span>AUDIO</span>
+             <span>{t('audio_badge')}</span>
            </div>
         </div>
       ) : (

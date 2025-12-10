@@ -42,7 +42,10 @@ import {
   Info,
   Clock,
   Shuffle,
-  CornerUpLeft
+  CornerUpLeft,
+  Activity,
+  Cpu,
+  Monitor
 } from 'lucide-react';
 
 export const Icons = {
@@ -89,5 +92,8 @@ export const Icons = {
   Info,
   Clock,
   Shuffle,
-  Up: CornerUpLeft
+  Up: CornerUpLeft,
+  Activity,
+  Cpu,
+  Monitor
 };

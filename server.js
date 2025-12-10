@@ -4,6 +4,8 @@ const fs = require('fs');
 const cors = require('cors');
 const mime = require('mime-types');
 const crypto = require('crypto');
+const os = require('os');
+const { exec } = require('child_process');
 
 // Try to require sharp
 let sharp;
@@ -28,6 +30,7 @@ const MEDIA_ROOT = process.env.MEDIA_ROOT || '/media';
 // Data persistence setup
 const DATA_DIR = path.join(__dirname, 'data');
 const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
+const LIBRARY_FILE = path.join(DATA_DIR, 'library.json');
 
 // Cache directory setup (persistent thumbnails)
 const CACHE_DIR = process.env.CACHE_DIR || path.join(__dirname, 'cache');
@@ -76,8 +79,90 @@ let thumbJob = {
     count: 0,
     total: 0,
     currentPath: '',
+    currentEngine: '', // 'sharp', 'ffmpeg-cpu', 'ffmpeg-cuda'
     control: { pause: false, cancel: false }
 };
+
+// --- System Capabilities ---
+let systemCaps = {
+    ffmpeg: false,
+    ffmpegHwAccels: [],
+    sharp: !!sharp
+};
+
+// Check FFmpeg Capabilities
+const checkSystemCapabilities = () => {
+    if (ffmpeg) {
+        ffmpeg.getAvailableCodecs((err, codecs) => {
+            if (!err) systemCaps.ffmpeg = true;
+        });
+
+        // Exec ffmpeg to check hwaccels
+        exec('ffmpeg -hwaccels', (err, stdout, stderr) => {
+            if (!err) {
+                const output = stdout || stderr;
+                const lines = output.split('\n');
+                let capturing = false;
+                let accels = [];
+                // Simple parsing strategy depending on ffmpeg version output
+                // Usually output lists "Hardware acceleration methods:" then list
+                if (output.includes('Hardware acceleration methods:')) {
+                    const methods = output.split('Hardware acceleration methods:')[1].trim().split('\n')[0].trim().split(' ');
+                    accels = methods.filter(m => m && m !== '');
+                } else {
+                    // Fallback parse
+                     lines.forEach(line => {
+                         if(capturing && line.trim()) accels.push(line.trim());
+                         if(line.includes('Hardware acceleration methods')) capturing = true;
+                     });
+                }
+                systemCaps.ffmpegHwAccels = accels;
+                console.log("Detected HW Accels:", accels);
+            }
+        });
+    }
+};
+checkSystemCapabilities();
+
+// --- Persistence Functions ---
+
+const saveLibrary = () => {
+    try {
+        const data = {
+            items: scanJob.items,
+            sources: scanJob.sources,
+            folders: scanJob.folders,
+            lastScan: Date.now()
+        };
+        fs.writeFileSync(LIBRARY_FILE, JSON.stringify(data));
+        console.log(`Library saved to disk. ${scanJob.items.length} items.`);
+    } catch (e) {
+        console.error("Failed to save library:", e);
+    }
+};
+
+const loadLibrary = () => {
+    if (fs.existsSync(LIBRARY_FILE)) {
+        try {
+            const raw = fs.readFileSync(LIBRARY_FILE, 'utf8');
+            const data = JSON.parse(raw);
+            if (data && Array.isArray(data.items)) {
+                scanJob.items = data.items;
+                scanJob.sources = data.sources || [];
+                scanJob.folders = data.folders || [];
+                scanJob.count = data.items.length;
+                scanJob.status = 'completed'; 
+                console.log(`Library loaded from disk. ${scanJob.items.length} items.`);
+            }
+        } catch (e) {
+            console.error("Failed to load library:", e);
+        }
+    }
+};
+
+// Load on startup
+loadLibrary();
+
 
 // --- Helper Functions ---
 
@@ -110,21 +195,28 @@ const generateVideoThumbnail = (sourcePath, outputPath) => {
     return new Promise((resolve, reject) => {
         if (!ffmpeg) return reject(new Error("FFmpeg not available"));
 
-        // 1. Probe for duration to pick a good timestamp (e.g. 20%)
+        // 1. Probe for duration
         ffmpeg.ffprobe(sourcePath, (err, metadata) => {
             if (err) return reject(err);
 
             const duration = metadata.format.duration || 0;
-            const timestamp = duration > 10 ? duration * 0.2 : 1; // 20% mark or 1st second
+            const timestamp = duration > 10 ? duration * 0.2 : 1; 
 
             // Helper to run ffmpeg command
             const runFfmpeg = (useHardwareAccel) => {
                 return new Promise((innerResolve, innerReject) => {
                     let command = ffmpeg(sourcePath);
 
-                    if (useHardwareAccel) {
-                        // Attempt NVIDIA Hardware Acceleration
-                        command = command.inputOptions(['-hwaccel cuda']);
+                    // If GPU is detected in systemCaps, try to use it
+                    // This is a naive implementation; real world needs more complex codec mapping
+                    if (useHardwareAccel && systemCaps.ffmpegHwAccels.includes('cuda')) {
+                         command = command.inputOptions(['-hwaccel cuda']);
+                         thumbJob.currentEngine = 'FFmpeg (CUDA)';
+                    } else if (useHardwareAccel && systemCaps.ffmpegHwAccels.includes('vaapi')) {
+                         command = command.inputOptions(['-hwaccel vaapi']);
+                         thumbJob.currentEngine = 'FFmpeg (VAAPI)';
+                    } else {
+                         thumbJob.currentEngine = 'FFmpeg (CPU)';
                     }
 
                     command
@@ -132,21 +224,27 @@ const generateVideoThumbnail = (sourcePath, outputPath) => {
                             timestamps: [timestamp],
                             filename: path.basename(outputPath),
                             folder: path.dirname(outputPath),
-                            size: '300x?', // Resize to width 300, auto height
+                            size: '300x?',
                         })
                         .on('end', () => innerResolve())
                         .on('error', (err) => innerReject(err));
                 });
             };
 
-            // Strategy: Try GPU first, fallback to CPU
-            runFfmpeg(true)
+            // Strategy: Try GPU if available, else CPU
+            const hasGpu = systemCaps.ffmpegHwAccels.length > 0;
+            
+            runFfmpeg(hasGpu)
                 .then(() => resolve())
                 .catch((hwErr) => {
-                    // console.warn(`HW Accel failed for ${path.basename(sourcePath)}, falling back to CPU. Error: ${hwErr.message}`);
-                    runFfmpeg(false)
-                        .then(() => resolve())
-                        .catch((cpuErr) => reject(cpuErr));
+                    if (hasGpu) {
+                         // Fallback
+                         runFfmpeg(false)
+                            .then(() => resolve())
+                            .catch((cpuErr) => reject(cpuErr));
+                    } else {
+                        reject(hwErr);
+                    }
                 });
         });
     });
@@ -341,6 +439,37 @@ const calculateFolderStats = (items) => {
 
 // --- API Endpoints ---
 
+// System Status Endpoint
+app.get('/api/system/status', async (req, res) => {
+    let cacheCount = 0;
+    try {
+        const files = await fs.promises.readdir(CACHE_DIR);
+        cacheCount = files.length;
+    } catch(e) {}
+
+    const breakdown = {
+        image: 0,
+        video: 0,
+        audio: 0
+    };
+
+    scanJob.items.forEach(i => {
+        if (i.type.startsWith('image')) breakdown.image++;
+        else if (i.type.startsWith('video')) breakdown.video++;
+        else if (i.type.startsWith('audio')) breakdown.audio++;
+    });
+
+    res.json({
+        ffmpeg: systemCaps.ffmpeg,
+        ffmpegHwAccels: systemCaps.ffmpegHwAccels,
+        sharp: systemCaps.sharp,
+        cacheCount: cacheCount,
+        totalItems: scanJob.items.length,
+        mediaBreakdown: breakdown,
+        platform: os.platform() + ' ' + os.arch()
+    });
+});
+
 // File Rename
 app.post('/api/file/rename', async (req, res) => {
     const { oldPath, newName } = req.body;
@@ -368,8 +497,7 @@ app.post('/api/file/rename', async (req, res) => {
             foundItem.path = parts.join('/');
         }
         
-        // Invalidate folder stats slightly (recalc would be better but expensive)
-        // ideally re-run calc but let's assume next scan fixes it or we live with slight mismatch
+        saveLibrary(); // Persist changes
         
         res.json({ success: true, newPath: foundItem ? foundItem.path : newName });
     } catch (e) {
@@ -396,6 +524,8 @@ app.post('/api/file/delete', async (req, res) => {
             scanJob.count--;
         }
         
+        saveLibrary(); // Persist changes
+
         res.json({ success: true });
     } catch (e) {
         console.error("Delete error", e);
@@ -525,6 +655,7 @@ app.post('/api/scan/start', async (req, res) => {
         scanJob.folders = calculateFolderStats(scanJob.items);
 
         scanJob.status = 'completed';
+        saveLibrary(); // Persist to disk
         console.log(`Scan completed. Found ${scanJob.count} items. Folders processed.`);
 
     } catch (e) {
@@ -664,6 +795,7 @@ app.post('/api/thumb-gen/start', async (req, res) => {
         count: 0,
         total: scanJob.items.length,
         currentPath: '',
+        currentEngine: 'Initializing...',
         control: { pause: false, cancel: false }
     };
     
@@ -689,6 +821,7 @@ app.post('/api/thumb-gen/start', async (req, res) => {
                 if (!fs.existsSync(cacheFilePath)) {
                     // IMAGE
                     if (sharp && item.type && item.type.startsWith('image/')) {
+                        thumbJob.currentEngine = 'Sharp (CPU)';
                         try {
                             await sharp(sourcePath)
                                 .resize({ width: 300, withoutEnlargement: true, fit: 'inside' })
@@ -698,6 +831,7 @@ app.post('/api/thumb-gen/start', async (req, res) => {
                     }
                     // VIDEO
                     else if (ffmpeg && item.type && item.type.startsWith('video/')) {
+                         // engine set inside generateVideoThumbnail
                         try {
                             await generateVideoThumbnail(sourcePath, cacheFilePath);
                         } catch(e) { /* ignore */ }
@@ -725,7 +859,8 @@ app.get('/api/thumb-gen/status', (req, res) => {
         status: thumbJob.status,
         count: thumbJob.count,
         total: thumbJob.total,
-        currentPath: thumbJob.currentPath
+        currentPath: thumbJob.currentPath,
+        currentEngine: thumbJob.currentEngine
     });
 });
 

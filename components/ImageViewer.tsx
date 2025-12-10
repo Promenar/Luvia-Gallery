@@ -1,9 +1,11 @@
+
 import React, { useEffect, useState, useRef } from 'react';
 import { motion, AnimatePresence, PanInfo } from 'framer-motion';
 // @ts-ignore - exifr is loaded via importmap
 import exifr from 'exifr';
 import { MediaItem, ExifData } from '../types';
 import { Icons } from './ui/Icon';
+import { useLanguage } from '../contexts/LanguageContext';
 
 interface ImageViewerProps {
   item: MediaItem | null;
@@ -22,6 +24,7 @@ interface TransformState {
 }
 
 export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext, onPrev, onDelete, onRename, onJumpToFolder }) => {
+  const { t } = useLanguage();
   const [transform, setTransform] = useState<TransformState>({ scale: 1, x: 0, y: 0 });
   const containerRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -299,7 +302,7 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
 
   const handleDeleteClick = (e: React.MouseEvent) => {
       e.stopPropagation();
-      if (onDelete && confirm(`Are you sure you want to delete ${item.name}?`)) {
+      if (onDelete && confirm(`${t('delete_confirm')} ${item.name}?`)) {
           onDelete(item);
       }
   };
@@ -427,31 +430,31 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
                     className="absolute top-0 right-0 bottom-0 w-80 bg-black/80 backdrop-blur-md z-40 p-6 pt-20 border-l border-white/10 text-white overflow-y-auto"
                     onClick={(e) => e.stopPropagation()}
                 >
-                    <h3 className="text-xl font-bold mb-6 flex items-center gap-2"><Icons.Info size={20}/> Info</h3>
+                    <h3 className="text-xl font-bold mb-6 flex items-center gap-2"><Icons.Info size={20}/> {t('file_info')}</h3>
                     <div className="space-y-6 text-sm">
                         <section>
-                            <h4 className="text-white/60 text-xs font-bold uppercase tracking-wider mb-3 border-b border-white/10 pb-1">File Details</h4>
+                            <h4 className="text-white/60 text-xs font-bold uppercase tracking-wider mb-3 border-b border-white/10 pb-1">{t('file_details')}</h4>
                             <div className="space-y-3">
                                 <div>
-                                    <p className="text-white/40 uppercase text-[10px] tracking-wider mb-0.5">Name</p>
+                                    <p className="text-white/40 uppercase text-[10px] tracking-wider mb-0.5">{t('name')}</p>
                                     <p className="font-medium break-all">{item.name}</p>
                                 </div>
                                 <div>
-                                    <p className="text-white/40 uppercase text-[10px] tracking-wider mb-0.5">Path</p>
+                                    <p className="text-white/40 uppercase text-[10px] tracking-wider mb-0.5">{t('path')}</p>
                                     <p className="text-white/80 break-all text-xs font-mono">{item.path}</p>
                                 </div>
                                 <div className="grid grid-cols-2 gap-4">
                                     <div>
-                                        <p className="text-white/40 uppercase text-[10px] tracking-wider mb-0.5">Size</p>
+                                        <p className="text-white/40 uppercase text-[10px] tracking-wider mb-0.5">{t('size')}</p>
                                         <p className="text-white/80">{formatSize(item.size)}</p>
                                     </div>
                                     <div>
-                                        <p className="text-white/40 uppercase text-[10px] tracking-wider mb-0.5">Type</p>
+                                        <p className="text-white/40 uppercase text-[10px] tracking-wider mb-0.5">{t('type')}</p>
                                         <p className="text-white/80">{item.mediaType.toUpperCase()}</p>
                                     </div>
                                 </div>
                                 <div>
-                                    <p className="text-white/40 uppercase text-[10px] tracking-wider mb-0.5">Date Modified</p>
+                                    <p className="text-white/40 uppercase text-[10px] tracking-wider mb-0.5">{t('date_modified')}</p>
                                     <p className="text-white/80">{formatDate(item.lastModified)}</p>
                                 </div>
                             </div>
@@ -460,66 +463,66 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
                         {/* EXIF Section */}
                         {item.mediaType === 'image' && (
                              <section>
-                                <h4 className="text-white/60 text-xs font-bold uppercase tracking-wider mb-3 border-b border-white/10 pb-1 mt-6">Camera Details</h4>
+                                <h4 className="text-white/60 text-xs font-bold uppercase tracking-wider mb-3 border-b border-white/10 pb-1 mt-6">{t('camera_details')}</h4>
                                 {isExifLoading ? (
                                     <div className="flex items-center gap-2 text-white/50 text-xs">
-                                        <Icons.Loader size={12} className="animate-spin" /> Loading metadata...
+                                        <Icons.Loader size={12} className="animate-spin" /> {t('loading_metadata')}
                                     </div>
                                 ) : exifData ? (
                                     <div className="space-y-3">
                                         {(exifData.Make || exifData.Model) && (
                                             <div>
-                                                <p className="text-white/40 uppercase text-[10px] tracking-wider mb-0.5">Camera</p>
+                                                <p className="text-white/40 uppercase text-[10px] tracking-wider mb-0.5">{t('camera')}</p>
                                                 <p className="text-white/80">{exifData.Make} {exifData.Model}</p>
                                             </div>
                                         )}
                                         {exifData.LensModel && (
                                             <div>
-                                                <p className="text-white/40 uppercase text-[10px] tracking-wider mb-0.5">Lens</p>
+                                                <p className="text-white/40 uppercase text-[10px] tracking-wider mb-0.5">{t('lens')}</p>
                                                 <p className="text-white/80">{exifData.LensModel}</p>
                                             </div>
                                         )}
                                         <div className="grid grid-cols-2 gap-4">
                                             {exifData.FNumber && (
                                                 <div>
-                                                    <p className="text-white/40 uppercase text-[10px] tracking-wider mb-0.5">Aperture</p>
+                                                    <p className="text-white/40 uppercase text-[10px] tracking-wider mb-0.5">{t('aperture')}</p>
                                                     <p className="text-white/80">f/{exifData.FNumber}</p>
                                                 </div>
                                             )}
                                             {exifData.ExposureTime && (
                                                 <div>
-                                                    <p className="text-white/40 uppercase text-[10px] tracking-wider mb-0.5">Shutter</p>
+                                                    <p className="text-white/40 uppercase text-[10px] tracking-wider mb-0.5">{t('shutter')}</p>
                                                     <p className="text-white/80">{formatExposure(exifData.ExposureTime)}</p>
                                                 </div>
                                             )}
                                             {exifData.ISO && (
                                                 <div>
-                                                    <p className="text-white/40 uppercase text-[10px] tracking-wider mb-0.5">ISO</p>
+                                                    <p className="text-white/40 uppercase text-[10px] tracking-wider mb-0.5">{t('iso')}</p>
                                                     <p className="text-white/80">{exifData.ISO}</p>
                                                 </div>
                                             )}
                                             {exifData.FocalLength && (
                                                 <div>
-                                                    <p className="text-white/40 uppercase text-[10px] tracking-wider mb-0.5">Focal Length</p>
+                                                    <p className="text-white/40 uppercase text-[10px] tracking-wider mb-0.5">{t('focal_length')}</p>
                                                     <p className="text-white/80">{exifData.FocalLength}mm</p>
                                                 </div>
                                             )}
                                              {(exifData.width || exifData.height) && (
                                                 <div>
-                                                    <p className="text-white/40 uppercase text-[10px] tracking-wider mb-0.5">Dimensions</p>
+                                                    <p className="text-white/40 uppercase text-[10px] tracking-wider mb-0.5">{t('dimensions')}</p>
                                                     <p className="text-white/80">{exifData.width || '?'} x {exifData.height || '?'}</p>
                                                 </div>
                                             )}
                                         </div>
                                          {exifData.DateTimeOriginal && (
                                             <div>
-                                                <p className="text-white/40 uppercase text-[10px] tracking-wider mb-0.5">Date Taken</p>
+                                                <p className="text-white/40 uppercase text-[10px] tracking-wider mb-0.5">{t('date_taken')}</p>
                                                 <p className="text-white/80">{formatDate(exifData.DateTimeOriginal)}</p>
                                             </div>
                                         )}
                                     </div>
                                 ) : (
-                                    <p className="text-xs text-white/40 italic">No EXIF data found.</p>
+                                    <p className="text-xs text-white/40 italic">{t('no_exif')}</p>
                                 )}
                              </section>
                         )}

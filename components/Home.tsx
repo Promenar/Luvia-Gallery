@@ -1,26 +1,53 @@
+
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { MediaItem } from '../types';
+import { HomeScreenConfig, MediaItem } from '../types';
 import { Icons } from './ui/Icon';
+import { useLanguage } from '../contexts/LanguageContext';
 
 interface HomeProps {
     items: MediaItem[];
     onEnterLibrary: () => void;
     onJumpToFolder: (item: MediaItem) => void;
     subtitle: string;
+    config?: HomeScreenConfig;
 }
 
-export const Home: React.FC<HomeProps> = ({ items, onEnterLibrary, onJumpToFolder, subtitle }) => {
+export const Home: React.FC<HomeProps> = ({ items, onEnterLibrary, onJumpToFolder, subtitle, config }) => {
+    const { t } = useLanguage();
     const [currentIndex, setCurrentIndex] = useState(0);
     const [featured, setFeatured] = useState<MediaItem[]>([]);
 
     useEffect(() => {
-        // Pick random items for slideshow
-        if (items.length > 0) {
-            const shuffled = [...items].sort(() => 0.5 - Math.random());
-            setFeatured(shuffled.slice(0, 10)); // Take top 10 random
+        if (items.length === 0) return;
+
+        let filteredItems = items;
+        
+        if (config?.mode === 'single' && config.path) {
+            // Find specific file. Note: config.path is likely "Folder/file.jpg", item.path is same.
+            filteredItems = items.filter(i => i.path === config.path || i.path.endsWith(config.path!));
+            // Fallback if not found exactly, try name search
+            if (filteredItems.length === 0) {
+                 filteredItems = items.filter(i => i.name === config.path);
+            }
+        } else if (config?.mode === 'folder' && config.path) {
+            filteredItems = items.filter(i => i.folderPath === config.path || i.folderPath.endsWith(config.path!));
         }
-    }, [items.length]); // Only re-shuffle if count changes significantly
+
+        if (filteredItems.length > 0) {
+            // If single mode, don't shuffle, just take one.
+            if (config?.mode === 'single') {
+                 setFeatured([filteredItems[0]]);
+            } else {
+                 const shuffled = [...filteredItems].sort(() => 0.5 - Math.random());
+                 setFeatured(shuffled.slice(0, 10)); // Take top 10 random
+            }
+        } else {
+             // Fallback to random if config matches nothing
+             const shuffled = [...items].sort(() => 0.5 - Math.random());
+             setFeatured(shuffled.slice(0, 10));
+        }
+    }, [items.length, config]); // Re-run if items or config changes
 
     useEffect(() => {
         if (featured.length <= 1) return;
@@ -81,7 +108,7 @@ export const Home: React.FC<HomeProps> = ({ items, onEnterLibrary, onJumpToFolde
                              </div>
                              <button onClick={() => onJumpToFolder(currentItem)} className="text-xs text-primary-300 hover:text-white flex items-center gap-1 hover:underline">
                                  <Icons.Folder size={12} />
-                                 <span>View in {currentItem.folderPath || 'Root'}</span>
+                                 <span>{t('view_in')} {currentItem.folderPath || 'Root'}</span>
                              </button>
                         </div>
                     )}
@@ -90,7 +117,7 @@ export const Home: React.FC<HomeProps> = ({ items, onEnterLibrary, onJumpToFolde
                         onClick={onEnterLibrary}
                         className="group relative px-8 py-4 bg-white/10 hover:bg-white/20 backdrop-blur-md border border-white/30 rounded-full text-white font-medium text-lg transition-all hover:scale-105 active:scale-95 flex items-center gap-3 mx-auto"
                     >
-                        <span>Enter Library</span>
+                        <span>{t('enter_library')}</span>
                         <div className="bg-white text-black rounded-full p-1 group-hover:translate-x-1 transition-transform">
                             <Icons.ChevronRight size={20} />
                         </div>
@@ -98,7 +125,7 @@ export const Home: React.FC<HomeProps> = ({ items, onEnterLibrary, onJumpToFolde
                     
                     {items.length > 0 && (
                         <p className="mt-8 text-white/40 text-sm tracking-widest uppercase">
-                            {items.length.toLocaleString()} Items
+                            {items.length.toLocaleString()} {t('items_count')}
                         </p>
                     )}
                 </motion.div>

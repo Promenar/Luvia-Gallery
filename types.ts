@@ -59,16 +59,36 @@ export interface UserData {
     sources: {id: string, name: string, count: number}[];
 }
 
+export interface HomeScreenConfig {
+    mode: 'random' | 'folder' | 'single';
+    path?: string; // Used for folder or single file mode
+}
+
 // The serializable configuration structure
 export interface AppConfig {
   title: string;
   homeSubtitle?: string;
+  homeScreen?: HomeScreenConfig;
   users: User[];
   // We only store source metadata, not the file blobs themselves due to browser security
   userSources: Record<string, {id: string, name: string, count: number}[]>; 
   // List of relative paths within MEDIA_ROOT to scan
   libraryPaths?: string[];
   lastModified: number;
+}
+
+export interface SystemStatus {
+    ffmpeg: boolean;
+    ffmpegHwAccels: string[];
+    sharp: boolean;
+    cacheCount: number;
+    totalItems: number;
+    mediaBreakdown: {
+        image: number;
+        video: number;
+        audio: number;
+    };
+    platform: string;
 }
 
 export type ViewMode = 'home' | 'all' | 'folders';

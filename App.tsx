@@ -1,6 +1,7 @@
+
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { MediaItem, ViewMode, GridLayout, User, UserData, SortOption, FilterOption, AppConfig, FolderNode } from './types';
+import { MediaItem, ViewMode, GridLayout, User, UserData, SortOption, FilterOption, AppConfig, FolderNode, SystemStatus, HomeScreenConfig } from './types';
 import { buildFolderTree, generateId, isVideo, isAudio, sortMedia } from './utils/fileUtils';
 import { Icons } from './components/ui/Icon';
 import { Navigation } from './components/Navigation';
@@ -11,6 +12,7 @@ import { ScanProgressModal, ScanStatus } from './components/ScanProgressModal';
 import { VirtualGallery } from './components/VirtualGallery';
 import { PathAutocomplete } from './components/PathAutocomplete';
 import { Home } from './components/Home';
+import { useLanguage } from './contexts/LanguageContext';
 
 const CONFIG_FILE_NAME = 'lumina-config.json';
 const USERS_STORAGE_KEY = 'lumina_users';
@@ -23,6 +25,8 @@ const THEME_STORAGE_KEY = 'lumina_theme';
 const AUTH_USER_KEY = 'lumina_auth_user';
 
 export default function App() {
+  const { t, language, setLanguage } = useLanguage();
+
   // --- Authentication State ---
   const [users, setUsers] = useState<User[]>([]);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
@@ -43,11 +47,12 @@ export default function App() {
   const [isFetchingMore, setIsFetchingMore] = useState(false);
   const [hasMoreServer, setHasMoreServer] = useState(true);
   const [serverFolders, setServerFolders] = useState<any[]>([]); // Full list of folders from server
+  const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
 
   // --- Scanning & Thumbnail Gen State ---
   const [isScanModalOpen, setIsScanModalOpen] = useState(false);
   const [scanStatus, setScanStatus] = useState<ScanStatus>('idle');
-  const [scanProgress, setScanProgress] = useState({ count: 0, currentPath: '' });
+  const [scanProgress, setScanProgress] = useState({ count: 0, currentPath: '', currentEngine: '' });
   const [jobType, setJobType] = useState<'scan' | 'thumb'>('scan');
   
   // Use timeout ref for recursive polling instead of interval to prevent congestion
@@ -57,6 +62,7 @@ export default function App() {
   const [allUserData, setAllUserData] = useState<Record<string, UserData>>({});
   const [appTitle, setAppTitle] = useState('Lumina Gallery');
   const [homeSubtitle, setHomeSubtitle] = useState('Your memories, beautifully organized. Rediscover your collection.');
+  const [homeConfig, setHomeConfig] = useState<HomeScreenConfig>({ mode: 'random' });
   
   // Derived state for current user
   const files = useMemo(() => 
@@ -70,7 +76,9 @@ export default function App() {
   const [currentPath, setCurrentPath] = useState<string>('');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [selectedItem, setSelectedItem] = useState<MediaItem | null>(null);
-  const [theme, setTheme] = useState<'light' | 'dark'>('light');
+  
+  // --- Theme State ---
+  const [theme, setTheme] = useState<'light' | 'dark' | 'system'>('system');
   
   // --- Sort & Filter State ---
   const [sortOption, setSortOption] = useState<SortOption>('dateDesc');
@@ -84,32 +92,55 @@ export default function App() {
 
   // --- Theme Logic ---
   useEffect(() => {
-    const savedTheme = localStorage.getItem(THEME_STORAGE_KEY) as 'light' | 'dark' | null;
-    const preferredTheme = savedTheme || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
-    setTheme(preferredTheme);
-    if (preferredTheme === 'dark') {
-      document.documentElement.classList.add('dark');
-    } else {
-      document.documentElement.classList.remove('dark');
+    const savedTheme = localStorage.getItem(THEME_STORAGE_KEY) as 'light' | 'dark' | 'system' | null;
+    if (savedTheme) {
+        setTheme(savedTheme);
     }
   }, []);
 
+  useEffect(() => {
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+    
+    const applyTheme = () => {
+        let effectiveTheme = theme;
+        if (theme === 'system') {
+            effectiveTheme = mediaQuery.matches ? 'dark' : 'light';
+        }
+        
+        if (effectiveTheme === 'dark') {
+            document.documentElement.classList.add('dark');
+        } else {
+            document.documentElement.classList.remove('dark');
+        }
+    };
+
+    applyTheme();
+
+    const handleChange = () => {
+        if (theme === 'system') applyTheme();
+    };
+
+    mediaQuery.addEventListener('change', handleChange);
+    return () => mediaQuery.removeEventListener('change', handleChange);
+  }, [theme]);
+
   const toggleTheme = () => {
-    const newTheme = theme === 'light' ? 'dark' : 'light';
+    const next: Record<string, 'light' | 'dark' | 'system'> = {
+        'system': 'light',
+        'light': 'dark',
+        'dark': 'system'
+    };
+    const newTheme = next[theme] || 'system';
     setTheme(newTheme);
     localStorage.setItem(THEME_STORAGE_KEY, newTheme);
-    if (newTheme === 'dark') {
-      document.documentElement.classList.add('dark');
-    } else {
-      document.documentElement.classList.remove('dark');
-    }
   };
 
   // --- Persistence Helper ---
-  const persistData = async (newUsers?: User[], newTitle?: string, newAllUserData?: Record<string, UserData>, newLibraryPaths?: string[], newHomeSubtitle?: string) => {
+  const persistData = async (newUsers?: User[], newTitle?: string, newAllUserData?: Record<string, UserData>, newLibraryPaths?: string[], newHomeSubtitle?: string, newHomeConfig?: HomeScreenConfig) => {
       const u = newUsers || users;
       const t = newTitle || appTitle;
       const s = newHomeSubtitle || homeSubtitle;
+      const hc = newHomeConfig || homeConfig;
       const d = newAllUserData || allUserData;
       const l = newLibraryPaths || libraryPaths;
 
@@ -117,6 +148,7 @@ export default function App() {
       if (newUsers) setUsers(newUsers);
       if (newTitle) setAppTitle(newTitle);
       if (newHomeSubtitle) setHomeSubtitle(newHomeSubtitle);
+      if (newHomeConfig) setHomeConfig(newHomeConfig);
       if (newAllUserData) setAllUserData(newAllUserData);
       if (newLibraryPaths) setLibraryPaths(newLibraryPaths);
 
@@ -129,6 +161,7 @@ export default function App() {
       const config: AppConfig = {
           title: t,
           homeSubtitle: s,
+          homeScreen: hc,
           users: u,
           userSources: userSources,
           libraryPaths: l,
@@ -160,6 +193,7 @@ export default function App() {
       let loadedData: Record<string, UserData> = {};
       let loadedTitle = 'Lumina Gallery';
       let loadedSubtitle = 'Your memories, beautifully organized. Rediscover your collection.';
+      let loadedHomeConfig: HomeScreenConfig = { mode: 'random' };
       let serverMode = false;
 
       try {
@@ -179,6 +213,7 @@ export default function App() {
               loadedUsers = config.users;
               loadedTitle = config.title || 'Lumina Gallery';
               if (config.homeSubtitle) loadedSubtitle = config.homeSubtitle;
+              if (config.homeScreen) loadedHomeConfig = config.homeScreen;
               setLibraryPaths(config.libraryPaths || []);
               
               config.users.forEach((u: User) => {
@@ -220,6 +255,7 @@ export default function App() {
       setUsers(loadedUsers);
       setAppTitle(loadedTitle);
       setHomeSubtitle(loadedSubtitle);
+      setHomeConfig(loadedHomeConfig);
       setAllUserData(loadedData);
 
       // Check Persistent Login
@@ -360,6 +396,17 @@ export default function App() {
       }
   };
 
+  const fetchSystemStatus = async () => {
+      if (!isServerMode) return;
+      try {
+          const res = await fetch('/api/system/status');
+          if (res.ok) {
+              const data = await res.json();
+              setSystemStatus(data);
+          }
+      } catch(e) {}
+  };
+
   const startPolling = (type: 'scan' | 'thumb' = 'scan') => {
     stopPolling();
     
@@ -379,7 +426,8 @@ export default function App() {
                     setScanStatus(statusData.status);
                     setScanProgress({ 
                         count: statusData.count || 0, 
-                        currentPath: statusData.currentPath || '' 
+                        currentPath: statusData.currentPath || '',
+                        currentEngine: statusData.currentEngine || ''
                     });
 
                     if (statusData.status === 'scanning' || statusData.status === 'paused') {
@@ -392,6 +440,8 @@ export default function App() {
                 scanTimeoutRef.current = setTimeout(poll, 2000);
             } else {
                 stopPolling();
+                // Refresh system status when job ends
+                fetchSystemStatus();
             }
         } catch (e) {
             console.error("Poll failed", e);
@@ -436,6 +486,7 @@ export default function App() {
   useEffect(() => {
     let isMounted = true;
     if (isServerMode && currentUser) {
+        fetchSystemStatus();
         // Check Scan Status on Mount
         fetch('/api/scan/status')
             .then(async r => {
@@ -445,7 +496,7 @@ export default function App() {
                     setJobType('scan');
                     setIsScanModalOpen(true);
                     setScanStatus(d.status);
-                    setScanProgress({ count: d.count, currentPath: d.currentPath });
+                    setScanProgress({ count: d.count, currentPath: d.currentPath, currentEngine: '' });
                     startPolling('scan');
                 }
             });
@@ -621,6 +672,7 @@ export default function App() {
     const config: AppConfig = {
         title: appTitle,
         homeSubtitle: homeSubtitle,
+        homeScreen: homeConfig,
         users: users,
         userSources: userSources,
         libraryPaths: libraryPaths,
@@ -651,7 +703,7 @@ export default function App() {
                        hydratedData[u.username] = { sources: json.userSources?.[u.username] || [], files: existingFiles };
                   });
                   
-                  persistData(json.users, json.title, hydratedData, json.libraryPaths, json.homeSubtitle);
+                  persistData(json.users, json.title, hydratedData, json.libraryPaths, json.homeSubtitle, json.homeScreen);
                   alert("Configuration restored.");
                   if (authStep === 'loading' || authStep === 'setup') setAuthStep('login');
               }
@@ -665,7 +717,7 @@ export default function App() {
   const handleSetup = (e: React.FormEvent) => {
     e.preventDefault();
     if (setupForm.password !== setupForm.confirmPassword) {
-      setAuthError("Passwords do not match");
+      setAuthError(t('passwords_not_match'));
       return;
     }
     const adminUser: User = { username: setupForm.username, password: setupForm.password, isAdmin: true };
@@ -700,7 +752,7 @@ export default function App() {
           fetchServerFolders();
       }
     } else {
-      setAuthError('Invalid credentials');
+      setAuthError(t('invalid_credentials'));
     }
   };
 
@@ -725,7 +777,7 @@ export default function App() {
 
   const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     if (isServerMode) {
-        alert("In Server Mode, please manage Library Paths in Settings and click 'Scan NAS Library'.");
+        alert(t('configure_nas'));
         return;
     }
     if (!currentUser) return;
@@ -821,13 +873,13 @@ export default function App() {
 
   const content = useMemo(() => {
     if (viewMode === 'all') {
-      return { type: 'media', data: processedFiles, title: 'Library' };
+      return { type: 'media', data: processedFiles, title: t('library') };
     }
     if (viewMode === 'home') {
         return { type: 'home' };
     }
     let targetNode = folderTree;
-    let title = 'Folders';
+    let title = t('folders');
     if (currentPath) {
        const parts = currentPath.split('/');
        for (const part of parts) {
@@ -840,7 +892,7 @@ export default function App() {
     const subfolders = (Object.values(targetNode.children) as FolderNode[]).sort((a, b) => a.name.localeCompare(b.name));
     const media = processedFiles.filter(f => f.folderPath === currentPath);
     return { type: 'mixed', folders: subfolders, photos: media, title: title };
-  }, [viewMode, currentPath, processedFiles, folderTree]);
+  }, [viewMode, currentPath, processedFiles, folderTree, t]);
 
   // Helpers
   useEffect(() => {
@@ -877,13 +929,62 @@ export default function App() {
   if (authStep === 'loading') return <div className="h-[100dvh] flex items-center justify-center text-gray-400 bg-gray-50 dark:bg-gray-900">Loading...</div>;
 
   if (authStep === 'setup') {
-      // (Setup Code Omitted for Brevity - unchanged)
-      return (/* ... same as existing ... */ <div className="h-[100dvh] flex items-center justify-center bg-gray-50 dark:bg-gray-900 p-4 transition-colors"><div className="bg-white dark:bg-gray-800 p-8 rounded-2xl shadow-xl w-full max-w-md transition-colors"><div className="flex justify-end mb-2"><button onClick={toggleTheme} className="p-2 text-gray-400 hover:text-primary-500 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">{theme === 'dark' ? <Icons.Sun size={20} /> : <Icons.Moon size={20} />}</button></div><h1 className="text-3xl font-bold text-primary-600 mb-2 text-center">Welcome</h1><p className="text-gray-500 dark:text-gray-400 mb-8 text-center">{isServerMode ? 'Initialize your NAS Gallery.' : 'Set up your admin account.'}</p><form onSubmit={handleSetup} className="space-y-4"><input type="text" placeholder="Username" value={setupForm.username} onChange={e => setSetupForm({...setupForm, username: e.target.value})} className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white border-gray-300 dark:border-gray-600 placeholder-gray-400 dark:placeholder-gray-500" /><input type="password" placeholder="Password" value={setupForm.password} onChange={e => setSetupForm({...setupForm, password: e.target.value})} className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white border-gray-300 dark:border-gray-600 placeholder-gray-400 dark:placeholder-gray-500" /><input type="password" placeholder="Confirm Password" value={setupForm.confirmPassword} onChange={e => setSetupForm({...setupForm, confirmPassword: e.target.value})} className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white border-gray-300 dark:border-gray-600 placeholder-gray-400 dark:placeholder-gray-500" />{authError && <p className="text-red-500 text-sm text-center">{authError}</p>}<button type="submit" className="w-full bg-primary-600 text-white py-2 rounded-lg font-semibold hover:bg-primary-700 transition-colors">Create Admin</button></form>{!isServerMode && (<div className="mt-8 pt-6 border-t border-gray-100 dark:border-gray-700"><label className="flex items-center justify-center gap-2 w-full py-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-600 dark:text-gray-300 rounded-lg cursor-pointer transition-colors text-sm font-medium"><Icons.Upload size={16} /><span>Import Database File</span><input type="file" accept=".json" onChange={handleImportConfig} className="hidden" /></label></div>)}</div></div>);
+      return (
+        <div className="h-[100dvh] flex items-center justify-center bg-gray-50 dark:bg-gray-900 p-4 transition-colors">
+            <div className="bg-white dark:bg-gray-800 p-8 rounded-2xl shadow-xl w-full max-w-md transition-colors">
+                <div className="flex justify-end mb-2">
+                    <div className="flex gap-1">
+                        <button onClick={() => setLanguage(language === 'en' ? 'zh' : 'en')} className="p-2 text-gray-400 hover:text-primary-500 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors font-bold text-xs w-9 h-9">
+                            {language === 'en' ? 'ZH' : 'EN'}
+                        </button>
+                        <button onClick={toggleTheme} className="p-2 text-gray-400 hover:text-primary-500 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">
+                            {theme === 'system' ? <Icons.Monitor size={20} /> : (theme === 'dark' ? <Icons.Moon size={20} /> : <Icons.Sun size={20} />)}
+                        </button>
+                    </div>
+                </div>
+                <h1 className="text-3xl font-bold text-primary-600 mb-2 text-center">{t('welcome')}</h1>
+                <p className="text-gray-500 dark:text-gray-400 mb-8 text-center">{isServerMode ? t('init_nas') : t('setup_admin')}</p>
+                <form onSubmit={handleSetup} className="space-y-4">
+                    <input type="text" placeholder="Username" value={setupForm.username} onChange={e => setSetupForm({...setupForm, username: e.target.value})} className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white border-gray-300 dark:border-gray-600 placeholder-gray-400 dark:placeholder-gray-500" />
+                    <input type="password" placeholder="Password" value={setupForm.password} onChange={e => setSetupForm({...setupForm, password: e.target.value})} className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white border-gray-300 dark:border-gray-600 placeholder-gray-400 dark:placeholder-gray-500" />
+                    <input type="password" placeholder="Confirm Password" value={setupForm.confirmPassword} onChange={e => setSetupForm({...setupForm, confirmPassword: e.target.value})} className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white border-gray-300 dark:border-gray-600 placeholder-gray-400 dark:placeholder-gray-500" />
+                    {authError && <p className="text-red-500 text-sm text-center">{authError}</p>}
+                    <button type="submit" className="w-full bg-primary-600 text-white py-2 rounded-lg font-semibold hover:bg-primary-700 transition-colors">{t('create_admin')}</button>
+                </form>
+                {!isServerMode && (<div className="mt-8 pt-6 border-t border-gray-100 dark:border-gray-700"><label className="flex items-center justify-center gap-2 w-full py-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-600 dark:text-gray-300 rounded-lg cursor-pointer transition-colors text-sm font-medium"><Icons.Upload size={16} /><span>{t('import_db')}</span><input type="file" accept=".json" onChange={handleImportConfig} className="hidden" /></label></div>)}
+            </div>
+        </div>
+      );
   }
 
   if (authStep === 'login') {
-      // (Login Code Omitted for Brevity - unchanged)
-      return (/* ... same as existing ... */ <div className="h-[100dvh] flex items-center justify-center bg-gray-50 dark:bg-gray-900 p-4 transition-colors"><div className="bg-white dark:bg-gray-800 p-8 rounded-2xl shadow-xl w-full max-w-sm transition-colors"><div className="flex justify-between items-start mb-4"><div className="w-12 h-12 bg-primary-600 rounded-xl flex items-center justify-center"><Icons.User className="text-white" /></div><button onClick={toggleTheme} className="p-2 text-gray-400 hover:text-primary-500 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">{theme === 'dark' ? <Icons.Sun size={20} /> : <Icons.Moon size={20} />}</button></div><h1 className="text-2xl font-bold text-gray-800 dark:text-white text-center mb-2">{appTitle}</h1>{isServerMode && <p className="text-xs text-center text-primary-600 dark:text-primary-400 bg-primary-50 dark:bg-primary-900/30 py-1 rounded mb-6">NAS Server Connected</p>}<form onSubmit={handleLogin} className="space-y-4"><input type="text" placeholder="Username" value={loginForm.username} onChange={e => setLoginForm({...loginForm, username: e.target.value})} className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white border-gray-300 dark:border-gray-600 placeholder-gray-400 dark:placeholder-gray-500" /><input type="password" placeholder="Password" value={loginForm.password} onChange={e => setLoginForm({...loginForm, password: e.target.value})} className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white border-gray-300 dark:border-gray-600 placeholder-gray-400 dark:placeholder-gray-500" />{authError && <p className="text-red-500 text-sm text-center">{authError}</p>}<button type="submit" className="w-full bg-primary-600 text-white py-2 rounded-lg font-semibold hover:bg-primary-700 transition-colors">Sign In</button></form></div></div>);
+      return (
+        <div className="h-[100dvh] flex items-center justify-center bg-gray-50 dark:bg-gray-900 p-4 transition-colors">
+            <div className="bg-white dark:bg-gray-800 p-8 rounded-2xl shadow-xl w-full max-w-sm transition-colors">
+                <div className="flex justify-between items-start mb-4">
+                    <div className="w-12 h-12 bg-primary-600 rounded-xl flex items-center justify-center">
+                        <Icons.User className="text-white" />
+                    </div>
+                    <div className="flex gap-1">
+                        <button onClick={() => setLanguage(language === 'en' ? 'zh' : 'en')} className="p-2 text-gray-400 hover:text-primary-500 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors font-bold text-xs w-9 h-9" title={t('language')}>
+                            {language === 'en' ? 'ZH' : 'EN'}
+                        </button>
+                        <button onClick={toggleTheme} className="p-2 text-gray-400 hover:text-primary-500 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">
+                            {theme === 'system' ? <Icons.Monitor size={20} /> : (theme === 'dark' ? <Icons.Moon size={20} /> : <Icons.Sun size={20} />)}
+                        </button>
+                    </div>
+                </div>
+                <h1 className="text-2xl font-bold text-gray-800 dark:text-white text-center mb-2">{appTitle}</h1>
+                {isServerMode && <p className="text-xs text-center text-primary-600 dark:text-primary-400 bg-primary-50 dark:bg-primary-900/30 py-1 rounded mb-6">{t('nas_connected')}</p>}
+                <form onSubmit={handleLogin} className="space-y-4">
+                    <input type="text" placeholder="Username" value={loginForm.username} onChange={e => setLoginForm({...loginForm, username: e.target.value})} className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white border-gray-300 dark:border-gray-600 placeholder-gray-400 dark:placeholder-gray-500" />
+                    <input type="password" placeholder="Password" value={loginForm.password} onChange={e => setLoginForm({...loginForm, password: e.target.value})} className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white border-gray-300 dark:border-gray-600 placeholder-gray-400 dark:placeholder-gray-500" />
+                    {authError && <p className="text-red-500 text-sm text-center">{authError}</p>}
+                    <button type="submit" className="w-full bg-primary-600 text-white py-2 rounded-lg font-semibold hover:bg-primary-700 transition-colors">{t('sign_in')}</button>
+                </form>
+            </div>
+        </div>
+      );
   }
 
   return (
@@ -899,7 +1000,7 @@ export default function App() {
         theme={theme}
         toggleTheme={toggleTheme}
         isServerMode={isServerMode}
-        onOpenSettings={() => setIsSettingsOpen(true)}
+        onOpenSettings={() => { fetchSystemStatus(); setIsSettingsOpen(true); }}
       />
 
       <main className="flex-1 flex flex-col h-full overflow-hidden relative">
@@ -909,6 +1010,7 @@ export default function App() {
                 onEnterLibrary={() => handleSetViewMode('folders')} 
                 onJumpToFolder={handleJumpToFolder}
                 subtitle={homeSubtitle}
+                config={homeConfig}
              />
         ) : (
         <>
@@ -934,7 +1036,7 @@ export default function App() {
                         })}
                     </div>
                 ) : (
-                    <div className="flex items-center gap-2"><Icons.Image size={20} className="text-primary-600" /><h1 className="text-xl font-bold text-gray-800 dark:text-white truncate">Library</h1></div>
+                    <div className="flex items-center gap-2"><Icons.Image size={20} className="text-primary-600" /><h1 className="text-xl font-bold text-gray-800 dark:text-white truncate">{t('library')}</h1></div>
                 )}
             </div>
             <div className="flex items-center gap-2">
@@ -952,16 +1054,16 @@ export default function App() {
                     <div className="absolute top-full right-0 h-2 w-full bg-transparent hidden group-hover:block" />
                     
                     <div className="absolute right-0 top-[calc(100%+0.5rem)] w-52 bg-white dark:bg-gray-800 rounded-xl shadow-xl border border-gray-100 dark:border-gray-700 p-2 hidden group-hover:block z-50 animate-in fade-in zoom-in-95 duration-200">
-                        <p className="text-xs font-semibold text-gray-400 uppercase px-2 py-1">Sort & Filter</p>
-                        <button onClick={() => setSortOption('dateDesc')} className={`w-full text-left px-2 py-1.5 text-sm rounded-lg flex justify-between transition-colors ${sortOption === 'dateDesc' ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}`}>Newest First {sortOption === 'dateDesc' && <Icons.Check size={14} />}</button>
-                        <button onClick={() => setSortOption('dateAsc')} className={`w-full text-left px-2 py-1.5 text-sm rounded-lg flex justify-between transition-colors ${sortOption === 'dateAsc' ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}`}>Oldest First {sortOption === 'dateAsc' && <Icons.Check size={14} />}</button>
+                        <p className="text-xs font-semibold text-gray-400 uppercase px-2 py-1">{t('sort_filter')}</p>
+                        <button onClick={() => setSortOption('dateDesc')} className={`w-full text-left px-2 py-1.5 text-sm rounded-lg flex justify-between transition-colors ${sortOption === 'dateDesc' ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}`}>{t('newest_first')} {sortOption === 'dateDesc' && <Icons.Check size={14} />}</button>
+                        <button onClick={() => setSortOption('dateAsc')} className={`w-full text-left px-2 py-1.5 text-sm rounded-lg flex justify-between transition-colors ${sortOption === 'dateAsc' ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}`}>{t('oldest_first')} {sortOption === 'dateAsc' && <Icons.Check size={14} />}</button>
                         {viewMode === 'all' && (
-                             <button onClick={() => setSortOption('random')} className={`w-full text-left px-2 py-1.5 text-sm rounded-lg flex justify-between transition-colors ${sortOption === 'random' ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}`}>Shuffle Random {sortOption === 'random' && <Icons.Check size={14} />}</button>
+                             <button onClick={() => setSortOption('random')} className={`w-full text-left px-2 py-1.5 text-sm rounded-lg flex justify-between transition-colors ${sortOption === 'random' ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}`}>{t('shuffle_random')} {sortOption === 'random' && <Icons.Check size={14} />}</button>
                         )}
                         <div className="my-1 border-t border-gray-100 dark:border-gray-700" />
-                        <button onClick={() => setFilterOption('all')} className={`w-full text-left px-2 py-1.5 text-sm rounded-lg flex justify-between transition-colors ${filterOption === 'all' ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}`}>All Types {filterOption === 'all' && <Icons.Check size={14} />}</button>
-                        <button onClick={() => setFilterOption('video')} className={`w-full text-left px-2 py-1.5 text-sm rounded-lg flex justify-between transition-colors ${filterOption === 'video' ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}`}>Videos Only {filterOption === 'video' && <Icons.Check size={14} />}</button>
-                        <button onClick={() => setFilterOption('audio')} className={`w-full text-left px-2 py-1.5 text-sm rounded-lg flex justify-between transition-colors ${filterOption === 'audio' ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}`}>Audio Only {filterOption === 'audio' && <Icons.Check size={14} />}</button>
+                        <button onClick={() => setFilterOption('all')} className={`w-full text-left px-2 py-1.5 text-sm rounded-lg flex justify-between transition-colors ${filterOption === 'all' ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}`}>{t('all_types')} {filterOption === 'all' && <Icons.Check size={14} />}</button>
+                        <button onClick={() => setFilterOption('video')} className={`w-full text-left px-2 py-1.5 text-sm rounded-lg flex justify-between transition-colors ${filterOption === 'video' ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}`}>{t('videos_only')} {filterOption === 'video' && <Icons.Check size={14} />}</button>
+                        <button onClick={() => setFilterOption('audio')} className={`w-full text-left px-2 py-1.5 text-sm rounded-lg flex justify-between transition-colors ${filterOption === 'audio' ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}`}>{t('audio_only')} {filterOption === 'audio' && <Icons.Check size={14} />}</button>
                     </div>
                 </div>
             </div>
@@ -971,12 +1073,12 @@ export default function App() {
             {files.length === 0 && !isFetchingMore && viewMode === 'all' && (
                 <div className="h-full flex flex-col items-center justify-center text-center p-8">
                 <div className="w-24 h-24 bg-indigo-50 dark:bg-indigo-900/30 rounded-full flex items-center justify-center mb-6 text-indigo-400"><Icons.Upload size={40} /></div>
-                <h2 className="text-2xl font-bold text-gray-800 dark:text-white mb-2">Welcome, {currentUser?.username}</h2>
-                <p className="text-gray-500 dark:text-gray-400 max-w-md mb-8">{isServerMode ? "Connected to NAS. Configure Library Paths in Settings and Scan." : "Import local folders to begin."}</p>
+                <h2 className="text-2xl font-bold text-gray-800 dark:text-white mb-2">{t('welcome')}, {currentUser?.username}</h2>
+                <p className="text-gray-500 dark:text-gray-400 max-w-md mb-8">{isServerMode ? t('configure_nas') : t('import_local')}</p>
                 {isServerMode ? (
-                    <button onClick={() => setIsSettingsOpen(true)} className="bg-primary-600 text-white px-8 py-3 rounded-xl font-medium shadow-lg hover:bg-primary-700 flex items-center justify-center gap-2 transition-colors"><Icons.Settings size={20} /><span>Configure Library</span></button>
+                    <button onClick={() => setIsSettingsOpen(true)} className="bg-primary-600 text-white px-8 py-3 rounded-xl font-medium shadow-lg hover:bg-primary-700 flex items-center justify-center gap-2 transition-colors"><Icons.Settings size={20} /><span>{t('configure_library')}</span></button>
                 ) : (
-                    <label className="bg-primary-600 text-white px-8 py-3 rounded-xl font-medium shadow-lg cursor-pointer flex items-center justify-center gap-2 hover:bg-primary-700 transition-colors"><Icons.Upload size={20} /><span>Import Local Folder</span><input type="file" multiple webkitdirectory="true" directory="" onChange={handleFileUpload} className="hidden" /></label>
+                    <label className="bg-primary-600 text-white px-8 py-3 rounded-xl font-medium shadow-lg cursor-pointer flex items-center justify-center gap-2 hover:bg-primary-700 transition-colors"><Icons.Upload size={20} /><span>{t('import_local_folder')}</span><input type="file" multiple webkitdirectory="true" directory="" onChange={handleFileUpload} className="hidden" /></label>
                 )}
                 </div>
             )}
@@ -986,7 +1088,7 @@ export default function App() {
                     
                     {viewMode === 'folders' && content.folders.length > 0 && (
                         <div className="mb-10 animate-in fade-in slide-in-from-bottom-2 duration-500">
-                            <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2"><Icons.Folder size={14} />{currentPath ? 'Subfolders' : 'Folders'}</h3>
+                            <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2"><Icons.Folder size={14} />{currentPath ? t('folders') : t('folders')}</h3>
                             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
                                 {content.folders.map((folder) => (<FolderCard key={folder.path} folder={folder} onClick={(path) => handleFolderClick(path)} />))}
                             </div>
@@ -1031,7 +1133,7 @@ export default function App() {
         onResume={() => handleScanControl('resume')}
         onCancel={() => handleScanControl('cancel')}
         onClose={() => setIsScanModalOpen(false)}
-        title={jobType === 'scan' ? 'Scanning Library' : 'Generating Thumbnails'}
+        title={jobType === 'scan' ? t('scanning_library') : `${t('generating_thumbnails')} ${scanProgress.currentEngine ? `(${scanProgress.currentEngine})` : ''}`}
         type={jobType}
       />
 
@@ -1039,47 +1141,129 @@ export default function App() {
         {isSettingsOpen && (
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setIsSettingsOpen(false)}>
                 <motion.div initial={{ scale: 0.95, y: 20 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.95, y: 20 }} className="bg-white dark:bg-gray-800 rounded-2xl w-full max-w-2xl max-h-[85vh] overflow-hidden flex flex-col shadow-2xl transition-colors" onClick={e => e.stopPropagation()}>
-                    <div className="p-6 border-b border-gray-100 dark:border-gray-700 flex justify-between items-center bg-gray-50 dark:bg-gray-800/50"><h2 className="font-bold text-xl text-gray-800 dark:text-white">Settings</h2><button onClick={() => setIsSettingsOpen(false)} className="p-2 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-full text-gray-500 dark:text-gray-400 transition-colors"><Icons.Close size={20}/></button></div>
+                    <div className="p-6 border-b border-gray-100 dark:border-gray-700 flex justify-between items-center bg-gray-50 dark:bg-gray-800/50"><h2 className="font-bold text-xl text-gray-800 dark:text-white">{t('settings')}</h2><button onClick={() => setIsSettingsOpen(false)} className="p-2 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-full text-gray-500 dark:text-gray-400 transition-colors"><Icons.Close size={20}/></button></div>
                     <div className="p-6 overflow-y-auto space-y-8 flex-1">
                         
+                        {/* SERVER DASHBOARD */}
+                        {isServerMode && systemStatus && (
+                            <section className="pb-6 border-b border-gray-100 dark:border-gray-700">
+                                <h3 className="font-bold text-gray-800 dark:text-gray-200 flex items-center gap-2 mb-4"><Icons.Activity size={18} /> {t('system_monitoring')}</h3>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                    <div className="bg-gray-50 dark:bg-gray-700/30 p-4 rounded-xl border border-gray-100 dark:border-gray-700">
+                                        <h4 className="text-xs uppercase font-bold text-gray-500 mb-2">{t('processors')}</h4>
+                                        <div className="space-y-2">
+                                            <div className="flex justify-between items-center text-sm">
+                                                <div className="flex items-center gap-2"><Icons.Cpu size={14} /> FFmpeg</div>
+                                                {systemStatus.ffmpeg ? <span className="text-green-500 bg-green-500/10 px-2 py-0.5 rounded text-[10px] font-bold">{t('active')}</span> : <span className="text-red-500 bg-red-500/10 px-2 py-0.5 rounded text-[10px] font-bold">{t('missing')}</span>}
+                                            </div>
+                                            <div className="flex justify-between items-center text-sm">
+                                                <div className="flex items-center gap-2"><Icons.Monitor size={14} /> {t('hw_acceleration')}</div>
+                                                {systemStatus.ffmpegHwAccels.length > 0 ? (
+                                                    <div className="flex gap-1">
+                                                        {systemStatus.ffmpegHwAccels.map(acc => <span key={acc} className="text-purple-500 bg-purple-500/10 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase">{acc}</span>)}
+                                                    </div>
+                                                ) : <span className="text-gray-400 text-[10px]">{t('cpu_only')}</span>}
+                                            </div>
+                                            <div className="flex justify-between items-center text-sm">
+                                                <div className="flex items-center gap-2"><Icons.Image size={14} /> Sharp (Img)</div>
+                                                {systemStatus.sharp ? <span className="text-green-500 bg-green-500/10 px-2 py-0.5 rounded text-[10px] font-bold">{t('active')}</span> : <span className="text-red-500 bg-red-500/10 px-2 py-0.5 rounded text-[10px] font-bold">{t('missing')}</span>}
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div className="bg-gray-50 dark:bg-gray-700/30 p-4 rounded-xl border border-gray-100 dark:border-gray-700">
+                                        <h4 className="text-xs uppercase font-bold text-gray-500 mb-2">{t('library_stats')}</h4>
+                                        <div className="flex justify-between items-end mb-2">
+                                            <span className="text-sm font-medium dark:text-white">{systemStatus.totalItems} {t('items_count')}</span>
+                                            <span className="text-xs text-gray-500">{systemStatus.cacheCount} {t('cached')}</span>
+                                        </div>
+                                        <div className="w-full bg-gray-200 dark:bg-gray-600 rounded-full h-2 mb-3">
+                                            <div className="bg-primary-500 h-2 rounded-full" style={{ width: `${Math.min(100, (systemStatus.cacheCount / (systemStatus.totalItems || 1)) * 100)}%` }} />
+                                        </div>
+                                        <div className="flex gap-2 text-[10px] text-gray-400">
+                                            <span className="bg-white dark:bg-gray-800 px-1.5 py-0.5 rounded border border-gray-200 dark:border-gray-600">{systemStatus.mediaBreakdown.image} IMG</span>
+                                            <span className="bg-white dark:bg-gray-800 px-1.5 py-0.5 rounded border border-gray-200 dark:border-gray-600">{systemStatus.mediaBreakdown.video} VID</span>
+                                            <span className="bg-white dark:bg-gray-800 px-1.5 py-0.5 rounded border border-gray-200 dark:border-gray-600">{systemStatus.mediaBreakdown.audio} AUD</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </section>
+                        )}
+
                         {currentUser?.isAdmin && (
                             <>
                             <section className="pb-6 border-b border-gray-100 dark:border-gray-700">
-                                <h3 className="font-bold text-gray-800 dark:text-gray-200 flex items-center gap-2 mb-4"><Icons.Settings size={18} /> General</h3>
+                                <h3 className="font-bold text-gray-800 dark:text-gray-200 flex items-center gap-2 mb-4"><Icons.Settings size={18} /> {t('general')}</h3>
                                 <div className="space-y-4">
                                     <div className="space-y-2">
-                                        <label className="text-sm font-medium text-gray-600 dark:text-gray-400">Website Title</label>
+                                        <label className="text-sm font-medium text-gray-600 dark:text-gray-400">{t('website_title')}</label>
                                         <input type="text" value={appTitle} onChange={(e) => handleUpdateTitle(e.target.value)} className="w-full px-3 py-2 text-sm border rounded-lg focus:ring-2 focus:ring-primary-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white border-gray-200 dark:border-gray-600 placeholder-gray-400 dark:placeholder-gray-500" />
                                     </div>
 
                                     <div className="space-y-2">
-                                        <label className="text-sm font-medium text-gray-600 dark:text-gray-400">Home Subtitle</label>
+                                        <label className="text-sm font-medium text-gray-600 dark:text-gray-400">{t('home_subtitle')}</label>
                                         <input type="text" value={homeSubtitle} onChange={(e) => handleUpdateSubtitle(e.target.value)} className="w-full px-3 py-2 text-sm border rounded-lg focus:ring-2 focus:ring-primary-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white border-gray-200 dark:border-gray-600 placeholder-gray-400 dark:placeholder-gray-500" />
+                                    </div>
+
+                                    <div className="space-y-2">
+                                        <label className="text-sm font-medium text-gray-600 dark:text-gray-400">{t('home_screen_bg')}</label>
+                                        <div className="grid grid-cols-3 gap-2 mb-2">
+                                            <button onClick={() => persistData(undefined, undefined, undefined, undefined, undefined, { ...homeConfig, mode: 'random' })} className={`px-2 py-1.5 text-xs font-medium rounded border transition-colors ${homeConfig.mode === 'random' ? 'bg-primary-50 dark:bg-primary-900/30 border-primary-500 text-primary-600 dark:text-primary-400' : 'bg-white dark:bg-gray-700 border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-300'}`}>{t('random_all')}</button>
+                                            <button onClick={() => persistData(undefined, undefined, undefined, undefined, undefined, { ...homeConfig, mode: 'folder' })} className={`px-2 py-1.5 text-xs font-medium rounded border transition-colors ${homeConfig.mode === 'folder' ? 'bg-primary-50 dark:bg-primary-900/30 border-primary-500 text-primary-600 dark:text-primary-400' : 'bg-white dark:bg-gray-700 border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-300'}`}>{t('specific_folder')}</button>
+                                            <button onClick={() => persistData(undefined, undefined, undefined, undefined, undefined, { ...homeConfig, mode: 'single' })} className={`px-2 py-1.5 text-xs font-medium rounded border transition-colors ${homeConfig.mode === 'single' ? 'bg-primary-50 dark:bg-primary-900/30 border-primary-500 text-primary-600 dark:text-primary-400' : 'bg-white dark:bg-gray-700 border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-300'}`}>{t('single_item')}</button>
+                                        </div>
+                                        {homeConfig.mode !== 'random' && (
+                                            <div>
+                                                 {isServerMode ? (
+                                                     <PathAutocomplete 
+                                                        value={homeConfig.path || ''} 
+                                                        onChange={(val) => persistData(undefined, undefined, undefined, undefined, undefined, { ...homeConfig, path: val })}
+                                                        onAdd={() => {}}
+                                                     />
+                                                 ) : (
+                                                     <input 
+                                                        type="text" 
+                                                        placeholder={homeConfig.mode === 'folder' ? "Exact folder path (e.g. Vacation/2023)" : "Exact file path (e.g. Vacation/photo.jpg)"}
+                                                        value={homeConfig.path || ''}
+                                                        onChange={(e) => persistData(undefined, undefined, undefined, undefined, undefined, { ...homeConfig, path: e.target.value })}
+                                                        className="w-full px-3 py-2 text-sm border rounded-lg focus:ring-2 focus:ring-primary-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white border-gray-200 dark:border-gray-600 placeholder-gray-400 dark:placeholder-gray-500" 
+                                                     />
+                                                 )}
+                                                 <p className="text-[10px] text-gray-400 mt-1">{t('enter_rel_path')}</p>
+                                            </div>
+                                        )}
                                     </div>
                                     
                                     <div className="space-y-3">
-                                        <label className="text-sm font-medium text-gray-600 dark:text-gray-400 block">Connection Mode</label>
+                                        <label className="text-sm font-medium text-gray-600 dark:text-gray-400 block">{t('connection_mode')}</label>
                                         <div className="flex bg-gray-100 dark:bg-gray-700/50 p-1 rounded-lg">
-                                            <button onClick={() => setIsServerMode(false)} className={`flex-1 py-2 text-sm font-medium rounded-md transition-all ${!isServerMode ? 'bg-white dark:bg-gray-600 shadow-sm text-gray-900 dark:text-white' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700'}`}>Client Mode</button>
-                                            <button onClick={() => setIsServerMode(true)} className={`flex-1 py-2 text-sm font-medium rounded-md transition-all ${isServerMode ? 'bg-primary-600 shadow-sm text-white' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700'}`}>Server Mode (NAS)</button>
+                                            <button onClick={() => setIsServerMode(false)} className={`flex-1 py-2 text-sm font-medium rounded-md transition-all ${!isServerMode ? 'bg-white dark:bg-gray-600 shadow-sm text-gray-900 dark:text-white' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700'}`}>{t('client_mode')}</button>
+                                            <button onClick={() => setIsServerMode(true)} className={`flex-1 py-2 text-sm font-medium rounded-md transition-all ${isServerMode ? 'bg-primary-600 shadow-sm text-white' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700'}`}>{t('server_mode')}</button>
+                                        </div>
+                                    </div>
+
+                                    <div className="space-y-3">
+                                        <label className="text-sm font-medium text-gray-600 dark:text-gray-400 block">{t('language')}</label>
+                                        <div className="flex bg-gray-100 dark:bg-gray-700/50 p-1 rounded-lg">
+                                            <button onClick={() => setLanguage('en')} className={`flex-1 py-2 text-sm font-medium rounded-md transition-all ${language === 'en' ? 'bg-white dark:bg-gray-600 shadow-sm text-gray-900 dark:text-white' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700'}`}>English</button>
+                                            <button onClick={() => setLanguage('zh')} className={`flex-1 py-2 text-sm font-medium rounded-md transition-all ${language === 'zh' ? 'bg-white dark:bg-gray-600 shadow-sm text-gray-900 dark:text-white' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700'}`}>简体中文</button>
                                         </div>
                                     </div>
                                 </div>
                             </section>
 
                             <section className="pb-6 border-b border-gray-100 dark:border-gray-700">
-                                <h3 className="font-bold text-gray-800 dark:text-gray-200 flex items-center gap-2 mb-4"><Icons.FileJson size={18} /> Storage & Database</h3>
+                                <h3 className="font-bold text-gray-800 dark:text-gray-200 flex items-center gap-2 mb-4"><Icons.FileJson size={18} /> {t('storage_database')}</h3>
                                 {isServerMode ? (
                                     <div className="space-y-4">
                                         <div className="bg-green-50 dark:bg-green-900/20 p-4 rounded-xl border border-green-100 dark:border-green-900/50 space-y-3">
-                                            <div className="flex items-center gap-2 text-green-800 dark:text-green-300 font-semibold text-sm"><Icons.Check size={16} /> Server Persistence Active</div>
-                                            <p className="text-sm text-green-700 dark:text-green-400">Media is served from configured paths.</p>
+                                            <div className="flex items-center gap-2 text-green-800 dark:text-green-300 font-semibold text-sm"><Icons.Check size={16} /> {t('server_persistence')}</div>
+                                            <p className="text-sm text-green-700 dark:text-green-400">{t('media_served')}</p>
                                         </div>
 
                                         <div>
-                                            <label className="text-sm font-medium text-gray-600 dark:text-gray-400 mb-2 block">Library Scan Paths</label>
+                                            <label className="text-sm font-medium text-gray-600 dark:text-gray-400 mb-2 block">{t('library_scan_paths')}</label>
                                             <div className="space-y-2 mb-3">
-                                                {libraryPaths.length === 0 && <div className="text-sm text-gray-400 italic bg-gray-50 dark:bg-gray-700/50 p-2 rounded">Scanning Default: /media</div>}
+                                                {libraryPaths.length === 0 && <div className="text-sm text-gray-400 italic bg-gray-50 dark:bg-gray-700/50 p-2 rounded">{t('scanning_default')}: /media</div>}
                                                 {libraryPaths.map(path => (
                                                     <div key={path} className="flex justify-between items-center bg-gray-50 dark:bg-gray-700/50 p-2 rounded text-sm">
                                                         <span className="font-mono text-gray-600 dark:text-gray-300">{path}</span>
@@ -1090,25 +1274,25 @@ export default function App() {
 
                                             <form onSubmit={handleAddLibraryPath} className="flex gap-2">
                                                 <PathAutocomplete value={newPathInput} onChange={setNewPathInput} onAdd={handleAddLibraryPath} />
-                                                <button type="submit" className="bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-200 px-3 py-2 rounded-lg text-sm font-medium hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors">Add Path</button>
+                                                <button type="submit" className="bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-200 px-3 py-2 rounded-lg text-sm font-medium hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors">{t('add_path')}</button>
                                             </form>
                                         </div>
                                         
                                         <div className="grid grid-cols-2 gap-3">
                                             <button onClick={() => startServerScan()} disabled={scanStatus === 'scanning'} className="py-2 bg-primary-50 dark:bg-primary-900/30 border border-primary-200 dark:border-primary-800 text-primary-700 dark:text-primary-300 rounded-lg text-sm font-medium hover:bg-primary-100 dark:hover:bg-primary-900/50 flex items-center justify-center gap-2 transition-colors">
                                                 <Icons.Refresh size={14} className={scanStatus === 'scanning' && jobType === 'scan' ? 'animate-spin' : ''} />
-                                                {scanStatus === 'scanning' && jobType === 'scan' ? 'Scanning...' : 'Scan Library'}
+                                                {scanStatus === 'scanning' && jobType === 'scan' ? t('scanning_library') : t('scan_library')}
                                             </button>
                                             <button onClick={() => startThumbnailGen()} disabled={scanStatus === 'scanning'} className="py-2 bg-purple-50 dark:bg-purple-900/30 border border-purple-200 dark:border-purple-800 text-purple-700 dark:text-purple-300 rounded-lg text-sm font-medium hover:bg-purple-100 dark:hover:bg-purple-900/50 flex items-center justify-center gap-2 transition-colors">
                                                 <Icons.Image size={14} className={scanStatus === 'scanning' && jobType === 'thumb' ? 'animate-spin' : ''} />
-                                                {scanStatus === 'scanning' && jobType === 'thumb' ? 'Generating...' : 'Generate Thumbs'}
+                                                {scanStatus === 'scanning' && jobType === 'thumb' ? t('generating_thumbnails') : t('generate_thumbs')}
                                             </button>
                                         </div>
                                     </div>
                                 ) : (
                                     <div className="bg-yellow-50 dark:bg-yellow-900/20 p-4 rounded-xl border border-yellow-100 dark:border-yellow-900/30">
-                                        <p className="text-sm text-yellow-800 dark:text-yellow-400 font-medium mb-2">Running in Client Mode</p>
-                                        <button onClick={handleExportConfig} className="flex items-center gap-2 px-3 py-1.5 bg-white dark:bg-gray-700 border border-yellow-200 dark:border-yellow-800 text-yellow-800 dark:text-yellow-300 rounded-lg text-xs font-medium transition-colors"><Icons.Download size={12} /> Backup Config</button>
+                                        <p className="text-sm text-yellow-800 dark:text-yellow-400 font-medium mb-2">{t('running_client_mode')}</p>
+                                        <button onClick={handleExportConfig} className="flex items-center gap-2 px-3 py-1.5 bg-white dark:bg-gray-700 border border-yellow-200 dark:border-yellow-800 text-yellow-800 dark:text-yellow-300 rounded-lg text-xs font-medium transition-colors"><Icons.Download size={12} /> {t('backup_config')}</button>
                                     </div>
                                 )}
                             </section>
@@ -1116,7 +1300,7 @@ export default function App() {
                         )}
                          {currentUser?.isAdmin && (
                             <section className="pt-6 border-t border-gray-100 dark:border-gray-700">
-                                <div className="flex justify-between items-center mb-4"><h3 className="font-bold text-gray-800 dark:text-gray-200 flex items-center gap-2"><Icons.User size={18} /> Users</h3><button onClick={() => setIsUserPanelOpen(!isUserPanelOpen)} className="text-xs font-medium text-primary-600 hover:underline">{isUserPanelOpen ? 'Hide' : 'Manage'}</button></div>
+                                <div className="flex justify-between items-center mb-4"><h3 className="font-bold text-gray-800 dark:text-gray-200 flex items-center gap-2"><Icons.User size={18} /> {t('users')}</h3><button onClick={() => setIsUserPanelOpen(!isUserPanelOpen)} className="text-xs font-medium text-primary-600 hover:underline">{isUserPanelOpen ? t('hide') : t('manage')}</button></div>
                                 {isUserPanelOpen && (
                                     <div className="bg-gray-50 dark:bg-gray-700/30 rounded-xl p-4 space-y-4 border border-gray-100 dark:border-gray-700">
                                         <div className="space-y-2">{users.map(u => (<div key={u.username} className="flex justify-between items-center text-sm p-3 bg-white dark:bg-gray-700 rounded-lg border border-gray-100 dark:border-gray-600"><span className="font-medium flex items-center gap-2 text-gray-900 dark:text-white">{u.username} {u.isAdmin && <span className="text-[10px] bg-primary-100 dark:bg-primary-900 text-primary-700 dark:text-primary-300 px-1.5 py-0.5 rounded font-bold">ADMIN</span>}</span><div className="text-xs flex gap-2"><span className="text-gray-400">Pass: {u.password}</span></div></div>))}</div>
@@ -1131,8 +1315,8 @@ export default function App() {
                         )}
                     </div>
                     <div className="p-4 border-t border-gray-100 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 flex justify-between items-center">
-                         <button onClick={handleLogout} className="flex items-center gap-2 text-red-600 dark:text-red-400 px-4 py-2 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors text-sm font-medium"><Icons.LogOut size={16} /> Sign Out</button>
-                         <button onClick={() => setIsSettingsOpen(false)} className="px-6 py-2 bg-gray-900 dark:bg-gray-700 text-white rounded-lg text-sm font-medium hover:bg-gray-800 dark:hover:bg-gray-600 transition-colors">Done</button>
+                         <button onClick={handleLogout} className="flex items-center gap-2 text-red-600 dark:text-red-400 px-4 py-2 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors text-sm font-medium"><Icons.LogOut size={16} /> {t('sign_out')}</button>
+                         <button onClick={() => setIsSettingsOpen(false)} className="px-6 py-2 bg-gray-900 dark:bg-gray-700 text-white rounded-lg text-sm font-medium hover:bg-gray-800 dark:hover:bg-gray-600 transition-colors">{t('done')}</button>
                     </div>
                 </motion.div>
             </motion.div>
