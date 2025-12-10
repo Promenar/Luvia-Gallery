@@ -21,6 +21,9 @@ services:
       
       # Persistence for configuration - Mapped to a directory to avoid 'touch' requirements
       - ./data:/app/data
+      
+      # Persistence for generated thumbnails (Recommended for performance)
+      - ./cache:/app/cache
     environment:
       - NODE_ENV=production
       # Default fallback root if no paths configured

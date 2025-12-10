@@ -3,6 +3,15 @@ const path = require('path');
 const fs = require('fs');
 const cors = require('cors');
 const mime = require('mime-types');
+const crypto = require('crypto');
+
+// Try to require sharp, but don't crash if it fails (fallback mode could be implemented, but we assume it's there)
+let sharp;
+try {
+  sharp = require('sharp');
+} catch (e) {
+  console.warn("Module 'sharp' not found. Thumbnail generation will fail. Please run 'npm install sharp'.");
+}
 
 const app = express();
 const PORT = process.env.PORT || 80;
@@ -12,13 +21,25 @@ const MEDIA_ROOT = process.env.MEDIA_ROOT || '/media';
 const DATA_DIR = path.join(__dirname, 'data');
 const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
 
-// Ensure data directory exists on startup
+// Cache directory setup (persistent thumbnails)
+const CACHE_DIR = process.env.CACHE_DIR || path.join(__dirname, 'cache');
+
+// Ensure directories exist on startup
 if (!fs.existsSync(DATA_DIR)) {
     try {
         fs.mkdirSync(DATA_DIR, { recursive: true });
         console.log(`Created data directory at ${DATA_DIR}`);
     } catch (e) {
         console.error(`Failed to create data directory: ${e.message}`);
+    }
+}
+
+if (!fs.existsSync(CACHE_DIR)) {
+    try {
+        fs.mkdirSync(CACHE_DIR, { recursive: true });
+        console.log(`Created cache directory at ${CACHE_DIR}`);
+    } catch (e) {
+        console.error(`Failed to create cache directory: ${e.message}`);
     }
 }
 
@@ -406,35 +427,103 @@ app.get('/api/library/folders', (req, res) => {
     }
 });
 
+// Helper to validate and resolve paths (shared logic)
+const resolveValidPath = (reqPath) => {
+    const decodedPath = decodeURIComponent(reqPath);
+    let config = {};
+    try {
+        if (fs.existsSync(CONFIG_FILE)) {
+            const content = fs.readFileSync(CONFIG_FILE, 'utf8');
+            if (content.trim()) config = JSON.parse(content);
+        }
+    } catch (e) {}
+
+    const validRoots = (config.libraryPaths && config.libraryPaths.length > 0) 
+        ? config.libraryPaths.map(p => p.startsWith('/') ? p : path.join(MEDIA_ROOT, p))
+        : [MEDIA_ROOT];
+
+    if (validRoots.length === 0) validRoots.push(MEDIA_ROOT);
+
+    const normalizedReqPath = path.normalize(decodedPath);
+    const isAllowed = validRoots.some(root => normalizedReqPath.startsWith(path.normalize(root)));
+
+    if (!isAllowed) return { error: 403, message: 'Access Denied' };
+    if (!fs.existsSync(normalizedReqPath)) return { error: 404, message: 'Not found' };
+    
+    return { path: normalizedReqPath };
+};
+
+// --- Thumbnail Endpoint (Persisted) ---
+app.get('/api/thumbnail', async (req, res) => {
+    const filePath = req.query.path;
+    if (!filePath) return res.status(400).send('Path required');
+
+    const result = resolveValidPath(filePath);
+    if (result.error) return res.status(result.error).send(result.message);
+
+    if (!sharp) {
+        // Fallback if sharp isn't installed: redirect to original stream
+        return res.redirect(`/media-stream/${encodeURIComponent(filePath)}`);
+    }
+
+    try {
+        const sourcePath = result.path;
+        
+        // 1. Generate unique cache key
+        // We include mtimeMs so if the source image is edited, the hash changes and we regen thumbnail.
+        let stat;
+        try {
+            stat = await fs.promises.stat(sourcePath);
+        } catch(e) {
+            return res.status(404).send('Source file not found');
+        }
+
+        const cacheKey = crypto.createHash('md5').update(sourcePath + stat.mtimeMs).digest('hex');
+        const cacheFilename = `${cacheKey}.jpg`;
+        const cacheFilePath = path.join(CACHE_DIR, cacheFilename);
+
+        // Common headers
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+        res.setHeader('Content-Type', 'image/jpeg');
+
+        // 2. Check if cached file exists
+        if (fs.existsSync(cacheFilePath)) {
+             // Stream from cache
+             const stream = fs.createReadStream(cacheFilePath);
+             stream.pipe(res);
+             return;
+        }
+
+        // 3. Generate and Save
+        // We use sharp to resize, save to file, and then stream the file to response.
+        // This ensures the file is fully written for next time.
+        // We could also pipe to res AND file, but logic is simpler this way.
+        
+        await sharp(sourcePath)
+            .resize({ 
+                width: 300, 
+                height: 300, 
+                fit: 'cover',
+                position: 'center' 
+            })
+            .jpeg({ quality: 80, mozjpeg: true })
+            .toFile(cacheFilePath);
+
+        fs.createReadStream(cacheFilePath).pipe(res);
+
+    } catch (e) {
+        console.error("Thumbnail error:", e);
+        // Fallback to original image in case of error, or 500
+        res.redirect(`/media-stream/${encodeURIComponent(filePath)}`);
+    }
+});
+
 // Stream Media Content
 app.get('/media-stream/:filepath', (req, res) => {
-  const reqPath = decodeURIComponent(req.params.filepath);
+  const result = resolveValidPath(req.params.filepath);
+  if (result.error) return res.status(result.error).send(result.message);
   
-  let config = {};
-  try {
-    if (fs.existsSync(CONFIG_FILE)) {
-        const content = fs.readFileSync(CONFIG_FILE, 'utf8');
-        if (content.trim()) config = JSON.parse(content);
-    }
-  } catch (e) {}
-
-  const validRoots = (config.libraryPaths && config.libraryPaths.length > 0) 
-    ? config.libraryPaths.map(p => p.startsWith('/') ? p : path.join(MEDIA_ROOT, p))
-    : [MEDIA_ROOT];
-
-  if (validRoots.length === 0) validRoots.push(MEDIA_ROOT);
-
-  const normalizedReqPath = path.normalize(reqPath);
-  const isAllowed = validRoots.some(root => normalizedReqPath.startsWith(path.normalize(root)));
-
-  if (!isAllowed) {
-      return res.status(403).send('Access Denied');
-  }
-
-  if (!fs.existsSync(normalizedReqPath)) {
-    return res.status(404).send('Not found');
-  }
-
+  const normalizedReqPath = result.path;
   const stat = fs.statSync(normalizedReqPath);
   const fileSize = stat.size;
   const range = req.headers.range;

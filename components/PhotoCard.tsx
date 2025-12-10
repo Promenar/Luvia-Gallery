@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useRef, useState, useMemo } from 'react';
 import { motion } from 'framer-motion';
 import { MediaItem } from '../types';
 import { Icons } from './ui/Icon';
@@ -14,6 +14,24 @@ interface MediaCardProps {
 export const MediaCard: React.FC<MediaCardProps> = React.memo(({ item, onClick, layout, isVirtual }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [isLoaded, setIsLoaded] = useState(false);
+
+  // Determine thumbnail URL for server mode
+  const thumbnailSrc = useMemo(() => {
+    // If it's a video, use the original stream (video tags handle buffering)
+    if (item.mediaType === 'video') return item.url;
+    
+    // Check if we are in Server Mode (URL starts with /media-stream/)
+    if (item.url.startsWith('/media-stream/')) {
+        // Extract the original file path from the stream URL
+        const pathPart = item.url.split('/media-stream/')[1];
+        // Point to the thumbnail API
+        return `/api/thumbnail?path=${pathPart}`;
+    }
+    
+    // Client mode (blob URLs)
+    return item.url;
+  }, [item.url, item.mediaType]);
 
   const handleMouseEnter = () => {
     if (item.mediaType === 'video' && videoRef.current) {
@@ -53,36 +71,43 @@ export const MediaCard: React.FC<MediaCardProps> = React.memo(({ item, onClick, 
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
     >
+      {/* Skeleton / Loading Placeholder */}
+      {!isLoaded && (
+          <div className="absolute inset-0 bg-gray-300 dark:bg-gray-700 animate-pulse z-0" />
+      )}
+
       {item.mediaType === 'video' ? (
         <div className={`relative w-full ${isGrid ? 'h-full absolute inset-0' : 'aspect-video'} flex items-center justify-center bg-gray-900`}>
            <video 
              ref={videoRef}
              src={item.url} 
-             className="w-full h-full object-cover"
+             className={`w-full h-full object-cover transition-opacity duration-500 ${isLoaded ? 'opacity-100' : 'opacity-0'}`}
              muted
              preload="metadata"
              playsInline
              loop
+             onLoadedData={() => setIsLoaded(true)}
            />
            {/* Play Icon Overlay (Hidden when playing) */}
-           <div className={`absolute inset-0 flex items-center justify-center transition-opacity duration-200 ${isPlaying ? 'opacity-0' : 'opacity-100'}`}>
+           <div className={`absolute inset-0 flex items-center justify-center transition-opacity duration-200 ${isPlaying ? 'opacity-0' : 'opacity-100'} ${!isLoaded ? 'hidden' : ''}`}>
              <div className="w-12 h-12 bg-white/20 backdrop-blur-md rounded-full flex items-center justify-center text-white group-hover:bg-white/40 transition-colors shadow-lg">
                <Icons.Play size={24} fill="currentColor" className="ml-1" />
              </div>
            </div>
            
            {/* Badge */}
-           <div className="absolute top-2 right-2 bg-black/60 backdrop-blur-sm px-2 py-0.5 rounded text-[10px] text-white font-medium flex items-center gap-1 z-10">
+           <div className={`absolute top-2 right-2 bg-black/60 backdrop-blur-sm px-2 py-0.5 rounded text-[10px] text-white font-medium flex items-center gap-1 z-10 transition-opacity duration-300 ${isLoaded ? 'opacity-100' : 'opacity-0'}`}>
              <Icons.Video size={10} />
              <span>VIDEO</span>
            </div>
         </div>
       ) : (
         <img
-          src={item.url}
+          src={thumbnailSrc}
           alt={item.name}
           loading="lazy"
-          className={`w-full h-full object-cover transition-transform duration-700 group-hover:scale-105 ${isGrid ? 'absolute inset-0' : 'block'}`}
+          onLoad={() => setIsLoaded(true)}
+          className={`w-full h-full object-cover transition-transform duration-700 group-hover:scale-105 ${isGrid ? 'absolute inset-0' : 'block'} transition-opacity duration-500 ${isLoaded ? 'opacity-100' : 'opacity-0'}`}
         />
       )}
       
