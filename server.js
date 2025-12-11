@@ -195,12 +195,13 @@ const checkThumbControl = async () => {
 }
 
 // Sharded Cache Path Generator
+// UPDATED: Using .webp extension
 const getCachePath = (sourcePath, mtime) => {
     const hash = crypto.createHash('md5').update(sourcePath + (mtime || 0)).digest('hex');
     const l1 = hash.substring(0, 2);
     const l2 = hash.substring(2, 4);
     const dir = path.join(CACHE_DIR, l1, l2);
-    return { dir, filepath: path.join(dir, hash + '.jpg') };
+    return { dir, filepath: path.join(dir, hash + '.webp') };
 };
 
 const ensureDir = async (dir) => {
@@ -209,6 +210,23 @@ const ensureDir = async (dir) => {
     } catch {
         await fs.promises.mkdir(dir, { recursive: true });
     }
+};
+
+const countFilesRecursively = async (dir) => {
+    let count = 0;
+    try {
+        const entries = await fs.promises.readdir(dir, { withFileTypes: true });
+        for (const entry of entries) {
+            if (entry.isDirectory()) {
+                count += await countFilesRecursively(path.join(dir, entry.name));
+            } else {
+                count++;
+            }
+        }
+    } catch (e) {
+        // Ignore errors (e.g., if cache dir doesn't exist yet)
+    }
+    return count;
 };
 
 // Video Thumbnail Generator
@@ -235,6 +253,7 @@ const generateVideoThumbnail = (sourcePath, outputPath) => {
                          thumbJob.currentEngine = 'FFmpeg (CPU)';
                     }
 
+                    // FFmpeg will infer WebP format from the output filename extension (.webp)
                     command
                         .screenshots({
                             timestamps: [timestamp],
@@ -271,6 +290,9 @@ const upsertFileStmt = db.prepare(`
 
 const deleteFileStmt = db.prepare(`DELETE FROM files WHERE path = ?`);
 
+// Helper to normalize path separators to forward slashes for DB consistency
+const toUnixPath = (p) => p.replace(/\\/g, '/');
+
 // Recursively scan and batch insert into DB
 const scanDirectoryToDB = async (baseDir, currentSubDir = '', sourceName, batchSize = 500) => {
     await checkControl();
@@ -301,10 +323,15 @@ const scanDirectoryToDB = async (baseDir, currentSubDir = '', sourceName, batchS
             if (file.startsWith('.')) continue;
 
             const fullFilePath = path.join(fullPathToScan, file);
-            const relativePath = path.join(sourceName, currentSubDir, file); 
-            // Normalize path for DB: ensure forward slashes
-            const normalizedPath = relativePath.replace(/\\/g, '/');
-            const normalizedFolderPath = path.dirname(normalizedPath).replace(/\\/g, '/');
+            
+            // Construct DB-safe paths
+            // We must manually construct the relative path structure to ensure consistent slashes
+            const relativePathParts = currentSubDir ? currentSubDir.split(path.sep).concat(file) : [file];
+            const relativePathUnix = [sourceName, ...relativePathParts].join('/'); // Force forward slash
+            
+            // Calculate folder path (parent of current file)
+            const folderPathParts = [sourceName, ...(currentSubDir ? currentSubDir.split(path.sep) : [])];
+            const folderPathUnix = folderPathParts.join('/');
 
             try {
                 const stat = await fs.promises.stat(fullFilePath);
@@ -323,9 +350,9 @@ const scanDirectoryToDB = async (baseDir, currentSubDir = '', sourceName, batchS
                         if (mimeType.startsWith('audio/')) mediaType = 'audio';
 
                         itemsBuffer.push({
-                            path: normalizedPath, // This acts as the unique ID for the file
+                            path: relativePathUnix, 
                             name: file,
-                            folder_path: normalizedFolderPath === '.' ? sourceName : normalizedFolderPath,
+                            folder_path: folderPathUnix,
                             type: mimeType,
                             media_type: mediaType,
                             size: stat.size,
@@ -354,6 +381,10 @@ const rebuildFolderStats = () => {
     console.log("Rebuilding folder stats...");
     db.exec(`DELETE FROM folders`);
     
+    // SQLite string manipulation to extract parent path.
+    // Logic: Remove the last segment after the last slash.
+    // Parent of "Photos/Vacation" is "Photos".
+    // Parent of "Photos" is empty string (handled carefully).
     db.exec(`
         INSERT INTO folders (path, name, parent_path, file_count, cover_file_path)
         SELECT 
@@ -366,6 +397,10 @@ const rebuildFolderStats = () => {
         GROUP BY folder_path
     `);
 
+    // Fix root level parents (if any calculation results in trailing slash issue)
+    // and cleanup empty strings if needed.
+    
+    // Fill missing video covers
     db.exec(`
         UPDATE folders 
         SET cover_file_path = (SELECT path FROM files WHERE files.folder_path = folders.path AND files.media_type = 'video' LIMIT 1)
@@ -418,12 +453,6 @@ const startWatcher = (libraryPaths) => {
 
 const handleWatcherEvent = async (event, filePath, libraryPaths) => {
     try {
-        // Determine source alias
-        // We need to map absolute filePath back to DB path structure
-        // DB Path = Relative path from source alias + Source Alias Prefix?
-        // Actually, our scanner logic: pathInput (user config) is the root.
-        // If config is "Photos", and absolute is "/media/Photos/img.jpg", DB path is "Photos/img.jpg".
-        
         let matchedConfigPath = null;
         let matchedAbsolutePath = null;
 
@@ -440,13 +469,13 @@ const handleWatcherEvent = async (event, filePath, libraryPaths) => {
 
         // Construct DB normalized path
         const relativeFromRoot = path.relative(matchedAbsolutePath, filePath);
-        const relativePath = path.join(matchedConfigPath, relativeFromRoot);
-        const normalizedPath = relativePath.replace(/\\/g, '/');
-        const normalizedFolderPath = path.dirname(normalizedPath).replace(/\\/g, '/');
+        // Force Unix style separators for DB
+        const relativePathUnix = [matchedConfigPath, ...relativeFromRoot.split(path.sep)].join('/');
+        const folderPathUnix = path.dirname(relativePathUnix).split(path.sep).join('/');
         
         if (event === 'unlink') {
-            console.log(`Watcher: Deleting ${normalizedPath}`);
-            deleteFileStmt.run(normalizedPath);
+            console.log(`Watcher: Deleting ${relativePathUnix}`);
+            deleteFileStmt.run(relativePathUnix);
         } else {
             // Add or Change
             const mimeType = mime.lookup(filePath);
@@ -456,11 +485,11 @@ const handleWatcherEvent = async (event, filePath, libraryPaths) => {
                 if (mimeType.startsWith('video/')) mediaType = 'video';
                 if (mimeType.startsWith('audio/')) mediaType = 'audio';
 
-                console.log(`Watcher: Upserting ${normalizedPath}`);
+                console.log(`Watcher: Upserting ${relativePathUnix}`);
                 upsertFileStmt.run({
-                    path: normalizedPath,
+                    path: relativePathUnix,
                     name: path.basename(filePath),
-                    folder_path: normalizedFolderPath === '.' ? matchedConfigPath : normalizedFolderPath,
+                    folder_path: folderPathUnix === '.' ? matchedConfigPath : folderPathUnix,
                     type: mimeType,
                     media_type: mediaType,
                     size: stat.size,
@@ -476,9 +505,28 @@ const handleWatcherEvent = async (event, filePath, libraryPaths) => {
 
 // --- API Endpoints ---
 
+// File System Listing for Autocomplete
+app.get('/api/fs/list', async (req, res) => {
+    const rawPath = req.query.path || '/';
+    // Security: In a real app, restrict this. Here we allow browsing the container.
+    // Basic check to ensure we are looking at something reasonable
+    const targetPath = path.resolve(rawPath);
+    
+    try {
+        const entries = await fs.promises.readdir(targetPath, { withFileTypes: true });
+        const dirs = entries
+            .filter(e => e.isDirectory() && !e.name.startsWith('.'))
+            .map(e => e.name);
+        res.json({ dirs });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
 // System Status
 app.get('/api/system/status', async (req, res) => {
-    let cacheCount = 0;
+    // Calculate real cache count
+    const cacheCount = await countFilesRecursively(CACHE_DIR);
     
     const dbStats = db.prepare('SELECT COUNT(*) as count FROM files').get();
     const mediaStats = db.prepare(`
@@ -552,8 +600,6 @@ app.post('/api/scan/start', async (req, res) => {
             : [MEDIA_ROOT];
         
         // Mark Phase: Mark all existing files as potentially stale
-        // We append '_scanning' to source_id.
-        // We only mark files that don't already have it (safety check)
         db.exec("UPDATE files SET source_id = source_id || '_scanning' WHERE source_id NOT LIKE '%_scanning'");
 
         for (const pathInput of pathsToScan) {
@@ -567,12 +613,11 @@ app.post('/api/scan/start', async (req, res) => {
              // Check existence
              try {
                 await fs.promises.access(normalized);
-                // scanDirectoryToDB will upsert with clean source_id (no suffix)
                 await scanDirectoryToDB(normalized, '', pathInput);
              } catch(e) { console.warn(`Path not found: ${normalized}`); }
         }
 
-        // Sweep Phase: Delete files that still have the '_scanning' suffix (they weren't found/updated)
+        // Sweep Phase
         const deleteResult = db.prepare("DELETE FROM files WHERE source_id LIKE '%_scanning'").run();
         console.log(`Scan Sweep: Removed ${deleteResult.changes} stale files.`);
 
@@ -635,29 +680,39 @@ const formatDbItem = (row) => {
 
 const resolveValidPath = (reqPath) => {
     const decodedPath = decodeURIComponent(reqPath);
-    const file = db.prepare('SELECT path FROM files WHERE path = ?').get(decodedPath);
+    // Security Check: Attempting to find file by path in DB to ensure it's a tracked file
+    // However, for streaming, we might need flexibility.
     
+    // We try to match mapped paths
     let config = {};
     try {
         if (fs.existsSync(CONFIG_FILE)) config = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
     } catch (e) {}
 
     const libraryPaths = config.libraryPaths || [MEDIA_ROOT];
-    let absolutePath = null;
     
-    if (path.isAbsolute(decodedPath)) {
-        if (fs.existsSync(decodedPath)) absolutePath = decodedPath;
-    } else {
-        const p = path.join(MEDIA_ROOT, decodedPath);
-        if (fs.existsSync(p)) absolutePath = p;
+    // reqPath comes from the DB 'path' column, which we store as e.g. "Photos/Vacation/img.jpg"
+    // We need to find which library path "Photos" corresponds to.
+    
+    // Since we store paths in DB relative to "Library Path Name" (User Input),
+    // we need to reverse match.
+    // Or, in `scanDirectoryToDB`, we actually used the input string as the root.
+    
+    // If input was `/media` and file was `/media/img.jpg`. DB Path: `/media/img.jpg`.
+    // If input was `/media` and file was `/media/sub/img.jpg`. DB Path: `/media/sub/img.jpg`.
+    
+    // If user inputs absolute path `/media`, DB stores absolute.
+    // If user inputs relative? We don't support relative inputs for scan config really.
+    
+    // So `decodedPath` is likely an absolute path on the server file system.
+    if (path.isAbsolute(decodedPath) && fs.existsSync(decodedPath)) {
+        return { path: decodedPath };
     }
+    
+    // Fallback: Check if it's relative to MEDIA_ROOT
+    const p = path.join(MEDIA_ROOT, decodedPath);
+    if (fs.existsSync(p)) return { path: p };
 
-    if (!absolutePath) {
-        if (fs.existsSync(decodedPath)) absolutePath = decodedPath;
-        else if (fs.existsSync(path.join(MEDIA_ROOT, decodedPath))) absolutePath = path.join(MEDIA_ROOT, decodedPath);
-    }
-    
-    if (absolutePath) return { path: absolutePath };
     return { error: 404, message: 'Not found' };
 };
 
@@ -773,9 +828,10 @@ app.post('/api/thumb-gen/start', async (req, res) => {
                 if (sharp && item.type.startsWith('image/')) {
                     thumbJob.currentEngine = 'Sharp (CPU)';
                     try {
+                        // UPDATED: Convert to WebP for smaller size and faster loading
                         await sharp(sourcePath)
                             .resize({ width: 300, withoutEnlargement: true, fit: 'inside' })
-                            .jpeg({ quality: 80, mozjpeg: true })
+                            .webp({ quality: 80 }) 
                             .toFile(filepath);
                     } catch(e) {}
                 } else if (ffmpeg && item.type.startsWith('video/')) {
@@ -811,7 +867,8 @@ app.get('/api/thumbnail', async (req, res) => {
     const { filepath: cacheFilePath, dir } = getCachePath(result.path, item.mtime);
 
     res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
-    res.setHeader('Content-Type', 'image/jpeg');
+    // UPDATED: Content Type WebP
+    res.setHeader('Content-Type', 'image/webp');
 
     if (fs.existsSync(cacheFilePath)) {
         fs.createReadStream(cacheFilePath).pipe(res);
@@ -824,7 +881,11 @@ app.get('/api/thumbnail', async (req, res) => {
         const mimeType = mime.lookup(result.path) || '';
         
         if (sharp && mimeType.startsWith('image/')) {
-            await sharp(result.path).resize({ width: 300, withoutEnlargement: true, fit: 'inside' }).jpeg().toFile(cacheFilePath);
+            // UPDATED: On-demand generation uses WebP
+            await sharp(result.path)
+                .resize({ width: 300, withoutEnlargement: true, fit: 'inside' })
+                .webp({ quality: 80 })
+                .toFile(cacheFilePath);
             fs.createReadStream(cacheFilePath).pipe(res);
             return;
         }

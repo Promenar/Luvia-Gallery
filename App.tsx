@@ -551,7 +551,8 @@ export default function App() {
     setCurrentPath(''); 
     
     if (isServerMode && currentUser) {
-        if (mode === 'all') {
+        if (mode === 'all' || mode === 'home') {
+             // Reset filters to fetch all files for home slideshow or full library view
              fetchServerFiles(currentUser.username, allUserData, 0, true, null);
         }
     }
@@ -905,9 +906,14 @@ export default function App() {
        title = parts[parts.length - 1];
     }
     const subfolders = (Object.values(targetNode.children) as FolderNode[]).sort((a, b) => a.name.localeCompare(b.name));
-    const media = processedFiles.filter(f => f.folderPath === currentPath);
+    // When in server mode and folder view, processedFiles already contains only the files for the current folder
+    // because we fetched them with the folder filter.
+    // However, if we navigated up, we might need to rely on the subfolders.
+    // For local mode, we need to filter.
+    const media = isServerMode ? processedFiles : processedFiles.filter(f => f.folderPath === currentPath);
+    
     return { type: 'mixed', folders: subfolders, photos: media, title: title };
-  }, [viewMode, currentPath, processedFiles, folderTree, t]);
+  }, [viewMode, currentPath, processedFiles, folderTree, t, isServerMode]);
 
   // Helpers
   useEffect(() => {

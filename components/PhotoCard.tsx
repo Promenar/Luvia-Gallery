@@ -17,9 +17,10 @@ export const MediaCard: React.FC<MediaCardProps> = React.memo(({ item, onClick, 
   const { t } = useLanguage();
   const videoRef = useRef<HTMLVideoElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [isLoaded, setIsLoaded] = useState(false);
+  const [isHovered, setIsHovered] = useState(false);
+  const [isVideoLoaded, setIsVideoLoaded] = useState(false);
 
-  // Determine thumbnail URL for server mode
+  // Determine thumbnail URL
   const thumbnailSrc = useMemo(() => {
     // Audio has no thumbnail
     if (item.mediaType === 'audio') return '';
@@ -33,19 +34,30 @@ export const MediaCard: React.FC<MediaCardProps> = React.memo(({ item, onClick, 
     }
     
     // Client mode (blob URLs)
-    return item.url;
+    // Only return blob URL for images. Videos in client mode don't have a poster image.
+    if (item.mediaType === 'image') {
+        return item.url;
+    }
+    
+    return '';
   }, [item.url, item.mediaType]);
 
   const handleMouseEnter = () => {
-    if (item.mediaType === 'video' && videoRef.current) {
-      videoRef.current.play().catch(() => {
-        // Autoplay might be blocked by browser policy
-      });
-      setIsPlaying(true);
+    setIsHovered(true);
+    if (item.mediaType === 'video') {
+      // Delay play slightly to avoid rapid hover flickering issues
+      setTimeout(() => {
+          if (videoRef.current) {
+            videoRef.current.play().catch(() => {});
+            setIsPlaying(true);
+          }
+      }, 50);
     }
   };
 
   const handleMouseLeave = () => {
+    setIsHovered(false);
+    setIsVideoLoaded(false); // Reset animation state
     if (item.mediaType === 'video' && videoRef.current) {
       videoRef.current.pause();
       videoRef.current.currentTime = 0;
@@ -74,35 +86,48 @@ export const MediaCard: React.FC<MediaCardProps> = React.memo(({ item, onClick, 
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
     >
-      {/* Skeleton / Loading Placeholder */}
-      {!isLoaded && item.mediaType !== 'audio' && (
-          <div className="absolute inset-0 bg-gray-300 dark:bg-gray-700 animate-pulse z-0" />
-      )}
-
       {item.mediaType === 'video' ? (
         <div className={`relative w-full ${isGrid ? 'h-full absolute inset-0' : 'aspect-video'} flex items-center justify-center bg-gray-900`}>
-           {/* Use thumbnail for video poster/preview if possible, else video tag */}
-           {/* In masonry we prefer the video tag for preview on hover, but use thumbnail for initial load speed */}
-           <video 
-             ref={videoRef}
-             src={item.url} 
-             poster={thumbnailSrc}
-             className={`w-full h-full object-cover transition-opacity duration-500 ${isLoaded ? 'opacity-100' : 'opacity-0'}`}
-             muted
-             preload="metadata"
-             playsInline
-             loop
-             onLoadedData={() => setIsLoaded(true)}
-           />
+           {/* Performance Optimization: Only render video tag on hover to prevent browser freezing with hundreds of videos */}
+           {isHovered && (
+               <video 
+                 ref={videoRef}
+                 src={item.url} 
+                 poster={thumbnailSrc}
+                 className={`w-full h-full object-cover absolute inset-0 z-10 transition-opacity duration-500 ${isVideoLoaded ? 'opacity-100' : 'opacity-0'}`}
+                 muted
+                 preload="metadata"
+                 playsInline
+                 loop
+                 onCanPlay={() => setIsVideoLoaded(true)}
+               />
+           )}
+           
+           {/* Thumbnail Image or Placeholder */}
+           {thumbnailSrc ? (
+               <img
+                 src={thumbnailSrc}
+                 alt={item.name}
+                 loading="lazy"
+                 className="w-full h-full object-cover block"
+               />
+           ) : (
+               // Improved Gradient Placeholder (Matches FolderCard style)
+               <div className="w-full h-full bg-gray-900 relative overflow-hidden flex items-center justify-center">
+                   <div className="absolute inset-0 bg-gradient-to-tr from-gray-900 to-gray-700 opacity-100" />
+                   {/* We rely on the existing Play icon overlay for the center icon to avoid duplication */}
+               </div>
+           )}
+
            {/* Play Icon Overlay (Hidden when playing) */}
-           <div className={`absolute inset-0 flex items-center justify-center transition-opacity duration-200 ${isPlaying ? 'opacity-0' : 'opacity-100'} ${!isLoaded ? 'hidden' : ''}`}>
+           <div className={`absolute inset-0 flex items-center justify-center transition-opacity duration-200 ${isPlaying ? 'opacity-0' : 'opacity-100'} z-20`}>
              <div className="w-12 h-12 bg-white/20 backdrop-blur-md rounded-full flex items-center justify-center text-white group-hover:bg-white/40 transition-colors shadow-lg">
                <Icons.Play size={24} fill="currentColor" className="ml-1" />
              </div>
            </div>
            
            {/* Badge */}
-           <div className={`absolute top-2 right-2 bg-black/60 backdrop-blur-sm px-2 py-0.5 rounded text-[10px] text-white font-medium flex items-center gap-1 z-10 transition-opacity duration-300 ${isLoaded ? 'opacity-100' : 'opacity-0'}`}>
+           <div className="absolute top-2 right-2 bg-black/60 backdrop-blur-sm px-2 py-0.5 rounded text-[10px] text-white font-medium flex items-center gap-1 z-20">
              <Icons.Video size={10} />
              <span>{t('video_badge')}</span>
            </div>
@@ -120,13 +145,12 @@ export const MediaCard: React.FC<MediaCardProps> = React.memo(({ item, onClick, 
           src={thumbnailSrc}
           alt={item.name}
           loading="lazy"
-          onLoad={() => setIsLoaded(true)}
-          className={`w-full h-full object-cover transition-transform duration-700 group-hover:scale-105 ${isGrid ? 'absolute inset-0' : 'block'} transition-opacity duration-500 ${isLoaded ? 'opacity-100' : 'opacity-0'}`}
+          className={`w-full h-full object-cover transition-transform duration-700 group-hover:scale-105 ${isGrid ? 'absolute inset-0' : 'block'}`}
         />
       )}
       
       {/* Hover Info Overlay */}
-      <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-end p-4 z-20 pointer-events-none">
+      <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-end p-4 z-30 pointer-events-none">
         <div className="w-full overflow-hidden">
            <p className="text-white text-sm font-medium truncate w-full">{item.name}</p>
            <div className="flex justify-between items-center mt-1">

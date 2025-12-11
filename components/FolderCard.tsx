@@ -1,3 +1,4 @@
+
 import React, { useMemo, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
 import { FolderNode } from '../types';
@@ -16,15 +17,13 @@ export const FolderCard: React.FC<FolderCardProps> = ({ folder, onClick }) => {
   const thumbUrl = useMemo(() => {
     if (!folder.coverMedia) return null;
     
-    // Always use API thumbnail if available in server mode AND it's an image
-    // For videos, the server thumbnail API (sharp) usually fails without ffmpeg, 
-    // so we skip it to prevent broken images unless we have a specific thumbnail service.
-    if (folder.coverMedia.url.startsWith('/media-stream/') && folder.coverMedia.mediaType === 'image') {
+    // Server Mode: Allow both Image and Video
+    if (folder.coverMedia.url.startsWith('/media-stream/')) {
             const pathPart = folder.coverMedia.url.split('/media-stream/')[1];
             return `/api/thumbnail?path=${pathPart}`;
     }
     
-    // Fallback for client mode or direct image
+    // Client mode: Only Images
     if (folder.coverMedia.mediaType === 'image') {
         return folder.coverMedia.url;
     }
@@ -68,6 +67,15 @@ export const FolderCard: React.FC<FolderCardProps> = ({ folder, onClick }) => {
                   <div className="w-full h-full bg-gray-800 flex items-center justify-center group-hover:scale-105 transition-transform duration-700 relative overflow-hidden">
                       {/* Video Pattern / Placeholder */}
                       <div className="absolute inset-0 bg-gradient-to-tr from-gray-900 to-gray-700 opacity-100" />
+                      
+                      {/* Static Thumbnail for Server Mode Video if available */}
+                      {thumbUrl && (
+                          <img 
+                              src={thumbUrl} 
+                              alt={folder.name} 
+                              className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-300 ${isPlaying ? 'opacity-0' : 'opacity-100'}`}
+                          />
+                      )}
                       
                       {/* Video Preview on Hover */}
                       <video 
