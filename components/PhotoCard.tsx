@@ -1,5 +1,5 @@
 
-import React, { useRef, useState, useMemo } from 'react';
+import React, { useRef, useState, useMemo, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { MediaItem } from '../types';
 import { Icons } from './ui/Icon';
@@ -18,6 +18,12 @@ export const MediaCard: React.FC<MediaCardProps> = React.memo(({ item, onClick, 
   const [isPlaying, setIsPlaying] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
   const [isVideoLoaded, setIsVideoLoaded] = useState(false);
+  const [imgError, setImgError] = useState(false);
+
+  // Reset error when item changes
+  useEffect(() => {
+    setImgError(false);
+  }, [item.id, item.url]);
 
   // Determine thumbnail URL
   const thumbnailSrc = useMemo(() => {
@@ -74,7 +80,7 @@ export const MediaCard: React.FC<MediaCardProps> = React.memo(({ item, onClick, 
     >
       {item.mediaType === 'video' ? (
         <div className={`relative w-full ${isGrid ? 'h-full absolute inset-0' : 'aspect-video'} flex items-center justify-center bg-gray-900`}>
-           {isHovered && (
+           {isHovered && !imgError && (
                <video 
                  ref={videoRef}
                  src={item.url} 
@@ -85,19 +91,28 @@ export const MediaCard: React.FC<MediaCardProps> = React.memo(({ item, onClick, 
                  playsInline
                  loop
                  onCanPlay={() => setIsVideoLoaded(true)}
+                 onError={() => { setIsVideoLoaded(false); }}
                />
            )}
            
-           {thumbnailSrc ? (
+           {!imgError && thumbnailSrc ? (
                <img
                  src={thumbnailSrc}
                  alt={item.name}
                  loading="lazy"
                  className="w-full h-full object-cover block"
+                 onError={() => setImgError(true)}
                />
            ) : (
-               <div className="w-full h-full bg-gray-900 relative overflow-hidden flex items-center justify-center">
-                   <div className="absolute inset-0 bg-gradient-to-tr from-gray-900 to-gray-700 opacity-100" />
+               <div className="w-full h-full bg-gray-800 relative overflow-hidden flex flex-col items-center justify-center text-gray-500 dark:text-gray-400">
+                   {imgError ? (
+                       <>
+                           <Icons.Video size={32} />
+                           <span className="text-[10px] mt-2 font-mono uppercase font-bold bg-black/20 px-1 rounded">{item.type.split('/')[1] || 'VIDEO'}</span>
+                       </>
+                   ) : (
+                        <div className="absolute inset-0 bg-gradient-to-tr from-gray-900 to-gray-700 opacity-100" />
+                   )}
                </div>
            )}
 
@@ -121,12 +136,20 @@ export const MediaCard: React.FC<MediaCardProps> = React.memo(({ item, onClick, 
            </div>
         </div>
       ) : (
-        <img
-          src={thumbnailSrc}
-          alt={item.name}
-          loading="lazy"
-          className={`w-full h-full object-cover transition-transform duration-700 group-hover:scale-105 ${isGrid ? 'absolute inset-0' : 'block'}`}
-        />
+          !imgError ? (
+            <img
+              src={thumbnailSrc}
+              alt={item.name}
+              loading="lazy"
+              className={`w-full h-full object-cover transition-transform duration-700 group-hover:scale-105 ${isGrid ? 'absolute inset-0' : 'block'}`}
+              onError={() => setImgError(true)}
+            />
+          ) : (
+             <div className="w-full h-full flex flex-col items-center justify-center bg-gray-200 dark:bg-gray-800 text-gray-400">
+                  <Icons.Image size={32} />
+                  <span className="text-[10px] mt-2 font-mono uppercase font-bold bg-black/10 dark:bg-white/10 px-1 rounded">{item.type.split('/')[1] || 'IMG'}</span>
+             </div>
+          )
       )}
       
       {/* Heart Icon Overlay */}

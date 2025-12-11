@@ -19,6 +19,7 @@ export const FolderCard: React.FC<FolderCardProps> = ({ folder, onClick, isFavor
   const [showMenu, setShowMenu] = useState(false);
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState('');
+  const [imgError, setImgError] = useState(false);
 
   // Resolve thumbnail URL for cover
   const thumbUrl = useMemo(() => {
@@ -34,7 +35,7 @@ export const FolderCard: React.FC<FolderCardProps> = ({ folder, onClick, isFavor
   }, [folder.coverMedia]);
 
   const handleMouseEnter = () => {
-      if (folder.coverMedia?.mediaType === 'video' && videoRef.current) {
+      if (folder.coverMedia?.mediaType === 'video' && videoRef.current && !imgError) {
           videoRef.current.play().catch(() => {});
           setIsPlaying(true);
       }
@@ -95,7 +96,7 @@ export const FolderCard: React.FC<FolderCardProps> = ({ folder, onClick, isFavor
       {/* Main Card */}
       <div className="relative bg-white dark:bg-gray-800 rounded-xl shadow-sm hover:shadow-lg border border-gray-100 dark:border-gray-700 overflow-hidden flex flex-col h-full z-10 transition-all duration-300">
         <div className="aspect-[4/3] bg-gray-100 dark:bg-gray-900 relative overflow-hidden flex items-center justify-center">
-          {folder.coverMedia ? (
+          {folder.coverMedia && !imgError ? (
               folder.coverMedia.mediaType === 'video' ? (
                   <div className="w-full h-full bg-gray-800 flex items-center justify-center group-hover:scale-105 transition-transform duration-700 relative overflow-hidden">
                       <div className="absolute inset-0 bg-gradient-to-tr from-gray-900 to-gray-700 opacity-100" />
@@ -104,6 +105,7 @@ export const FolderCard: React.FC<FolderCardProps> = ({ folder, onClick, isFavor
                               src={thumbUrl} 
                               alt={folder.name} 
                               className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-300 ${isPlaying ? 'opacity-0' : 'opacity-100'}`}
+                              onError={() => setImgError(true)}
                           />
                       )}
                       <video 
@@ -113,6 +115,7 @@ export const FolderCard: React.FC<FolderCardProps> = ({ folder, onClick, isFavor
                           loop
                           playsInline
                           className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-300 ${isPlaying ? 'opacity-100' : 'opacity-0'}`}
+                          onError={() => {}} // Silent error for preview video
                       />
                       <div className={`absolute inset-0 flex items-center justify-center z-10 transition-opacity ${isPlaying ? 'opacity-0' : 'opacity-100'}`}>
                         <div className="w-12 h-12 rounded-full bg-white/10 backdrop-blur-sm flex items-center justify-center border border-white/20">
@@ -129,6 +132,7 @@ export const FolderCard: React.FC<FolderCardProps> = ({ folder, onClick, isFavor
                       src={thumbUrl || folder.coverMedia.url} 
                       alt={folder.name} 
                       className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700" 
+                      onError={() => setImgError(true)}
                   />
               )
           ) : (

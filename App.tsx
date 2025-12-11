@@ -602,11 +602,22 @@ export default function App() {
     setCurrentPath(''); 
     
     if (isServerMode && currentUser) {
+        // Clear current files to avoid "flash" of old content when switching views
+        // This is critical for Favorites view to avoid showing all files briefly
+        const clearedData = { 
+              ...allUserData, 
+              [currentUser.username]: { 
+                  ...allUserData[currentUser.username], 
+                  files: [] 
+              } 
+        };
+        setAllUserData(clearedData);
+
         if (mode === 'all' || mode === 'home') {
-             fetchServerFiles(currentUser.username, allUserData, 0, true, null);
+             fetchServerFiles(currentUser.username, clearedData, 0, true, null);
              fetchServerFolders(false); // Get all folders
         } else if (mode === 'favorites') {
-             fetchServerFiles(currentUser.username, allUserData, 0, true, null, true);
+             fetchServerFiles(currentUser.username, clearedData, 0, true, null, true);
              fetchServerFolders(true); // Get favorite folders
              fetchServerFavorites();
         } else {
@@ -1238,6 +1249,8 @@ export default function App() {
       );
   }
 
+  const hasVisualFiles = (viewMode === 'all' || viewMode === 'favorites' || (viewMode === 'folders' && currentPath !== '')) && (content.photos && content.photos.length > 0);
+
   return (
     <div className="flex flex-col md:flex-row h-[100dvh] bg-white dark:bg-gray-900 transition-colors">
       <Navigation 
@@ -1351,7 +1364,7 @@ export default function App() {
             {(files.length > 0 || isFetchingMore || (viewMode === 'folders' && content.folders.length > 0) || (viewMode === 'favorites')) && (
                 <>
                     {((viewMode === 'folders' && content.folders.length > 0) || (viewMode === 'favorites' && content.folders.length > 0)) && (
-                        <div className="p-4 md:p-8 pb-0 shrink-0 max-h-[40vh] overflow-y-auto no-scrollbar animate-in fade-in slide-in-from-bottom-2 duration-500">
+                        <div className={`p-4 md:p-8 pb-0 shrink-0 overflow-y-auto no-scrollbar animate-in fade-in slide-in-from-bottom-2 duration-500 ${hasVisualFiles ? 'max-h-[40vh]' : 'flex-1 h-full'}`}>
                             <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2">
                                 <Icons.Folder size={14} />{t('folders')}
                             </h3>
@@ -1566,6 +1579,7 @@ export default function App() {
                                              </div>
                                              <div className="flex flex-col gap-2 mt-auto">
                                                 <button onClick={clearCache} className="w-full py-1.5 text-xs bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded hover:bg-red-50 dark:hover:bg-red-900/20 hover:text-red-500 hover:border-red-200 transition-colors">{t('clear_all_cache')}</button>
+                                                <button onClick={pruneCache} className="w-full py-1.5 text-xs bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded hover:bg-orange-50 dark:hover:bg-orange-900/20 hover:text-orange-500 hover:border-orange-200 transition-colors">{t('prune_legacy_cache')}</button>
                                              </div>
                                         </div>
 
@@ -1676,21 +1690,13 @@ export default function App() {
                                             <button onClick={startServerScan} className="flex flex-col items-center justify-center p-4 bg-gray-50 dark:bg-gray-800 hover:bg-primary-50 dark:hover:bg-primary-900/20 border border-gray-200 dark:border-gray-700 hover:border-primary-200 dark:hover:border-primary-800 rounded-xl transition-all group">
                                                 <Icons.Refresh size={24} className="text-gray-400 group-hover:text-primary-600 mb-2" />
                                                 <span className="text-sm font-bold text-gray-700 dark:text-gray-200">{t('scan_library')}</span>
-                                                <span className="text-[10px] text-gray-400 mt-1">{t('scan_started')}</span>
+                                                <span className="text-[10px] text-gray-400 mt-1">{t('scan_library_desc')}</span>
                                             </button>
                                             <button onClick={startThumbnailGen} className="flex flex-col items-center justify-center p-4 bg-gray-50 dark:bg-gray-800 hover:bg-primary-50 dark:hover:bg-primary-900/20 border border-gray-200 dark:border-gray-700 hover:border-primary-200 dark:hover:border-primary-800 rounded-xl transition-all group">
                                                 <Icons.Image size={24} className="text-gray-400 group-hover:text-primary-600 mb-2" />
                                                 <span className="text-sm font-bold text-gray-700 dark:text-gray-200">{t('generate_thumbs')}</span>
-                                                <span className="text-[10px] text-gray-400 mt-1">{t('thumbs_started')}</span>
+                                                <span className="text-[10px] text-gray-400 mt-1">{t('generate_thumbs_desc')}</span>
                                             </button>
-                                        </div>
-                                        
-                                        <div className="pt-4 border-t border-gray-100 dark:border-gray-700">
-                                            <h4 className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-3">{t('cache_management')}</h4>
-                                            <div className="flex gap-3">
-                                                 <button onClick={clearCache} className="px-3 py-2 text-xs font-medium text-red-600 bg-red-50 dark:bg-red-900/20 hover:bg-red-100 rounded-lg transition-colors flex items-center gap-2"><Icons.Trash size={14}/> {t('clear_all_cache')}</button>
-                                                 <button onClick={pruneCache} className="px-3 py-2 text-xs font-medium text-orange-600 bg-orange-50 dark:bg-orange-900/20 hover:bg-orange-100 rounded-lg transition-colors flex items-center gap-2"><Icons.Filter size={14}/> {t('prune_legacy_cache')}</button>
-                                            </div>
                                         </div>
                                     </div>
                                 ) : (

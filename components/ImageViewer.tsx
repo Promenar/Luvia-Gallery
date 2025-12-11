@@ -37,6 +37,7 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
 
   // Video Controls
   const [playbackRate, setPlaybackRate] = useState(1.0);
+  const [videoError, setVideoError] = useState(false);
 
   // Info Panel
   const [showInfo, setShowInfo] = useState(false);
@@ -57,6 +58,7 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
     lastDist.current = null;
     setIsRenaming(false);
     setPlaybackRate(1.0);
+    setVideoError(false);
     setExifData(null);
   }, [item?.id]);
 
@@ -544,26 +546,46 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
         >
           {item.mediaType === 'video' ? (
             <div className="w-full h-full flex flex-col items-center justify-center relative group" onClick={(e) => e.stopPropagation()}>
-                <video 
-                  ref={videoRef}
-                  src={item.url}
-                  controls
-                  autoPlay
-                  onEnded={() => { if(isPlaying && onNext) onNext(); }}
-                  className="max-w-full max-h-full shadow-2xl rounded-sm focus:outline-none"
-                />
-                <div className="absolute top-1/2 right-4 -translate-y-1/2 bg-black/60 rounded-lg backdrop-blur px-2 py-3 flex flex-col items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <Icons.Clock size={16} className="text-white/70 mb-1" />
-                    {[0.5, 1.0, 1.5, 2.0].map(speed => (
-                        <button 
-                            key={speed}
-                            onClick={() => setPlaybackRate(speed)}
-                            className={`text-xs font-bold w-full text-center hover:text-primary-400 ${playbackRate === speed ? 'text-primary-400' : 'text-white/60'}`}
+                {!videoError ? (
+                    <>
+                        <video 
+                          ref={videoRef}
+                          src={item.url}
+                          controls
+                          autoPlay
+                          onEnded={() => { if(isPlaying && onNext) onNext(); }}
+                          onError={() => setVideoError(true)}
+                          className="max-w-full max-h-full shadow-2xl rounded-sm focus:outline-none"
+                        />
+                        <div className="absolute top-1/2 right-4 -translate-y-1/2 bg-black/60 rounded-lg backdrop-blur px-2 py-3 flex flex-col items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <Icons.Clock size={16} className="text-white/70 mb-1" />
+                            {[0.5, 1.0, 1.5, 2.0].map(speed => (
+                                <button 
+                                    key={speed}
+                                    onClick={() => setPlaybackRate(speed)}
+                                    className={`text-xs font-bold w-full text-center hover:text-primary-400 ${playbackRate === speed ? 'text-primary-400' : 'text-white/60'}`}
+                                >
+                                    {speed}x
+                                </button>
+                            ))}
+                        </div>
+                    </>
+                ) : (
+                    <div className="flex flex-col items-center justify-center p-8 bg-gray-900 rounded-xl border border-gray-700 text-center max-w-md">
+                        <Icons.AlertTriangle size={48} className="text-yellow-500 mb-4" />
+                        <h3 className="text-xl font-bold text-white mb-2">Playback Failed</h3>
+                        <p className="text-gray-400 text-sm mb-6">
+                            The video format <span className="font-mono bg-black/30 px-1 rounded">{item.type}</span> might not be supported by your browser.
+                        </p>
+                        <a 
+                            href={item.url} 
+                            download 
+                            className="bg-white text-gray-900 hover:bg-gray-200 px-6 py-2 rounded-full font-bold transition-colors flex items-center gap-2"
                         >
-                            {speed}x
-                        </button>
-                    ))}
-                </div>
+                            <Icons.Download size={18} /> Download Video
+                        </a>
+                    </div>
+                )}
             </div>
           ) : item.mediaType === 'audio' ? (
              <div className="w-full max-w-md bg-white/10 backdrop-blur-md p-8 rounded-3xl flex flex-col items-center gap-6" onClick={(e) => e.stopPropagation()}>
