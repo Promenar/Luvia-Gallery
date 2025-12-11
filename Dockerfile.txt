@@ -9,50 +9,46 @@ RUN apk add --no-cache python3 make g++
 COPY package*.json ./
 RUN npm install
 
-# Install additional build tools (react-scripts, typescript, vite, etc.)
-RUN npm install --save-dev react-scripts @types/react @types/react-dom typescript vite @vitejs/plugin-react || true
-
 # Copy all project files
 COPY . .
 
 # Save server.js before restructuring (it needs to stay in root for production stage)
 RUN cp server.js server.js.bak
 
-# --- FIX STRUCTURE FOR REACT-SCRIPTS ---
-# The project files are in the root, but react-scripts expects 'src' and 'public' folders.
-# We restructure them before building.
+# --- FIX STRUCTURE FOR CREATE REACT APP (CRA) ---
+# CRA expects specific folder structure: /public for index.html and /src for code.
+# The source files are currently in root, so we move them.
 
 # 1. Prepare directories
 RUN mkdir -p public src
 
-# 2. Move static assets to public
+# 2. Move static assets to public (CRA looks for index.html here)
+RUN if [ -f index.html ]; then mv index.html public/; fi
 RUN if [ -f metadata.json ]; then mv metadata.json public/; fi
 
 # 3. Move source code to src (but exclude server.js)
 # We move .tsx, .ts files and component directories.
-# We verify files exist to avoid errors if the structure changes slightly.
-RUN for file in *.tsx; do [ -f "$file" ] && [ "$file" != "server.js" ] && mv "$file" src/; done && \
-    for file in *.ts; do [ -f "$file" ] && [ "$file" != "server.js" ] && mv "$file" src/; done && \
-    [ -d components ] && mv components src/ || true && \
-    [ -d utils ] && mv utils src/ || true
+RUN for file in *.tsx; do [ -f "$file" ] && [ "$file" != "server.js" ] && mv "$file" src/; done || true
+RUN for file in *.ts; do [ -f "$file" ] && [ "$file" != "server.js" ] && mv "$file" src/; done || true
+
+# Move directories if they exist
+RUN [ -d components ] && mv components src/ || true
+RUN [ -d utils ] && mv utils src/ || true
+RUN [ -d contexts ] && mv contexts src/ || true
 
 # ---------------------------------------
-# Build the React application using Vite
-RUN npx vite build --outDir build
+# Build the React application using CRA (react-scripts)
+# This executes "react-scripts build" defined in package.json
+RUN npm run build
 
 # Production Stage
 FROM node:18-alpine
 WORKDIR /app
 
 # Install system dependencies (FFmpeg + SQLite libs)
-RUN apk add --no-cache ffmpeg
+RUN apk add --no-cache ffmpeg python3 make g++
 
 # Install production dependencies only
-# We also need build tools here if rebuilding native modules, or copy from build.
-# For simplicity in this environment, we install dependencies fresh.
-# In a strict production env, we'd do a multi-stage copy of node_modules.
-RUN apk add --no-cache python3 make g++
-
 COPY package*.json ./
 RUN npm install --production
 
