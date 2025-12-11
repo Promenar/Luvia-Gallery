@@ -893,10 +893,13 @@ export default function App() {
         const root: FolderNode = { name: 'Root', path: '', children: {}, mediaCount: 0 };
         serverFolders.forEach(sf => {
             const parts = sf.path.split('/').filter((p: string) => p);
+            const hasLeadingSlash = sf.path.startsWith('/');
             let currentNode = root;
             parts.forEach((part: string, index: number) => {
                 if (!currentNode.children[part]) {
-                    const currentPath = parts.slice(0, index + 1).join('/');
+                    let currentPath = parts.slice(0, index + 1).join('/');
+                    if (hasLeadingSlash) currentPath = '/' + currentPath;
+
                     const match = serverFolders.find(f => f.path === currentPath);
                     currentNode.children[part] = {
                         name: part,
@@ -924,13 +927,13 @@ export default function App() {
     let targetNode = folderTree;
     let title = t('folders');
     if (currentPath) {
-       const parts = currentPath.split('/');
+       const parts = currentPath.split('/').filter(p => p);
        for (const part of parts) {
            if (targetNode.children[part]) {
                targetNode = targetNode.children[part];
            }
        }
-       title = parts[parts.length - 1];
+       title = parts[parts.length - 1] || t('folders');
     }
     const subfolders = (Object.values(targetNode.children) as FolderNode[]).sort((a, b) => a.name.localeCompare(b.name));
     // When in server mode and folder view, processedFiles already contains only the files for the current folder
@@ -1078,8 +1081,14 @@ export default function App() {
                          )}
 
                         <button onClick={() => handleFolderClick('')} className={`hover:bg-gray-100 dark:hover:bg-gray-800 px-2 py-1 rounded-md flex items-center gap-1 transition-colors ${currentPath === '' ? 'font-bold text-gray-900 dark:text-white bg-gray-50 dark:bg-gray-800' : ''}`}><Icons.Folder size={16} />Root</button>
-                        {currentPath && currentPath.split('/').map((part, index, arr) => {
-                            const path = arr.slice(0, index + 1).join('/');
+                        {currentPath && currentPath.split('/').filter(p => p).map((part, index, arr) => {
+                            // Reconstruct the path for breadcrumbs, handling leading slash if needed
+                            // For simplicity in display, we join with /. 
+                            // In handleFolderClick, if original path had slash, we might lose it here if we don't know.
+                            // However, we can reconstruct based on currentPath string.
+                            // If currentPath starts with /, then we should prepend it.
+                            const hasLeading = currentPath.startsWith('/');
+                            const path = (hasLeading ? '/' : '') + arr.slice(0, index + 1).join('/');
                             return (<React.Fragment key={path}><Icons.ChevronRight size={12} className="text-gray-300 dark:text-gray-600" /><button onClick={() => handleFolderClick(path)} className="hover:bg-gray-100 dark:hover:bg-gray-800 px-2 py-1 rounded-md truncate max-w-[150px] transition-colors">{part}</button></React.Fragment>);
                         })}
                     </div>
