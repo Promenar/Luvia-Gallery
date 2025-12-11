@@ -28,6 +28,8 @@ interface ExtendedSystemStatus extends SystemStatus {
     watcherActive?: boolean;
 }
 
+type SettingsTab = 'general' | 'library' | 'system' | 'account';
+
 export default function App() {
   const { t, language, setLanguage } = useLanguage();
 
@@ -93,8 +95,7 @@ export default function App() {
   const [sortOption, setSortOption] = useState<SortOption>('dateDesc');
   const [filterOption, setFilterOption] = useState<FilterOption>('all');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [isUserPanelOpen, setIsUserPanelOpen] = useState(false); 
-  const [newUserForm, setNewUserForm] = useState({ username: '', password: '' });
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>('general'); // New state for tabs
 
   // --- Random Sort Stability ---
   const [randomizedFiles, setRandomizedFiles] = useState<MediaItem[]>([]);
@@ -306,6 +307,7 @@ export default function App() {
       setAuthStep('login');
     };
     
+    // Check if we are already initialized to prevent double loading
     initApp();
 
     const savedViewMode = localStorage.getItem(VIEW_MODE_KEY) as ViewMode;
@@ -546,7 +548,7 @@ export default function App() {
           const res = await fetch('/api/cache/clear', { method: 'POST' });
           if (res.ok) {
               alert(t('cache_cleared'));
-              fetchSystemStatus();
+              fetchSystemStatus(true);
           } else {
               alert('Failed to clear cache');
           }
@@ -560,7 +562,7 @@ export default function App() {
           if (res.ok) {
               const data = await res.json();
               alert(`${t('cache_pruned')}: ${data.count} items`);
-              fetchSystemStatus();
+              fetchSystemStatus(true);
           } else {
               alert('Failed to prune cache');
           }
@@ -570,7 +572,7 @@ export default function App() {
   useEffect(() => {
     let isMounted = true;
     if (isServerMode && currentUser) {
-        fetchSystemStatus();
+        fetchSystemStatus(true);
         fetchServerFavorites();
         // Check Scan Status on Mount
         fetch('/api/scan/status')
@@ -1141,6 +1143,312 @@ export default function App() {
       );
   }
 
+  // Helper to render specific tab content
+  const renderSettingsContent = () => {
+    switch (settingsTab) {
+        case 'general':
+            return (
+                <div className="space-y-8 animate-in fade-in slide-in-from-right-4 duration-300">
+                     <section>
+                         <h4 className="text-sm font-bold uppercase text-gray-400 tracking-wider mb-4">{t('appearance')}</h4>
+                         <div className="space-y-4">
+                             <div>
+                                 <label className="block text-sm font-medium mb-1.5">{t('website_title')}</label>
+                                 <input 
+                                     value={appTitle} 
+                                     onChange={e => handleUpdateTitle(e.target.value)} 
+                                     className="w-full px-4 py-2 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 outline-none focus:ring-2 focus:ring-primary-500 transition-all"
+                                 />
+                             </div>
+                             <div>
+                                 <label className="block text-sm font-medium mb-1.5">{t('home_subtitle')}</label>
+                                 <input 
+                                     value={homeSubtitle} 
+                                     onChange={e => handleUpdateSubtitle(e.target.value)} 
+                                     className="w-full px-4 py-2 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 outline-none focus:ring-2 focus:ring-primary-500 transition-all"
+                                 />
+                             </div>
+                             <div>
+                                 <label className="block text-sm font-medium mb-1.5">{t('language')}</label>
+                                 <select 
+                                     value={language}
+                                     onChange={(e) => setLanguage(e.target.value as 'en' | 'zh')}
+                                     className="w-full px-4 py-2 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 outline-none focus:ring-2 focus:ring-primary-500 transition-all"
+                                 >
+                                     <option value="en">English</option>
+                                     <option value="zh">中文 (Chinese)</option>
+                                 </select>
+                             </div>
+                             <div>
+                                 <label className="block text-sm font-medium mb-2">{t('home_screen_conf')}</label>
+                                 <div className="flex flex-wrap gap-2 mb-2">
+                                     {['random', 'folder', 'single'].map(m => (
+                                         <button 
+                                             key={m}
+                                             onClick={() => handleUpdateHomeConfig({...homeConfig, mode: m as any})}
+                                             className={`px-4 py-2 rounded-lg text-sm font-medium capitalize border transition-colors ${homeConfig.mode === m ? 'bg-primary-50 dark:bg-primary-900/30 border-primary-500 text-primary-600' : 'bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300'}`}
+                                         >
+                                             {t(m === 'random' ? 'random_all' : (m === 'folder' ? 'specific_folder' : 'single_item'))}
+                                         </button>
+                                     ))}
+                                 </div>
+                                 {homeConfig.mode !== 'random' && (
+                                     <input 
+                                         placeholder={t('enter_rel_path')}
+                                         value={homeConfig.path || ''}
+                                         onChange={e => handleUpdateHomeConfig({...homeConfig, path: e.target.value})}
+                                         className="w-full px-4 py-2 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 outline-none focus:ring-2 focus:ring-primary-500 font-mono text-sm transition-all"
+                                     />
+                                 )}
+                             </div>
+                         </div>
+                     </section>
+                </div>
+            );
+        case 'library':
+            return (
+                <div className="space-y-8 animate-in fade-in slide-in-from-right-4 duration-300">
+                    {!isServerMode ? (
+                         <div className="flex flex-col items-center justify-center p-8 bg-gray-50 dark:bg-gray-800/50 rounded-2xl border border-dashed border-gray-200 dark:border-gray-700">
+                             <div className="p-4 bg-gray-100 dark:bg-gray-800 rounded-full mb-4">
+                                 <Icons.Server size={32} className="text-gray-400" />
+                             </div>
+                             <h4 className="text-lg font-bold mb-2">{t('running_client_mode')}</h4>
+                             <p className="text-center text-sm text-gray-500 max-w-sm mb-6">
+                                 {t('client_mode_description')}
+                             </p>
+                             <button 
+                                onClick={() => { setIsServerMode(true); setSettingsTab('system'); }} 
+                                className="px-6 py-2 bg-primary-600 hover:bg-primary-700 text-white font-medium rounded-lg transition-colors"
+                            >
+                                 {t('switch_to_server')}
+                             </button>
+                         </div>
+                    ) : (
+                        <>
+                             {/* Library Paths */}
+                             <section>
+                                 <h4 className="text-sm font-bold uppercase text-gray-400 tracking-wider mb-4">{t('storage_database')}</h4>
+                                 <div className="bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded-2xl overflow-hidden shadow-sm">
+                                     <div className="p-6 border-b border-gray-100 dark:border-gray-700">
+                                         <h5 className="font-bold text-lg mb-2">{t('library_scan_paths')}</h5>
+                                         <p className="text-sm text-gray-500 mb-4">{t('media_served')}</p>
+                                         <form onSubmit={handleAddLibraryPath} className="flex gap-2">
+                                             <PathAutocomplete 
+                                                 value={newPathInput} 
+                                                 onChange={setNewPathInput} 
+                                                 onAdd={() => {}} 
+                                             />
+                                             <button type="submit" className="px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white font-medium rounded-lg transition-colors flex items-center gap-2">
+                                                 <Icons.Plus size={18} /> {t('add_path')}
+                                             </button>
+                                         </form>
+                                     </div>
+                                     <div className="bg-gray-50 dark:bg-gray-900/50 p-2 space-y-1 max-h-64 overflow-y-auto border-b border-gray-100 dark:border-gray-700">
+                                         {libraryPaths.length === 0 && (
+                                             <div className="p-4 text-center text-sm text-gray-500 italic">
+                                                 {t('scanning_default')} <span className="font-mono bg-gray-200 dark:bg-gray-700 px-1 rounded">/media</span>
+                                             </div>
+                                         )}
+                                         {libraryPaths.map(path => (
+                                             <div key={path} className="flex items-center justify-between p-3 bg-white dark:bg-gray-800 rounded-xl border border-gray-100 dark:border-gray-700 shadow-sm group">
+                                                 <div className="flex items-center gap-3">
+                                                     <Icons.Folder size={18} className="text-primary-500" />
+                                                     <span className="font-mono text-sm">{path}</span>
+                                                 </div>
+                                                 <button onClick={() => handleRemoveLibraryPath(path)} className="text-red-500 opacity-0 group-hover:opacity-100 p-2 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-all">
+                                                     <Icons.Trash size={16} />
+                                                 </button>
+                                             </div>
+                                         ))}
+                                     </div>
+                                     
+                                     {/* Integrated Real-time Monitoring Toggle */}
+                                     {systemStatus && (
+                                         <div className="p-4 flex items-center justify-between bg-blue-50/50 dark:bg-blue-900/10">
+                                             <div className="flex items-center gap-3">
+                                                 <div className={`p-2 rounded-lg ${systemStatus.watcherActive ? 'bg-green-100 dark:bg-green-900/30 text-green-600' : 'bg-gray-200 dark:bg-gray-700 text-gray-500'}`}>
+                                                     <Icons.Activity size={20} />
+                                                 </div>
+                                                 <div>
+                                                     <div className="font-medium text-sm text-gray-900 dark:text-gray-100">{t('realtime_monitoring')}</div>
+                                                     <div className="text-xs text-gray-500">Automatically scan changes in above paths</div>
+                                                 </div>
+                                             </div>
+                                             <div 
+                                                 onClick={toggleWatcher}
+                                                 className={`w-12 h-6 rounded-full cursor-pointer relative transition-colors duration-300 ${systemStatus.watcherActive ? 'bg-green-500' : 'bg-gray-300 dark:bg-gray-600'}`}
+                                             >
+                                                 <div className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow-sm transition-all duration-300 ${systemStatus.watcherActive ? 'left-7' : 'left-1'}`} />
+                                             </div>
+                                         </div>
+                                     )}
+                                 </div>
+                             </section>
+
+                             {/* Operations */}
+                             <section>
+                                 <h4 className="text-sm font-bold uppercase text-gray-400 tracking-wider mb-4">Maintenance</h4>
+                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                     <div className="bg-white dark:bg-gray-800 p-6 rounded-2xl border border-gray-100 dark:border-gray-700 shadow-sm hover:shadow-md transition-shadow">
+                                         <div className="flex items-center gap-3 mb-3">
+                                             <div className="p-2.5 bg-blue-50 dark:bg-blue-900/30 text-blue-600 rounded-xl"><Icons.Scan size={24} /></div>
+                                             <div>
+                                                 <h5 className="font-bold text-gray-900 dark:text-white">{t('scan_library')}</h5>
+                                                 <p className="text-xs text-gray-500">Index files from disk</p>
+                                             </div>
+                                         </div>
+                                         <button onClick={startServerScan} className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-medium text-sm transition-colors shadow-sm shadow-blue-500/20">
+                                             Start Scan
+                                         </button>
+                                     </div>
+                                     
+                                     <div className="bg-white dark:bg-gray-800 p-6 rounded-2xl border border-gray-100 dark:border-gray-700 shadow-sm hover:shadow-md transition-shadow">
+                                         <div className="flex items-center gap-3 mb-3">
+                                             <div className="p-2.5 bg-purple-50 dark:bg-purple-900/30 text-purple-600 rounded-xl"><Icons.Image size={24} /></div>
+                                             <div>
+                                                 <h5 className="font-bold text-gray-900 dark:text-white">{t('generate_thumbs')}</h5>
+                                                 <p className="text-xs text-gray-500">Process missing previews</p>
+                                             </div>
+                                         </div>
+                                         <button onClick={startThumbnailGen} className="w-full py-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-xl font-medium text-sm transition-colors shadow-sm shadow-purple-500/20">
+                                             Generate
+                                         </button>
+                                     </div>
+                                 </div>
+                             </section>
+                        </>
+                    )}
+                </div>
+            );
+        case 'system':
+            return (
+                 <div className="space-y-8 animate-in fade-in slide-in-from-right-4 duration-300">
+                     <section>
+                         <h4 className="text-sm font-bold uppercase text-gray-400 tracking-wider mb-4">{t('connection')}</h4>
+                         <div className="bg-gray-100 dark:bg-gray-800 p-1 rounded-xl inline-flex w-full md:w-auto">
+                             <button className={`flex-1 md:flex-none px-6 py-2 rounded-lg text-sm font-medium transition-all ${!isServerMode ? 'bg-white dark:bg-gray-700 shadow-sm text-gray-900 dark:text-white' : 'text-gray-500'}`} onClick={() => setIsServerMode(false)}>
+                                 {t('client_mode')}
+                             </button>
+                             <button className={`flex-1 md:flex-none px-6 py-2 rounded-lg text-sm font-medium transition-all ${isServerMode ? 'bg-white dark:bg-gray-700 shadow-sm text-gray-900 dark:text-white' : 'text-gray-500'}`} onClick={() => setIsServerMode(true)}>
+                                 {t('server_mode')}
+                             </button>
+                         </div>
+                     </section>
+
+                     {isServerMode && systemStatus && (
+                         <div className="space-y-6">
+                             {/* System Dashboard Grid */}
+                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                 {/* Component Status */}
+                                 <div className="bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded-2xl p-5 shadow-sm">
+                                     <h5 className="flex items-center gap-2 font-bold text-gray-900 dark:text-white mb-4">
+                                         <Icons.Cpu size={18} className="text-primary-500" /> {t('backend_components')}
+                                     </h5>
+                                     <div className="space-y-3">
+                                         <div className="flex justify-between items-center">
+                                             <span className="text-sm text-gray-600 dark:text-gray-400">FFmpeg (Video)</span>
+                                             <div className="flex items-center gap-2">
+                                                 <span className={`text-xs font-bold ${systemStatus.ffmpeg ? 'text-green-600 bg-green-50 dark:bg-green-900/20' : 'text-red-600 bg-red-50 dark:bg-red-900/20'} px-2 py-0.5 rounded`}>
+                                                     {systemStatus.ffmpeg ? t('active') : t('missing')}
+                                                 </span>
+                                                 <div className={`w-2 h-2 rounded-full ${systemStatus.ffmpeg ? 'bg-green-500' : 'bg-red-500'}`} />
+                                             </div>
+                                         </div>
+                                         <div className="flex justify-between items-center">
+                                             <span className="text-sm text-gray-600 dark:text-gray-400">Sharp (Image)</span>
+                                             <div className="flex items-center gap-2">
+                                                 <span className={`text-xs font-bold ${systemStatus.sharp ? 'text-green-600 bg-green-50 dark:bg-green-900/20' : 'text-red-600 bg-red-50 dark:bg-red-900/20'} px-2 py-0.5 rounded`}>
+                                                     {systemStatus.sharp ? t('active') : t('missing')}
+                                                 </span>
+                                                 <div className={`w-2 h-2 rounded-full ${systemStatus.sharp ? 'bg-green-500' : 'bg-red-500'}`} />
+                                             </div>
+                                         </div>
+                                         <div className="flex justify-between items-center pt-2 border-t border-gray-100 dark:border-gray-700">
+                                             <span className="text-xs text-gray-400">Platform</span>
+                                             <span className="text-xs font-mono text-gray-500">{systemStatus.platform}</span>
+                                         </div>
+                                     </div>
+                                 </div>
+
+                                 {/* Hardware Acceleration */}
+                                 <div className="bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded-2xl p-5 shadow-sm">
+                                     <h5 className="flex items-center gap-2 font-bold text-gray-900 dark:text-white mb-4">
+                                         <Icons.Zap size={18} className="text-yellow-500" /> {t('hw_accel')}
+                                     </h5>
+                                     {systemStatus.ffmpegHwAccels && systemStatus.ffmpegHwAccels.length > 0 ? (
+                                         <div className="flex flex-wrap gap-2">
+                                             {systemStatus.ffmpegHwAccels.map(accel => (
+                                                 <span key={accel} className="px-3 py-1 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg text-xs font-bold uppercase tracking-wide border border-gray-200 dark:border-gray-600">
+                                                     {accel}
+                                                 </span>
+                                             ))}
+                                         </div>
+                                     ) : (
+                                         <div className="flex flex-col items-center justify-center h-20 text-gray-400 bg-gray-50 dark:bg-gray-900/50 rounded-lg border border-dashed border-gray-200 dark:border-gray-700">
+                                             <span className="text-xs font-medium">{t('cpu_only')}</span>
+                                         </div>
+                                     )}
+                                 </div>
+                             </div>
+
+                             {/* Cache Control */}
+                             <div className="bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded-2xl p-5 shadow-sm">
+                                 <div className="flex items-center justify-between mb-4">
+                                     <h5 className="flex items-center gap-2 font-bold text-gray-900 dark:text-white">
+                                         <Icons.Database size={18} className="text-blue-500" /> {t('cache_management')}
+                                     </h5>
+                                     <div className="bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 px-3 py-1 rounded-full text-xs font-bold">
+                                         {systemStatus.cacheCount.toLocaleString()} {t('cached')}
+                                     </div>
+                                 </div>
+                                 <div className="grid grid-cols-2 gap-3">
+                                     <button onClick={pruneCache} className="px-4 py-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200 rounded-xl text-sm font-medium transition-colors border border-transparent hover:border-gray-300 dark:hover:border-gray-500">
+                                         {t('prune_legacy_cache')}
+                                     </button>
+                                     <button onClick={clearCache} className="px-4 py-2 bg-red-50 dark:bg-red-900/10 hover:bg-red-100 dark:hover:bg-red-900/20 text-red-600 dark:text-red-400 rounded-xl text-sm font-medium transition-colors border border-transparent hover:border-red-200 dark:hover:border-red-900/30">
+                                         {t('clear_all_cache')}
+                                     </button>
+                                 </div>
+                             </div>
+                         </div>
+                     )}
+                     
+                     <section className="pt-4 border-t border-gray-100 dark:border-gray-800">
+                         <button onClick={handleExportConfig} className="text-sm font-medium text-primary-600 hover:underline flex items-center gap-2">
+                             <Icons.Download size={16} /> {t('backup_config')}
+                         </button>
+                     </section>
+                 </div>
+            );
+        case 'account':
+            return (
+                <div className="space-y-8 animate-in fade-in slide-in-from-right-4 duration-300">
+                     <section>
+                         <h4 className="text-sm font-bold uppercase text-gray-400 tracking-wider mb-4">{t('users')}</h4>
+                         <div className="bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded-2xl p-6 flex items-center justify-between shadow-sm">
+                             <div className="flex items-center gap-4">
+                                 <div className="w-12 h-12 rounded-full bg-primary-100 dark:bg-primary-900 text-primary-600 dark:text-primary-400 flex items-center justify-center text-xl font-bold">
+                                     {currentUser?.username.charAt(0).toUpperCase()}
+                                 </div>
+                                 <div>
+                                     <h5 className="font-bold text-lg">{currentUser?.username}</h5>
+                                     <p className="text-sm text-gray-500">{currentUser?.isAdmin ? 'Administrator' : 'User'}</p>
+                                 </div>
+                             </div>
+                             <button onClick={() => { setCurrentUser(null); setAuthStep('login'); localStorage.removeItem(AUTH_USER_KEY); }} className="px-4 py-2 bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/30 text-red-600 dark:text-red-400 rounded-lg font-medium transition-colors flex items-center gap-2">
+                                 <Icons.LogOut size={18} />
+                                 <span className="hidden md:inline">{t('sign_out')}</span>
+                             </button>
+                         </div>
+                     </section>
+                </div>
+            );
+        default:
+            return null;
+    }
+  };
+
   // Main App Render
   return (
     <div className={`flex h-screen w-full bg-gray-50 dark:bg-gray-900 overflow-hidden text-gray-900 dark:text-gray-100 font-sans transition-colors duration-200 ${isServerMode ? 'server-mode' : ''}`}>
@@ -1239,7 +1547,7 @@ export default function App() {
                           <Icons.Server size={48} className="mb-4 text-primary-500" />
                           <h3 className="text-xl font-bold text-gray-600 dark:text-gray-300 mb-2">{t('connected_to_nas')}</h3>
                           <p className="max-w-md text-center text-sm">{t('configure_nas')}</p>
-                          <button onClick={() => setIsSettingsOpen(true)} className="mt-6 px-6 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded-full font-medium transition-colors">
+                          <button onClick={() => { setIsSettingsOpen(true); setSettingsTab('library'); }} className="mt-6 px-6 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded-full font-medium transition-colors">
                               {t('configure_library')}
                           </button>
                      </div>
@@ -1306,7 +1614,7 @@ export default function App() {
          )}
       </main>
 
-      {/* Settings Modal */}
+      {/* Settings Modal - Modern Two-Column Layout */}
       <AnimatePresence>
         {isSettingsOpen && (
             <motion.div
@@ -1325,214 +1633,49 @@ export default function App() {
                 >
                     {/* Settings Sidebar */}
                     <div className="w-full md:w-64 bg-gray-50 dark:bg-gray-950/50 border-r border-gray-100 dark:border-gray-800 p-6 flex flex-col gap-1 shrink-0">
-                        <h3 className="text-xl font-bold mb-6 px-2 flex items-center gap-2"><Icons.Settings size={24} className="text-primary-600"/> {t('settings')}</h3>
+                        <h3 className="text-xl font-bold mb-6 px-2 flex items-center gap-2 text-gray-800 dark:text-white">
+                            <Icons.Settings size={24} className="text-primary-600"/> {t('settings')}
+                        </h3>
+                        
                         <div className="space-y-1">
-                             <button className="w-full text-left px-4 py-2.5 rounded-xl bg-white dark:bg-gray-800 shadow-sm font-medium text-primary-600 dark:text-primary-400">{t('general')}</button>
-                             {/* Future tabs could go here */}
-                        </div>
-                        <div className="mt-auto">
-                            <button onClick={() => { setCurrentUser(null); setAuthStep('login'); localStorage.removeItem(AUTH_USER_KEY); }} className="w-full text-left px-4 py-3 rounded-xl hover:bg-red-50 dark:hover:bg-red-900/10 text-red-600 flex items-center gap-3 transition-colors">
-                                <Icons.LogOut size={20} />
-                                <span className="font-medium">{t('sign_out')}</span>
-                            </button>
+                             <button 
+                                onClick={() => setSettingsTab('general')}
+                                className={`w-full text-left px-4 py-3 rounded-xl flex items-center gap-3 transition-colors ${settingsTab === 'general' ? 'bg-white dark:bg-gray-800 shadow-sm font-medium text-primary-600 dark:text-primary-400' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800/50'}`}
+                             >
+                                <Icons.Settings size={18} /> {t('general')}
+                             </button>
+                             <button 
+                                onClick={() => setSettingsTab('library')}
+                                className={`w-full text-left px-4 py-3 rounded-xl flex items-center gap-3 transition-colors ${settingsTab === 'library' ? 'bg-white dark:bg-gray-800 shadow-sm font-medium text-primary-600 dark:text-primary-400' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800/50'}`}
+                             >
+                                <Icons.Database size={18} /> {t('storage_database')}
+                             </button>
+                             <button 
+                                onClick={() => setSettingsTab('system')}
+                                className={`w-full text-left px-4 py-3 rounded-xl flex items-center gap-3 transition-colors ${settingsTab === 'system' ? 'bg-white dark:bg-gray-800 shadow-sm font-medium text-primary-600 dark:text-primary-400' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800/50'}`}
+                             >
+                                <Icons.Cpu size={18} /> {t('system')}
+                             </button>
+                             <button 
+                                onClick={() => setSettingsTab('account')}
+                                className={`w-full text-left px-4 py-3 rounded-xl flex items-center gap-3 transition-colors ${settingsTab === 'account' ? 'bg-white dark:bg-gray-800 shadow-sm font-medium text-primary-600 dark:text-primary-400' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800/50'}`}
+                             >
+                                <Icons.User size={18} /> {t('users')}
+                             </button>
                         </div>
                     </div>
 
                     {/* Settings Content */}
-                    <div className="flex-1 overflow-y-auto p-6 md:p-10">
-                         <div className="max-w-3xl mx-auto space-y-10">
-                            
-                             {/* Server/Client Mode Toggle */}
-                             <section>
-                                 <h4 className="text-sm font-bold uppercase text-gray-400 tracking-wider mb-4">{t('connection')}</h4>
-                                 <div className="bg-gray-100 dark:bg-gray-800 p-1 rounded-xl inline-flex mb-4">
-                                     <button className={`px-6 py-2 rounded-lg text-sm font-medium transition-all ${!isServerMode ? 'bg-white dark:bg-gray-700 shadow-sm text-gray-900 dark:text-white' : 'text-gray-500'}`} onClick={() => { if(isServerMode) window.location.reload(); }}>
-                                         {t('client_mode')}
-                                     </button>
-                                     <button className={`px-6 py-2 rounded-lg text-sm font-medium transition-all ${isServerMode ? 'bg-white dark:bg-gray-700 shadow-sm text-gray-900 dark:text-white' : 'text-gray-500'}`} onClick={() => window.location.reload()}>
-                                         {t('server_mode')}
-                                     </button>
-                                 </div>
-                                 <p className="text-sm text-gray-500">
-                                     {isServerMode ? t('server_mode_description') : t('client_mode_description')}
-                                 </p>
-                             </section>
+                    <div className="flex-1 overflow-y-auto p-6 md:p-10 bg-white dark:bg-gray-900 relative">
+                         {/* Close Button Mobile - Absolute position inside content area */}
+                         <button onClick={() => setIsSettingsOpen(false)} className="absolute top-6 right-6 p-2 bg-gray-100 dark:bg-gray-800 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors z-50">
+                            <Icons.Close size={20} />
+                         </button>
 
-                             {/* Library Paths (Server Only) */}
-                             {isServerMode && (
-                                 <section>
-                                     <h4 className="text-sm font-bold uppercase text-gray-400 tracking-wider mb-4">{t('storage_database')}</h4>
-                                     <div className="bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded-2xl overflow-hidden">
-                                         <div className="p-6 border-b border-gray-100 dark:border-gray-700">
-                                             <h5 className="font-bold text-lg mb-2">{t('library_scan_paths')}</h5>
-                                             <p className="text-sm text-gray-500 mb-4">{t('media_served')}</p>
-                                             <form onSubmit={handleAddLibraryPath} className="flex gap-2">
-                                                 <PathAutocomplete 
-                                                     value={newPathInput} 
-                                                     onChange={setNewPathInput} 
-                                                     onAdd={() => {}} // Handled by form submit
-                                                 />
-                                                 <button type="submit" className="px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white font-medium rounded-lg transition-colors flex items-center gap-2">
-                                                     <Icons.Plus size={18} /> {t('add_path')}
-                                                 </button>
-                                             </form>
-                                         </div>
-                                         <div className="bg-gray-50 dark:bg-gray-900/50 p-2 space-y-1">
-                                             {libraryPaths.length === 0 && (
-                                                 <div className="p-4 text-center text-sm text-gray-500 italic">
-                                                     {t('scanning_default')} <span className="font-mono bg-gray-200 dark:bg-gray-700 px-1 rounded">/media</span>
-                                                 </div>
-                                             )}
-                                             {libraryPaths.map(path => (
-                                                 <div key={path} className="flex items-center justify-between p-3 bg-white dark:bg-gray-800 rounded-xl border border-gray-100 dark:border-gray-700 shadow-sm group">
-                                                     <div className="flex items-center gap-3">
-                                                         <Icons.Folder size={18} className="text-primary-500" />
-                                                         <span className="font-mono text-sm">{path}</span>
-                                                     </div>
-                                                     <button onClick={() => handleRemoveLibraryPath(path)} className="text-red-500 opacity-0 group-hover:opacity-100 p-2 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-all">
-                                                         <Icons.Trash size={16} />
-                                                     </button>
-                                                 </div>
-                                             ))}
-                                         </div>
-                                     </div>
-                                     
-                                     {/* Operations */}
-                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
-                                         <div className="bg-white dark:bg-gray-800 p-6 rounded-2xl border border-gray-100 dark:border-gray-700">
-                                             <div className="flex items-center gap-3 mb-2">
-                                                 <div className="p-2 bg-blue-50 dark:bg-blue-900/30 text-blue-600 rounded-lg"><Icons.Scan size={20} /></div>
-                                                 <h5 className="font-bold">{t('scan_library')}</h5>
-                                             </div>
-                                             <p className="text-sm text-gray-500 mb-4">{t('scan_library_desc')}</p>
-                                             <button onClick={startServerScan} className="w-full py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition-colors">Start Scan</button>
-                                         </div>
-                                         
-                                         <div className="bg-white dark:bg-gray-800 p-6 rounded-2xl border border-gray-100 dark:border-gray-700">
-                                             <div className="flex items-center gap-3 mb-2">
-                                                 <div className="p-2 bg-purple-50 dark:bg-purple-900/30 text-purple-600 rounded-lg"><Icons.Image size={20} /></div>
-                                                 <h5 className="font-bold">{t('generate_thumbs')}</h5>
-                                             </div>
-                                             <p className="text-sm text-gray-500 mb-4">{t('generate_thumbs_desc')}</p>
-                                             <button onClick={startThumbnailGen} className="w-full py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-medium transition-colors">Generate</button>
-                                         </div>
-                                     </div>
-                                 </section>
-                             )}
-
-                             {/* App Config */}
-                             <section>
-                                 <h4 className="text-sm font-bold uppercase text-gray-400 tracking-wider mb-4">{t('appearance')}</h4>
-                                 <div className="space-y-4">
-                                     <div>
-                                         <label className="block text-sm font-medium mb-1.5">{t('website_title')}</label>
-                                         <input 
-                                             value={appTitle} 
-                                             onChange={e => handleUpdateTitle(e.target.value)} 
-                                             className="w-full px-4 py-2 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 outline-none focus:ring-2 focus:ring-primary-500"
-                                         />
-                                     </div>
-                                     <div>
-                                         <label className="block text-sm font-medium mb-1.5">{t('home_subtitle')}</label>
-                                         <input 
-                                             value={homeSubtitle} 
-                                             onChange={e => handleUpdateSubtitle(e.target.value)} 
-                                             className="w-full px-4 py-2 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 outline-none focus:ring-2 focus:ring-primary-500"
-                                         />
-                                     </div>
-                                     <div>
-                                         <label className="block text-sm font-medium mb-1.5">{t('language')}</label>
-                                         <select 
-                                             value={language}
-                                             onChange={(e) => setLanguage(e.target.value as 'en' | 'zh')}
-                                             className="w-full px-4 py-2 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 outline-none focus:ring-2 focus:ring-primary-500"
-                                         >
-                                             <option value="en">English</option>
-                                             <option value="zh">中文 (Chinese)</option>
-                                         </select>
-                                     </div>
-                                     <div>
-                                         <label className="block text-sm font-medium mb-2">{t('home_screen_conf')}</label>
-                                         <div className="flex gap-4 mb-2">
-                                             {['random', 'folder', 'single'].map(m => (
-                                                 <button 
-                                                     key={m}
-                                                     onClick={() => handleUpdateHomeConfig({...homeConfig, mode: m as any})}
-                                                     className={`px-4 py-2 rounded-lg text-sm font-medium capitalize border ${homeConfig.mode === m ? 'bg-primary-50 dark:bg-primary-900/30 border-primary-500 text-primary-600' : 'bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300'}`}
-                                                 >
-                                                     {t(m === 'random' ? 'random_all' : (m === 'folder' ? 'specific_folder' : 'single_item'))}
-                                                 </button>
-                                             ))}
-                                         </div>
-                                         {homeConfig.mode !== 'random' && (
-                                             <input 
-                                                 placeholder={t('enter_rel_path')}
-                                                 value={homeConfig.path || ''}
-                                                 onChange={e => handleUpdateHomeConfig({...homeConfig, path: e.target.value})}
-                                                 className="w-full px-4 py-2 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 outline-none focus:ring-2 focus:ring-primary-500 font-mono text-sm"
-                                             />
-                                         )}
-                                     </div>
-                                 </div>
-                             </section>
-
-                             {/* System Dashboard (Server Only) */}
-                             {isServerMode && systemStatus && (
-                                 <section>
-                                     <h4 className="text-sm font-bold uppercase text-gray-400 tracking-wider mb-4">{t('system_monitoring')}</h4>
-                                     <div className="bg-gray-900 text-gray-300 rounded-2xl p-6 font-mono text-xs space-y-4">
-                                         <div className="flex justify-between items-center border-b border-gray-800 pb-2">
-                                             <span className="text-gray-500">PLATFORM</span>
-                                             <span className="text-white">{systemStatus.platform}</span>
-                                         </div>
-                                         <div className="grid grid-cols-2 gap-4">
-                                             <div>
-                                                 <p className="text-gray-500 mb-1">FFMPEG</p>
-                                                 <div className="flex items-center gap-2">
-                                                     <div className={`w-2 h-2 rounded-full ${systemStatus.ffmpeg ? 'bg-green-500' : 'bg-red-500'}`} />
-                                                     <span>{systemStatus.ffmpeg ? 'ACTIVE' : 'MISSING'}</span>
-                                                 </div>
-                                                 {systemStatus.ffmpegHwAccels?.length > 0 && (
-                                                     <p className="mt-1 text-purple-400">{systemStatus.ffmpegHwAccels.join(', ')}</p>
-                                                 )}
-                                             </div>
-                                             <div>
-                                                 <p className="text-gray-500 mb-1">SHARP</p>
-                                                 <div className="flex items-center gap-2">
-                                                     <div className={`w-2 h-2 rounded-full ${systemStatus.sharp ? 'bg-green-500' : 'bg-red-500'}`} />
-                                                     <span>{systemStatus.sharp ? 'ACTIVE' : 'MISSING'}</span>
-                                                 </div>
-                                             </div>
-                                         </div>
-                                         <div className="border-t border-gray-800 pt-4 flex justify-between items-center">
-                                             <span className="text-gray-500">{t('realtime_monitoring')}</span>
-                                             <div className="flex items-center gap-4">
-                                                 <span className={systemStatus.watcherActive ? 'text-green-400' : 'text-gray-500'}>{systemStatus.watcherActive ? t('enabled') : t('disabled')}</span>
-                                                 <button onClick={toggleWatcher} className="px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded text-[10px] uppercase tracking-wide transition-colors">{t('toggle')}</button>
-                                             </div>
-                                         </div>
-                                         <div className="border-t border-gray-800 pt-4 flex justify-between items-center">
-                                             <div>
-                                                 <span className="text-gray-500 block mb-1">CACHE</span>
-                                                 <span className="text-white text-lg">{systemStatus.cacheCount} files</span>
-                                             </div>
-                                             <div className="flex gap-2">
-                                                 <button onClick={pruneCache} className="px-3 py-1.5 bg-gray-800 hover:bg-gray-700 rounded text-xs transition-colors">Prune</button>
-                                                 <button onClick={clearCache} className="px-3 py-1.5 bg-red-900/30 hover:bg-red-900/50 text-red-400 rounded text-xs transition-colors">Clear All</button>
-                                             </div>
-                                         </div>
-                                     </div>
-                                 </section>
-                             )}
-
-                             <section className="pt-4 border-t border-gray-100 dark:border-gray-800">
-                                 <button onClick={handleExportConfig} className="text-sm font-medium text-primary-600 hover:underline">{t('backup_config')}</button>
-                             </section>
+                         <div className="max-w-3xl mx-auto pt-2">
+                            {renderSettingsContent()}
                          </div>
                     </div>
-                    <button onClick={() => setIsSettingsOpen(false)} className="absolute top-4 right-4 p-2 bg-gray-100 dark:bg-gray-800 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors z-50">
-                        <Icons.Close size={20} />
-                    </button>
                 </motion.div>
             </motion.div>
         )}
