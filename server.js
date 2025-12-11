@@ -576,11 +576,16 @@ app.get('/api/watcher/toggle', (req, res) => {
 app.post('/api/cache/clear', async (req, res) => {
     try {
         if (fs.existsSync(CACHE_DIR)) {
-            await fs.promises.rm(CACHE_DIR, { recursive: true, force: true });
-            await fs.promises.mkdir(CACHE_DIR, { recursive: true });
+            // Instead of removing the directory (which fails if it's a mount point), empty it
+            const files = await fs.promises.readdir(CACHE_DIR);
+            for (const file of files) {
+                // Ignore hidden files (like .keep or .DS_Store) just in case, but usually force remove is fine
+                await fs.promises.rm(path.join(CACHE_DIR, file), { recursive: true, force: true });
+            }
         }
         res.json({ success: true, message: 'Cache cleared' });
     } catch(e) {
+        console.error("Clear cache failed:", e);
         res.status(500).json({ error: e.message });
     }
 });
