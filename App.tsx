@@ -24,6 +24,10 @@ const SOURCES_STORAGE_KEY = 'lumina_sources';
 const THEME_STORAGE_KEY = 'lumina_theme';
 const AUTH_USER_KEY = 'lumina_auth_user';
 
+interface ExtendedSystemStatus extends SystemStatus {
+    watcherActive?: boolean;
+}
+
 export default function App() {
   const { t, language, setLanguage } = useLanguage();
 
@@ -47,7 +51,7 @@ export default function App() {
   const [isFetchingMore, setIsFetchingMore] = useState(false);
   const [hasMoreServer, setHasMoreServer] = useState(true);
   const [serverFolders, setServerFolders] = useState<any[]>([]); // Full list of folders from server
-  const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
+  const [systemStatus, setSystemStatus] = useState<ExtendedSystemStatus | null>(null);
 
   // --- Scanning & Thumbnail Gen State ---
   const [isScanModalOpen, setIsScanModalOpen] = useState(false);
@@ -403,6 +407,17 @@ export default function App() {
           if (res.ok) {
               const data = await res.json();
               setSystemStatus(data);
+          }
+      } catch(e) {}
+  };
+
+  const toggleWatcher = async () => {
+      if (!isServerMode) return;
+      try {
+          const res = await fetch('/api/watcher/toggle');
+          if (res.ok) {
+              const data = await res.json();
+              setSystemStatus(prev => prev ? { ...prev, watcherActive: data.active } : prev);
           }
       } catch(e) {}
   };
@@ -1042,7 +1057,7 @@ export default function App() {
             <div className="flex items-center gap-2">
                 <button 
                     onClick={toggleLayoutMode} 
-                    className="p-2 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors hidden sm:block" 
+                    className="p-2 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors" 
                     title={layoutMode === 'grid' ? "Switch to Waterfall Masonry" : layoutMode === 'masonry' ? "Switch to Timeline" : "Switch to Grid"}
                 >
                     {layoutMode === 'grid' ? <Icons.Masonry size={20} /> : layoutMode === 'masonry' ? <Icons.List size={20} /> : <Icons.Grid size={20} />}
@@ -1078,7 +1093,17 @@ export default function App() {
                 {isServerMode ? (
                     <button onClick={() => setIsSettingsOpen(true)} className="bg-primary-600 text-white px-8 py-3 rounded-xl font-medium shadow-lg hover:bg-primary-700 flex items-center justify-center gap-2 transition-colors"><Icons.Settings size={20} /><span>{t('configure_library')}</span></button>
                 ) : (
-                    <label className="bg-primary-600 text-white px-8 py-3 rounded-xl font-medium shadow-lg cursor-pointer flex items-center justify-center gap-2 hover:bg-primary-700 transition-colors"><Icons.Upload size={20} /><span>{t('import_local_folder')}</span><input type="file" multiple webkitdirectory="true" directory="" onChange={handleFileUpload} className="hidden" /></label>
+                    <label className="bg-primary-600 text-white px-8 py-3 rounded-xl font-medium shadow-lg cursor-pointer flex items-center justify-center gap-2 hover:bg-primary-700 transition-colors">
+                        <Icons.Upload size={20} />
+                        <span>{t('import_local_folder')}</span>
+                        <input 
+                            type="file" 
+                            multiple 
+                            {...({ webkitdirectory: "true", directory: "" } as any)} 
+                            onChange={handleFileUpload} 
+                            className="hidden" 
+                        />
+                    </label>
                 )}
                 </div>
             )}
@@ -1147,7 +1172,7 @@ export default function App() {
                         {/* SERVER DASHBOARD */}
                         {isServerMode && systemStatus && (
                             <section className="pb-6 border-b border-gray-100 dark:border-gray-700">
-                                <h3 className="font-bold text-gray-800 dark:text-gray-200 flex items-center gap-2 mb-4"><Icons.Activity size={18} /> {t('system_monitoring')}</h3>
+                                <h3 className="font-bold text-gray-800 dark:text-gray-200 flex items-center gap-2"><Icons.Activity size={18} /> {t('system_monitoring')}</h3>
                                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                                     <div className="bg-gray-50 dark:bg-gray-700/30 p-4 rounded-xl border border-gray-100 dark:border-gray-700">
                                         <h4 className="text-xs uppercase font-bold text-gray-500 mb-2">{t('processors')}</h4>
@@ -1258,6 +1283,20 @@ export default function App() {
                                         <div className="bg-green-50 dark:bg-green-900/20 p-4 rounded-xl border border-green-100 dark:border-green-900/50 space-y-3">
                                             <div className="flex items-center gap-2 text-green-800 dark:text-green-300 font-semibold text-sm"><Icons.Check size={16} /> {t('server_persistence')}</div>
                                             <p className="text-sm text-green-700 dark:text-green-400">{t('media_served')}</p>
+                                        </div>
+
+                                        {/* Watcher Toggle */}
+                                        <div className="flex items-center justify-between bg-gray-50 dark:bg-gray-700/30 p-4 rounded-xl border border-gray-100 dark:border-gray-700">
+                                            <div>
+                                                <h4 className="text-sm font-medium text-gray-800 dark:text-gray-200">{t('realtime_monitoring')}</h4>
+                                                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{systemStatus?.watcherActive ? t('enabled') : t('disabled')}</p>
+                                            </div>
+                                            <button 
+                                                onClick={toggleWatcher}
+                                                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${systemStatus?.watcherActive ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' : 'bg-gray-200 text-gray-600 dark:bg-gray-600 dark:text-gray-300'}`}
+                                            >
+                                                {t('toggle')}
+                                            </button>
                                         </div>
 
                                         <div>

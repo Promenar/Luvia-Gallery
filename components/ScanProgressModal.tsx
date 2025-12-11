@@ -38,7 +38,7 @@ export const ScanProgressModal: React.FC<ScanProgressModalProps> = ({
 
   const isThumb = type === 'thumb';
 
-  const getStatusText = (s: ScanStatus) => {
+  const getStatusText = (s: string) => {
       switch(s) {
           case 'scanning': return t('processing');
           case 'paused': return t('paused');

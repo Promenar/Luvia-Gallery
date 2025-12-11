@@ -83,6 +83,10 @@ const translations = {
     cached: 'Cached',
     active: 'ACTIVE',
     missing: 'MISSING',
+    realtime_monitoring: 'Real-time File Monitoring',
+    enabled: 'ENABLED',
+    disabled: 'DISABLED',
+    toggle: 'Toggle',
     
     // Settings - General
     general: 'General',
@@ -216,6 +220,10 @@ const translations = {
     cached: '已缓存',
     active: '已激活',
     missing: '缺失',
+    realtime_monitoring: '实时文件监控',
+    enabled: '已启用',
+    disabled: '已禁用',
+    toggle: '切换',
     
     // Settings - General
     general: '常规设置',

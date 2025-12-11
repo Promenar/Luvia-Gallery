@@ -6,6 +6,17 @@ const mime = require('mime-types');
 const crypto = require('crypto');
 const os = require('os');
 const { exec } = require('child_process');
+const chokidar = require('chokidar');
+
+// Database Integration
+let Database;
+let db;
+try {
+    Database = require('better-sqlite3');
+} catch (e) {
+    console.error("Module 'better-sqlite3' not found. Please install it.");
+    process.exit(1);
+}
 
 // Try to require sharp
 let sharp;
@@ -30,7 +41,7 @@ const MEDIA_ROOT = process.env.MEDIA_ROOT || '/media';
 // Data persistence setup
 const DATA_DIR = path.join(__dirname, 'data');
 const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
-const LIBRARY_FILE = path.join(DATA_DIR, 'library.json');
+const DB_FILE = path.join(DATA_DIR, 'library.db');
 
 // Cache directory setup (persistent thumbnails)
 const CACHE_DIR = process.env.CACHE_DIR || path.join(__dirname, 'cache');
@@ -54,9 +65,54 @@ if (!fs.existsSync(CACHE_DIR)) {
     }
 }
 
+// --- SQLite Initialization ---
+try {
+    db = new Database(DB_FILE);
+    // WAL mode for better concurrency and ZFS performance
+    db.pragma('journal_mode = WAL');
+    
+    // Create Tables
+    db.exec(`
+        CREATE TABLE IF NOT EXISTS files (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            path TEXT UNIQUE NOT NULL,
+            name TEXT,
+            folder_path TEXT,
+            type TEXT,
+            media_type TEXT,
+            size INTEGER,
+            mtime INTEGER,
+            width INTEGER,
+            height INTEGER,
+            source_id TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_files_folder ON files(folder_path);
+        CREATE INDEX IF NOT EXISTS idx_files_mtime ON files(mtime DESC);
+        CREATE INDEX IF NOT EXISTS idx_files_type ON files(media_type);
+        
+        CREATE TABLE IF NOT EXISTS folders (
+            path TEXT PRIMARY KEY,
+            name TEXT,
+            parent_path TEXT,
+            file_count INTEGER DEFAULT 0,
+            cover_file_path TEXT
+        );
+        
+        CREATE TABLE IF NOT EXISTS sources (
+            id TEXT PRIMARY KEY,
+            name TEXT,
+            path TEXT,
+            count INTEGER
+        );
+    `);
+    console.log("SQLite Database initialized.");
+} catch (e) {
+    console.error("Failed to initialize SQLite:", e);
+    process.exit(1);
+}
+
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
-
 app.use(express.static(path.join(__dirname, 'build')));
 
 // --- Global Scan State ---
@@ -64,13 +120,7 @@ let scanJob = {
     status: 'idle', // idle, scanning, paused, completed, cancelled, error
     count: 0,
     currentPath: '',
-    items: [],
-    sources: [],
-    folders: [], // Cached folder structure with counts
-    control: {
-        pause: false,
-        cancel: false
-    }
+    control: { pause: false, cancel: false }
 };
 
 // --- Thumbnail Gen State ---
@@ -79,9 +129,13 @@ let thumbJob = {
     count: 0,
     total: 0,
     currentPath: '',
-    currentEngine: '', // 'sharp', 'ffmpeg-cpu', 'ffmpeg-cuda'
+    currentEngine: '',
     control: { pause: false, cancel: false }
 };
+
+// --- Watcher State ---
+let watcher = null;
+let isWatcherActive = true;
 
 // --- System Capabilities ---
 let systemCaps = {
@@ -90,27 +144,21 @@ let systemCaps = {
     sharp: !!sharp
 };
 
-// Check FFmpeg Capabilities
 const checkSystemCapabilities = () => {
     if (ffmpeg) {
         ffmpeg.getAvailableCodecs((err, codecs) => {
             if (!err) systemCaps.ffmpeg = true;
         });
-
-        // Exec ffmpeg to check hwaccels
         exec('ffmpeg -hwaccels', (err, stdout, stderr) => {
             if (!err) {
                 const output = stdout || stderr;
                 const lines = output.split('\n');
                 let capturing = false;
                 let accels = [];
-                // Simple parsing strategy depending on ffmpeg version output
-                // Usually output lists "Hardware acceleration methods:" then list
                 if (output.includes('Hardware acceleration methods:')) {
                     const methods = output.split('Hardware acceleration methods:')[1].trim().split('\n')[0].trim().split(' ');
                     accels = methods.filter(m => m && m !== '');
                 } else {
-                    // Fallback parse
                      lines.forEach(line => {
                          if(capturing && line.trim()) accels.push(line.trim());
                          if(line.includes('Hardware acceleration methods')) capturing = true;
@@ -124,60 +172,16 @@ const checkSystemCapabilities = () => {
 };
 checkSystemCapabilities();
 
-// --- Persistence Functions ---
+// --- Helpers ---
 
-const saveLibrary = () => {
-    try {
-        const data = {
-            items: scanJob.items,
-            sources: scanJob.sources,
-            folders: scanJob.folders,
-            lastScan: Date.now()
-        };
-        fs.writeFileSync(LIBRARY_FILE, JSON.stringify(data));
-        console.log(`Library saved to disk. ${scanJob.items.length} items.`);
-    } catch (e) {
-        console.error("Failed to save library:", e);
-    }
-};
-
-const loadLibrary = () => {
-    if (fs.existsSync(LIBRARY_FILE)) {
-        try {
-            const raw = fs.readFileSync(LIBRARY_FILE, 'utf8');
-            const data = JSON.parse(raw);
-            if (data && Array.isArray(data.items)) {
-                scanJob.items = data.items;
-                scanJob.sources = data.sources || [];
-                scanJob.folders = data.folders || [];
-                scanJob.count = data.items.length;
-                scanJob.status = 'completed'; 
-                console.log(`Library loaded from disk. ${scanJob.items.length} items.`);
-            }
-        } catch (e) {
-            console.error("Failed to load library:", e);
-        }
-    }
-};
-
-// Load on startup
-loadLibrary();
-
-
-// --- Helper Functions ---
-
-// Promisified sleep for async pause
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-// Helper to check pause/cancel status during scan
 const checkControl = async () => {
     if (scanJob.control.cancel) throw new Error('CANCELLED');
-    
     while (scanJob.control.pause) {
         if (scanJob.control.cancel) throw new Error('CANCELLED');
         await sleep(500);
     }
-    // Allow event loop to breathe
     await sleep(0);
 };
 
@@ -190,25 +194,37 @@ const checkThumbControl = async () => {
     await sleep(0);
 }
 
-// --- Video Thumbnail Helper ---
+// Sharded Cache Path Generator
+const getCachePath = (sourcePath, mtime) => {
+    const hash = crypto.createHash('md5').update(sourcePath + (mtime || 0)).digest('hex');
+    const l1 = hash.substring(0, 2);
+    const l2 = hash.substring(2, 4);
+    const dir = path.join(CACHE_DIR, l1, l2);
+    return { dir, filepath: path.join(dir, hash + '.jpg') };
+};
+
+const ensureDir = async (dir) => {
+    try {
+        await fs.promises.access(dir);
+    } catch {
+        await fs.promises.mkdir(dir, { recursive: true });
+    }
+};
+
+// Video Thumbnail Generator
 const generateVideoThumbnail = (sourcePath, outputPath) => {
     return new Promise((resolve, reject) => {
         if (!ffmpeg) return reject(new Error("FFmpeg not available"));
 
-        // 1. Probe for duration
         ffmpeg.ffprobe(sourcePath, (err, metadata) => {
             if (err) return reject(err);
 
             const duration = metadata.format.duration || 0;
             const timestamp = duration > 10 ? duration * 0.2 : 1; 
 
-            // Helper to run ffmpeg command
             const runFfmpeg = (useHardwareAccel) => {
                 return new Promise((innerResolve, innerReject) => {
                     let command = ffmpeg(sourcePath);
-
-                    // If GPU is detected in systemCaps, try to use it
-                    // This is a naive implementation; real world needs more complex codec mapping
                     if (useHardwareAccel && systemCaps.ffmpegHwAccels.includes('cuda')) {
                          command = command.inputOptions(['-hwaccel cuda']);
                          thumbJob.currentEngine = 'FFmpeg (CUDA)';
@@ -231,394 +247,303 @@ const generateVideoThumbnail = (sourcePath, outputPath) => {
                 });
             };
 
-            // Strategy: Try GPU if available, else CPU
             const hasGpu = systemCaps.ffmpegHwAccels.length > 0;
-            
-            runFfmpeg(hasGpu)
-                .then(() => resolve())
-                .catch((hwErr) => {
-                    if (hasGpu) {
-                         // Fallback
-                         runFfmpeg(false)
-                            .then(() => resolve())
-                            .catch((cpuErr) => reject(cpuErr));
-                    } else {
-                        reject(hwErr);
-                    }
-                });
+            runFfmpeg(hasGpu).then(resolve).catch((hwErr) => {
+                if (hasGpu) runFfmpeg(false).then(resolve).catch(reject);
+                else reject(hwErr);
+            });
         });
     });
 };
 
+// --- Scanning Logic (Database Optimized) ---
 
-// Async recursive scan
-const scanDirectoryAsync = async (baseDir, currentSubDir = '', rootAlias = '') => {
+const upsertFileStmt = db.prepare(`
+    INSERT INTO files (path, name, folder_path, type, media_type, size, mtime, source_id)
+    VALUES (@path, @name, @folder_path, @type, @media_type, @size, @mtime, @source_id)
+    ON CONFLICT(path) DO UPDATE SET
+        size=excluded.size,
+        mtime=excluded.mtime,
+        type=excluded.type,
+        media_type=excluded.media_type,
+        source_id=excluded.source_id
+`);
+
+const deleteFileStmt = db.prepare(`DELETE FROM files WHERE path = ?`);
+
+// Recursively scan and batch insert into DB
+const scanDirectoryToDB = async (baseDir, currentSubDir = '', sourceName, batchSize = 500) => {
     await checkControl();
     
-    let results = [];
     const fullPathToScan = path.join(baseDir, currentSubDir);
+    scanJob.currentPath = fullPathToScan;
+
+    let itemsBuffer = [];
     
-    // Safety check for currentPath assignment
-    scanJob.currentPath = path.join(rootAlias || '', currentSubDir || '');
+    // Function to flush buffer
+    const flushBuffer = () => {
+        if (itemsBuffer.length === 0) return;
+        const transaction = db.transaction((items) => {
+            for (const item of items) upsertFileStmt.run(item);
+        });
+        transaction(itemsBuffer);
+        scanJob.count += itemsBuffer.length;
+        itemsBuffer = [];
+    };
 
     try {
         const dirExists = await fs.promises.access(fullPathToScan).then(() => true).catch(() => false);
-        if (!dirExists) return [];
+        if (!dirExists) return;
 
         const list = await fs.promises.readdir(fullPathToScan);
         
         for (const file of list) {
             if (file.startsWith('.')) continue;
 
-            // Check control before processing each file/folder
-            await checkControl();
-
             const fullFilePath = path.join(fullPathToScan, file);
-            // relativePath: used for Unique ID generation and streaming
-            const relativePath = path.join(rootAlias, currentSubDir, file);
-            
+            const relativePath = path.join(sourceName, currentSubDir, file); 
+            // Normalize path for DB: ensure forward slashes
+            const normalizedPath = relativePath.replace(/\\/g, '/');
+            const normalizedFolderPath = path.dirname(normalizedPath).replace(/\\/g, '/');
+
             try {
                 const stat = await fs.promises.stat(fullFilePath);
                 
                 if (stat.isDirectory()) {
-                    const subResults = await scanDirectoryAsync(baseDir, path.join(currentSubDir, file), rootAlias);
-                    results = results.concat(subResults);
+                    // Flush before going deeper
+                    flushBuffer(); 
+                    await scanDirectoryToDB(baseDir, path.join(currentSubDir, file), sourceName, batchSize);
                 } else {
                     const mimeType = mime.lookup(fullFilePath);
-                    // Check if mimeType is a string before checking startsWith, as lookup can return false
                     if (mimeType && typeof mimeType === 'string' && 
                        (mimeType.startsWith('image/') || mimeType.startsWith('video/') || mimeType.startsWith('audio/'))) {
-                        const item = {
-                            name: file,
-                            path: relativePath,
-                            streamPath: fullFilePath,
-                            size: stat.size,
-                            lastModified: stat.mtimeMs,
-                            type: mimeType
-                        };
-                        results.push(item);
                         
-                        // Update global live stats
-                        scanJob.count++;
-                        scanJob.items.push(item); // We accumulate in global state for simplicity here
+                        let mediaType = 'image';
+                        if (mimeType.startsWith('video/')) mediaType = 'video';
+                        if (mimeType.startsWith('audio/')) mediaType = 'audio';
+
+                        itemsBuffer.push({
+                            path: normalizedPath, // This acts as the unique ID for the file
+                            name: file,
+                            folder_path: normalizedFolderPath === '.' ? sourceName : normalizedFolderPath,
+                            type: mimeType,
+                            media_type: mediaType,
+                            size: stat.size,
+                            mtime: stat.mtimeMs,
+                            source_id: `nas-${Buffer.from(sourceName).toString('base64')}`
+                        });
+
+                        if (itemsBuffer.length >= batchSize) {
+                            flushBuffer();
+                            await checkControl();
+                            // Yield to event loop
+                            await sleep(1); 
+                        }
                     }
                 }
-            } catch (err) {
-                // Ignore individual file errors
-            }
+            } catch (err) { /* ignore access errors */ }
         }
+        flushBuffer(); // Flush remaining
     } catch (e) {
         if (e.message === 'CANCELLED') throw e;
         console.error(`Error reading directory ${fullPathToScan}:`, e.message);
     }
-    return results;
 };
 
-// Helper to format an item for API response
-const formatItemForClient = (f) => {
-    if (!f || !f.path) return null;
+const rebuildFolderStats = () => {
+    console.log("Rebuilding folder stats...");
+    db.exec(`DELETE FROM folders`);
+    
+    db.exec(`
+        INSERT INTO folders (path, name, parent_path, file_count, cover_file_path)
+        SELECT 
+            folder_path,
+            replace(folder_path, rtrim(folder_path, replace(folder_path, '/', '')), ''),
+            substr(folder_path, 0, length(folder_path) - length(replace(folder_path, rtrim(folder_path, replace(folder_path, '/', '')), ''))),
+            COUNT(*),
+            (SELECT path FROM files f2 WHERE f2.folder_path = files.folder_path AND f2.media_type = 'image' ORDER BY mtime DESC LIMIT 1)
+        FROM files
+        GROUP BY folder_path
+    `);
 
-    try {
-        const dir = path.dirname(f.path);
-        // Normalize folderPath to match frontend "path/to/folder" format.
-        const normalizedFolder = (dir === '.' ? '' : dir).replace(/\\/g, '/').replace(/^\//, '');
-        const streamPath = f.streamPath || f.path; // Fallback
-        
-        let mediaType = 'image';
-        // Ensure f.type is string
-        const typeStr = (typeof f.type === 'string') ? f.type : 'application/octet-stream';
-        
-        if (typeStr.startsWith('video/')) mediaType = 'video';
-        else if (typeStr.startsWith('audio/')) mediaType = 'audio';
+    db.exec(`
+        UPDATE folders 
+        SET cover_file_path = (SELECT path FROM files WHERE files.folder_path = folders.path AND files.media_type = 'video' LIMIT 1)
+        WHERE cover_file_path IS NULL
+    `);
+    console.log("Folder stats rebuilt.");
+};
 
-        return {
-            id: Buffer.from(streamPath).toString('base64'),
-            url: `/media-stream/${encodeURIComponent(streamPath)}`,
-            name: f.name || 'Unknown',
-            path: f.path,
-            folderPath: normalizedFolder,
-            size: f.size || 0,
-            type: typeStr,
-            lastModified: f.lastModified || Date.now(),
-            mediaType: mediaType,
-            sourceId: 'nas-mixed' 
-        };
-    } catch (e) {
-        console.error("Error formatting item", f, e);
-        return null;
+// --- File Watcher Logic ---
+
+const startWatcher = (libraryPaths) => {
+    if (watcher) {
+        watcher.close();
+        watcher = null;
     }
+
+    if (!isWatcherActive || !libraryPaths || libraryPaths.length === 0) return;
+
+    // Resolve paths to absolute
+    const pathsToWatch = libraryPaths.map(p => {
+        return p.startsWith('/') ? p : path.join(MEDIA_ROOT, p);
+    });
+
+    console.log("Starting file watcher on:", pathsToWatch);
+
+    watcher = chokidar.watch(pathsToWatch, {
+        ignored: /(^|[\/\\])\../, // ignore dotfiles
+        persistent: true,
+        ignoreInitial: true, // Don't re-scan everything on startup
+        awaitWriteFinish: {
+            stabilityThreshold: 2000,
+            pollInterval: 100
+        }
+    });
+
+    watcher.on('add', async (filePath) => {
+        await handleWatcherEvent('add', filePath, libraryPaths);
+    });
+
+    watcher.on('change', async (filePath) => {
+        await handleWatcherEvent('change', filePath, libraryPaths);
+    });
+
+    watcher.on('unlink', async (filePath) => {
+        await handleWatcherEvent('unlink', filePath, libraryPaths);
+    });
+
+    watcher.on('error', error => console.error(`Watcher error: ${error}`));
 };
 
-// Helper to validate and resolve paths (shared logic)
-const resolveValidPath = (reqPath) => {
-    const decodedPath = decodeURIComponent(reqPath);
-    let config = {};
+const handleWatcherEvent = async (event, filePath, libraryPaths) => {
     try {
-        if (fs.existsSync(CONFIG_FILE)) {
-            const content = fs.readFileSync(CONFIG_FILE, 'utf8');
-            if (content.trim()) config = JSON.parse(content);
-        }
-    } catch (e) {}
-
-    const validRoots = (config.libraryPaths && config.libraryPaths.length > 0) 
-        ? config.libraryPaths.map(p => p.startsWith('/') ? p : path.join(MEDIA_ROOT, p))
-        : [MEDIA_ROOT];
-
-    if (validRoots.length === 0) validRoots.push(MEDIA_ROOT);
-
-    const normalizedReqPath = path.normalize(decodedPath);
-    
-    // Security check: ensure path is within one of the valid roots
-    const isAllowed = validRoots.some(root => normalizedReqPath.startsWith(path.normalize(root)));
-
-    if (!isAllowed) return { error: 403, message: 'Access Denied' };
-    if (!fs.existsSync(normalizedReqPath)) return { error: 404, message: 'Not found' };
-    
-    return { path: normalizedReqPath };
-};
-
-// Calculate folders from scanned items (used at end of scan)
-const calculateFolderStats = (items) => {
-    const folderMap = new Map();
-
-    // 1. First Pass: Aggregate direct counts and identify covers
-    items.forEach(item => {
-        if (!item.path) return;
-        const dir = path.dirname(item.path);
-        const folderPath = (dir === '.' ? '' : dir).replace(/\\/g, '/').replace(/^\//, '');
+        // Determine source alias
+        // We need to map absolute filePath back to DB path structure
+        // DB Path = Relative path from source alias + Source Alias Prefix?
+        // Actually, our scanner logic: pathInput (user config) is the root.
+        // If config is "Photos", and absolute is "/media/Photos/img.jpg", DB path is "Photos/img.jpg".
         
-        if (!folderMap.has(folderPath)) {
-            folderMap.set(folderPath, {
-                path: folderPath,
-                directCount: 0,
-                totalCount: 0, 
-                coverItem: null
-            });
-        }
-        
-        const folderData = folderMap.get(folderPath);
-        folderData.directCount++;
-        
-        // Pick cover: Prefer image over video/audio.
-        if (item.type && typeof item.type === 'string') {
-            if (!folderData.coverItem) {
-                 folderData.coverItem = item;
-            } else if (folderData.coverItem.type.startsWith('video/') && item.type.startsWith('image/')) {
-                 folderData.coverItem = item; // Upgrade to image
+        let matchedConfigPath = null;
+        let matchedAbsolutePath = null;
+
+        for (const configPath of libraryPaths) {
+            const absolute = configPath.startsWith('/') ? configPath : path.join(MEDIA_ROOT, configPath);
+            if (filePath.startsWith(absolute)) {
+                matchedConfigPath = configPath;
+                matchedAbsolutePath = absolute;
+                break;
             }
         }
-    });
 
-    // 2. Second Pass: Calculate Recursive Counts
-    const allFolders = Array.from(folderMap.values());
-    allFolders.forEach(f => f.totalCount = f.directCount); // Init
+        if (!matchedConfigPath) return;
 
-    allFolders.forEach(child => {
-        if (child.directCount > 0) {
-                let currentPath = child.path;
-                while(currentPath.includes('/')) {
-                    currentPath = path.dirname(currentPath);
-                    const parentKey = currentPath === '.' ? '' : currentPath; 
-                    if (folderMap.has(parentKey)) {
-                        folderMap.get(parentKey).totalCount += child.directCount;
-                    }
-                }
-                // Handle root files if root key exists (often empty string '')
-                if (child.path !== '' && folderMap.has('')) {
-                     folderMap.get('').totalCount += child.directCount;
-                }
+        // Construct DB normalized path
+        const relativeFromRoot = path.relative(matchedAbsolutePath, filePath);
+        const relativePath = path.join(matchedConfigPath, relativeFromRoot);
+        const normalizedPath = relativePath.replace(/\\/g, '/');
+        const normalizedFolderPath = path.dirname(normalizedPath).replace(/\\/g, '/');
+        
+        if (event === 'unlink') {
+            console.log(`Watcher: Deleting ${normalizedPath}`);
+            deleteFileStmt.run(normalizedPath);
+        } else {
+            // Add or Change
+            const mimeType = mime.lookup(filePath);
+            if (mimeType && (mimeType.startsWith('image/') || mimeType.startsWith('video/') || mimeType.startsWith('audio/'))) {
+                const stat = await fs.promises.stat(filePath);
+                let mediaType = 'image';
+                if (mimeType.startsWith('video/')) mediaType = 'video';
+                if (mimeType.startsWith('audio/')) mediaType = 'audio';
+
+                console.log(`Watcher: Upserting ${normalizedPath}`);
+                upsertFileStmt.run({
+                    path: normalizedPath,
+                    name: path.basename(filePath),
+                    folder_path: normalizedFolderPath === '.' ? matchedConfigPath : normalizedFolderPath,
+                    type: mimeType,
+                    media_type: mediaType,
+                    size: stat.size,
+                    mtime: stat.mtimeMs,
+                    source_id: `nas-${Buffer.from(matchedConfigPath).toString('base64')}`
+                });
+            }
         }
-    });
-
-    return allFolders.map(f => ({
-        path: f.path,
-        count: f.totalCount, 
-        coverItem: f.coverItem ? formatItemForClient(f.coverItem) : null
-    }));
+    } catch (e) {
+        console.error("Watcher event handler failed", e);
+    }
 };
 
 // --- API Endpoints ---
 
-// System Status Endpoint
+// System Status
 app.get('/api/system/status', async (req, res) => {
     let cacheCount = 0;
-    try {
-        const files = await fs.promises.readdir(CACHE_DIR);
-        cacheCount = files.length;
-    } catch(e) {}
-
-    const breakdown = {
-        image: 0,
-        video: 0,
-        audio: 0
-    };
-
-    scanJob.items.forEach(i => {
-        if (i.type.startsWith('image')) breakdown.image++;
-        else if (i.type.startsWith('video')) breakdown.video++;
-        else if (i.type.startsWith('audio')) breakdown.audio++;
-    });
+    
+    const dbStats = db.prepare('SELECT COUNT(*) as count FROM files').get();
+    const mediaStats = db.prepare(`
+        SELECT 
+            SUM(CASE WHEN media_type = 'image' THEN 1 ELSE 0 END) as image,
+            SUM(CASE WHEN media_type = 'video' THEN 1 ELSE 0 END) as video,
+            SUM(CASE WHEN media_type = 'audio' THEN 1 ELSE 0 END) as audio
+        FROM files
+    `).get();
 
     res.json({
         ffmpeg: systemCaps.ffmpeg,
         ffmpegHwAccels: systemCaps.ffmpegHwAccels,
         sharp: systemCaps.sharp,
         cacheCount: cacheCount,
-        totalItems: scanJob.items.length,
-        mediaBreakdown: breakdown,
-        platform: os.platform() + ' ' + os.arch()
+        totalItems: dbStats.count,
+        mediaBreakdown: mediaStats,
+        platform: os.platform() + ' ' + os.arch(),
+        watcherActive: isWatcherActive
     });
 });
 
-// File Rename
-app.post('/api/file/rename', async (req, res) => {
-    const { oldPath, newName } = req.body;
-    if (!oldPath || !newName) return res.status(400).json({ error: 'Missing parameters' });
-
-    const result = resolveValidPath(oldPath);
-    if (result.error) return res.status(result.error).json({ error: result.message });
+app.get('/api/watcher/toggle', (req, res) => {
+    isWatcherActive = !isWatcherActive;
     
-    const oldFilePath = result.path;
-    const dir = path.dirname(oldFilePath);
-    const newFilePath = path.join(dir, newName);
-
+    // Restart watcher with current config
+    let config = {};
     try {
-        await fs.promises.rename(oldFilePath, newFilePath);
-        
-        // Update memory cache (scanJob)
-        const foundItem = scanJob.items.find(i => i.streamPath === oldFilePath);
-        if (foundItem) {
-            foundItem.name = newName;
-            foundItem.streamPath = newFilePath;
-            // Update the display path too
-            const parts = foundItem.path.split('/');
-            parts.pop();
-            parts.push(newName);
-            foundItem.path = parts.join('/');
+        if (fs.existsSync(CONFIG_FILE)) {
+            config = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
         }
-        
-        saveLibrary(); // Persist changes
-        
-        res.json({ success: true, newPath: foundItem ? foundItem.path : newName });
-    } catch (e) {
-        console.error("Rename error", e);
-        res.status(500).json({ error: e.message });
-    }
-});
-
-// File Delete
-app.post('/api/file/delete', async (req, res) => {
-    const { filePath } = req.body;
-    if (!filePath) return res.status(400).json({ error: 'Path required' });
-
-    const result = resolveValidPath(filePath);
-    if (result.error) return res.status(result.error).json({ error: result.message });
-
-    try {
-        await fs.promises.unlink(result.path);
-        
-        // Remove from memory cache
-        const idx = scanJob.items.findIndex(i => i.streamPath === result.path);
-        if (idx !== -1) {
-            scanJob.items.splice(idx, 1);
-            scanJob.count--;
-        }
-        
-        saveLibrary(); // Persist changes
-
-        res.json({ success: true });
-    } catch (e) {
-        console.error("Delete error", e);
-        res.status(500).json({ error: e.message });
-    }
-});
-
-// File System Autocomplete
-app.get('/api/fs/list', async (req, res) => {
-    const queryPath = req.query.path || '/';
+    } catch (e) {}
     
-    try {
-        const resolvedPath = path.normalize(queryPath);
-        
-        const stats = await fs.promises.stat(resolvedPath);
-        if (!stats.isDirectory()) {
-             return res.json({ dirs: [] });
-        }
+    const paths = config.libraryPaths || [MEDIA_ROOT];
+    startWatcher(paths);
 
-        const items = await fs.promises.readdir(resolvedPath, { withFileTypes: true });
-        
-        const dirs = items
-            .filter(item => item.isDirectory() && !item.name.startsWith('.'))
-            .map(item => item.name);
-            
-        res.json({ dirs });
-    } catch (e) {
-        console.error(`FS List error for ${queryPath}:`, e.message);
-        res.json({ dirs: [] }); 
-    }
+    res.json({ active: isWatcherActive });
 });
 
-// Get Configuration
-app.get('/api/config', (req, res) => {
-  if (fs.existsSync(CONFIG_FILE)) {
-    try {
-      const content = fs.readFileSync(CONFIG_FILE, 'utf8');
-      // Handle empty file
-      if (!content || content.trim() === '') {
-          return res.json({ configured: false });
-      }
-      const config = JSON.parse(content);
-      // Ensure we never return null if the file content was "null"
-      if (!config || typeof config !== 'object') {
-          return res.json({ configured: false });
-      }
-      res.json(config);
-    } catch (e) {
-      console.error("Config read error", e);
-      res.json({ configured: false }); // Return safe default on error instead of 500
-    }
-  } else {
-    // Return object instead of null to prevent "Unexpected non-whitespace character after JSON at position 4"
-    res.json({ configured: false });
-  }
-});
-
-// Save Configuration
-app.post('/api/config', (req, res) => {
-  try {
-    fs.writeFileSync(CONFIG_FILE, JSON.stringify(req.body, null, 2));
-    res.json({ success: true });
-  } catch (e) {
-    res.status(500).json({ error: 'Failed to write config' });
-  }
-});
-
-// Scan Control & Status API
+// Scan Control
 app.post('/api/scan/start', async (req, res) => {
     if (scanJob.status === 'scanning' || scanJob.status === 'paused') {
         return res.status(409).json({ error: 'Scan already in progress' });
     }
 
-    // Reset Job
     scanJob = {
         status: 'scanning',
         count: 0,
         currentPath: '',
-        items: [],
-        sources: [],
-        folders: [],
         control: { pause: false, cancel: false }
     };
 
     res.json({ success: true, message: 'Scan started' });
 
-    // Start background scan
+    // Pause watcher during full scan to avoid conflicts
+    if (watcher) {
+        await watcher.close();
+        watcher = null;
+    }
+
     try {
         let config = {};
         try {
             if (fs.existsSync(CONFIG_FILE)) {
-                const content = fs.readFileSync(CONFIG_FILE, 'utf8');
-                if (content.trim()) config = JSON.parse(content);
+                config = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
             }
         } catch (e) {}
 
@@ -626,62 +551,55 @@ app.post('/api/scan/start', async (req, res) => {
             ? config.libraryPaths 
             : [MEDIA_ROOT];
         
-        console.log(`Starting background scan: ${JSON.stringify(pathsToScan)}`);
+        // Mark Phase: Mark all existing files as potentially stale
+        // We append '_scanning' to source_id.
+        // We only mark files that don't already have it (safety check)
+        db.exec("UPDATE files SET source_id = source_id || '_scanning' WHERE source_id NOT LIKE '%_scanning'");
 
         for (const pathInput of pathsToScan) {
              await checkControl();
-             
              if (!pathInput) continue;
 
              const isAbsolute = pathInput.startsWith('/');
              const absoluteScanPath = isAbsolute ? pathInput : path.join(MEDIA_ROOT, pathInput);
              const normalized = path.normalize(absoluteScanPath);
              
-             const exists = await fs.promises.access(normalized).then(() => true).catch(() => false);
-             if (exists) {
-                 const startIndex = scanJob.items.length;
-                 await scanDirectoryAsync(normalized, '', pathInput);
-                 const endIndex = scanJob.items.length;
-                 
-                 scanJob.sources.push({
-                     id: `nas-${Buffer.from(pathInput).toString('base64')}`,
-                     name: pathInput,
-                     count: endIndex - startIndex
-                 });
-             }
+             // Check existence
+             try {
+                await fs.promises.access(normalized);
+                // scanDirectoryToDB will upsert with clean source_id (no suffix)
+                await scanDirectoryToDB(normalized, '', pathInput);
+             } catch(e) { console.warn(`Path not found: ${normalized}`); }
         }
-        
-        // Post-Scan: Calculate Folders Structure immediately
-        scanJob.folders = calculateFolderStats(scanJob.items);
+
+        // Sweep Phase: Delete files that still have the '_scanning' suffix (they weren't found/updated)
+        const deleteResult = db.prepare("DELETE FROM files WHERE source_id LIKE '%_scanning'").run();
+        console.log(`Scan Sweep: Removed ${deleteResult.changes} stale files.`);
+
+        rebuildFolderStats();
 
         scanJob.status = 'completed';
-        saveLibrary(); // Persist to disk
-        console.log(`Scan completed. Found ${scanJob.count} items. Folders processed.`);
-
     } catch (e) {
         if (e.message === 'CANCELLED') {
             scanJob.status = 'cancelled';
-            console.log('Scan cancelled by user.');
         } else {
             scanJob.status = 'error';
             console.error('Scan failed:', e);
+        }
+    } finally {
+        // Restart watcher if it was active
+        if (isWatcherActive) {
+            let config = {};
+            try {
+                 if (fs.existsSync(CONFIG_FILE)) config = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+            } catch(e){}
+            startWatcher(config.libraryPaths || [MEDIA_ROOT]);
         }
     }
 });
 
 app.get('/api/scan/status', (req, res) => {
-    // Defensive coding to prevent returning null or undefined which can break JSON parsing on client
-    try {
-        const statusData = {
-            status: (scanJob && scanJob.status) ? scanJob.status : 'idle',
-            count: (scanJob && typeof scanJob.count === 'number') ? scanJob.count : 0,
-            currentPath: (scanJob && scanJob.currentPath) ? scanJob.currentPath : ''
-        };
-        res.json(statusData);
-    } catch(e) {
-        console.error("Error sending status:", e);
-        res.json({ status: 'error', count: 0, currentPath: '' });
-    }
+    res.json(scanJob);
 });
 
 app.post('/api/scan/control', (req, res) => {
@@ -694,303 +612,288 @@ app.post('/api/scan/control', (req, res) => {
         scanJob.status = 'scanning';
     } else if (action === 'cancel') {
         scanJob.control.cancel = true;
-        scanJob.control.pause = false; // ensure loop breaks
+        scanJob.control.pause = false;
     }
     res.json({ success: true, status: scanJob.status });
 });
+
+// Helper to format DB item to Client item
+const formatDbItem = (row) => {
+    return {
+        id: Buffer.from(row.path).toString('base64'),
+        url: `/media-stream/${encodeURIComponent(row.path)}`,
+        name: row.name,
+        path: row.path,
+        folderPath: row.folder_path,
+        size: row.size,
+        type: row.type,
+        lastModified: row.mtime,
+        mediaType: row.media_type,
+        sourceId: row.source_id
+    };
+};
+
+const resolveValidPath = (reqPath) => {
+    const decodedPath = decodeURIComponent(reqPath);
+    const file = db.prepare('SELECT path FROM files WHERE path = ?').get(decodedPath);
+    
+    let config = {};
+    try {
+        if (fs.existsSync(CONFIG_FILE)) config = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+    } catch (e) {}
+
+    const libraryPaths = config.libraryPaths || [MEDIA_ROOT];
+    let absolutePath = null;
+    
+    if (path.isAbsolute(decodedPath)) {
+        if (fs.existsSync(decodedPath)) absolutePath = decodedPath;
+    } else {
+        const p = path.join(MEDIA_ROOT, decodedPath);
+        if (fs.existsSync(p)) absolutePath = p;
+    }
+
+    if (!absolutePath) {
+        if (fs.existsSync(decodedPath)) absolutePath = decodedPath;
+        else if (fs.existsSync(path.join(MEDIA_ROOT, decodedPath))) absolutePath = path.join(MEDIA_ROOT, decodedPath);
+    }
+    
+    if (absolutePath) return { path: absolutePath };
+    return { error: 404, message: 'Not found' };
+};
 
 app.get('/api/scan/results', (req, res) => {
     try {
         const offset = parseInt(req.query.offset) || 0;
         const limit = parseInt(req.query.limit) || 1000;
-        // Distinguish between undefined (all folders) and empty string (root folder)
-        let folderFilter = null;
-        if (req.query.folder !== undefined) {
-            folderFilter = req.query.folder;
+        const folder = req.query.folder;
+
+        let rows, total;
+
+        if (folder !== undefined) {
+            // Filter by folder
+            rows = db.prepare(`SELECT * FROM files WHERE folder_path = ? ORDER BY mtime DESC LIMIT ? OFFSET ?`).all(folder, limit, offset);
+            total = db.prepare(`SELECT COUNT(*) as count FROM files WHERE folder_path = ?`).get(folder).count;
+        } else {
+            // All files
+            rows = db.prepare(`SELECT * FROM files ORDER BY mtime DESC LIMIT ? OFFSET ?`).all(limit, offset);
+            total = db.prepare(`SELECT COUNT(*) as count FROM files`).get().count;
         }
 
-        // Ensure scanJob is valid
-        if (!scanJob) {
-            return res.json({ files: [], sources: [], total: 0, offset, limit, hasMore: false });
-        }
-
-        let filteredItems = (scanJob.items) ? scanJob.items : [];
-        
-        // Server-side folder filtering to support folder navigation without loading everything
-        if (folderFilter !== null) {
-            filteredItems = filteredItems.filter(f => {
-                if (!f || !f.path) return false;
-                try {
-                    const dir = path.dirname(f.path);
-                    const normalizedFolder = (dir === '.' ? '' : dir).replace(/\\/g, '/').replace(/^\//, '');
-                    return normalizedFolder === folderFilter;
-                } catch(e) { return false; }
-            });
-        }
-
-        // Apply simple pagination slice to memory array
-        const slicedItems = filteredItems.slice(offset, offset + limit);
-        const total = filteredItems.length;
-
-        // Process items for frontend (generate base64 IDs etc)
-        const processedItems = slicedItems.map(formatItemForClient).filter(i => i !== null);
-
-        // Better source association
-        const sources = (scanJob.sources) ? scanJob.sources : [];
-        const finalItems = processedItems.map(item => {
-            // Find which source this item belongs to
-            // item.path is the relative path stored in memory, safe to compare
-            const source = sources.find(s => item.path && item.path.startsWith(s.name));
-            return { ...item, sourceId: source ? source.id : 'nas-unknown' };
-        });
+        const files = rows.map(formatDbItem);
+        const sources = db.prepare('SELECT DISTINCT source_id as id, source_id as name FROM files').all().map(s => ({...s, count: 0}));
 
         res.json({
-            files: finalItems,
-            sources: sources,
-            total: total,
-            offset: offset,
-            limit: limit,
+            files,
+            sources,
+            total,
+            offset,
+            limit,
             hasMore: (offset + limit) < total
         });
     } catch (e) {
         console.error("Results API Error", e);
-        res.status(500).json({ error: "Internal Server Error during fetch" });
+        res.status(500).json({ error: "DB Error" });
     }
 });
 
-// Endpoint to get all folders at once (grouped by directory)
 app.get('/api/library/folders', (req, res) => {
     try {
-        // Return pre-calculated folders from scan job if available
-        if (scanJob && scanJob.folders && scanJob.folders.length > 0) {
-            return res.json({ folders: scanJob.folders });
-        }
+        const rows = db.prepare(`
+            SELECT path, file_count as count, cover_file_path 
+            FROM folders 
+            ORDER BY path ASC
+        `).all();
         
-        // Fallback for empty state
-        res.json({ folders: [] });
-    } catch(e) {
-        console.error("Folder List API Error", e);
-        res.status(500).json({ error: "Failed to list folders" });
+        const folders = rows.map(r => {
+             let coverItem = null;
+             if (r.cover_file_path) {
+                 const f = db.prepare('SELECT * FROM files WHERE path = ?').get(r.cover_file_path);
+                 if (f) coverItem = formatDbItem(f);
+             }
+             return {
+                 path: r.path,
+                 count: r.count,
+                 coverItem
+             };
+        });
+
+        res.json({ folders });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
     }
 });
 
-// --- Thumbnail Gen API ---
+// --- Thumbnails (Sharded) ---
 
 app.post('/api/thumb-gen/start', async (req, res) => {
-    if (thumbJob.status === 'scanning' || thumbJob.status === 'paused') {
-        return res.status(409).json({ error: 'Thumbnail generation already in progress' });
-    }
+    if (thumbJob.status === 'scanning') return res.status(409).json({ error: 'Busy' });
     
-    if (!scanJob.items || scanJob.items.length === 0) {
-        return res.status(400).json({ error: 'Library is empty. Please scan library first.' });
-    }
+    // Get total count
+    const total = db.prepare('SELECT COUNT(*) as count FROM files').get().count;
+    if (total === 0) return res.status(400).json({ error: 'Library empty' });
 
-    if (!sharp && !ffmpeg) {
-        return res.status(500).json({ error: 'No thumbnail generators (Sharp/FFmpeg) installed.' });
-    }
-
-    // Reset Job
     thumbJob = {
         status: 'scanning',
         count: 0,
-        total: scanJob.items.length,
+        total: total,
         currentPath: '',
         currentEngine: 'Initializing...',
         control: { pause: false, cancel: false }
     };
     
-    res.json({ success: true, message: 'Thumbnail generation started' });
+    res.json({ success: true });
     
-    // Background Process
-    const processThumbnails = async () => {
+    // Background
+    (async () => {
         try {
-            console.log("Starting thumbnail generation...");
-            const items = scanJob.items;
+            // Iterate using a cursor to avoid loading all into RAM
+            const stmt = db.prepare('SELECT path, type, mtime FROM files');
             
-            for (const item of items) {
+            for (const item of stmt.iterate()) {
                 await checkThumbControl();
                 
-                thumbJob.currentPath = item.path;
                 thumbJob.count++;
-                
-                const sourcePath = item.streamPath;
-                const cacheKey = crypto.createHash('md5').update(sourcePath + item.lastModified + 'v2').digest('hex');
-                const cacheFilename = `${cacheKey}.jpg`;
-                const cacheFilePath = path.join(CACHE_DIR, cacheFilename);
+                thumbJob.currentPath = item.path;
 
-                if (!fs.existsSync(cacheFilePath)) {
-                    // IMAGE
-                    if (sharp && item.type && item.type.startsWith('image/')) {
-                        thumbJob.currentEngine = 'Sharp (CPU)';
-                        try {
-                            await sharp(sourcePath)
-                                .resize({ width: 300, withoutEnlargement: true, fit: 'inside' })
-                                .jpeg({ quality: 80, mozjpeg: true })
-                                .toFile(cacheFilePath);
-                        } catch(e) { /* ignore */ }
-                    }
-                    // VIDEO
-                    else if (ffmpeg && item.type && item.type.startsWith('video/')) {
-                         // engine set inside generateVideoThumbnail
-                        try {
-                            await generateVideoThumbnail(sourcePath, cacheFilePath);
-                        } catch(e) { /* ignore */ }
-                    }
+                // Resolve absolute path
+                const res = resolveValidPath(item.path);
+                if (res.error) continue;
+                const sourcePath = res.path;
+
+                // Determine Cache Path
+                const { dir, filepath } = getCachePath(sourcePath, item.mtime);
+                
+                // Skip if exists
+                if (fs.existsSync(filepath)) continue;
+
+                // Ensure directory
+                await ensureDir(dir);
+
+                // Generate
+                if (sharp && item.type.startsWith('image/')) {
+                    thumbJob.currentEngine = 'Sharp (CPU)';
+                    try {
+                        await sharp(sourcePath)
+                            .resize({ width: 300, withoutEnlargement: true, fit: 'inside' })
+                            .jpeg({ quality: 80, mozjpeg: true })
+                            .toFile(filepath);
+                    } catch(e) {}
+                } else if (ffmpeg && item.type.startsWith('video/')) {
+                    try {
+                         await generateVideoThumbnail(sourcePath, filepath);
+                    } catch(e) {}
                 }
             }
             thumbJob.status = 'completed';
-            console.log("Thumbnail generation completed.");
-        } catch(e) {
-            if (e.message === 'CANCELLED') {
-                thumbJob.status = 'cancelled';
-                console.log('Thumbnail generation cancelled.');
-            } else {
-                thumbJob.status = 'error';
-                console.error("Thumbnail generation failed:", e);
-            }
+        } catch (e) {
+            thumbJob.status = e.message === 'CANCELLED' ? 'cancelled' : 'error';
         }
-    };
-    
-    processThumbnails();
+    })();
 });
 
-app.get('/api/thumb-gen/status', (req, res) => {
-    res.json({
-        status: thumbJob.status,
-        count: thumbJob.count,
-        total: thumbJob.total,
-        currentPath: thumbJob.currentPath,
-        currentEngine: thumbJob.currentEngine
-    });
-});
-
+app.get('/api/thumb-gen/status', (req, res) => res.json(thumbJob));
 app.post('/api/thumb-gen/control', (req, res) => {
-    const { action } = req.body;
-    if (action === 'pause') {
-        thumbJob.control.pause = true;
-        thumbJob.status = 'paused';
-    } else if (action === 'resume') {
-        thumbJob.control.pause = false;
-        thumbJob.status = 'scanning';
-    } else if (action === 'cancel') {
-        thumbJob.control.cancel = true;
-        thumbJob.control.pause = false;
-    }
-    res.json({ success: true, status: thumbJob.status });
+    if (req.body.action === 'cancel') thumbJob.control.cancel = true;
+    res.json({ success: true });
 });
 
-
-// --- Thumbnail Endpoint (Persisted) ---
 app.get('/api/thumbnail', async (req, res) => {
     const filePath = req.query.path;
     if (!filePath) return res.status(400).send('Path required');
+    
+    // Lookup item for mtime
+    const item = db.prepare('SELECT mtime FROM files WHERE path = ?').get(filePath);
+    if (!item) return res.redirect(`/media-stream/${encodeURIComponent(filePath)}`);
 
     const result = resolveValidPath(filePath);
-    if (result.error) return res.status(result.error).send(result.message);
+    if (result.error) return res.status(404).send('Not found');
+    
+    const { filepath: cacheFilePath, dir } = getCachePath(result.path, item.mtime);
 
+    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    res.setHeader('Content-Type', 'image/jpeg');
+
+    if (fs.existsSync(cacheFilePath)) {
+        fs.createReadStream(cacheFilePath).pipe(res);
+        return;
+    }
+
+    // On-demand gen
     try {
-        const sourcePath = result.path;
+        await ensureDir(dir);
+        const mimeType = mime.lookup(result.path) || '';
         
-        let stat;
-        try {
-            stat = await fs.promises.stat(sourcePath);
-        } catch(e) {
-            return res.status(404).send('Source file not found');
-        }
-
-        const cacheKey = crypto.createHash('md5').update(sourcePath + stat.mtimeMs + 'v2').digest('hex');
-        const cacheFilename = `${cacheKey}.jpg`;
-        const cacheFilePath = path.join(CACHE_DIR, cacheFilename);
-
-        // Common headers
-        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
-        res.setHeader('Content-Type', 'image/jpeg');
-
-        // Check if cached file exists
-        if (fs.existsSync(cacheFilePath)) {
-             const stream = fs.createReadStream(cacheFilePath);
-             stream.pipe(res);
-             return;
-        }
-
-        const mimeType = mime.lookup(sourcePath) || '';
-
-        // VIDEO ON-DEMAND GEN
-        if (ffmpeg && mimeType.startsWith('video/')) {
-            try {
-                await generateVideoThumbnail(sourcePath, cacheFilePath);
-                fs.createReadStream(cacheFilePath).pipe(res);
-                return;
-            } catch(e) {
-                // console.error("Video thumb gen failed", e);
-                return res.redirect(`/media-stream/${encodeURIComponent(filePath)}`);
-            }
-        }
-
-        // IMAGE ON-DEMAND GEN
         if (sharp && mimeType.startsWith('image/')) {
-            await sharp(sourcePath)
-                .resize({ 
-                    width: 300, 
-                    withoutEnlargement: true,
-                    fit: 'inside' 
-                })
-                .jpeg({ quality: 80, mozjpeg: true })
-                .toFile(cacheFilePath);
-
+            await sharp(result.path).resize({ width: 300, withoutEnlargement: true, fit: 'inside' }).jpeg().toFile(cacheFilePath);
             fs.createReadStream(cacheFilePath).pipe(res);
             return;
         }
+        
+        if (ffmpeg && mimeType.startsWith('video/')) {
+            await generateVideoThumbnail(result.path, cacheFilePath);
+            fs.createReadStream(cacheFilePath).pipe(res);
+            return;
+        }
+    } catch(e) {}
 
-        // Fallback
-        res.redirect(`/media-stream/${encodeURIComponent(filePath)}`);
+    res.redirect(`/media-stream/${encodeURIComponent(filePath)}`);
+});
 
-    } catch (e) {
-        console.error("Thumbnail error:", e);
-        res.redirect(`/media-stream/${encodeURIComponent(filePath)}`);
+// Config and Streaming Endpoints
+app.get('/api/config', (req, res) => {
+    try {
+        if (fs.existsSync(CONFIG_FILE)) res.json(JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')));
+        else res.json({ configured: false });
+    } catch(e) { res.json({ configured: false }); }
+});
+
+app.post('/api/config', (req, res) => {
+    fs.writeFileSync(CONFIG_FILE, JSON.stringify(req.body, null, 2));
+    
+    // Update watcher if paths changed
+    if (isWatcherActive) {
+        startWatcher(req.body.libraryPaths || [MEDIA_ROOT]);
+    }
+    
+    res.json({ success: true });
+});
+
+app.get('/media-stream/:filepath', (req, res) => {
+    const result = resolveValidPath(req.params.filepath);
+    if (result.error) return res.status(404).send('Not found');
+    
+    const stat = fs.statSync(result.path);
+    const fileSize = stat.size;
+    const range = req.headers.range;
+    const contentType = mime.lookup(result.path) || 'application/octet-stream';
+
+    if (range) {
+        const parts = range.replace(/bytes=/, "").split("-");
+        const start = parseInt(parts[0], 10);
+        const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+        const chunksize = (end - start) + 1;
+        const file = fs.createReadStream(result.path, { start, end });
+        res.writeHead(206, {
+            'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+            'Accept-Ranges': 'bytes',
+            'Content-Length': chunksize,
+            'Content-Type': contentType,
+        });
+        file.pipe(res);
+    } else {
+        res.writeHead(200, {
+            'Content-Length': fileSize,
+            'Content-Type': contentType,
+        });
+        fs.createReadStream(result.path).pipe(res);
     }
 });
 
-// Stream Media Content
-app.get('/media-stream/:filepath', (req, res) => {
-  const result = resolveValidPath(req.params.filepath);
-  if (result.error) return res.status(result.error).send(result.message);
-  
-  const normalizedReqPath = result.path;
-  const stat = fs.statSync(normalizedReqPath);
-  const fileSize = stat.size;
-  const range = req.headers.range;
-  const mimeType = mime.lookup(normalizedReqPath) || 'application/octet-stream';
+// Initial startup watcher
+let startupConfig = {};
+try {
+    if (fs.existsSync(CONFIG_FILE)) startupConfig = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+} catch (e) {}
+startWatcher(startupConfig.libraryPaths || [MEDIA_ROOT]);
 
-  if (range) {
-    const parts = range.replace(/bytes=/, "").split("-");
-    const start = parseInt(parts[0], 10);
-    const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
-    const chunksize = (end - start) + 1;
-    const file = fs.createReadStream(normalizedReqPath, { start, end });
-    const head = {
-      'Content-Range': `bytes ${start}-${end}/${fileSize}`,
-      'Accept-Ranges': 'bytes',
-      'Content-Length': chunksize,
-      'Content-Type': mimeType,
-    };
-    res.writeHead(206, head);
-    file.pipe(res);
-  } else {
-    const head = {
-      'Content-Length': fileSize,
-      'Content-Type': mimeType,
-    };
-    res.writeHead(200, head);
-    fs.createReadStream(normalizedReqPath).pipe(res);
-  }
-});
-
-app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'build', 'index.html'));
-});
-
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-  console.log(`Data Directory: ${DATA_DIR}`);
-});
+app.listen(PORT, () => console.log(`Lumina Server (SQLite + Watcher) running on port ${PORT}`));

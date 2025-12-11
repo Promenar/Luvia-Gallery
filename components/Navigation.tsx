@@ -94,8 +94,7 @@ export const Navigation: React.FC<NavigationProps> = ({
                   <input
                       type="file"
                       multiple
-                      webkitdirectory="true"
-                      directory=""
+                      {...({ webkitdirectory: "true", directory: "" } as any)}
                       onChange={onUpload}
                       className="hidden"
                   />
@@ -200,8 +199,7 @@ export const Navigation: React.FC<NavigationProps> = ({
                       <input
                           type="file"
                           multiple
-                          webkitdirectory="true"
-                          directory=""
+                          {...({ webkitdirectory: "true", directory: "" } as any)}
                           onChange={onUpload}
                           className="hidden"
                       />

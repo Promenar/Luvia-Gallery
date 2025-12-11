@@ -1,13 +1,5 @@
-import React from 'react';
 
-// Extend React HTML attributes to support webkitdirectory
-// We need to extend the interface within the React namespace correctly
-declare module 'react' {
-  interface InputHTMLAttributes<T> extends React.HTMLAttributes<T> {
-    webkitdirectory?: string;
-    directory?: string;
-  }
-}
+import React from 'react';
 
 export type MediaType = 'image' | 'video' | 'audio';
 

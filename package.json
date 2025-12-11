@@ -13,7 +13,9 @@
     "react-window": "^1.8.10",
     "react-virtualized-auto-sizer": "^1.0.25",
     "sharp": "^0.32.6",
-    "fluent-ffmpeg": "^2.1.2"
+    "fluent-ffmpeg": "^2.1.2",
+    "better-sqlite3": "^9.4.3",
+    "chokidar": "^3.5.3"
   },
   "scripts": {
     "start": "react-scripts start",

@@ -30,13 +30,30 @@ services:
       - NODE_ENV=production
       # Default fallback root if no paths configured
       - MEDIA_ROOT=/media
-      # NVIDIA GPU Support
+      # NVIDIA GPU Support (Environment variables)
+      # These variables tell the NVIDIA runtime what capabilities to expose.
+      # They are harmless if the runtime is not used, but required if it is.
       - NVIDIA_VISIBLE_DEVICES=all
-      - NVIDIA_DRIVER_CAPABILITIES=all
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
+      - NVIDIA_DRIVER_CAPABILITIES=compute,video,utility
+    
+    # -------------------------------------------------------------------------
+    # GPU CONFIGURATION NOTE:
+    # The error "could not select device driver nvidia" occurs if the host machine
+    # does not have the NVIDIA Container Toolkit installed and configured.
+    #
+    # 1. If you DO NOT have an NVIDIA GPU or the toolkit installed:
+    #    Keep the 'deploy' section commented out. The app will run in CPU mode.
+    #
+    # 2. If you DO have an NVIDIA GPU and want hardware acceleration:
+    #    a. Install NVIDIA Container Toolkit on your host: https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html
+    #    b. Restart Docker daemon.
+    #    c. Uncomment the 'deploy' section below.
+    # -------------------------------------------------------------------------
+    
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
