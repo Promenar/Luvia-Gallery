@@ -273,12 +273,31 @@ export default function App() {
           if (user) {
               setCurrentUser(user);
               setAuthStep('app');
+              
+              // Load saved ViewMode to decide what to fetch
+              const savedViewMode = localStorage.getItem(VIEW_MODE_KEY) as ViewMode;
+
               if (serverMode) {
+                  // Ensure state is ready before fetching
                   setTimeout(() => {
-                      fetchServerFiles(user.username, loadedData, 0, true, null);
-                      fetchServerFolders();
-                      fetchServerFavorites();
-                  }, 100);
+                      if (savedViewMode === 'favorites') {
+                           // Directly fetch favorites only on init if that's the view
+                           fetchServerFiles(user.username, loadedData, 0, true, null, true);
+                           fetchServerFolders(true);
+                           fetchServerFavorites();
+                      } else if (savedViewMode === 'folders') {
+                           // If folders view, we assume root unless path is persisted (future enhancement)
+                           // For now, load folders
+                           fetchServerFolders(false);
+                           fetchServerFavorites();
+                           // We don't fetch all files in folders mode initially
+                      } else {
+                           // Default / All Photos / Home
+                           fetchServerFiles(user.username, loadedData, 0, true, null);
+                           fetchServerFolders(false);
+                           fetchServerFavorites();
+                      }
+                  }, 50);
               }
               return;
           }
@@ -603,7 +622,6 @@ export default function App() {
     
     if (isServerMode && currentUser) {
         // Clear current files to avoid "flash" of old content when switching views
-        // This is critical for Favorites view to avoid showing all files briefly
         const clearedData = { 
               ...allUserData, 
               [currentUser.username]: { 
@@ -898,7 +916,7 @@ export default function App() {
         lastModified: Date.now()
     };
 
-    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(config, null, 2));
+    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(config));
     const downloadAnchorNode = document.createElement('a');
     downloadAnchorNode.setAttribute("href", dataStr);
     downloadAnchorNode.setAttribute("download", CONFIG_FILE_NAME);
@@ -907,851 +925,651 @@ export default function App() {
     downloadAnchorNode.remove();
   };
 
-  const handleImportConfig = (event: React.ChangeEvent<HTMLInputElement>) => {
-      const file = event.target.files?.[0];
-      if (!file) return;
-
-      const reader = new FileReader();
-      reader.onload = (e) => {
-          try {
-              const json = JSON.parse(e.target?.result as string) as AppConfig;
-              if (json.users && json.title) {
-                  const hydratedData: Record<string, UserData> = {};
-                  json.users.forEach(u => {
-                       const existingFiles = allUserData[u.username]?.files || [];
-                       hydratedData[u.username] = { sources: json.userSources?.[u.username] || [], files: existingFiles };
-                  });
-                  
-                  persistData(json.users, json.title, hydratedData, json.libraryPaths, json.homeSubtitle, json.homeScreen);
-                  alert("Configuration restored.");
-                  if (authStep === 'loading' || authStep === 'setup') setAuthStep('login');
-              }
-          } catch (err) {
-              alert("Failed to parse configuration file.");
-          }
-      };
-      reader.readAsText(file);
-  };
-
-  const handleSetup = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (setupForm.password !== setupForm.confirmPassword) {
-      setAuthError(t('passwords_not_match'));
-      return;
-    }
-    const adminUser: User = { username: setupForm.username, password: setupForm.password, isAdmin: true };
-    const newUsers = [adminUser];
-    const newUserData = { [adminUser.username]: { files: [], sources: [] } };
-    persistData(newUsers, undefined, newUserData, [], undefined);
-    setCurrentUser(adminUser);
-    localStorage.setItem(AUTH_USER_KEY, adminUser.username); // Auto-login next time
-    setAuthStep('app');
-    if (isServerMode) {
-        fetchServerFiles(adminUser.username, newUserData, 0, true);
-        fetchServerFolders();
-    }
-  };
-
-  const handleLogin = (e: React.FormEvent) => {
-    e.preventDefault();
-    const user = users.find(u => u.username === loginForm.username && u.password === loginForm.password);
-    if (user) {
-      setCurrentUser(user);
-      localStorage.setItem(AUTH_USER_KEY, user.username); // Persist login
-      
-      let newData = allUserData;
-      if (!allUserData[user.username]) {
-          newData = { ...allUserData, [user.username]: { files: [], sources: [] } };
-          setAllUserData(newData);
-      }
-      setAuthStep('app');
-      setAuthError('');
-      if (isServerMode) {
-          fetchServerFiles(user.username, newData, 0, true, null); // Load sidebar count
-          fetchServerFolders();
-          fetchServerFavorites();
-      }
-    } else {
-      setAuthError(t('invalid_credentials'));
-    }
-  };
-
-  const handleLogout = () => {
-    setCurrentUser(null);
-    localStorage.removeItem(AUTH_USER_KEY); // Clear persistence
-    setAuthStep('login');
-    setLoginForm({ username: '', password: '' });
-    setCurrentPath('');
-  };
-
-  const handleAddUser = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newUserForm.username || !newUserForm.password) return;
-    if (users.find(u => u.username === newUserForm.username)) { alert("User already exists"); return; }
-    const newUser: User = { username: newUserForm.username, password: newUserForm.password, isAdmin: false };
-    const updatedUsers = [...users, newUser];
-    const updatedUserData = { ...allUserData, [newUser.username]: { files: [], sources: [] } };
-    persistData(updatedUsers, undefined, updatedUserData, undefined, undefined);
-    setNewUserForm({ username: '', password: '' });
-  };
-
-  const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
-    if (isServerMode) {
-        alert(t('configure_nas'));
-        return;
-    }
-    if (!currentUser) return;
-    const fileList = event.target.files;
-    if (!fileList || fileList.length === 0) return;
-
+  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    // Client-side upload simulation (no server processing)
+    if (!e.target.files || !currentUser) return;
+    
+    const newFiles: MediaItem[] = [];
     const sourceId = generateId();
-    const firstPath = fileList[0].webkitRelativePath;
-    const sourceName = firstPath ? firstPath.split('/')[0] : 'Uploaded Folder';
+    const sourceName = `Import ${new Date().toLocaleTimeString()}`;
+    
+    Array.from(e.target.files).forEach(file => {
+        if (file.type.startsWith('image/') || file.type.startsWith('video/') || file.type.startsWith('audio/')) {
+            const relativePath = file.webkitRelativePath || file.name;
+            const folderPath = relativePath.includes('/') ? relativePath.substring(0, relativePath.lastIndexOf('/')) : '';
+            
+            let mediaType: 'image'|'video'|'audio' = 'image';
+            if (file.type.startsWith('video/')) mediaType = 'video';
+            if (file.type.startsWith('audio/')) mediaType = 'audio';
 
-    const newItems: MediaItem[] = [];
-    Array.from(fileList).forEach((file: File) => {
-      if (file.type.startsWith('image/') || file.type.startsWith('video/') || file.type.startsWith('audio/')) {
-        const path = file.webkitRelativePath || file.name;
-        const pathParts = path.split('/');
-        const folderPath = pathParts.length > 1 ? pathParts.slice(0, -1).join('/') : '';
-        
-        let mediaType: 'image' | 'video' | 'audio' = 'image';
-        if (isVideo(file.type)) mediaType = 'video';
-        if (isAudio(file.type)) mediaType = 'audio';
-
-        newItems.push({
-          id: generateId(),
-          file,
-          url: URL.createObjectURL(file),
-          name: file.name,
-          path,
-          folderPath,
-          size: file.size,
-          type: file.type,
-          lastModified: file.lastModified,
-          mediaType: mediaType,
-          sourceId
-        });
-      }
+            newFiles.push({
+                id: generateId(),
+                file: file,
+                url: URL.createObjectURL(file),
+                name: file.name,
+                path: relativePath,
+                folderPath: folderPath,
+                size: file.size,
+                type: file.type,
+                lastModified: file.lastModified,
+                mediaType: mediaType,
+                sourceId: sourceId
+            });
+        }
     });
-
-    if (newItems.length > 0) {
-      const updatedUserData = {
-          ...allUserData,
-          [currentUser.username]: {
-              ...allUserData[currentUser.username],
-              files: [...(allUserData[currentUser.username]?.files || []), ...newItems],
-              sources: [...(allUserData[currentUser.username]?.sources || []), { id: sourceId, name: sourceName, count: newItems.length }]
-          }
-      };
-      setAllUserData(updatedUserData);
-      persistData(undefined, undefined, updatedUserData, undefined, undefined); 
-      setIsSettingsOpen(false);
+    
+    if (newFiles.length > 0) {
+        const updatedFiles = [...files, ...newFiles];
+        const newSource = { id: sourceId, name: sourceName, count: newFiles.length };
+        const updatedSources = [...(allUserData[currentUser.username].sources || []), newSource];
+        
+        const updatedUserData = {
+            ...allUserData,
+            [currentUser.username]: {
+                ...allUserData[currentUser.username],
+                files: updatedFiles,
+                sources: updatedSources
+            }
+        };
+        
+        setAllUserData(updatedUserData);
+        persistData(undefined, undefined, updatedUserData);
     }
   };
+  
+  // --- Render Helpers ---
 
   const processedFiles = useMemo(() => {
-    let result = files;
-    if (viewMode === 'favorites' && !isServerMode) {
+    let result = [...files];
+
+    // 1. Folder Filter
+    if (viewMode === 'folders' && currentPath) {
+        if (!isServerMode) {
+            result = result.filter(f => f.folderPath === currentPath);
+        } else {
+             // In server mode, 'files' is the content of the current folder/query. 
+             // However, to be safe against race conditions where 'files' might be 'all photos' temporarily:
+             result = result.filter(f => f.folderPath === currentPath);
+        }
+    }
+
+    // 2. Favorites Filter (CRITICAL FIX)
+    // Enforce favorite filtering even in server mode if we are in favorites view
+    // to prevent flashing of non-favorite items during state transitions.
+    if (viewMode === 'favorites') {
         result = result.filter(f => f.isFavorite);
     }
 
+    // 3. Media Type Filter
     if (filterOption !== 'all') {
-      result = result.filter(f => f.mediaType === filterOption);
+        result = result.filter(f => f.mediaType === filterOption);
     }
+
+    // 4. Sorting
     if (sortOption === 'random') {
-        if (randomizedFiles.length !== result.length) {
-            const shuffled = sortMedia(result, 'random');
-            setRandomizedFiles(shuffled);
-            return shuffled;
-        }
-        return randomizedFiles;
+         // Stable random sort
+         if (randomizedFiles.length > 0 && result.length === randomizedFiles.length && result[0]?.id === randomizedFiles[0]?.id) {
+             return randomizedFiles;
+         }
+         const shuffled = sortMedia(result, 'random');
+         setRandomizedFiles(shuffled);
+         return shuffled;
+    } else {
+        result = sortMedia(result, sortOption);
     }
-    return sortMedia(result, sortOption);
-  }, [files, filterOption, sortOption, randomizedFiles, viewMode, isServerMode]);
-
-  const folderTree = useMemo(() => {
-    if (isServerMode && serverFolders.length > 0) {
-        const root: FolderNode = { name: 'Root', path: '', children: {}, mediaCount: 0 };
-        serverFolders.forEach(sf => {
-            const parts = sf.path.split('/').filter((p: string) => p);
-            const hasLeadingSlash = sf.path.startsWith('/');
-            let currentNode = root;
-            parts.forEach((part: string, index: number) => {
-                if (!currentNode.children[part]) {
-                    let currentPath = parts.slice(0, index + 1).join('/');
-                    if (hasLeadingSlash) currentPath = '/' + currentPath;
-
-                    const match = serverFolders.find(f => f.path === currentPath);
-                    currentNode.children[part] = {
-                        name: part,
-                        path: currentPath,
-                        children: {},
-                        mediaCount: match ? match.count : 0, 
-                        coverMedia: match ? match.coverItem : undefined
-                    };
-                }
-                currentNode = currentNode.children[part];
-            });
-        });
-        return root;
-    }
-    // Client mode folder tree construction
-    return buildFolderTree(files);
-  }, [files, isServerMode, serverFolders]);
-
-  const content = useMemo(() => {
-    if (viewMode === 'all') {
-      return { type: 'media', data: processedFiles, title: t('library') };
-    }
-    if (viewMode === 'favorites') {
-        // In client mode, we need to filter folders manually
-        let subfolders: FolderNode[] = [];
-        if (!isServerMode) {
-             subfolders = favoriteFolderPaths.map(path => {
-                const cover = files.find(f => f.folderPath === path && f.mediaType === 'image');
-                return {
-                    name: path.split('/').pop() || path,
-                    path: path,
-                    children: {},
-                    mediaCount: files.filter(f => f.folderPath === path).length,
-                    coverMedia: cover
-                } as FolderNode;
-            });
-        } else {
-            // Server mode returns already filtered folders list in `serverFolders`
-            subfolders = serverFolders.map(sf => ({
-                name: sf.path.split('/').pop() || sf.path,
-                path: sf.path,
-                children: {},
-                mediaCount: sf.count,
-                coverMedia: sf.coverItem
-            }));
-        }
-        return { type: 'mixed', folders: subfolders, photos: processedFiles, title: t('favorites') };
-    }
-    if (viewMode === 'home') {
-        return { type: 'home' };
-    }
-    let targetNode = folderTree;
-    let title = t('folders');
-    if (currentPath) {
-       const parts = currentPath.split('/').filter(p => p);
-       for (const part of parts) {
-           if (targetNode.children[part]) {
-               targetNode = targetNode.children[part];
-           }
-       }
-       title = parts[parts.length - 1] || t('folders');
-    }
-    const subfolders = (Object.values(targetNode.children) as FolderNode[]).sort((a, b) => a.name.localeCompare(b.name));
     
-    const media = isServerMode ? processedFiles : processedFiles.filter(f => f.folderPath === currentPath);
-    
-    return { type: 'mixed', folders: subfolders, photos: media, title: title };
-  }, [viewMode, currentPath, processedFiles, folderTree, t, isServerMode, serverFolders, favoriteFolderPaths, files]);
+    return result;
+  }, [files, viewMode, currentPath, filterOption, sortOption, isServerMode]);
 
-  // Helpers
-  useEffect(() => {
-    return () => {
-      (Object.values(allUserData) as UserData[]).forEach(userData => {
-          userData.files.forEach(f => {
-              if (f.file && f.url && f.url.startsWith('blob:')) URL.revokeObjectURL(f.url);
-          });
-      });
-    };
-  }, []);
 
-  const getLightboxList = () => {
-    if (viewMode === 'home') return files;
-    return viewMode === 'all' ? processedFiles : (content.photos || []);
-  };
-  
-  const handleNext = () => {
-      if (!selectedItem) return;
-      const list = getLightboxList();
-      const idx = list.findIndex(p => p.id === selectedItem.id);
-      if (idx !== -1 && idx < list.length - 1) setSelectedItem(list[idx + 1]);
-      else if (idx === list.length - 1) setSelectedItem(list[0]);
-  };
-  const handlePrev = () => {
-      if (!selectedItem) return;
-      const list = getLightboxList();
-      const idx = list.findIndex(p => p.id === selectedItem.id);
-      if (idx > 0) setSelectedItem(list[idx - 1]);
-      else if (idx === 0) setSelectedItem(list[list.length - 1]);
-  };
-
-  const isFavoriteFolder = (path: string) => {
-      if (isServerMode) return serverFavoriteIds.folders.includes(path);
-      return favoriteFolderPaths.includes(path);
-  };
-
-  // --- RENDER ---
-  if (authStep === 'loading') return <div className="h-[100dvh] flex items-center justify-center text-gray-400 bg-gray-50 dark:bg-gray-900">Loading...</div>;
-
-  if (authStep === 'setup') {
+  // Auth/Setup Screens
+  if (authStep === 'loading') {
       return (
-        <div className="h-[100dvh] flex items-center justify-center bg-gray-50 dark:bg-gray-900 p-4 transition-colors">
-            <div className="bg-white dark:bg-gray-800 p-8 rounded-2xl shadow-xl w-full max-w-md transition-colors">
-                <div className="flex justify-end mb-2">
-                    <div className="flex gap-1">
-                        <button onClick={() => setLanguage(language === 'en' ? 'zh' : 'en')} className="p-2 text-gray-400 hover:text-primary-500 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors font-bold text-xs w-9 h-9">
-                            {language === 'en' ? 'ZH' : 'EN'}
-                        </button>
-                        <button onClick={toggleTheme} className="p-2 text-gray-400 hover:text-primary-500 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">
-                            {theme === 'system' ? <Icons.Monitor size={20} /> : (theme === 'dark' ? <Icons.Moon size={20} /> : <Icons.Sun size={20} />)}
-                        </button>
+          <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center">
+              <Icons.Loader className="animate-spin text-primary-500" size={32} />
+          </div>
+      );
+  }
+
+  if (authStep === 'setup' || authStep === 'login') {
+      // Basic Auth UI
+      return (
+        <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex flex-col items-center justify-center p-4">
+            <div className="w-full max-w-md bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-8">
+                <div className="flex justify-center mb-6">
+                    <div className="w-16 h-16 bg-primary-600 rounded-2xl flex items-center justify-center shadow-lg shadow-primary-500/30">
+                        <div className="w-8 h-8 bg-white/30 rounded-full" />
                     </div>
                 </div>
-                <h1 className="text-3xl font-bold text-primary-600 mb-2 text-center">{t('welcome')}</h1>
-                <p className="text-gray-500 dark:text-gray-400 mb-8 text-center">{isServerMode ? t('init_nas') : t('setup_admin')}</p>
-                <form onSubmit={handleSetup} className="space-y-4">
-                    <input type="text" placeholder="Username" value={setupForm.username} onChange={e => setSetupForm({...setupForm, username: e.target.value})} className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white border-gray-300 dark:border-gray-600 placeholder-gray-400 dark:placeholder-gray-500" />
-                    <input type="password" placeholder="Password" value={setupForm.password} onChange={e => setSetupForm({...setupForm, password: e.target.value})} className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white border-gray-300 dark:border-gray-600 placeholder-gray-400 dark:placeholder-gray-500" />
-                    <input type="password" placeholder="Confirm Password" value={setupForm.confirmPassword} onChange={e => setSetupForm({...setupForm, confirmPassword: e.target.value})} className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white border-gray-300 dark:border-gray-600 placeholder-gray-400 dark:placeholder-gray-500" />
-                    {authError && <p className="text-red-500 text-sm text-center">{authError}</p>}
-                    <button type="submit" className="w-full bg-primary-600 text-white py-2 rounded-lg font-semibold hover:bg-primary-700 transition-colors">{t('create_admin')}</button>
+                <h1 className="text-2xl font-bold text-center text-gray-900 dark:text-white mb-2">
+                    {authStep === 'setup' ? t('welcome') : t('sign_in')}
+                </h1>
+                <p className="text-center text-gray-500 dark:text-gray-400 mb-8">
+                    {authStep === 'setup' ? t('setup_admin') : 'Access your Lumina Gallery'}
+                </p>
+
+                {authError && (
+                    <div className="mb-4 p-3 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 text-sm rounded-lg flex items-center gap-2">
+                        <Icons.Alert size={16} />
+                        {authError}
+                    </div>
+                )}
+
+                <form onSubmit={(e) => {
+                    e.preventDefault();
+                    if (authStep === 'setup') {
+                        if (setupForm.password !== setupForm.confirmPassword) {
+                            setAuthError(t('passwords_not_match'));
+                            return;
+                        }
+                        const newUser = { 
+                            username: setupForm.username, 
+                            password: setupForm.password, 
+                            isAdmin: true,
+                            avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${setupForm.username}` 
+                        };
+                        const newUsers = [newUser];
+                        const newData = { [newUser.username]: { sources: [], files: [], favoriteFolderPaths: [] } };
+                        persistData(newUsers, undefined, newData);
+                        setUsers(newUsers);
+                        setAllUserData(newData);
+                        setCurrentUser(newUser);
+                        setAuthStep('app');
+                        localStorage.setItem(AUTH_USER_KEY, newUser.username);
+                    } else {
+                        const user = users.find(u => u.username === loginForm.username && u.password === loginForm.password);
+                        if (user) {
+                            setCurrentUser(user);
+                            setAuthStep('app');
+                            localStorage.setItem(AUTH_USER_KEY, user.username);
+                            
+                            // Trigger init fetch if server mode
+                            if (isServerMode) {
+                                setTimeout(() => {
+                                   fetchServerFiles(user.username, allUserData, 0, true, null);
+                                   fetchServerFolders();
+                                }, 100);
+                            }
+                        } else {
+                            setAuthError(t('invalid_credentials'));
+                        }
+                    }
+                }} className="space-y-4">
+                    <div className="space-y-1">
+                        <label className="text-xs font-semibold uppercase text-gray-500 dark:text-gray-400">Username</label>
+                        <input 
+                            required
+                            type="text" 
+                            className="w-full px-4 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-500 outline-none"
+                            value={authStep === 'setup' ? setupForm.username : loginForm.username}
+                            onChange={e => authStep === 'setup' ? setSetupForm({...setupForm, username: e.target.value}) : setLoginForm({...loginForm, username: e.target.value})}
+                        />
+                    </div>
+                    <div className="space-y-1">
+                        <label className="text-xs font-semibold uppercase text-gray-500 dark:text-gray-400">Password</label>
+                        <input 
+                            required
+                            type="password" 
+                            className="w-full px-4 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-500 outline-none"
+                            value={authStep === 'setup' ? setupForm.password : loginForm.password}
+                            onChange={e => authStep === 'setup' ? setSetupForm({...setupForm, password: e.target.value}) : setLoginForm({...loginForm, password: e.target.value})}
+                        />
+                    </div>
+                    {authStep === 'setup' && (
+                        <div className="space-y-1">
+                            <label className="text-xs font-semibold uppercase text-gray-500 dark:text-gray-400">Confirm Password</label>
+                            <input 
+                                required
+                                type="password" 
+                                className="w-full px-4 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-500 outline-none"
+                                value={setupForm.confirmPassword}
+                                onChange={e => setSetupForm({...setupForm, confirmPassword: e.target.value})}
+                            />
+                        </div>
+                    )}
+                    <button type="submit" className="w-full py-3 bg-primary-600 hover:bg-primary-700 text-white font-bold rounded-lg transition-colors shadow-lg shadow-primary-600/20">
+                        {authStep === 'setup' ? t('create_admin') : t('sign_in')}
+                    </button>
                 </form>
-                {!isServerMode && (<div className="mt-8 pt-6 border-t border-gray-100 dark:border-gray-700"><label className="flex items-center justify-center gap-2 w-full py-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-600 dark:text-gray-300 rounded-lg cursor-pointer transition-colors text-sm font-medium"><Icons.Upload size={16} /><span>{t('import_db')}</span><input type="file" accept=".json" onChange={handleImportConfig} className="hidden" /></label></div>)}
+                {authStep === 'login' && users.length === 0 && (
+                     <div className="mt-4 text-center">
+                         <button onClick={() => setAuthStep('setup')} className="text-sm text-primary-600 hover:underline">Need to set up?</button>
+                     </div>
+                )}
             </div>
         </div>
       );
   }
 
-  if (authStep === 'login') {
-      return (
-        <div className="h-[100dvh] flex items-center justify-center bg-gray-50 dark:bg-gray-900 p-4 transition-colors">
-            <div className="bg-white dark:bg-gray-800 p-8 rounded-2xl shadow-xl w-full max-w-sm transition-colors">
-                <div className="flex justify-between items-start mb-4">
-                    <div className="w-12 h-12 bg-primary-600 rounded-xl flex items-center justify-center">
-                        <Icons.User className="text-white" />
-                    </div>
-                    <div className="flex gap-1">
-                        <button onClick={() => setLanguage(language === 'en' ? 'zh' : 'en')} className="p-2 text-gray-400 hover:text-primary-500 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors font-bold text-xs w-9 h-9" title={t('language')}>
-                            {language === 'en' ? 'ZH' : 'EN'}
-                        </button>
-                        <button onClick={toggleTheme} className="p-2 text-gray-400 hover:text-primary-500 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">
-                            {theme === 'system' ? <Icons.Monitor size={20} /> : (theme === 'dark' ? <Icons.Moon size={20} /> : <Icons.Sun size={20} />)}
-                        </button>
-                    </div>
-                </div>
-                <h1 className="text-2xl font-bold text-gray-800 dark:text-white text-center mb-2">{appTitle}</h1>
-                {isServerMode && <p className="text-xs text-center text-primary-600 dark:text-primary-400 bg-primary-50 dark:bg-primary-900/30 py-1 rounded mb-6">{t('nas_connected')}</p>}
-                <form onSubmit={handleLogin} className="space-y-4">
-                    <input type="text" placeholder="Username" value={loginForm.username} onChange={e => setLoginForm({...loginForm, username: e.target.value})} className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white border-gray-300 dark:border-gray-600 placeholder-gray-400 dark:placeholder-gray-500" />
-                    <input type="password" placeholder="Password" value={loginForm.password} onChange={e => setLoginForm({...loginForm, password: e.target.value})} className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white border-gray-300 dark:border-gray-600 placeholder-gray-400 dark:placeholder-gray-500" />
-                    {authError && <p className="text-red-500 text-sm text-center">{authError}</p>}
-                    <button type="submit" className="w-full bg-primary-600 text-white py-2 rounded-lg font-semibold hover:bg-primary-700 transition-colors">{t('sign_in')}</button>
-                </form>
-            </div>
-        </div>
-      );
-  }
-
-  const hasVisualFiles = (viewMode === 'all' || viewMode === 'favorites' || (viewMode === 'folders' && currentPath !== '')) && (content.photos && content.photos.length > 0);
-
+  // Main App Render
   return (
-    <div className="flex flex-col md:flex-row h-[100dvh] bg-white dark:bg-gray-900 transition-colors">
+    <div className={`flex h-screen w-full bg-gray-50 dark:bg-gray-900 overflow-hidden text-gray-900 dark:text-gray-100 font-sans transition-colors duration-200 ${isServerMode ? 'server-mode' : ''}`}>
       <Navigation 
-        appTitle={appTitle}
-        viewMode={viewMode}
-        setViewMode={handleSetViewMode}
-        onUpload={handleFileUpload}
-        isSidebarOpen={isSidebarOpen}
-        toggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)}
-        totalPhotos={isServerMode ? libraryTotalCount : files.length} 
-        theme={theme}
-        toggleTheme={toggleTheme}
-        isServerMode={isServerMode}
-        onOpenSettings={() => { fetchSystemStatus(); setIsSettingsOpen(true); }}
+         appTitle={appTitle}
+         viewMode={viewMode}
+         setViewMode={handleSetViewMode}
+         onUpload={handleUpload}
+         isSidebarOpen={isSidebarOpen}
+         toggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)}
+         totalPhotos={libraryTotalCount || files.length}
+         theme={theme}
+         toggleTheme={toggleTheme}
+         isServerMode={isServerMode}
+         onOpenSettings={() => setIsSettingsOpen(true)}
       />
 
-      <main className="flex-1 flex flex-col h-full overflow-hidden relative">
-        {viewMode === 'home' ? (
+      <main className="flex-1 flex flex-col min-w-0 relative h-full">
+         {/* Toolbar */}
+         {viewMode !== 'home' && (
+             <header className="h-16 flex items-center justify-between px-4 md:px-8 border-b border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-900 z-20 shrink-0">
+                <div className="flex items-center gap-3 md:hidden">
+                    <button onClick={() => setIsSidebarOpen(true)} className="p-2 -ml-2 text-gray-600 dark:text-gray-300">
+                        <Icons.Menu size={24} />
+                    </button>
+                    <span className="font-bold text-lg truncate">{appTitle}</span>
+                </div>
+
+                <div className="hidden md:flex items-center gap-4">
+                    {viewMode === 'folders' && currentPath && (
+                         <button onClick={handleGoBackFolder} className="flex items-center gap-2 text-gray-500 hover:text-gray-800 dark:hover:text-white transition-colors">
+                             <Icons.Back size={20} />
+                             <span className="font-medium text-lg">{currentPath.split('/').pop()}</span>
+                         </button>
+                    )}
+                    {(viewMode === 'all' || viewMode === 'favorites' || (viewMode === 'folders' && !currentPath)) && (
+                         <h2 className="text-xl font-bold">{t(viewMode === 'all' ? 'all_photos' : (viewMode === 'favorites' ? 'favorites' : 'folders'))}</h2>
+                    )}
+                </div>
+
+                <div className="flex items-center gap-2">
+                    {/* View/Sort Controls */}
+                    {viewMode !== 'folders' && (
+                        <div className="flex items-center bg-gray-100 dark:bg-gray-800 rounded-lg p-1">
+                            <button onClick={() => setFilterOption('all')} className={`p-1.5 rounded-md ${filterOption === 'all' ? 'bg-white dark:bg-gray-700 shadow-sm' : 'text-gray-500'}`} title={t('all_types')}><Icons.Grid size={16}/></button>
+                            <button onClick={() => setFilterOption('video')} className={`p-1.5 rounded-md ${filterOption === 'video' ? 'bg-white dark:bg-gray-700 shadow-sm' : 'text-gray-500'}`} title={t('videos_only')}><Icons.Video size={16}/></button>
+                            <button onClick={() => setFilterOption('audio')} className={`p-1.5 rounded-md ${filterOption === 'audio' ? 'bg-white dark:bg-gray-700 shadow-sm' : 'text-gray-500'}`} title={t('audio_only')}><Icons.Music size={16}/></button>
+                        </div>
+                    )}
+                    
+                    {viewMode !== 'folders' && (
+                         <div className="relative group">
+                             <button className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg text-gray-600 dark:text-gray-300">
+                                 <Icons.Sort size={20} />
+                             </button>
+                             <div className="absolute right-0 top-full mt-2 w-48 bg-white dark:bg-gray-800 rounded-xl shadow-xl border border-gray-100 dark:border-gray-700 p-1 hidden group-hover:block z-50">
+                                 <button onClick={() => setSortOption('dateDesc')} className={`w-full text-left px-3 py-2 rounded-lg text-sm ${sortOption === 'dateDesc' ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600' : 'hover:bg-gray-100 dark:hover:bg-gray-700'}`}>{t('newest_first')}</button>
+                                 <button onClick={() => setSortOption('dateAsc')} className={`w-full text-left px-3 py-2 rounded-lg text-sm ${sortOption === 'dateAsc' ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600' : 'hover:bg-gray-100 dark:hover:bg-gray-700'}`}>{t('oldest_first')}</button>
+                                 <button onClick={() => setSortOption('random')} className={`w-full text-left px-3 py-2 rounded-lg text-sm ${sortOption === 'random' ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600' : 'hover:bg-gray-100 dark:hover:bg-gray-700'}`}>{t('shuffle_random')}</button>
+                             </div>
+                         </div>
+                    )}
+
+                    {(viewMode === 'all' || viewMode === 'favorites' || (viewMode === 'folders' && currentPath)) && (
+                        <button onClick={toggleLayoutMode} className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg text-gray-600 dark:text-gray-300" title="Toggle Layout">
+                            {layoutMode === 'masonry' ? <Icons.Masonry size={20} /> : (layoutMode === 'timeline' ? <Icons.List size={20} /> : <Icons.Grid size={20} />)}
+                        </button>
+                    )}
+                </div>
+             </header>
+         )}
+
+         {/* Content Area */}
+         {viewMode === 'home' ? (
              <Home 
                 items={files} 
-                onEnterLibrary={() => handleSetViewMode('folders')} 
+                onEnterLibrary={() => handleSetViewMode('all')} 
                 onJumpToFolder={handleJumpToFolder}
                 subtitle={homeSubtitle}
                 config={homeConfig}
              />
-        ) : (
-        <>
-            <header className="h-16 flex items-center justify-between px-6 border-b border-gray-50 dark:border-gray-800 bg-white/80 dark:bg-gray-900/80 backdrop-blur-sm z-20 shrink-0 transition-colors">
-            <div className="flex items-center gap-2 overflow-hidden flex-1 mr-4">
-                {viewMode === 'folders' || (viewMode === 'favorites' && currentPath) ? (
-                    <div className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400 overflow-hidden whitespace-nowrap mask-linear-fade">
-                         {currentPath && (
-                            <button 
-                                onClick={handleGoBackFolder} 
-                                className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-md transition-colors mr-1 flex items-center gap-1 text-gray-500"
-                                title="Go Up"
-                            >
-                                <Icons.Up size={18} />
-                                <span className="text-xs font-bold hidden sm:block">UP</span>
-                            </button>
-                         )}
+         ) : (
+             <div className="flex-1 overflow-hidden relative">
+                 {/* Empty State */}
+                 {!isServerMode && files.length === 0 && (
+                     <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-400">
+                         <div className="w-24 h-24 bg-gray-100 dark:bg-gray-800 rounded-full flex items-center justify-center mb-4">
+                             <Icons.Image size={40} className="opacity-50" />
+                         </div>
+                         <h3 className="text-xl font-bold text-gray-600 dark:text-gray-300 mb-2">{t('empty_library')}</h3>
+                         <p className="max-w-xs text-center text-sm">{t('import_local')}</p>
+                     </div>
+                 )}
+                 {isServerMode && libraryTotalCount === 0 && !isFetchingMore && viewMode === 'all' && (
+                     <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-400">
+                          <Icons.Server size={48} className="mb-4 text-primary-500" />
+                          <h3 className="text-xl font-bold text-gray-600 dark:text-gray-300 mb-2">{t('connected_to_nas')}</h3>
+                          <p className="max-w-md text-center text-sm">{t('configure_nas')}</p>
+                          <button onClick={() => setIsSettingsOpen(true)} className="mt-6 px-6 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded-full font-medium transition-colors">
+                              {t('configure_library')}
+                          </button>
+                     </div>
+                 )}
 
-                        <button onClick={() => handleFolderClick('')} className={`hover:bg-gray-100 dark:hover:bg-gray-800 px-2 py-1 rounded-md flex items-center gap-1 transition-colors ${currentPath === '' ? 'font-bold text-gray-900 dark:text-white bg-gray-50 dark:bg-gray-800' : ''}`}><Icons.Folder size={16} />Root</button>
-                        {currentPath && currentPath.split('/').filter(p => p).map((part, index, arr) => {
-                            const hasLeading = currentPath.startsWith('/');
-                            const path = (hasLeading ? '/' : '') + arr.slice(0, index + 1).join('/');
-                            return (<React.Fragment key={path}><Icons.ChevronRight size={12} className="text-gray-300 dark:text-gray-600" /><button onClick={() => handleFolderClick(path)} className="hover:bg-gray-100 dark:hover:bg-gray-800 px-2 py-1 rounded-md truncate max-w-[150px] transition-colors">{part}</button></React.Fragment>);
-                        })}
-                    </div>
-                ) : (
-                    <div className="flex items-center gap-2">
-                        {viewMode === 'favorites' ? <Icons.Heart size={20} className="text-red-500" fill="currentColor" /> : <Icons.Image size={20} className="text-primary-600" />}
-                        <h1 className="text-xl font-bold text-gray-800 dark:text-white truncate">{viewMode === 'favorites' ? t('favorites') : t('library')}</h1>
-                    </div>
-                )}
-            </div>
-            <div className="flex items-center gap-2">
-                <button 
-                    onClick={toggleLayoutMode} 
-                    className="p-2 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors" 
-                    title={layoutMode === 'grid' ? "Switch to Waterfall Masonry" : layoutMode === 'masonry' ? "Switch to Timeline" : "Switch to Grid"}
-                >
-                    {layoutMode === 'grid' ? <Icons.Masonry size={20} /> : layoutMode === 'masonry' ? <Icons.List size={20} /> : <Icons.Grid size={20} />}
-                </button>
-
-                <div className="relative group z-30 h-full flex items-center">
-                    <button className="p-2 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full flex items-center gap-1 transition-colors group-hover:bg-gray-100 dark:group-hover:bg-gray-800"><Icons.Filter size={18} /><Icons.Sort size={14} /></button>
-                    {/* Transparent Bridge to prevent mouse falling through */}
-                    <div className="absolute top-[80%] right-0 h-6 w-full bg-transparent hidden group-hover:block" />
-                    
-                    <div className="absolute right-0 top-full mt-1 w-52 bg-white dark:bg-gray-800 rounded-xl shadow-xl border border-gray-100 dark:border-gray-700 p-2 hidden group-hover:block z-50 animate-in fade-in zoom-in-95 duration-200">
-                        <p className="text-xs font-semibold text-gray-400 uppercase px-2 py-1">{t('sort_filter')}</p>
-                        <button onClick={() => setSortOption('dateDesc')} className={`w-full text-left px-2 py-1.5 text-sm rounded-lg flex justify-between transition-colors ${sortOption === 'dateDesc' ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}`}>{t('newest_first')} {sortOption === 'dateDesc' && <Icons.Check size={14} />}</button>
-                        <button onClick={() => setSortOption('dateAsc')} className={`w-full text-left px-2 py-1.5 text-sm rounded-lg flex justify-between transition-colors ${sortOption === 'dateAsc' ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}`}>{t('oldest_first')} {sortOption === 'dateAsc' && <Icons.Check size={14} />}</button>
-                        {viewMode === 'all' && (
-                             <button onClick={() => setSortOption('random')} className={`w-full text-left px-2 py-1.5 text-sm rounded-lg flex justify-between transition-colors ${sortOption === 'random' ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}`}>{t('shuffle_random')} {sortOption === 'random' && <Icons.Check size={14} />}</button>
-                        )}
-                        <div className="my-1 border-t border-gray-100 dark:border-gray-700" />
-                        <button onClick={() => setFilterOption('all')} className={`w-full text-left px-2 py-1.5 text-sm rounded-lg flex justify-between transition-colors ${filterOption === 'all' ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}`}>{t('all_types')} {filterOption === 'all' && <Icons.Check size={14} />}</button>
-                        <button onClick={() => setFilterOption('video')} className={`w-full text-left px-2 py-1.5 text-sm rounded-lg flex justify-between transition-colors ${filterOption === 'video' ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}`}>{t('videos_only')} {filterOption === 'video' && <Icons.Check size={14} />}</button>
-                        <button onClick={() => setFilterOption('audio')} className={`w-full text-left px-2 py-1.5 text-sm rounded-lg flex justify-between transition-colors ${filterOption === 'audio' ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}`}>{t('audio_only')} {filterOption === 'audio' && <Icons.Check size={14} />}</button>
-                    </div>
-                </div>
-            </div>
-            </header>
-
-            <div className="flex-1 flex flex-col overflow-hidden bg-gray-50/50 dark:bg-gray-900/50 transition-colors">
-            {files.length === 0 && !isFetchingMore && viewMode === 'all' && (
-                <div className="h-full flex flex-col items-center justify-center text-center p-8 overflow-y-auto">
-                <div className="w-24 h-24 bg-indigo-50 dark:bg-indigo-900/30 rounded-full flex items-center justify-center mb-6 text-indigo-400"><Icons.Upload size={40} /></div>
-                <h2 className="text-2xl font-bold text-gray-800 dark:text-white mb-2">{t('welcome')}, {currentUser?.username}</h2>
-                <p className="text-gray-500 dark:text-gray-400 max-w-md mb-8">{isServerMode ? t('configure_nas') : t('import_local')}</p>
-                {isServerMode ? (
-                    <button onClick={() => setIsSettingsOpen(true)} className="bg-primary-600 text-white px-8 py-3 rounded-xl font-medium shadow-lg hover:bg-primary-700 flex items-center justify-center gap-2 transition-colors"><Icons.Settings size={20} /><span>{t('configure_library')}</span></button>
-                ) : (
-                    <label className="bg-primary-600 text-white px-8 py-3 rounded-xl font-medium shadow-lg cursor-pointer flex items-center justify-center gap-2 hover:bg-primary-700 transition-colors">
-                        <Icons.Upload size={20} />
-                        <span>{t('import_local_folder')}</span>
-                        <input 
-                            type="file" 
-                            multiple 
-                            {...({ webkitdirectory: "true", directory: "" } as any)} 
-                            onChange={handleFileUpload} 
-                            className="hidden" 
-                        />
-                    </label>
-                )}
-                </div>
-            )}
-
-            {(files.length > 0 || isFetchingMore || (viewMode === 'folders' && content.folders.length > 0) || (viewMode === 'favorites')) && (
-                <>
-                    {((viewMode === 'folders' && content.folders.length > 0) || (viewMode === 'favorites' && content.folders.length > 0)) && (
-                        <div className={`p-4 md:p-8 pb-0 shrink-0 overflow-y-auto no-scrollbar animate-in fade-in slide-in-from-bottom-2 duration-500 ${hasVisualFiles ? 'max-h-[40vh]' : 'flex-1 h-full'}`}>
-                            <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2">
-                                <Icons.Folder size={14} />{t('folders')}
-                            </h3>
-                            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
-                                {content.folders.map((folder) => (
-                                    <FolderCard 
-                                        key={folder.path} 
-                                        folder={folder} 
-                                        onClick={(path) => handleFolderClick(path)}
-                                        isFavorite={isFavoriteFolder(folder.path)}
-                                        onToggleFavorite={(p) => handleToggleFavorite(p, 'folder')}
-                                        onRename={handleFolderRename}
-                                        onDelete={handleFolderDelete}
-                                    />
+                 {/* Views */}
+                 {viewMode === 'folders' && !currentPath ? (
+                     <div className="w-full h-full overflow-y-auto p-4 md:p-8">
+                         {isServerMode ? (
+                             serverFolders.length === 0 ? (
+                                 <div className="flex items-center justify-center h-64 text-gray-500">No folders found</div>
+                             ) : (
+                                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 md:gap-6">
+                                    {serverFolders.map(folder => (
+                                        <FolderCard 
+                                            key={folder.path}
+                                            folder={{
+                                                name: folder.path.split('/').pop() || 'Root',
+                                                path: folder.path,
+                                                mediaCount: folder.count,
+                                                children: {},
+                                                coverMedia: folder.coverItem
+                                            }}
+                                            onClick={handleFolderClick}
+                                            isFavorite={serverFavoriteIds.folders.includes(folder.path)}
+                                            onToggleFavorite={(path) => handleToggleFavorite(path, 'folder')}
+                                            onRename={handleFolderRename}
+                                            onDelete={handleFolderDelete}
+                                        />
+                                    ))}
+                                </div>
+                             )
+                         ) : (
+                            // Client Side Folder Grid
+                            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 md:gap-6">
+                                {Object.values(buildFolderTree(files).children).map(node => (
+                                     <FolderCard 
+                                         key={node.path}
+                                         folder={node}
+                                         onClick={handleFolderClick}
+                                         isFavorite={(allUserData[currentUser?.username || '']?.favoriteFolderPaths || []).includes(node.path)}
+                                         onToggleFavorite={(path) => handleToggleFavorite(path, 'folder')}
+                                         onRename={handleFolderRename}
+                                         onDelete={handleFolderDelete}
+                                     />
                                 ))}
                             </div>
-                        </div>
-                    )}
-
-                    {(viewMode === 'all' || (viewMode === 'folders' && currentPath !== '') || viewMode === 'favorites') && (
-                        <div className="flex-1 min-h-0 p-4 md:p-8 pt-4 w-full"> 
-                            {viewMode === 'favorites' && (
-                                <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2"><Icons.Image size={14} />{t('all_photos')}</h3>
-                            )}
-                            <VirtualGallery 
-                                    layout={layoutMode}
-                                    items={viewMode === 'all' || viewMode === 'favorites' ? processedFiles : (content.photos || [])}
-                                    onItemClick={setSelectedItem}
-                                    hasNextPage={isServerMode ? hasMoreServer : false}
-                                    isNextPageLoading={isFetchingMore}
-                                    loadNextPage={loadMoreServerFiles}
-                                    itemCount={isServerMode && (viewMode === 'all' || viewMode === 'favorites') ? serverTotal : processedFiles.length}
-                            />
-                        </div>
-                    )}
-                </>
-            )}
-            </div>
-        </>
-        )}
+                         )}
+                     </div>
+                 ) : (
+                     <div className="w-full h-full">
+                         <VirtualGallery 
+                             items={processedFiles} 
+                             onItemClick={setSelectedItem}
+                             hasNextPage={isServerMode && hasMoreServer}
+                             isNextPageLoading={isFetchingMore}
+                             loadNextPage={loadMoreServerFiles}
+                             itemCount={isServerMode ? serverTotal : processedFiles.length}
+                             layout={layoutMode}
+                         />
+                     </div>
+                 )}
+             </div>
+         )}
       </main>
 
-      <ImageViewer 
-        item={selectedItem} 
-        onClose={() => setSelectedItem(null)} 
-        onNext={handleNext} 
-        onPrev={handlePrev}
-        onDelete={handleDelete}
-        onRename={handleRename}
-        onJumpToFolder={handleJumpToFolder}
-        onToggleFavorite={handleToggleFavorite}
-      />
-      
-      {/* Scan Progress Modal */}
-      <ScanProgressModal 
-        isOpen={isScanModalOpen}
-        status={scanStatus}
-        count={scanProgress.count}
-        currentPath={scanProgress.currentPath}
-        onPause={() => handleScanControl('pause')}
-        onResume={() => handleScanControl('resume')}
-        onCancel={() => handleScanControl('cancel')}
-        onClose={() => setIsScanModalOpen(false)}
-        title={jobType === 'scan' ? t('scanning_library') : `${t('generating_thumbnails')} ${scanProgress.currentEngine ? `(${scanProgress.currentEngine})` : ''}`}
-        type={jobType}
-      />
-
+      {/* Settings Modal */}
       <AnimatePresence>
         {isSettingsOpen && (
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setIsSettingsOpen(false)}>
-                <motion.div initial={{ scale: 0.95, y: 20 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.95, y: 20 }} className="bg-white dark:bg-gray-800 rounded-2xl w-full max-w-2xl max-h-[85vh] overflow-hidden flex flex-col shadow-2xl transition-colors" onClick={e => e.stopPropagation()}>
-                    <div className="p-6 border-b border-gray-100 dark:border-gray-700 flex justify-between items-center bg-gray-50 dark:bg-gray-800/50"><h2 className="font-bold text-xl text-gray-800 dark:text-white">{t('settings')}</h2><button onClick={() => setIsSettingsOpen(false)} className="p-2 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-full text-gray-500 dark:text-gray-400 transition-colors"><Icons.Close size={20}/></button></div>
-                    <div className="p-6 overflow-y-auto space-y-8 flex-1">
-                        
-                        {/* APPEARANCE SECTION (Both Modes) */}
-                        <section className="pb-6 border-b border-gray-100 dark:border-gray-700">
-                            <h3 className="font-bold text-gray-800 dark:text-gray-200 flex items-center gap-2 mb-4"><Icons.Monitor size={18} /> {t('appearance')}</h3>
-                            <div className="grid grid-cols-2 gap-4">
-                                <div>
-                                    <label className="text-sm font-medium text-gray-600 dark:text-gray-400 mb-2 block">{t('theme')}</label>
-                                    <div className="flex bg-gray-100 dark:bg-gray-700 rounded-lg p-1">
-                                        {['light', 'dark', 'system'].map((m) => (
-                                            <button
-                                                key={m}
-                                                className={`flex-1 py-1.5 text-xs font-medium rounded-md capitalize ${theme === m ? 'bg-white dark:bg-gray-600 shadow-sm text-gray-900 dark:text-white' : 'text-gray-500 dark:text-gray-400'}`}
-                                                onClick={() => { setTheme(m as any); localStorage.setItem(THEME_STORAGE_KEY, m); }}
-                                            >
-                                                {t(m === 'light' ? 'light_mode' : m === 'dark' ? 'dark_mode' : 'follow_system')}
-                                            </button>
-                                        ))}
-                                    </div>
-                                </div>
-                                <div>
-                                    <label className="text-sm font-medium text-gray-600 dark:text-gray-400 mb-2 block">{t('language')}</label>
-                                    <div className="flex bg-gray-100 dark:bg-gray-700 rounded-lg p-1">
-                                        <button onClick={() => setLanguage('en')} className={`flex-1 py-1.5 text-xs font-medium rounded-md ${language === 'en' ? 'bg-white dark:bg-gray-600 shadow-sm text-gray-900 dark:text-white' : 'text-gray-500 dark:text-gray-400'}`}>English</button>
-                                        <button onClick={() => setLanguage('zh')} className={`flex-1 py-1.5 text-xs font-medium rounded-md ${language === 'zh' ? 'bg-white dark:bg-gray-600 shadow-sm text-gray-900 dark:text-white' : 'text-gray-500 dark:text-gray-400'}`}>中文</button>
-                                    </div>
-                                </div>
-                            </div>
-                        </section>
+            <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 md:p-12"
+                onClick={() => setIsSettingsOpen(false)}
+            >
+                <motion.div
+                    initial={{ scale: 0.95, y: 20 }}
+                    animate={{ scale: 1, y: 0 }}
+                    exit={{ scale: 0.95, y: 20 }}
+                    className="bg-white dark:bg-gray-900 w-full max-w-5xl h-[85vh] rounded-3xl shadow-2xl overflow-hidden flex flex-col md:flex-row"
+                    onClick={e => e.stopPropagation()}
+                >
+                    {/* Settings Sidebar */}
+                    <div className="w-full md:w-64 bg-gray-50 dark:bg-gray-950/50 border-r border-gray-100 dark:border-gray-800 p-6 flex flex-col gap-1 shrink-0">
+                        <h3 className="text-xl font-bold mb-6 px-2 flex items-center gap-2"><Icons.Settings size={24} className="text-primary-600"/> {t('settings')}</h3>
+                        <div className="space-y-1">
+                             <button className="w-full text-left px-4 py-2.5 rounded-xl bg-white dark:bg-gray-800 shadow-sm font-medium text-primary-600 dark:text-primary-400">{t('general')}</button>
+                             {/* Future tabs could go here */}
+                        </div>
+                        <div className="mt-auto">
+                            <button onClick={() => { setCurrentUser(null); setAuthStep('login'); localStorage.removeItem(AUTH_USER_KEY); }} className="w-full text-left px-4 py-3 rounded-xl hover:bg-red-50 dark:hover:bg-red-900/10 text-red-600 flex items-center gap-3 transition-colors">
+                                <Icons.LogOut size={20} />
+                                <span className="font-medium">{t('sign_out')}</span>
+                            </button>
+                        </div>
+                    </div>
 
-                        {/* CONNECTION SECTION */}
-                        <section className="pb-6 border-b border-gray-100 dark:border-gray-700">
-                            <h3 className="font-bold text-gray-800 dark:text-gray-200 flex items-center gap-2 mb-4"><Icons.Server size={18} /> {t('connection')}</h3>
-                            <div className="bg-gray-50 dark:bg-gray-700/30 p-4 rounded-xl border border-gray-100 dark:border-gray-700 flex justify-between items-center">
-                                <div>
-                                    <h4 className="text-sm font-bold text-gray-700 dark:text-gray-200 flex items-center gap-2">
-                                        {isServerMode ? t('server_mode') : t('client_mode')}
-                                        <span className={`w-2 h-2 rounded-full ${isServerMode ? (systemStatus ? 'bg-green-500' : 'bg-yellow-500') : 'bg-orange-500'}`} />
-                                    </h4>
-                                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                                        {isServerMode ? t('server_mode_description') : t('client_mode_description')}
-                                    </p>
-                                </div>
-                                <button 
-                                    onClick={() => {
-                                        if(isServerMode) {
-                                            setIsServerMode(false);
-                                            setSystemStatus(null);
-                                        } else {
-                                            setIsServerMode(true);
-                                            setTimeout(() => {
-                                                fetchSystemStatus(true);
-                                                fetchServerFolders();
-                                            }, 100);
-                                        }
-                                    }}
-                                    className="px-3 py-1.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-300 text-xs font-bold rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
-                                >
-                                    {t('toggle')}
-                                </button>
-                            </div>
-                        </section>
-
-                        {/* SERVER DASHBOARD */}
-                        {isServerMode && (
-                            <section className="pb-6 border-b border-gray-100 dark:border-gray-700">
-                                <h3 className="font-bold text-gray-800 dark:text-gray-200 flex items-center gap-2"><Icons.Activity size={18} /> {t('system_monitoring')}</h3>
-                                {!systemStatus ? (
-                                     <div className="mt-4 p-4 bg-red-50 dark:bg-red-900/20 border border-red-100 dark:border-red-800 rounded-xl flex items-center gap-3 animate-in fade-in slide-in-from-top-2 duration-300">
-                                         <Icons.AlertTriangle className="text-red-500" />
-                                         <div>
-                                             <p className="text-sm font-bold text-red-700 dark:text-red-400">{t('server_offline')}</p>
-                                             <p className="text-xs text-red-600 dark:text-red-500">{t('server_offline_desc')}</p>
-                                         </div>
-                                         <button onClick={() => fetchSystemStatus(true)} className="ml-auto px-3 py-1 bg-white dark:bg-gray-800 shadow-sm rounded-lg text-xs font-bold text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">{t('retry')}</button>
-                                     </div>
-                                ) : (
-                                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mt-4 animate-in fade-in slide-in-from-top-2 duration-300">
-                                        {/* Core Components Status */}
-                                        <div className="bg-gray-50 dark:bg-gray-700/30 p-4 rounded-xl border border-gray-100 dark:border-gray-700">
-                                            <h4 className="text-xs uppercase font-bold text-gray-500 mb-3">{t('backend_components')}</h4>
-                                            <div className="space-y-2">
-                                                <div className="flex justify-between items-center text-sm">
-                                                    <span className="flex items-center gap-2 text-gray-700 dark:text-gray-300"><Icons.Database size={14}/> {t('database')}</span>
-                                                    <span className="text-green-500 bg-green-500/10 px-2 py-0.5 rounded text-[10px] font-bold">ONLINE</span>
-                                                </div>
-                                                <div className="flex justify-between items-center text-sm">
-                                                    <span className="flex items-center gap-2 text-gray-700 dark:text-gray-300"><Icons.Cpu size={14}/> {t('video_engine')}</span>
-                                                     {systemStatus.ffmpeg ? <span className="text-green-500 bg-green-500/10 px-2 py-0.5 rounded text-[10px] font-bold">FFMPEG</span> : <span className="text-red-500 bg-red-500/10 px-2 py-0.5 rounded text-[10px] font-bold">MISSING</span>}
-                                                </div>
-                                                 <div className="flex justify-between items-center text-sm">
-                                                    <span className="flex items-center gap-2 text-gray-700 dark:text-gray-300"><Icons.Image size={14}/> {t('image_engine')}</span>
-                                                     {systemStatus.sharp ? <span className="text-green-500 bg-green-500/10 px-2 py-0.5 rounded text-[10px] font-bold">SHARP</span> : <span className="text-red-500 bg-red-500/10 px-2 py-0.5 rounded text-[10px] font-bold">MISSING</span>}
-                                                </div>
-                                                 <div className="flex justify-between items-center text-sm">
-                                                    <span className="flex items-center gap-2 text-gray-700 dark:text-gray-300"><Icons.Zap size={14}/> {t('hw_accel')}</span>
-                                                     {systemStatus.ffmpegHwAccels.length > 0 ? (
-                                                        <div className="flex gap-1">
-                                                            {systemStatus.ffmpegHwAccels.slice(0, 2).map(a => <span key={a} className="text-purple-500 bg-purple-500/10 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase">{a}</span>)}
-                                                        </div>
-                                                     ) : <span className="text-gray-400 text-[10px]">OFF</span>}
-                                                </div>
-                                            </div>
-                                        </div>
-
-                                        {/* Library Stats */}
-                                        <div className="bg-gray-50 dark:bg-gray-700/30 p-4 rounded-xl border border-gray-100 dark:border-gray-700">
-                                             <h4 className="text-xs uppercase font-bold text-gray-500 mb-3">{t('library_stats')}</h4>
-                                             <div className="flex items-end justify-between mb-4">
-                                                 <div>
-                                                     <p className="text-2xl font-bold text-gray-800 dark:text-white">{systemStatus.totalItems}</p>
-                                                     <p className="text-xs text-gray-400">{t('total_assets')}</p>
-                                                 </div>
-                                                 <div className="text-right">
-                                                     <p className="text-sm font-bold text-gray-700 dark:text-gray-200">{systemStatus.mediaBreakdown.video}</p>
-                                                     <p className="text-xs text-gray-400">Videos</p>
-                                                 </div>
-                                             </div>
-                                             <div className="flex gap-2 text-[10px]">
-                                                <div className="flex-1 bg-white dark:bg-gray-800 p-2 rounded border border-gray-200 dark:border-gray-600 text-center">
-                                                    <strong className="block text-gray-800 dark:text-gray-200">{systemStatus.mediaBreakdown.image}</strong> Images
-                                                </div>
-                                                <div className="flex-1 bg-white dark:bg-gray-800 p-2 rounded border border-gray-200 dark:border-gray-600 text-center">
-                                                    <strong className="block text-gray-800 dark:text-gray-200">{systemStatus.mediaBreakdown.audio}</strong> Audio
-                                                </div>
-                                             </div>
-                                        </div>
-
-                                        {/* Cache Stats */}
-                                        <div className="bg-gray-50 dark:bg-gray-700/30 p-4 rounded-xl border border-gray-100 dark:border-gray-700">
-                                             <h4 className="text-xs uppercase font-bold text-gray-500 mb-3">{t('cache_management')}</h4>
-                                             <div className="mb-3">
-                                                 <div className="flex justify-between text-sm mb-1">
-                                                     <span className="text-gray-600 dark:text-gray-400">Thumbnails</span>
-                                                     <span className="font-bold text-gray-800 dark:text-white">{systemStatus.cacheCount}</span>
-                                                 </div>
-                                                 <div className="w-full bg-gray-200 dark:bg-gray-600 rounded-full h-1.5">
-                                                    <div className="bg-blue-500 h-1.5 rounded-full" style={{ width: `${Math.min(100, (systemStatus.cacheCount / (systemStatus.totalItems || 1)) * 100)}%` }}></div>
-                                                 </div>
-                                             </div>
-                                             <div className="flex flex-col gap-2 mt-auto">
-                                                <button onClick={clearCache} className="w-full py-1.5 text-xs bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded hover:bg-red-50 dark:hover:bg-red-900/20 hover:text-red-500 hover:border-red-200 transition-colors">{t('clear_all_cache')}</button>
-                                                <button onClick={pruneCache} className="w-full py-1.5 text-xs bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded hover:bg-orange-50 dark:hover:bg-orange-900/20 hover:text-orange-500 hover:border-orange-200 transition-colors">{t('prune_legacy_cache')}</button>
-                                             </div>
-                                        </div>
-
-                                         {/* Watcher (Full Width) */}
-                                         <div className="bg-gray-50 dark:bg-gray-700/30 p-4 rounded-xl border border-gray-100 dark:border-gray-700 sm:col-span-2 lg:col-span-3 flex justify-between items-center">
-                                            <div>
-                                                <h4 className="text-sm font-bold text-gray-700 dark:text-gray-200 flex items-center gap-2"><Icons.Scan size={16} /> {t('auto_scan')}</h4>
-                                                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Automatically detect changes in library folders.</p>
-                                            </div>
-                                            <div className="flex items-center gap-3">
-                                                <div className={`flex items-center gap-1.5 px-2 py-1 rounded text-xs font-bold uppercase ${systemStatus.watcherActive ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' : 'bg-gray-200 text-gray-500 dark:bg-gray-600 dark:text-gray-400'}`}>
-                                                    <div className={`w-2 h-2 rounded-full ${systemStatus.watcherActive ? 'bg-green-500 animate-pulse' : 'bg-gray-500'}`} />
-                                                    {systemStatus.watcherActive ? 'Running' : 'Stopped'}
-                                                </div>
-                                                <button onClick={toggleWatcher} className={`relative w-10 h-6 rounded-full transition-colors ${systemStatus.watcherActive ? 'bg-primary-600' : 'bg-gray-300 dark:bg-gray-600'}`}>
-                                                    <div className={`absolute top-1 left-1 bg-white w-4 h-4 rounded-full shadow transition-transform ${systemStatus.watcherActive ? 'translate-x-4' : 'translate-x-0'}`} />
-                                                </button>
-                                            </div>
-                                        </div>
-                                    </div>
-                                )}
-                            </section>
-                        )}
-
-                        {currentUser?.isAdmin && (
-                            <>
-                            <section className="pb-6 border-b border-gray-100 dark:border-gray-700">
-                                <h3 className="font-bold text-gray-800 dark:text-gray-200 flex items-center gap-2 mb-4"><Icons.Settings size={18} /> {t('general')}</h3>
-                                <div className="space-y-4">
-                                    <div className="space-y-2">
-                                        <label className="text-sm font-medium text-gray-600 dark:text-gray-400">{t('website_title')}</label>
-                                        <input type="text" value={appTitle} onChange={(e) => handleUpdateTitle(e.target.value)} className="w-full px-3 py-2 text-sm border rounded-lg focus:ring-2 focus:ring-primary-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white border-gray-200 dark:border-gray-600 placeholder-gray-400 dark:placeholder-gray-500" />
-                                    </div>
-
-                                    <div className="space-y-2">
-                                        <label className="text-sm font-medium text-gray-600 dark:text-gray-400">{t('home_subtitle')}</label>
-                                        <input type="text" value={homeSubtitle} onChange={(e) => handleUpdateSubtitle(e.target.value)} className="w-full px-3 py-2 text-sm border rounded-lg focus:ring-2 focus:ring-primary-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white border-gray-200 dark:border-gray-600 placeholder-gray-400 dark:placeholder-gray-500" />
-                                    </div>
-                                    
-                                    <div className="pt-4 mt-4 border-t border-gray-100 dark:border-gray-700">
-                                         <label className="text-sm font-medium text-gray-600 dark:text-gray-400 mb-2 block">{t('home_screen_conf')}</label>
-                                         <div className="space-y-2">
-                                            <div className="flex flex-col sm:flex-row gap-4">
-                                                 <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
-                                                     <input type="radio" checked={homeConfig.mode === 'random'} onChange={() => handleUpdateHomeConfig({ mode: 'random' })} />
-                                                     {t('random_all')}
-                                                 </label>
-                                                 <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
-                                                     <input type="radio" checked={homeConfig.mode === 'folder'} onChange={() => handleUpdateHomeConfig({ mode: 'folder', path: homeConfig.path || '' })} />
-                                                     {t('specific_folder')}
-                                                 </label>
-                                                  <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
-                                                     <input type="radio" checked={homeConfig.mode === 'single'} onChange={() => handleUpdateHomeConfig({ mode: 'single', path: homeConfig.path || '' })} />
-                                                     {t('single_item')}
-                                                 </label>
-                                            </div>
-                                            {(homeConfig.mode === 'folder' || homeConfig.mode === 'single') && (
-                                                <input 
-                                                    type="text" 
-                                                    value={homeConfig.path || ''} 
-                                                    onChange={(e) => handleUpdateHomeConfig({ ...homeConfig, path: e.target.value })}
-                                                    placeholder={t('enter_rel_path')}
-                                                    className="w-full px-3 py-2 text-sm border rounded-lg outline-none bg-white dark:bg-gray-700 border-gray-200 dark:border-gray-600 placeholder-gray-400 dark:placeholder-gray-500"
-                                                />
-                                            )}
-                                         </div>
-                                    </div>
-                                </div>
-                            </section>
+                    {/* Settings Content */}
+                    <div className="flex-1 overflow-y-auto p-6 md:p-10">
+                         <div className="max-w-3xl mx-auto space-y-10">
                             
-                            {/* STORAGE & DATABASE SECTION */}
-                            <section className="pb-6 border-b border-gray-100 dark:border-gray-700">
-                                <h3 className="font-bold text-gray-800 dark:text-gray-200 flex items-center gap-2 mb-4"><Icons.Folder size={18} /> {t('storage_database')}</h3>
-                                
-                                {isServerMode ? (
-                                    <div className="space-y-4">
-                                        <div className="bg-primary-50 dark:bg-primary-900/20 p-4 rounded-xl border border-primary-100 dark:border-primary-800/50">
-                                            <div className="flex items-start gap-3">
-                                                <Icons.Check className="text-primary-600 dark:text-primary-400 mt-1" size={20} />
-                                                <div>
-                                                    <h4 className="font-bold text-primary-900 dark:text-primary-100 text-sm">{t('server_persistence')}</h4>
-                                                    <p className="text-xs text-primary-700 dark:text-primary-300 mt-1">{t('media_served')}</p>
-                                                </div>
-                                            </div>
-                                        </div>
+                             {/* Server/Client Mode Toggle */}
+                             <section>
+                                 <h4 className="text-sm font-bold uppercase text-gray-400 tracking-wider mb-4">{t('connection')}</h4>
+                                 <div className="bg-gray-100 dark:bg-gray-800 p-1 rounded-xl inline-flex mb-4">
+                                     <button className={`px-6 py-2 rounded-lg text-sm font-medium transition-all ${!isServerMode ? 'bg-white dark:bg-gray-700 shadow-sm text-gray-900 dark:text-white' : 'text-gray-500'}`} onClick={() => { if(isServerMode) window.location.reload(); }}>
+                                         {t('client_mode')}
+                                     </button>
+                                     <button className={`px-6 py-2 rounded-lg text-sm font-medium transition-all ${isServerMode ? 'bg-white dark:bg-gray-700 shadow-sm text-gray-900 dark:text-white' : 'text-gray-500'}`} onClick={() => window.location.reload()}>
+                                         {t('server_mode')}
+                                     </button>
+                                 </div>
+                                 <p className="text-sm text-gray-500">
+                                     {isServerMode ? t('server_mode_description') : t('client_mode_description')}
+                                 </p>
+                             </section>
 
-                                        <div className="space-y-2">
-                                            <label className="text-sm font-medium text-gray-600 dark:text-gray-400">{t('library_scan_paths')}</label>
-                                            <div className="flex flex-col gap-2">
-                                                {libraryPaths.length === 0 && (
-                                                    <div className="text-sm text-gray-400 italic bg-gray-50 dark:bg-gray-800 px-3 py-2 rounded-lg border border-dashed border-gray-200 dark:border-gray-700">{t('scanning_default')} (/media)</div>
-                                                )}
-                                                {libraryPaths.map(path => (
-                                                    <div key={path} className="flex items-center gap-2 bg-gray-50 dark:bg-gray-800 px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700">
-                                                        <Icons.Folder size={14} className="text-gray-400" />
-                                                        <span className="text-sm font-mono flex-1 truncate">{path}</span>
-                                                        <button onClick={() => handleRemoveLibraryPath(path)} className="text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30 p-1 rounded"><Icons.Trash size={14} /></button>
-                                                    </div>
-                                                ))}
-                                                <form onSubmit={handleAddLibraryPath} className="flex gap-2 mt-1">
-                                                     <PathAutocomplete value={newPathInput} onChange={setNewPathInput} onAdd={handleAddLibraryPath} />
-                                                     <button type="submit" disabled={!newPathInput} className="bg-gray-900 dark:bg-gray-700 text-white px-3 rounded-lg text-sm font-medium disabled:opacity-50">{t('add_path')}</button>
-                                                </form>
-                                            </div>
-                                        </div>
+                             {/* Library Paths (Server Only) */}
+                             {isServerMode && (
+                                 <section>
+                                     <h4 className="text-sm font-bold uppercase text-gray-400 tracking-wider mb-4">{t('storage_database')}</h4>
+                                     <div className="bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded-2xl overflow-hidden">
+                                         <div className="p-6 border-b border-gray-100 dark:border-gray-700">
+                                             <h5 className="font-bold text-lg mb-2">{t('library_scan_paths')}</h5>
+                                             <p className="text-sm text-gray-500 mb-4">{t('media_served')}</p>
+                                             <form onSubmit={handleAddLibraryPath} className="flex gap-2">
+                                                 <PathAutocomplete 
+                                                     value={newPathInput} 
+                                                     onChange={setNewPathInput} 
+                                                     onAdd={() => {}} // Handled by form submit
+                                                 />
+                                                 <button type="submit" className="px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white font-medium rounded-lg transition-colors flex items-center gap-2">
+                                                     <Icons.Plus size={18} /> {t('add_path')}
+                                                 </button>
+                                             </form>
+                                         </div>
+                                         <div className="bg-gray-50 dark:bg-gray-900/50 p-2 space-y-1">
+                                             {libraryPaths.length === 0 && (
+                                                 <div className="p-4 text-center text-sm text-gray-500 italic">
+                                                     {t('scanning_default')} <span className="font-mono bg-gray-200 dark:bg-gray-700 px-1 rounded">/media</span>
+                                                 </div>
+                                             )}
+                                             {libraryPaths.map(path => (
+                                                 <div key={path} className="flex items-center justify-between p-3 bg-white dark:bg-gray-800 rounded-xl border border-gray-100 dark:border-gray-700 shadow-sm group">
+                                                     <div className="flex items-center gap-3">
+                                                         <Icons.Folder size={18} className="text-primary-500" />
+                                                         <span className="font-mono text-sm">{path}</span>
+                                                     </div>
+                                                     <button onClick={() => handleRemoveLibraryPath(path)} className="text-red-500 opacity-0 group-hover:opacity-100 p-2 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-all">
+                                                         <Icons.Trash size={16} />
+                                                     </button>
+                                                 </div>
+                                             ))}
+                                         </div>
+                                     </div>
+                                     
+                                     {/* Operations */}
+                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+                                         <div className="bg-white dark:bg-gray-800 p-6 rounded-2xl border border-gray-100 dark:border-gray-700">
+                                             <div className="flex items-center gap-3 mb-2">
+                                                 <div className="p-2 bg-blue-50 dark:bg-blue-900/30 text-blue-600 rounded-lg"><Icons.Scan size={20} /></div>
+                                                 <h5 className="font-bold">{t('scan_library')}</h5>
+                                             </div>
+                                             <p className="text-sm text-gray-500 mb-4">{t('scan_library_desc')}</p>
+                                             <button onClick={startServerScan} className="w-full py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition-colors">Start Scan</button>
+                                         </div>
+                                         
+                                         <div className="bg-white dark:bg-gray-800 p-6 rounded-2xl border border-gray-100 dark:border-gray-700">
+                                             <div className="flex items-center gap-3 mb-2">
+                                                 <div className="p-2 bg-purple-50 dark:bg-purple-900/30 text-purple-600 rounded-lg"><Icons.Image size={20} /></div>
+                                                 <h5 className="font-bold">{t('generate_thumbs')}</h5>
+                                             </div>
+                                             <p className="text-sm text-gray-500 mb-4">{t('generate_thumbs_desc')}</p>
+                                             <button onClick={startThumbnailGen} className="w-full py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-medium transition-colors">Generate</button>
+                                         </div>
+                                     </div>
+                                 </section>
+                             )}
 
-                                        <div className="grid grid-cols-2 gap-3 pt-2">
-                                            <button onClick={startServerScan} className="flex flex-col items-center justify-center p-4 bg-gray-50 dark:bg-gray-800 hover:bg-primary-50 dark:hover:bg-primary-900/20 border border-gray-200 dark:border-gray-700 hover:border-primary-200 dark:hover:border-primary-800 rounded-xl transition-all group">
-                                                <Icons.Refresh size={24} className="text-gray-400 group-hover:text-primary-600 mb-2" />
-                                                <span className="text-sm font-bold text-gray-700 dark:text-gray-200">{t('scan_library')}</span>
-                                                <span className="text-[10px] text-gray-400 mt-1">{t('scan_library_desc')}</span>
-                                            </button>
-                                            <button onClick={startThumbnailGen} className="flex flex-col items-center justify-center p-4 bg-gray-50 dark:bg-gray-800 hover:bg-primary-50 dark:hover:bg-primary-900/20 border border-gray-200 dark:border-gray-700 hover:border-primary-200 dark:hover:border-primary-800 rounded-xl transition-all group">
-                                                <Icons.Image size={24} className="text-gray-400 group-hover:text-primary-600 mb-2" />
-                                                <span className="text-sm font-bold text-gray-700 dark:text-gray-200">{t('generate_thumbs')}</span>
-                                                <span className="text-[10px] text-gray-400 mt-1">{t('generate_thumbs_desc')}</span>
-                                            </button>
-                                        </div>
-                                    </div>
-                                ) : (
-                                    <div className="bg-orange-50 dark:bg-orange-900/20 p-4 rounded-xl border border-orange-100 dark:border-orange-800/50">
-                                         <div className="flex items-start gap-3">
-                                             <Icons.Alert size={20} className="text-orange-600 dark:text-orange-400 mt-1" />
+                             {/* App Config */}
+                             <section>
+                                 <h4 className="text-sm font-bold uppercase text-gray-400 tracking-wider mb-4">{t('appearance')}</h4>
+                                 <div className="space-y-4">
+                                     <div>
+                                         <label className="block text-sm font-medium mb-1.5">{t('website_title')}</label>
+                                         <input 
+                                             value={appTitle} 
+                                             onChange={e => handleUpdateTitle(e.target.value)} 
+                                             className="w-full px-4 py-2 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 outline-none focus:ring-2 focus:ring-primary-500"
+                                         />
+                                     </div>
+                                     <div>
+                                         <label className="block text-sm font-medium mb-1.5">{t('home_subtitle')}</label>
+                                         <input 
+                                             value={homeSubtitle} 
+                                             onChange={e => handleUpdateSubtitle(e.target.value)} 
+                                             className="w-full px-4 py-2 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 outline-none focus:ring-2 focus:ring-primary-500"
+                                         />
+                                     </div>
+                                     <div>
+                                         <label className="block text-sm font-medium mb-1.5">{t('language')}</label>
+                                         <select 
+                                             value={language}
+                                             onChange={(e) => setLanguage(e.target.value as 'en' | 'zh')}
+                                             className="w-full px-4 py-2 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 outline-none focus:ring-2 focus:ring-primary-500"
+                                         >
+                                             <option value="en">English</option>
+                                             <option value="zh">中文 (Chinese)</option>
+                                         </select>
+                                     </div>
+                                     <div>
+                                         <label className="block text-sm font-medium mb-2">{t('home_screen_conf')}</label>
+                                         <div className="flex gap-4 mb-2">
+                                             {['random', 'folder', 'single'].map(m => (
+                                                 <button 
+                                                     key={m}
+                                                     onClick={() => handleUpdateHomeConfig({...homeConfig, mode: m as any})}
+                                                     className={`px-4 py-2 rounded-lg text-sm font-medium capitalize border ${homeConfig.mode === m ? 'bg-primary-50 dark:bg-primary-900/30 border-primary-500 text-primary-600' : 'bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300'}`}
+                                                 >
+                                                     {t(m === 'random' ? 'random_all' : (m === 'folder' ? 'specific_folder' : 'single_item'))}
+                                                 </button>
+                                             ))}
+                                         </div>
+                                         {homeConfig.mode !== 'random' && (
+                                             <input 
+                                                 placeholder={t('enter_rel_path')}
+                                                 value={homeConfig.path || ''}
+                                                 onChange={e => handleUpdateHomeConfig({...homeConfig, path: e.target.value})}
+                                                 className="w-full px-4 py-2 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 outline-none focus:ring-2 focus:ring-primary-500 font-mono text-sm"
+                                             />
+                                         )}
+                                     </div>
+                                 </div>
+                             </section>
+
+                             {/* System Dashboard (Server Only) */}
+                             {isServerMode && systemStatus && (
+                                 <section>
+                                     <h4 className="text-sm font-bold uppercase text-gray-400 tracking-wider mb-4">{t('system_monitoring')}</h4>
+                                     <div className="bg-gray-900 text-gray-300 rounded-2xl p-6 font-mono text-xs space-y-4">
+                                         <div className="flex justify-between items-center border-b border-gray-800 pb-2">
+                                             <span className="text-gray-500">PLATFORM</span>
+                                             <span className="text-white">{systemStatus.platform}</span>
+                                         </div>
+                                         <div className="grid grid-cols-2 gap-4">
                                              <div>
-                                                 <h4 className="font-bold text-orange-900 dark:text-orange-100 text-sm">{t('running_client_mode')}</h4>
-                                                 <p className="text-xs text-orange-700 dark:text-orange-300 mt-1">Data is stored in your browser's LocalStorage. Clearing browser data will lose your library index.</p>
-                                                 <button onClick={handleExportConfig} className="mt-3 text-xs bg-orange-200 dark:bg-orange-800 text-orange-800 dark:text-orange-100 px-3 py-1.5 rounded-lg font-bold hover:bg-orange-300 transition-colors flex items-center gap-2 w-fit"><Icons.Download size={12} /> {t('backup_config')}</button>
+                                                 <p className="text-gray-500 mb-1">FFMPEG</p>
+                                                 <div className="flex items-center gap-2">
+                                                     <div className={`w-2 h-2 rounded-full ${systemStatus.ffmpeg ? 'bg-green-500' : 'bg-red-500'}`} />
+                                                     <span>{systemStatus.ffmpeg ? 'ACTIVE' : 'MISSING'}</span>
+                                                 </div>
+                                                 {systemStatus.ffmpegHwAccels?.length > 0 && (
+                                                     <p className="mt-1 text-purple-400">{systemStatus.ffmpegHwAccels.join(', ')}</p>
+                                                 )}
+                                             </div>
+                                             <div>
+                                                 <p className="text-gray-500 mb-1">SHARP</p>
+                                                 <div className="flex items-center gap-2">
+                                                     <div className={`w-2 h-2 rounded-full ${systemStatus.sharp ? 'bg-green-500' : 'bg-red-500'}`} />
+                                                     <span>{systemStatus.sharp ? 'ACTIVE' : 'MISSING'}</span>
+                                                 </div>
+                                             </div>
+                                         </div>
+                                         <div className="border-t border-gray-800 pt-4 flex justify-between items-center">
+                                             <span className="text-gray-500">{t('realtime_monitoring')}</span>
+                                             <div className="flex items-center gap-4">
+                                                 <span className={systemStatus.watcherActive ? 'text-green-400' : 'text-gray-500'}>{systemStatus.watcherActive ? t('enabled') : t('disabled')}</span>
+                                                 <button onClick={toggleWatcher} className="px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded text-[10px] uppercase tracking-wide transition-colors">{t('toggle')}</button>
+                                             </div>
+                                         </div>
+                                         <div className="border-t border-gray-800 pt-4 flex justify-between items-center">
+                                             <div>
+                                                 <span className="text-gray-500 block mb-1">CACHE</span>
+                                                 <span className="text-white text-lg">{systemStatus.cacheCount} files</span>
+                                             </div>
+                                             <div className="flex gap-2">
+                                                 <button onClick={pruneCache} className="px-3 py-1.5 bg-gray-800 hover:bg-gray-700 rounded text-xs transition-colors">Prune</button>
+                                                 <button onClick={clearCache} className="px-3 py-1.5 bg-red-900/30 hover:bg-red-900/50 text-red-400 rounded text-xs transition-colors">Clear All</button>
                                              </div>
                                          </div>
                                      </div>
-                                )}
-                            </section>
+                                 </section>
+                             )}
 
-                            {/* USER MANAGEMENT SECTION */}
-                            <section>
-                                <div className="flex justify-between items-center mb-4">
-                                    <h3 className="font-bold text-gray-800 dark:text-gray-200 flex items-center gap-2"><Icons.User size={18} /> {t('users')}</h3>
-                                    <button onClick={() => setIsUserPanelOpen(!isUserPanelOpen)} className="text-xs font-bold text-primary-600 hover:bg-primary-50 px-2 py-1 rounded transition-colors">{isUserPanelOpen ? t('hide') : t('manage')}</button>
-                                </div>
-                                
-                                {isUserPanelOpen && (
-                                    <div className="space-y-4 animate-in fade-in slide-in-from-top-2 duration-300">
-                                        <div className="space-y-2">
-                                            {users.map(u => (
-                                                <div key={u.username} className="flex justify-between items-center bg-gray-50 dark:bg-gray-800 px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700">
-                                                    <div className="flex items-center gap-2">
-                                                        <div className={`w-2 h-2 rounded-full ${u.isAdmin ? 'bg-purple-500' : 'bg-gray-400'}`} />
-                                                        <span className="text-sm font-medium">{u.username}</span>
-                                                    </div>
-                                                    <span className="text-[10px] bg-gray-200 dark:bg-gray-700 px-2 py-0.5 rounded text-gray-600 dark:text-gray-300">{u.isAdmin ? 'Admin' : 'User'}</span>
-                                                </div>
-                                            ))}
-                                        </div>
-                                        <form onSubmit={handleAddUser} className="flex gap-2 p-3 bg-gray-50 dark:bg-gray-800/50 rounded-xl border border-dashed border-gray-300 dark:border-gray-700">
-                                            <input placeholder="New Username" value={newUserForm.username} onChange={e => setNewUserForm({...newUserForm, username: e.target.value})} className="flex-1 px-3 py-1.5 text-sm border rounded-lg outline-none bg-white dark:bg-gray-700 border-gray-200 dark:border-gray-600" />
-                                            <input type="password" placeholder="Password" value={newUserForm.password} onChange={e => setNewUserForm({...newUserForm, password: e.target.value})} className="flex-1 px-3 py-1.5 text-sm border rounded-lg outline-none bg-white dark:bg-gray-700 border-gray-200 dark:border-gray-600" />
-                                            <button type="submit" className="bg-gray-900 dark:bg-gray-600 text-white px-3 rounded-lg text-sm font-bold"><Icons.Plus size={16}/></button>
-                                        </form>
-                                    </div>
-                                )}
-                            </section>
-                            </>
-                        )}
+                             <section className="pt-4 border-t border-gray-100 dark:border-gray-800">
+                                 <button onClick={handleExportConfig} className="text-sm font-medium text-primary-600 hover:underline">{t('backup_config')}</button>
+                             </section>
+                         </div>
                     </div>
-                    <div className="p-4 border-t border-gray-100 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 flex justify-between items-center">
-                         <button onClick={handleLogout} className="flex items-center gap-2 text-red-600 dark:text-red-400 px-4 py-2 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors text-sm font-medium"><Icons.LogOut size={16} /> {t('sign_out')}</button>
-                         <button onClick={() => setIsSettingsOpen(false)} className="px-6 py-2 bg-gray-900 dark:bg-gray-700 text-white rounded-lg text-sm font-medium hover:bg-gray-800 dark:hover:bg-gray-600 transition-colors">{t('done')}</button>
-                    </div>
+                    <button onClick={() => setIsSettingsOpen(false)} className="absolute top-4 right-4 p-2 bg-gray-100 dark:bg-gray-800 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors z-50">
+                        <Icons.Close size={20} />
+                    </button>
                 </motion.div>
             </motion.div>
         )}
       </AnimatePresence>
+
+      <ImageViewer 
+          item={selectedItem} 
+          onClose={() => setSelectedItem(null)} 
+          onNext={() => {
+              if(!selectedItem) return;
+              const idx = processedFiles.findIndex(f => f.id === selectedItem.id);
+              if (idx !== -1 && idx < processedFiles.length - 1) setSelectedItem(processedFiles[idx + 1]);
+          }}
+          onPrev={() => {
+              if(!selectedItem) return;
+              const idx = processedFiles.findIndex(f => f.id === selectedItem.id);
+              if (idx > 0) setSelectedItem(processedFiles[idx - 1]);
+          }}
+          onDelete={handleDelete}
+          onRename={handleRename}
+          onJumpToFolder={handleJumpToFolder}
+          onToggleFavorite={handleToggleFavorite}
+      />
+      
+      <ScanProgressModal 
+         isOpen={isScanModalOpen}
+         status={scanStatus}
+         count={scanProgress.count}
+         currentPath={scanProgress.currentPath}
+         onPause={() => handleScanControl('pause')}
+         onResume={() => handleScanControl('resume')}
+         onCancel={() => handleScanControl('cancel')}
+         onClose={() => setIsScanModalOpen(false)}
+         type={jobType}
+         title={jobType === 'scan' ? t('scanning_library') : t('generating_thumbnails')}
+      />
+
     </div>
   );
 }
