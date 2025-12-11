@@ -115,6 +115,11 @@ const translations = {
     thumbs_started: 'Thumbnail generation started',
     running_client_mode: 'Running in Client Mode',
     backup_config: 'Backup Config',
+    cache_management: 'Cache Management',
+    clear_all_cache: 'Clear All Cache',
+    prune_legacy_cache: 'Prune Legacy Cache (JPG)',
+    cache_cleared: 'Cache Cleared',
+    cache_pruned: 'Legacy Cache Pruned',
     
     // Settings - Users
     users: 'Users',
@@ -252,6 +257,11 @@ const translations = {
     thumbs_started: '缩略图生成已开始',
     running_client_mode: '运行于客户端模式',
     backup_config: '备份配置',
+    cache_management: '缓存管理',
+    clear_all_cache: '清除所有缓存',
+    prune_legacy_cache: '清除旧缓存 (JPG)',
+    cache_cleared: '缓存已清除',
+    cache_pruned: '旧缓存已清除',
     
     // Settings - Users
     users: '用户管理',

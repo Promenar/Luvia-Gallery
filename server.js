@@ -566,6 +566,49 @@ app.get('/api/watcher/toggle', (req, res) => {
     res.json({ active: isWatcherActive });
 });
 
+// Cache Management Endpoints
+app.post('/api/cache/clear', async (req, res) => {
+    try {
+        if (fs.existsSync(CACHE_DIR)) {
+            await fs.promises.rm(CACHE_DIR, { recursive: true, force: true });
+            await fs.promises.mkdir(CACHE_DIR, { recursive: true });
+        }
+        res.json({ success: true, message: 'Cache cleared' });
+    } catch(e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.post('/api/cache/prune', async (req, res) => {
+    try {
+        let deleted = 0;
+        const traverse = async (dir) => {
+            if (!fs.existsSync(dir)) return;
+            const files = await fs.promises.readdir(dir, {withFileTypes: true});
+            for (const file of files) {
+                const fullPath = path.join(dir, file.name);
+                if (file.isDirectory()) {
+                    await traverse(fullPath);
+                    // Attempt to remove empty directories
+                    try {
+                        const remaining = await fs.promises.readdir(fullPath);
+                        if (remaining.length === 0) await fs.promises.rmdir(fullPath);
+                    } catch(e) {}
+                } else if (file.name.endsWith('.jpg') || file.name.endsWith('.jpeg')) {
+                    // Remove legacy JPG thumbnails
+                    await fs.promises.unlink(fullPath);
+                    deleted++;
+                }
+            }
+        };
+        
+        await traverse(CACHE_DIR);
+        res.json({ success: true, count: deleted });
+    } catch(e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
 // Scan Control
 app.post('/api/scan/start', async (req, res) => {
     if (scanJob.status === 'scanning' || scanJob.status === 'paused') {

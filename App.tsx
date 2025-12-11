@@ -498,6 +498,33 @@ export default function App() {
       } catch (e) { console.error(e); }
   };
 
+  const clearCache = async () => {
+      if (!isServerMode || !confirm('Are you sure you want to clear all cache? Thumbnails will need to be regenerated.')) return;
+      try {
+          const res = await fetch('/api/cache/clear', { method: 'POST' });
+          if (res.ok) {
+              alert(t('cache_cleared'));
+              fetchSystemStatus();
+          } else {
+              alert('Failed to clear cache');
+          }
+      } catch(e) { alert('Network error'); }
+  };
+
+  const pruneCache = async () => {
+      if (!isServerMode) return;
+      try {
+          const res = await fetch('/api/cache/prune', { method: 'POST' });
+          if (res.ok) {
+              const data = await res.json();
+              alert(`${t('cache_pruned')}: ${data.count} items`);
+              fetchSystemStatus();
+          } else {
+              alert('Failed to prune cache');
+          }
+      } catch(e) { alert('Network error'); }
+  };
+
   useEffect(() => {
     let isMounted = true;
     if (isServerMode && currentUser) {
@@ -1090,9 +1117,10 @@ export default function App() {
             </div>
             </header>
 
-            <div className="flex-1 overflow-y-auto p-4 md:p-8 no-scrollbar bg-gray-50/50 dark:bg-gray-900/50 transition-colors">
+            {/* Changed from overflow-y-auto to flex-col with overflow-hidden for layout fix */}
+            <div className="flex-1 flex flex-col overflow-hidden bg-gray-50/50 dark:bg-gray-900/50 transition-colors">
             {files.length === 0 && !isFetchingMore && viewMode === 'all' && (
-                <div className="h-full flex flex-col items-center justify-center text-center p-8">
+                <div className="h-full flex flex-col items-center justify-center text-center p-8 overflow-y-auto">
                 <div className="w-24 h-24 bg-indigo-50 dark:bg-indigo-900/30 rounded-full flex items-center justify-center mb-6 text-indigo-400"><Icons.Upload size={40} /></div>
                 <h2 className="text-2xl font-bold text-gray-800 dark:text-white mb-2">{t('welcome')}, {currentUser?.username}</h2>
                 <p className="text-gray-500 dark:text-gray-400 max-w-md mb-8">{isServerMode ? t('configure_nas') : t('import_local')}</p>
@@ -1115,10 +1143,12 @@ export default function App() {
             )}
 
             {(files.length > 0 || isFetchingMore || (viewMode === 'folders' && content.folders.length > 0)) && (
-                <div className="h-full w-full"> 
-                    
+                <>
+                    {/* Folders Section - Only Render if folders exist. 
+                        Added max-h to ensure it doesn't consume full screen, and shrink-0 to prevent compression.
+                    */}
                     {viewMode === 'folders' && content.folders.length > 0 && (
-                        <div className="mb-10 animate-in fade-in slide-in-from-bottom-2 duration-500">
+                        <div className="p-4 md:p-8 pb-0 shrink-0 max-h-[40vh] overflow-y-auto no-scrollbar animate-in fade-in slide-in-from-bottom-2 duration-500">
                             <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2"><Icons.Folder size={14} />{currentPath ? t('folders') : t('folders')}</h3>
                             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
                                 {content.folders.map((folder) => (<FolderCard key={folder.path} folder={folder} onClick={(path) => handleFolderClick(path)} />))}
@@ -1126,18 +1156,21 @@ export default function App() {
                         </div>
                     )}
 
+                    {/* Gallery Section - Flex-1 ensures it fills remaining space and AutoSizer gets correct height */}
                     {(viewMode === 'all' || (viewMode === 'folders' && currentPath !== '')) && (
-                    <VirtualGallery 
-                            layout={layoutMode}
-                            items={viewMode === 'all' ? processedFiles : (content.photos || [])}
-                            onItemClick={setSelectedItem}
-                            hasNextPage={isServerMode ? hasMoreServer : false}
-                            isNextPageLoading={isFetchingMore}
-                            loadNextPage={loadMoreServerFiles}
-                            itemCount={isServerMode && viewMode === 'all' ? serverTotal : processedFiles.length}
-                    />
+                        <div className="flex-1 min-h-0 p-4 md:p-8 pt-4 w-full"> 
+                            <VirtualGallery 
+                                    layout={layoutMode}
+                                    items={viewMode === 'all' ? processedFiles : (content.photos || [])}
+                                    onItemClick={setSelectedItem}
+                                    hasNextPage={isServerMode ? hasMoreServer : false}
+                                    isNextPageLoading={isFetchingMore}
+                                    loadNextPage={loadMoreServerFiles}
+                                    itemCount={isServerMode && viewMode === 'all' ? serverTotal : processedFiles.length}
+                            />
+                        </div>
                     )}
-                </div>
+                </>
             )}
             </div>
         </>
@@ -1341,6 +1374,21 @@ export default function App() {
                                     </div>
                                 )}
                             </section>
+
+                            {/* Cache Management Section */}
+                            {isServerMode && (
+                                <section className="pb-6 border-b border-gray-100 dark:border-gray-700">
+                                    <h3 className="font-bold text-gray-800 dark:text-gray-200 flex items-center gap-2 mb-4"><Icons.Trash size={18} /> {t('cache_management')}</h3>
+                                    <div className="grid grid-cols-2 gap-3">
+                                        <button onClick={clearCache} className="py-2 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300 rounded-lg text-sm font-medium hover:bg-red-100 dark:hover:bg-red-900/40 transition-colors">
+                                            {t('clear_all_cache')}
+                                        </button>
+                                        <button onClick={pruneCache} className="py-2 bg-orange-50 dark:bg-orange-900/20 border border-orange-200 dark:border-orange-800 text-orange-700 dark:text-orange-300 rounded-lg text-sm font-medium hover:bg-orange-100 dark:hover:bg-orange-900/40 transition-colors">
+                                            {t('prune_legacy_cache')}
+                                        </button>
+                                    </div>
+                                </section>
+                            )}
                             </>
                         )}
                          {currentUser?.isAdmin && (
