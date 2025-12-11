@@ -45,13 +45,11 @@ export const Navigation: React.FC<NavigationProps> = ({
       if (window.innerWidth < 768) toggleSidebar();
   };
 
-  // Force Dark Mode styling for sidebar when on Home to match the dark aesthetic
   const sidebarBaseClass = isHome 
       ? "bg-gray-900 border-r border-gray-800 text-gray-100" 
       : "bg-white dark:bg-gray-900 border-r border-gray-100 dark:border-gray-800 text-gray-800 dark:text-gray-100";
 
   const navItemClass = (active: boolean) => {
-      // When on Home, use standard Dark Mode active/inactive styles
       if (isHome) {
           return active 
               ? 'bg-primary-900/30 text-primary-400 font-medium shadow-sm'
@@ -69,14 +67,12 @@ export const Navigation: React.FC<NavigationProps> = ({
   
   const sectionTitleClass = isHome ? "text-gray-500" : "text-gray-400 dark:text-gray-500";
   
-  // Mobile header remains transparent on Home to overlay the image
   const mobileHeaderClass = isHome 
       ? "bg-transparent border-none text-white absolute top-0 left-0 right-0 z-50 pointer-events-none" 
       : "bg-white dark:bg-gray-900 border-b border-gray-100 dark:border-gray-800 shadow-sm transition-colors relative z-30";
 
   return (
     <>
-      {/* Mobile Header */}
       <div className={`md:hidden h-16 flex items-center px-4 justify-between transition-colors ${mobileHeaderClass}`}>
         <div className="flex items-center gap-3 pointer-events-auto">
           <button onClick={toggleSidebar} className={`p-2 rounded-full transition-colors ${isHome ? 'text-white hover:bg-white/10' : 'text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800'}`}>
@@ -103,7 +99,6 @@ export const Navigation: React.FC<NavigationProps> = ({
         </div>
       </div>
 
-      {/* Sidebar (Desktop & Mobile Drawer) */}
       <motion.aside
         initial={false}
         animate={{ 
@@ -126,7 +121,6 @@ export const Navigation: React.FC<NavigationProps> = ({
         <div className="p-4 flex-1 overflow-y-auto">
           <div className="space-y-6">
             
-            {/* Main Nav */}
              <div>
                 <p className={`px-4 text-xs font-semibold uppercase tracking-wider mb-2 ${sectionTitleClass}`}>{t('menu')}</p>
                 <button
@@ -136,9 +130,15 @@ export const Navigation: React.FC<NavigationProps> = ({
                     <Icons.Home size={20} className={iconColorClass(viewMode === 'home')} />
                     <span>{t('home')}</span>
                 </button>
+                <button
+                    onClick={() => handleNavClick('favorites')}
+                    className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all mb-1 ${navItemClass(viewMode === 'favorites')}`}
+                >
+                    <Icons.Heart size={20} className={viewMode === 'favorites' ? 'text-red-500' : (isHome ? 'text-gray-500' : 'text-gray-400 dark:text-gray-500')} fill={viewMode === 'favorites' ? "currentColor" : "none"} />
+                    <span>{t('favorites')}</span>
+                </button>
             </div>
 
-            {/* Library Section */}
             <div>
                 <p className={`px-4 text-xs font-semibold uppercase tracking-wider mb-2 ${sectionTitleClass}`}>{t('library')}</p>
                 <button
@@ -163,7 +163,6 @@ export const Navigation: React.FC<NavigationProps> = ({
                 </button>
             </div>
 
-            {/* System Section */}
             <div>
                 <p className={`px-4 text-xs font-semibold uppercase tracking-wider mb-2 ${sectionTitleClass}`}>{t('system')}</p>
                 <button 
@@ -210,7 +209,6 @@ export const Navigation: React.FC<NavigationProps> = ({
         </div>
       </motion.aside>
 
-      {/* Overlay for mobile */}
       {isSidebarOpen && (
         <div 
           className="fixed inset-0 bg-black/20 dark:bg-black/50 z-30 md:hidden backdrop-blur-sm"

@@ -1,3 +1,4 @@
+
 import React, { useMemo, useRef, useEffect, useState } from 'react';
 import * as ReactWindow from 'react-window';
 import AutoSizer from 'react-virtualized-auto-sizer';
@@ -202,7 +203,7 @@ export const VirtualGallery: React.FC<VirtualGalleryProps> = ({
 
   if (layout === 'masonry') {
       return (
-          <div className="w-full h-full pb-20">
+          <div className="w-full h-full overflow-y-auto pb-20 no-scrollbar">
               <div className="flex gap-4 p-1 items-start">
                   {columns.map((colItems, colIndex) => (
                       <div key={colIndex} className="flex-1 flex flex-col gap-4">

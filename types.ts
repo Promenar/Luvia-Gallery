@@ -15,6 +15,7 @@ export interface MediaItem {
   lastModified: number;
   mediaType: MediaType;
   sourceId: string;   // To identify which "import" this came from
+  isFavorite?: boolean; // New: Favorite status
 }
 
 export interface ExifData {
@@ -49,6 +50,7 @@ export interface User {
 export interface UserData {
     files: MediaItem[];
     sources: {id: string, name: string, count: number}[];
+    favoriteFolderPaths?: string[]; // New: Persist favorite folders in client mode
 }
 
 export interface HomeScreenConfig {
@@ -83,7 +85,7 @@ export interface SystemStatus {
     platform: string;
 }
 
-export type ViewMode = 'home' | 'all' | 'folders';
+export type ViewMode = 'home' | 'all' | 'folders' | 'favorites';
 export type GridLayout = 'grid' | 'masonry' | 'timeline';
 export type SortOption = 'dateDesc' | 'dateAsc' | 'nameAsc' | 'nameDesc' | 'sizeDesc' | 'random';
 export type FilterOption = 'all' | 'image' | 'video' | 'audio';

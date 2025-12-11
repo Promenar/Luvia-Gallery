@@ -1,3 +1,4 @@
+
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
@@ -84,11 +85,13 @@ try {
             mtime INTEGER,
             width INTEGER,
             height INTEGER,
-            source_id TEXT
+            source_id TEXT,
+            is_favorite INTEGER DEFAULT 0
         );
         CREATE INDEX IF NOT EXISTS idx_files_folder ON files(folder_path);
         CREATE INDEX IF NOT EXISTS idx_files_mtime ON files(mtime DESC);
         CREATE INDEX IF NOT EXISTS idx_files_type ON files(media_type);
+        CREATE INDEX IF NOT EXISTS idx_files_fav ON files(is_favorite);
         
         CREATE TABLE IF NOT EXISTS folders (
             path TEXT PRIMARY KEY,
@@ -96,6 +99,10 @@ try {
             parent_path TEXT,
             file_count INTEGER DEFAULT 0,
             cover_file_path TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS favorite_folders (
+            path TEXT PRIMARY KEY
         );
         
         CREATE TABLE IF NOT EXISTS sources (
@@ -105,6 +112,12 @@ try {
             count INTEGER
         );
     `);
+
+    // Migration for existing DBs
+    try {
+        db.exec("ALTER TABLE files ADD COLUMN is_favorite INTEGER DEFAULT 0");
+    } catch (e) { /* Column likely exists */ }
+
     console.log("SQLite Database initialized.");
 } catch (e) {
     console.error("Failed to initialize SQLite:", e);
@@ -397,9 +410,6 @@ const rebuildFolderStats = () => {
         GROUP BY folder_path
     `);
 
-    // Fix root level parents (if any calculation results in trailing slash issue)
-    // and cleanup empty strings if needed.
-    
     // Fill missing video covers
     db.exec(`
         UPDATE folders 
@@ -508,8 +518,6 @@ const handleWatcherEvent = async (event, filePath, libraryPaths) => {
 // File System Listing for Autocomplete
 app.get('/api/fs/list', async (req, res) => {
     const rawPath = req.query.path || '/';
-    // Security: In a real app, restrict this. Here we allow browsing the container.
-    // Basic check to ensure we are looking at something reasonable
     const targetPath = path.resolve(rawPath);
     
     try {
@@ -576,10 +584,8 @@ app.get('/api/watcher/toggle', (req, res) => {
 app.post('/api/cache/clear', async (req, res) => {
     try {
         if (fs.existsSync(CACHE_DIR)) {
-            // Instead of removing the directory (which fails if it's a mount point), empty it
             const files = await fs.promises.readdir(CACHE_DIR);
             for (const file of files) {
-                // Ignore hidden files (like .keep or .DS_Store) just in case, but usually force remove is fine
                 await fs.promises.rm(path.join(CACHE_DIR, file), { recursive: true, force: true });
             }
         }
@@ -600,13 +606,11 @@ app.post('/api/cache/prune', async (req, res) => {
                 const fullPath = path.join(dir, file.name);
                 if (file.isDirectory()) {
                     await traverse(fullPath);
-                    // Attempt to remove empty directories
                     try {
                         const remaining = await fs.promises.readdir(fullPath);
                         if (remaining.length === 0) await fs.promises.rmdir(fullPath);
                     } catch(e) {}
                 } else if (file.name.endsWith('.jpg') || file.name.endsWith('.jpeg')) {
-                    // Remove legacy JPG thumbnails
                     await fs.promises.unlink(fullPath);
                     deleted++;
                 }
@@ -635,7 +639,6 @@ app.post('/api/scan/start', async (req, res) => {
 
     res.json({ success: true, message: 'Scan started' });
 
-    // Pause watcher during full scan to avoid conflicts
     if (watcher) {
         await watcher.close();
         watcher = null;
@@ -664,7 +667,6 @@ app.post('/api/scan/start', async (req, res) => {
              const absoluteScanPath = isAbsolute ? pathInput : path.join(MEDIA_ROOT, pathInput);
              const normalized = path.normalize(absoluteScanPath);
              
-             // Check existence
              try {
                 await fs.promises.access(normalized);
                 await scanDirectoryToDB(normalized, '', pathInput);
@@ -686,7 +688,6 @@ app.post('/api/scan/start', async (req, res) => {
             console.error('Scan failed:', e);
         }
     } finally {
-        // Restart watcher if it was active
         if (isWatcherActive) {
             let config = {};
             try {
@@ -728,42 +729,16 @@ const formatDbItem = (row) => {
         type: row.type,
         lastModified: row.mtime,
         mediaType: row.media_type,
-        sourceId: row.source_id
+        sourceId: row.source_id,
+        isFavorite: row.is_favorite === 1
     };
 };
 
 const resolveValidPath = (reqPath) => {
     const decodedPath = decodeURIComponent(reqPath);
-    // Security Check: Attempting to find file by path in DB to ensure it's a tracked file
-    // However, for streaming, we might need flexibility.
-    
-    // We try to match mapped paths
-    let config = {};
-    try {
-        if (fs.existsSync(CONFIG_FILE)) config = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
-    } catch (e) {}
-
-    const libraryPaths = config.libraryPaths || [MEDIA_ROOT];
-    
-    // reqPath comes from the DB 'path' column, which we store as e.g. "Photos/Vacation/img.jpg"
-    // We need to find which library path "Photos" corresponds to.
-    
-    // Since we store paths in DB relative to "Library Path Name" (User Input),
-    // we need to reverse match.
-    // Or, in `scanDirectoryToDB`, we actually used the input string as the root.
-    
-    // If input was `/media` and file was `/media/img.jpg`. DB Path: `/media/img.jpg`.
-    // If input was `/media` and file was `/media/sub/img.jpg`. DB Path: `/media/sub/img.jpg`.
-    
-    // If user inputs absolute path `/media`, DB stores absolute.
-    // If user inputs relative? We don't support relative inputs for scan config really.
-    
-    // So `decodedPath` is likely an absolute path on the server file system.
     if (path.isAbsolute(decodedPath) && fs.existsSync(decodedPath)) {
         return { path: decodedPath };
     }
-    
-    // Fallback: Check if it's relative to MEDIA_ROOT
     const p = path.join(MEDIA_ROOT, decodedPath);
     if (fs.existsSync(p)) return { path: p };
 
@@ -775,15 +750,17 @@ app.get('/api/scan/results', (req, res) => {
         const offset = parseInt(req.query.offset) || 0;
         const limit = parseInt(req.query.limit) || 1000;
         const folder = req.query.folder;
+        const favorites = req.query.favorites === 'true';
 
         let rows, total;
 
-        if (folder !== undefined) {
-            // Filter by folder
+        if (favorites) {
+            rows = db.prepare(`SELECT * FROM files WHERE is_favorite = 1 ORDER BY mtime DESC LIMIT ? OFFSET ?`).all(limit, offset);
+            total = db.prepare(`SELECT COUNT(*) as count FROM files WHERE is_favorite = 1`).get().count;
+        } else if (folder !== undefined) {
             rows = db.prepare(`SELECT * FROM files WHERE folder_path = ? ORDER BY mtime DESC LIMIT ? OFFSET ?`).all(folder, limit, offset);
             total = db.prepare(`SELECT COUNT(*) as count FROM files WHERE folder_path = ?`).get(folder).count;
         } else {
-            // All files
             rows = db.prepare(`SELECT * FROM files ORDER BY mtime DESC LIMIT ? OFFSET ?`).all(limit, offset);
             total = db.prepare(`SELECT COUNT(*) as count FROM files`).get().count;
         }
@@ -807,11 +784,19 @@ app.get('/api/scan/results', (req, res) => {
 
 app.get('/api/library/folders', (req, res) => {
     try {
-        const rows = db.prepare(`
-            SELECT path, file_count as count, cover_file_path 
-            FROM folders 
-            ORDER BY path ASC
-        `).all();
+        const favorites = req.query.favorites === 'true';
+        let query = `
+            SELECT f.path, f.file_count as count, f.cover_file_path 
+            FROM folders f
+        `;
+        
+        if (favorites) {
+            query += ` JOIN favorite_folders ff ON f.path = ff.path`;
+        }
+        
+        query += ` ORDER BY f.path ASC`;
+
+        const rows = db.prepare(query).all();
         
         const folders = rows.map(r => {
              let coverItem = null;
@@ -828,6 +813,97 @@ app.get('/api/library/folders', (req, res) => {
 
         res.json({ folders });
     } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// --- Favorites Management ---
+app.post('/api/favorites/toggle', (req, res) => {
+    const { type, id } = req.body; // type: 'file' | 'folder', id: filePath or folderPath
+    if (!type || !id) return res.status(400).json({error: 'Invalid parameters'});
+
+    try {
+        let isFavorite = false;
+        if (type === 'file') {
+            const current = db.prepare('SELECT is_favorite FROM files WHERE path = ?').get(id);
+            if (!current) return res.status(404).json({error: 'File not found'});
+            
+            const newState = current.is_favorite ? 0 : 1;
+            db.prepare('UPDATE files SET is_favorite = ? WHERE path = ?').run(newState, id);
+            isFavorite = newState === 1;
+        } else {
+            const exists = db.prepare('SELECT 1 FROM favorite_folders WHERE path = ?').get(id);
+            if (exists) {
+                db.prepare('DELETE FROM favorite_folders WHERE path = ?').run(id);
+                isFavorite = false;
+            } else {
+                db.prepare('INSERT INTO favorite_folders (path) VALUES (?)').run(id);
+                isFavorite = true;
+            }
+        }
+        res.json({ success: true, isFavorite });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.get('/api/favorites/ids', (req, res) => {
+    try {
+        const files = db.prepare('SELECT path FROM files WHERE is_favorite = 1').all().map(r => r.path);
+        const folders = db.prepare('SELECT path FROM favorite_folders').all().map(r => r.path);
+        res.json({ files, folders });
+    } catch(e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// --- Folder Management ---
+app.post('/api/folder/rename', (req, res) => {
+    const { oldPath, newName } = req.body;
+    if (!oldPath || !newName) return res.status(400).json({error: 'Missing parameters'});
+
+    try {
+        const resolved = resolveValidPath(oldPath);
+        if (resolved.error) return res.status(404).json({error: 'Folder not found'});
+        
+        const parentDir = path.dirname(resolved.path);
+        const newPath = path.join(parentDir, newName);
+
+        if (fs.existsSync(newPath)) return res.status(409).json({error: 'Destination already exists'});
+        
+        fs.renameSync(resolved.path, newPath);
+        
+        // Note: DB is now stale. A full scan is safer, but slow. 
+        // We will do a quick DB patch for immediate feedback, 
+        // but recommend user to Rescan.
+        
+        // This is complex in SQL. Simple approach: Delete folder stats and let rescan handle it.
+        // Or leave DB stale and user MUST rescan.
+        // We'll return success and frontend should probably notify user or trigger rescan.
+        
+        res.json({ success: true, message: 'Renamed. Please rescan library to update database.' });
+    } catch(e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.post('/api/folder/delete', (req, res) => {
+    const { path: folderPath } = req.body;
+    if (!folderPath) return res.status(400).json({error: 'Missing path'});
+
+    try {
+        const resolved = resolveValidPath(folderPath);
+        if (resolved.error) return res.status(404).json({error: 'Folder not found'});
+
+        // Recursive delete
+        fs.rmSync(resolved.path, { recursive: true, force: true });
+        
+        // Clean DB
+        db.prepare('DELETE FROM files WHERE folder_path = ? OR folder_path LIKE ?').run(folderPath, folderPath + '/%');
+        db.prepare('DELETE FROM folders WHERE path = ? OR path LIKE ?').run(folderPath, folderPath + '/%');
+        
+        res.json({ success: true });
+    } catch(e) {
         res.status(500).json({ error: e.message });
     }
 });
@@ -963,7 +1039,6 @@ app.get('/api/config', (req, res) => {
 });
 
 app.post('/api/config', (req, res) => {
-    // Preserve existing watcherEnabled state since frontend doesn't send it
     let currentConfig = {};
     try {
         if (fs.existsSync(CONFIG_FILE)) {
@@ -978,13 +1053,57 @@ app.post('/api/config', (req, res) => {
 
     fs.writeFileSync(CONFIG_FILE, JSON.stringify(newConfig, null, 2));
     
-    // Update watcher if paths changed
     if (isWatcherActive) {
         startWatcher(newConfig.libraryPaths || [MEDIA_ROOT]);
     }
     
     res.json({ success: true });
 });
+
+app.post('/api/file/delete', (req, res) => {
+     const { filePath } = req.body;
+     if (!filePath) return res.status(400).json({ error: 'Missing file path' });
+
+     try {
+         const resolved = resolveValidPath(filePath);
+         if (resolved.error) return res.status(404).json({ error: 'File not found' });
+         
+         fs.unlinkSync(resolved.path);
+         deleteFileStmt.run(filePath);
+         
+         res.json({ success: true });
+     } catch (e) {
+         res.status(500).json({ error: e.message });
+     }
+});
+
+app.post('/api/file/rename', (req, res) => {
+    const { oldPath, newName } = req.body;
+    if (!oldPath || !newName) return res.status(400).json({ error: 'Missing parameters' });
+    
+    try {
+        const resolved = resolveValidPath(oldPath);
+        if (resolved.error) return res.status(404).json({ error: 'File not found' });
+        
+        const dir = path.dirname(resolved.path);
+        const newPath = path.join(dir, newName);
+        
+        if (fs.existsSync(newPath)) return res.status(409).json({ error: 'File exists' });
+        
+        fs.renameSync(resolved.path, newPath);
+        
+        // Update DB
+        const relativeDir = path.dirname(oldPath);
+        const newRelativePath = path.join(relativeDir, newName).replace(/\\/g, '/');
+        
+        db.prepare('UPDATE files SET path = ?, name = ? WHERE path = ?').run(newRelativePath, newName, oldPath);
+        
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
 
 app.get('/media-stream/:filepath', (req, res) => {
     const result = resolveValidPath(req.params.filepath);

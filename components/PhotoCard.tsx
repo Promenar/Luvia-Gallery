@@ -12,7 +12,6 @@ interface MediaCardProps {
   isVirtual?: boolean;
 }
 
-// Memoize the card to prevent re-renders when parent list updates
 export const MediaCard: React.FC<MediaCardProps> = React.memo(({ item, onClick, layout, isVirtual }) => {
   const { t } = useLanguage();
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -22,30 +21,20 @@ export const MediaCard: React.FC<MediaCardProps> = React.memo(({ item, onClick, 
 
   // Determine thumbnail URL
   const thumbnailSrc = useMemo(() => {
-    // Audio has no thumbnail
     if (item.mediaType === 'audio') return '';
-    
-    // Check if we are in Server Mode (URL starts with /media-stream/)
     if (item.url.startsWith('/media-stream/')) {
-        // Extract the original file path from the stream URL
         const pathPart = item.url.split('/media-stream/')[1];
-        // Point to the thumbnail API
         return `/api/thumbnail?path=${pathPart}`;
     }
-    
-    // Client mode (blob URLs)
-    // Only return blob URL for images. Videos in client mode don't have a poster image.
     if (item.mediaType === 'image') {
         return item.url;
     }
-    
     return '';
   }, [item.url, item.mediaType]);
 
   const handleMouseEnter = () => {
     setIsHovered(true);
     if (item.mediaType === 'video') {
-      // Delay play slightly to avoid rapid hover flickering issues
       setTimeout(() => {
           if (videoRef.current) {
             videoRef.current.play().catch(() => {});
@@ -57,7 +46,7 @@ export const MediaCard: React.FC<MediaCardProps> = React.memo(({ item, onClick, 
 
   const handleMouseLeave = () => {
     setIsHovered(false);
-    setIsVideoLoaded(false); // Reset animation state
+    setIsVideoLoaded(false); 
     if (item.mediaType === 'video' && videoRef.current) {
       videoRef.current.pause();
       videoRef.current.currentTime = 0;
@@ -65,7 +54,6 @@ export const MediaCard: React.FC<MediaCardProps> = React.memo(({ item, onClick, 
     }
   };
 
-  // For native masonry, we need the image to dictate height, so no absolute positioning.
   const isGrid = layout === 'grid' || isVirtual;
   
   const containerClasses = isGrid
@@ -74,11 +62,9 @@ export const MediaCard: React.FC<MediaCardProps> = React.memo(({ item, onClick, 
 
   return (
     <motion.div
-      // Remove layoutId for performance in large lists if virtual
       layoutId={!isVirtual && layout !== 'masonry' ? `media-${item.id}` : undefined}
       initial={!isVirtual ? { opacity: 0, scale: 0.95 } : { opacity: 1 }}
       animate={{ opacity: 1, scale: 1 }}
-      // Disable hover scaling in virtual mode to prevent z-index clipping or performance hits
       whileHover={!isVirtual ? { scale: 1.02 } : {}}
       transition={{ duration: 0.2 }}
       className={containerClasses}
@@ -88,7 +74,6 @@ export const MediaCard: React.FC<MediaCardProps> = React.memo(({ item, onClick, 
     >
       {item.mediaType === 'video' ? (
         <div className={`relative w-full ${isGrid ? 'h-full absolute inset-0' : 'aspect-video'} flex items-center justify-center bg-gray-900`}>
-           {/* Performance Optimization: Only render video tag on hover to prevent browser freezing with hundreds of videos */}
            {isHovered && (
                <video 
                  ref={videoRef}
@@ -103,7 +88,6 @@ export const MediaCard: React.FC<MediaCardProps> = React.memo(({ item, onClick, 
                />
            )}
            
-           {/* Thumbnail Image or Placeholder */}
            {thumbnailSrc ? (
                <img
                  src={thumbnailSrc}
@@ -112,21 +96,17 @@ export const MediaCard: React.FC<MediaCardProps> = React.memo(({ item, onClick, 
                  className="w-full h-full object-cover block"
                />
            ) : (
-               // Improved Gradient Placeholder (Matches FolderCard style)
                <div className="w-full h-full bg-gray-900 relative overflow-hidden flex items-center justify-center">
                    <div className="absolute inset-0 bg-gradient-to-tr from-gray-900 to-gray-700 opacity-100" />
-                   {/* We rely on the existing Play icon overlay for the center icon to avoid duplication */}
                </div>
            )}
 
-           {/* Play Icon Overlay (Hidden when playing) */}
            <div className={`absolute inset-0 flex items-center justify-center transition-opacity duration-200 ${isPlaying ? 'opacity-0' : 'opacity-100'} z-20`}>
              <div className="w-12 h-12 bg-white/20 backdrop-blur-md rounded-full flex items-center justify-center text-white group-hover:bg-white/40 transition-colors shadow-lg">
                <Icons.Play size={24} fill="currentColor" className="ml-1" />
              </div>
            </div>
            
-           {/* Badge */}
            <div className="absolute top-2 right-2 bg-black/60 backdrop-blur-sm px-2 py-0.5 rounded text-[10px] text-white font-medium flex items-center gap-1 z-20">
              <Icons.Video size={10} />
              <span>{t('video_badge')}</span>
@@ -149,6 +129,13 @@ export const MediaCard: React.FC<MediaCardProps> = React.memo(({ item, onClick, 
         />
       )}
       
+      {/* Heart Icon Overlay */}
+      {item.isFavorite && (
+          <div className="absolute top-2 left-2 z-30 text-red-500 drop-shadow-md">
+              <Icons.Heart size={20} fill="currentColor" />
+          </div>
+      )}
+
       {/* Hover Info Overlay */}
       <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-end p-4 z-30 pointer-events-none">
         <div className="w-full overflow-hidden">
@@ -162,9 +149,8 @@ export const MediaCard: React.FC<MediaCardProps> = React.memo(({ item, onClick, 
     </motion.div>
   );
 }, (prev, next) => {
-    // Custom comparison function for React.memo
-    // Only re-render if ID matches (content assumption) or layout/virtual props change
     return prev.item.id === next.item.id && 
+           prev.item.isFavorite === next.item.isFavorite && // Re-render on favorite change
            prev.layout === next.layout && 
            prev.isVirtual === next.isVirtual;
 });

@@ -1,3 +1,4 @@
+
 import { 
   Folder, 
   Image as ImageIcon, 
@@ -45,7 +46,13 @@ import {
   CornerUpLeft,
   Activity,
   Cpu,
-  Monitor
+  Monitor,
+  Heart,
+  Star,
+  Server,
+  Database,
+  Zap,
+  Scan
 } from 'lucide-react';
 
 export const Icons = {
@@ -77,6 +84,7 @@ export const Icons = {
   FileJson,
   Refresh: RefreshCw,
   Alert: AlertTriangle,
+  AlertTriangle, // Added for direct access if needed
   Sun,
   Moon,
   Pause,
@@ -95,5 +103,11 @@ export const Icons = {
   Up: CornerUpLeft,
   Activity,
   Cpu,
-  Monitor
+  Monitor,
+  Heart,
+  Star,
+  Server,
+  Database,
+  Zap,
+  Scan
 };

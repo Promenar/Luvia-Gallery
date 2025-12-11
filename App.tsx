@@ -51,6 +51,7 @@ export default function App() {
   const [isFetchingMore, setIsFetchingMore] = useState(false);
   const [hasMoreServer, setHasMoreServer] = useState(true);
   const [serverFolders, setServerFolders] = useState<any[]>([]); // Full list of folders from server
+  const [serverFavoriteIds, setServerFavoriteIds] = useState<{files: string[], folders: string[]}>({files:[], folders:[]});
   const [systemStatus, setSystemStatus] = useState<ExtendedSystemStatus | null>(null);
 
   // --- Scanning & Thumbnail Gen State ---
@@ -59,7 +60,6 @@ export default function App() {
   const [scanProgress, setScanProgress] = useState({ count: 0, currentPath: '', currentEngine: '' });
   const [jobType, setJobType] = useState<'scan' | 'thumb'>('scan');
   
-  // Use timeout ref for recursive polling instead of interval to prevent congestion
   const scanTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // --- App Data State ---
@@ -74,6 +74,11 @@ export default function App() {
     [currentUser, allUserData]
   );
   
+  const favoriteFolderPaths = useMemo(() => 
+    currentUser ? (allUserData[currentUser.username]?.favoriteFolderPaths || []) : [],
+    [currentUser, allUserData]
+  );
+
   // --- View State ---
   const [viewMode, setViewMode] = useState<ViewMode>('home');
   const [layoutMode, setLayoutMode] = useState<GridLayout>('timeline'); // Default to timeline
@@ -203,7 +208,6 @@ export default function App() {
       try {
         const res = await fetch('/api/config');
         if (res.ok) {
-           // Safe parsing for config to prevent stream errors
            const text = await res.text();
            let config = null;
            try {
@@ -221,7 +225,7 @@ export default function App() {
               setLibraryPaths(config.libraryPaths || []);
               
               config.users.forEach((u: User) => {
-                  loadedData[u.username] = { sources: [], files: [] };
+                  loadedData[u.username] = { sources: [], files: [], favoriteFolderPaths: [] };
               });
            } else if (!config || config.configured === false) {
                setAuthStep('setup');
@@ -245,10 +249,10 @@ export default function App() {
             if (storedSources) {
                 const parsedSources = JSON.parse(storedSources);
                 Object.keys(parsedSources).forEach(username => {
-                    loadedData[username] = { sources: parsedSources[username], files: [] };
+                    loadedData[username] = { sources: parsedSources[username], files: [], favoriteFolderPaths: [] };
                 });
             } else {
-                loadedUsers.forEach((u: User) => loadedData[u.username] = { sources: [], files: [] });
+                loadedUsers.forEach((u: User) => loadedData[u.username] = { sources: [], files: [], favoriteFolderPaths: [] });
             }
           } else {
             setAuthStep('setup');
@@ -270,10 +274,10 @@ export default function App() {
               setCurrentUser(user);
               setAuthStep('app');
               if (serverMode) {
-                  // We delay the sync slightly to ensure state is ready
                   setTimeout(() => {
                       fetchServerFiles(user.username, loadedData, 0, true, null);
                       fetchServerFolders();
+                      fetchServerFavorites();
                   }, 100);
               }
               return;
@@ -318,9 +322,9 @@ export default function App() {
 
   // --- Server Logic: Scan & Poll ---
 
-  const fetchServerFolders = async () => {
+  const fetchServerFolders = async (favoritesOnly = false) => {
     try {
-        const res = await fetch('/api/library/folders');
+        const res = await fetch(`/api/library/folders${favoritesOnly ? '?favorites=true' : ''}`);
         if (res.ok) {
             const text = await res.text();
             try {
@@ -332,20 +336,33 @@ export default function App() {
         }
     } catch(e) {}
   };
+
+  const fetchServerFavorites = async () => {
+      try {
+          const res = await fetch('/api/favorites/ids');
+          if (res.ok) {
+              const data = await res.json();
+              setServerFavoriteIds(data);
+          }
+      } catch(e) {}
+  };
   
   const fetchServerFiles = async (
       username: string, 
       currentData: Record<string, UserData>,
       offset: number = 0,
       reset: boolean = false,
-      folderFilter: string | null = null
+      folderFilter: string | null = null,
+      favoritesOnly: boolean = false
   ) => {
       try {
           setIsFetchingMore(true);
           const limit = 500;
           let url = `/api/scan/results?offset=${offset}&limit=${limit}`;
           
-          if (folderFilter !== null && folderFilter !== undefined) {
+          if (favoritesOnly) {
+              url += `&favorites=true`;
+          } else if (folderFilter !== null && folderFilter !== undefined) {
               url += `&folder=${encodeURIComponent(folderFilter)}`;
           }
 
@@ -367,13 +384,14 @@ export default function App() {
           setAllUserData({
               ...currentData,
               [username]: {
+                  ...currentData[username],
                   files: newFiles,
                   sources: data.sources
               }
           });
           
           setServerTotal(data.total);
-          if (folderFilter === null) {
+          if (folderFilter === null && !favoritesOnly) {
               setLibraryTotalCount(data.total);
           }
 
@@ -390,7 +408,8 @@ export default function App() {
   const loadMoreServerFiles = async () => {
       if (!isServerMode || !currentUser || !hasMoreServer || isFetchingMore) return;
       const filter = viewMode === 'folders' ? currentPath : null;
-      await fetchServerFiles(currentUser.username, allUserData, serverOffset, false, filter);
+      const favs = viewMode === 'favorites';
+      await fetchServerFiles(currentUser.username, allUserData, serverOffset, false, filter, favs);
   };
 
   const stopPolling = () => {
@@ -400,15 +419,19 @@ export default function App() {
       }
   };
 
-  const fetchSystemStatus = async () => {
-      if (!isServerMode) return;
+  const fetchSystemStatus = async (forceCheck = false) => {
+      if (!isServerMode && !forceCheck) return;
       try {
           const res = await fetch('/api/system/status');
           if (res.ok) {
               const data = await res.json();
               setSystemStatus(data);
+          } else {
+              setSystemStatus(null);
           }
-      } catch(e) {}
+      } catch(e) {
+          setSystemStatus(null);
+      }
   };
 
   const toggleWatcher = async () => {
@@ -529,6 +552,7 @@ export default function App() {
     let isMounted = true;
     if (isServerMode && currentUser) {
         fetchSystemStatus();
+        fetchServerFavorites();
         // Check Scan Status on Mount
         fetch('/api/scan/status')
             .then(async r => {
@@ -579,8 +603,14 @@ export default function App() {
     
     if (isServerMode && currentUser) {
         if (mode === 'all' || mode === 'home') {
-             // Reset filters to fetch all files for home slideshow or full library view
              fetchServerFiles(currentUser.username, allUserData, 0, true, null);
+             fetchServerFolders(false); // Get all folders
+        } else if (mode === 'favorites') {
+             fetchServerFiles(currentUser.username, allUserData, 0, true, null, true);
+             fetchServerFolders(true); // Get favorite folders
+             fetchServerFavorites();
+        } else {
+             fetchServerFolders(false);
         }
     }
   };
@@ -591,7 +621,17 @@ export default function App() {
          window.history.pushState({ path }, '', '#folder=' + encodeURIComponent(path));
       }
       if (isServerMode && currentUser) {
-          fetchServerFiles(currentUser.username, allUserData, 0, true, path);
+          // Clear current files to avoid "flash" of old directory content
+          const clearedData = { 
+              ...allUserData, 
+              [currentUser.username]: { 
+                  ...allUserData[currentUser.username], 
+                  files: [] 
+              } 
+          };
+          setAllUserData(clearedData);
+          
+          fetchServerFiles(currentUser.username, clearedData, 0, true, path);
       }
   };
 
@@ -608,18 +648,81 @@ export default function App() {
       handleFolderClick(item.folderPath);
   };
 
+  const handleToggleFavorite = async (item: MediaItem | string, type: 'file' | 'folder') => {
+      if (!currentUser) return;
+      const targetId = typeof item === 'string' ? item : (isServerMode ? item.path : item.id);
+
+      if (isServerMode) {
+          try {
+              const res = await fetch('/api/favorites/toggle', {
+                  method: 'POST',
+                  headers: {'Content-Type': 'application/json'},
+                  body: JSON.stringify({ type, id: targetId })
+              });
+              const data = await res.json();
+              if (data.success) {
+                  // Update local state to reflect change immediately if possible
+                  if (type === 'file') {
+                      const updatedFiles = files.map(f => f.path === targetId ? { ...f, isFavorite: data.isFavorite } : f);
+                      setAllUserData({
+                          ...allUserData,
+                          [currentUser.username]: { ...allUserData[currentUser.username], files: updatedFiles }
+                      });
+                      if (data.isFavorite) {
+                          setServerFavoriteIds(prev => ({...prev, files: [...prev.files, targetId]}));
+                      } else {
+                          setServerFavoriteIds(prev => ({...prev, files: prev.files.filter(id => id !== targetId)}));
+                      }
+                      
+                      // Critical: Update selectedItem if it is currently open in ImageViewer
+                      if (selectedItem && (selectedItem.path === targetId)) {
+                           setSelectedItem(prev => prev ? { ...prev, isFavorite: data.isFavorite } : null);
+                      }
+                  } else {
+                      // Update favorite folders list
+                      if (data.isFavorite) {
+                          setServerFavoriteIds(prev => ({...prev, folders: [...prev.folders, targetId]}));
+                      } else {
+                          setServerFavoriteIds(prev => ({...prev, folders: prev.folders.filter(id => id !== targetId)}));
+                      }
+                      if (viewMode === 'favorites') fetchServerFolders(true);
+                  }
+              }
+          } catch(e) {}
+      } else {
+          // Client mode
+          if (type === 'file') {
+              const updatedFiles = files.map(f => f.id === targetId ? { ...f, isFavorite: !f.isFavorite } : f);
+              const updatedUserData = { ...allUserData, [currentUser.username]: { ...allUserData[currentUser.username], files: updatedFiles } };
+              setAllUserData(updatedUserData);
+              persistData(undefined, undefined, updatedUserData);
+              
+              // Critical: Update selectedItem if it is currently open in ImageViewer
+              if (selectedItem && (selectedItem.id === targetId)) {
+                   setSelectedItem(prev => prev ? { ...prev, isFavorite: !prev.isFavorite } : null);
+              }
+          } else {
+              // Toggle folder path in favorites list
+              const currentFavs = allUserData[currentUser.username].favoriteFolderPaths || [];
+              const newFavs = currentFavs.includes(targetId) 
+                  ? currentFavs.filter(p => p !== targetId)
+                  : [...currentFavs, targetId];
+              
+              const updatedUserData = { ...allUserData, [currentUser.username]: { ...allUserData[currentUser.username], favoriteFolderPaths: newFavs } };
+              setAllUserData(updatedUserData);
+              persistData(undefined, undefined, updatedUserData);
+          }
+      }
+  };
+
   const handleRename = async (item: MediaItem, newName: string) => {
       if(!currentUser) return;
-
       if(isServerMode) {
           try {
-              const pathPart = item.url.split('/media-stream/')[1];
-              if(!pathPart) return;
-
               const res = await fetch('/api/file/rename', {
                   method: 'POST',
                   headers: {'Content-Type': 'application/json'},
-                  body: JSON.stringify({ oldPath: pathPart, newName: newName })
+                  body: JSON.stringify({ oldPath: item.path, newName: newName })
               });
               const data = await res.json();
               if(data.success) {
@@ -628,9 +731,7 @@ export default function App() {
               } else {
                   alert("Rename failed: " + data.error);
               }
-          } catch(e) {
-              alert("Network error during rename");
-          }
+          } catch(e) { alert("Network error"); }
       } else {
           const updatedFiles = files.map(f => {
               if (f.id === item.id) return { ...f, name: newName };
@@ -638,22 +739,18 @@ export default function App() {
           });
           const updatedUserData = { ...allUserData, [currentUser.username]: { ...allUserData[currentUser.username], files: updatedFiles } };
           setAllUserData(updatedUserData);
-          persistData(undefined, undefined, updatedUserData, undefined, undefined);
+          persistData(undefined, undefined, updatedUserData);
       }
   };
 
   const handleDelete = async (item: MediaItem) => {
       if(!currentUser) return;
-      
       if(isServerMode) {
            try {
-              const pathPart = item.url.split('/media-stream/')[1];
-              if(!pathPart) return;
-
               const res = await fetch('/api/file/delete', {
                   method: 'POST',
                   headers: {'Content-Type': 'application/json'},
-                  body: JSON.stringify({ filePath: pathPart })
+                  body: JSON.stringify({ filePath: item.path })
               });
               const data = await res.json();
               if(data.success) {
@@ -663,16 +760,80 @@ export default function App() {
               } else {
                   alert("Delete failed: " + data.error);
               }
-           } catch(e) {
-              alert("Network error during delete");
-           }
+           } catch(e) { alert("Network error"); }
       } else {
            const updatedFiles = files.filter(f => f.id !== item.id);
            const updatedUserData = { ...allUserData, [currentUser.username]: { ...allUserData[currentUser.username], files: updatedFiles } };
            setAllUserData(updatedUserData);
-           persistData(undefined, undefined, updatedUserData, undefined, undefined);
+           persistData(undefined, undefined, updatedUserData);
            setSelectedItem(null);
       }
+  };
+
+  const handleFolderRename = async (pathStr: string, newName: string) => {
+    if (!currentUser) return;
+    if (isServerMode) {
+         try {
+             const res = await fetch('/api/folder/rename', {
+                 method: 'POST',
+                 headers: {'Content-Type': 'application/json'},
+                 body: JSON.stringify({ oldPath: pathStr, newName })
+             });
+             const data = await res.json();
+             if (data.success) {
+                 alert("Folder renamed. Please rescan library to update database.");
+                 fetchServerFolders(viewMode === 'favorites');
+             } else {
+                 alert("Error: " + data.error);
+             }
+         } catch(e) { alert("Network error"); }
+    } else {
+         // Client mode rename
+         const updatedFiles = files.map(f => {
+             if (f.path.startsWith(pathStr + '/')) {
+                 const relative = f.path.substring(pathStr.length);
+                 const parentDir = pathStr.substring(0, pathStr.lastIndexOf('/'));
+                 const newPath = (parentDir ? parentDir + '/' : '') + newName + relative;
+                 
+                 const newFolderPath = newPath.substring(0, newPath.lastIndexOf('/'));
+                 return { ...f, path: newPath, folderPath: newFolderPath };
+             }
+             return f;
+         });
+         const updatedUserData = { ...allUserData, [currentUser.username]: { ...allUserData[currentUser.username], files: updatedFiles } };
+         setAllUserData(updatedUserData);
+         persistData(undefined, undefined, updatedUserData);
+    }
+  };
+
+  const handleFolderDelete = async (pathStr: string) => {
+    if (!currentUser || !confirm(`Are you sure you want to delete folder "${pathStr}" and all its contents?`)) return;
+    
+    if (isServerMode) {
+        try {
+            const res = await fetch('/api/folder/delete', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ path: pathStr })
+            });
+            const data = await res.json();
+            if (data.success) {
+                fetchServerFolders(viewMode === 'favorites');
+                // If current view was inside this folder, go up
+                if (currentPath.startsWith(pathStr)) {
+                    setCurrentPath('');
+                }
+            } else {
+                alert("Error: " + data.error);
+            }
+        } catch(e) { alert("Network error"); }
+    } else {
+        // Client mode delete
+        const updatedFiles = files.filter(f => !f.path.startsWith(pathStr + '/') && f.path !== pathStr);
+        const updatedUserData = { ...allUserData, [currentUser.username]: { ...allUserData[currentUser.username], files: updatedFiles } };
+        setAllUserData(updatedUserData);
+        persistData(undefined, undefined, updatedUserData);
+    }
   };
 
   const toggleLayoutMode = () => {
@@ -691,6 +852,10 @@ export default function App() {
 
   const handleUpdateSubtitle = (newSubtitle: string) => {
     persistData(undefined, undefined, undefined, undefined, newSubtitle);
+  };
+  
+  const handleUpdateHomeConfig = (newConfig: HomeScreenConfig) => {
+      persistData(undefined, undefined, undefined, undefined, undefined, newConfig);
   };
 
   const handleAddLibraryPath = (e?: React.FormEvent) => {
@@ -793,6 +958,7 @@ export default function App() {
       if (isServerMode) {
           fetchServerFiles(user.username, newData, 0, true, null); // Load sidebar count
           fetchServerFolders();
+          fetchServerFavorites();
       }
     } else {
       setAuthError(t('invalid_credentials'));
@@ -862,6 +1028,7 @@ export default function App() {
       const updatedUserData = {
           ...allUserData,
           [currentUser.username]: {
+              ...allUserData[currentUser.username],
               files: [...(allUserData[currentUser.username]?.files || []), ...newItems],
               sources: [...(allUserData[currentUser.username]?.sources || []), { id: sourceId, name: sourceName, count: newItems.length }]
           }
@@ -874,6 +1041,10 @@ export default function App() {
 
   const processedFiles = useMemo(() => {
     let result = files;
+    if (viewMode === 'favorites' && !isServerMode) {
+        result = result.filter(f => f.isFavorite);
+    }
+
     if (filterOption !== 'all') {
       result = result.filter(f => f.mediaType === filterOption);
     }
@@ -886,7 +1057,7 @@ export default function App() {
         return randomizedFiles;
     }
     return sortMedia(result, sortOption);
-  }, [files, filterOption, sortOption, randomizedFiles]);
+  }, [files, filterOption, sortOption, randomizedFiles, viewMode, isServerMode]);
 
   const folderTree = useMemo(() => {
     if (isServerMode && serverFolders.length > 0) {
@@ -914,12 +1085,39 @@ export default function App() {
         });
         return root;
     }
-    return buildFolderTree(processedFiles);
-  }, [processedFiles, isServerMode, serverFolders]);
+    // Client mode folder tree construction
+    return buildFolderTree(files);
+  }, [files, isServerMode, serverFolders]);
 
   const content = useMemo(() => {
     if (viewMode === 'all') {
       return { type: 'media', data: processedFiles, title: t('library') };
+    }
+    if (viewMode === 'favorites') {
+        // In client mode, we need to filter folders manually
+        let subfolders: FolderNode[] = [];
+        if (!isServerMode) {
+             subfolders = favoriteFolderPaths.map(path => {
+                const cover = files.find(f => f.folderPath === path && f.mediaType === 'image');
+                return {
+                    name: path.split('/').pop() || path,
+                    path: path,
+                    children: {},
+                    mediaCount: files.filter(f => f.folderPath === path).length,
+                    coverMedia: cover
+                } as FolderNode;
+            });
+        } else {
+            // Server mode returns already filtered folders list in `serverFolders`
+            subfolders = serverFolders.map(sf => ({
+                name: sf.path.split('/').pop() || sf.path,
+                path: sf.path,
+                children: {},
+                mediaCount: sf.count,
+                coverMedia: sf.coverItem
+            }));
+        }
+        return { type: 'mixed', folders: subfolders, photos: processedFiles, title: t('favorites') };
     }
     if (viewMode === 'home') {
         return { type: 'home' };
@@ -936,14 +1134,11 @@ export default function App() {
        title = parts[parts.length - 1] || t('folders');
     }
     const subfolders = (Object.values(targetNode.children) as FolderNode[]).sort((a, b) => a.name.localeCompare(b.name));
-    // When in server mode and folder view, processedFiles already contains only the files for the current folder
-    // because we fetched them with the folder filter.
-    // However, if we navigated up, we might need to rely on the subfolders.
-    // For local mode, we need to filter.
+    
     const media = isServerMode ? processedFiles : processedFiles.filter(f => f.folderPath === currentPath);
     
     return { type: 'mixed', folders: subfolders, photos: media, title: title };
-  }, [viewMode, currentPath, processedFiles, folderTree, t, isServerMode]);
+  }, [viewMode, currentPath, processedFiles, folderTree, t, isServerMode, serverFolders, favoriteFolderPaths, files]);
 
   // Helpers
   useEffect(() => {
@@ -974,6 +1169,11 @@ export default function App() {
       const idx = list.findIndex(p => p.id === selectedItem.id);
       if (idx > 0) setSelectedItem(list[idx - 1]);
       else if (idx === 0) setSelectedItem(list[list.length - 1]);
+  };
+
+  const isFavoriteFolder = (path: string) => {
+      if (isServerMode) return serverFavoriteIds.folders.includes(path);
+      return favoriteFolderPaths.includes(path);
   };
 
   // --- RENDER ---
@@ -1067,7 +1267,7 @@ export default function App() {
         <>
             <header className="h-16 flex items-center justify-between px-6 border-b border-gray-50 dark:border-gray-800 bg-white/80 dark:bg-gray-900/80 backdrop-blur-sm z-20 shrink-0 transition-colors">
             <div className="flex items-center gap-2 overflow-hidden flex-1 mr-4">
-                {viewMode === 'folders' ? (
+                {viewMode === 'folders' || (viewMode === 'favorites' && currentPath) ? (
                     <div className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400 overflow-hidden whitespace-nowrap mask-linear-fade">
                          {currentPath && (
                             <button 
@@ -1082,18 +1282,16 @@ export default function App() {
 
                         <button onClick={() => handleFolderClick('')} className={`hover:bg-gray-100 dark:hover:bg-gray-800 px-2 py-1 rounded-md flex items-center gap-1 transition-colors ${currentPath === '' ? 'font-bold text-gray-900 dark:text-white bg-gray-50 dark:bg-gray-800' : ''}`}><Icons.Folder size={16} />Root</button>
                         {currentPath && currentPath.split('/').filter(p => p).map((part, index, arr) => {
-                            // Reconstruct the path for breadcrumbs, handling leading slash if needed
-                            // For simplicity in display, we join with /. 
-                            // In handleFolderClick, if original path had slash, we might lose it here if we don't know.
-                            // However, we can reconstruct based on currentPath string.
-                            // If currentPath starts with /, then we should prepend it.
                             const hasLeading = currentPath.startsWith('/');
                             const path = (hasLeading ? '/' : '') + arr.slice(0, index + 1).join('/');
                             return (<React.Fragment key={path}><Icons.ChevronRight size={12} className="text-gray-300 dark:text-gray-600" /><button onClick={() => handleFolderClick(path)} className="hover:bg-gray-100 dark:hover:bg-gray-800 px-2 py-1 rounded-md truncate max-w-[150px] transition-colors">{part}</button></React.Fragment>);
                         })}
                     </div>
                 ) : (
-                    <div className="flex items-center gap-2"><Icons.Image size={20} className="text-primary-600" /><h1 className="text-xl font-bold text-gray-800 dark:text-white truncate">{t('library')}</h1></div>
+                    <div className="flex items-center gap-2">
+                        {viewMode === 'favorites' ? <Icons.Heart size={20} className="text-red-500" fill="currentColor" /> : <Icons.Image size={20} className="text-primary-600" />}
+                        <h1 className="text-xl font-bold text-gray-800 dark:text-white truncate">{viewMode === 'favorites' ? t('favorites') : t('library')}</h1>
+                    </div>
                 )}
             </div>
             <div className="flex items-center gap-2">
@@ -1105,12 +1303,12 @@ export default function App() {
                     {layoutMode === 'grid' ? <Icons.Masonry size={20} /> : layoutMode === 'masonry' ? <Icons.List size={20} /> : <Icons.Grid size={20} />}
                 </button>
 
-                <div className="relative group z-30">
+                <div className="relative group z-30 h-full flex items-center">
                     <button className="p-2 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full flex items-center gap-1 transition-colors group-hover:bg-gray-100 dark:group-hover:bg-gray-800"><Icons.Filter size={18} /><Icons.Sort size={14} /></button>
                     {/* Transparent Bridge to prevent mouse falling through */}
-                    <div className="absolute top-full right-0 h-2 w-full bg-transparent hidden group-hover:block" />
+                    <div className="absolute top-[80%] right-0 h-6 w-full bg-transparent hidden group-hover:block" />
                     
-                    <div className="absolute right-0 top-[calc(100%+0.5rem)] w-52 bg-white dark:bg-gray-800 rounded-xl shadow-xl border border-gray-100 dark:border-gray-700 p-2 hidden group-hover:block z-50 animate-in fade-in zoom-in-95 duration-200">
+                    <div className="absolute right-0 top-full mt-1 w-52 bg-white dark:bg-gray-800 rounded-xl shadow-xl border border-gray-100 dark:border-gray-700 p-2 hidden group-hover:block z-50 animate-in fade-in zoom-in-95 duration-200">
                         <p className="text-xs font-semibold text-gray-400 uppercase px-2 py-1">{t('sort_filter')}</p>
                         <button onClick={() => setSortOption('dateDesc')} className={`w-full text-left px-2 py-1.5 text-sm rounded-lg flex justify-between transition-colors ${sortOption === 'dateDesc' ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}`}>{t('newest_first')} {sortOption === 'dateDesc' && <Icons.Check size={14} />}</button>
                         <button onClick={() => setSortOption('dateAsc')} className={`w-full text-left px-2 py-1.5 text-sm rounded-lg flex justify-between transition-colors ${sortOption === 'dateAsc' ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}`}>{t('oldest_first')} {sortOption === 'dateAsc' && <Icons.Check size={14} />}</button>
@@ -1126,7 +1324,6 @@ export default function App() {
             </div>
             </header>
 
-            {/* Changed from overflow-y-auto to flex-col with overflow-hidden for layout fix */}
             <div className="flex-1 flex flex-col overflow-hidden bg-gray-50/50 dark:bg-gray-900/50 transition-colors">
             {files.length === 0 && !isFetchingMore && viewMode === 'all' && (
                 <div className="h-full flex flex-col items-center justify-center text-center p-8 overflow-y-auto">
@@ -1151,31 +1348,42 @@ export default function App() {
                 </div>
             )}
 
-            {(files.length > 0 || isFetchingMore || (viewMode === 'folders' && content.folders.length > 0)) && (
+            {(files.length > 0 || isFetchingMore || (viewMode === 'folders' && content.folders.length > 0) || (viewMode === 'favorites')) && (
                 <>
-                    {/* Folders Section - Only Render if folders exist. 
-                        Added max-h to ensure it doesn't consume full screen, and shrink-0 to prevent compression.
-                    */}
-                    {viewMode === 'folders' && content.folders.length > 0 && (
+                    {((viewMode === 'folders' && content.folders.length > 0) || (viewMode === 'favorites' && content.folders.length > 0)) && (
                         <div className="p-4 md:p-8 pb-0 shrink-0 max-h-[40vh] overflow-y-auto no-scrollbar animate-in fade-in slide-in-from-bottom-2 duration-500">
-                            <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2"><Icons.Folder size={14} />{currentPath ? t('folders') : t('folders')}</h3>
+                            <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2">
+                                <Icons.Folder size={14} />{t('folders')}
+                            </h3>
                             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
-                                {content.folders.map((folder) => (<FolderCard key={folder.path} folder={folder} onClick={(path) => handleFolderClick(path)} />))}
+                                {content.folders.map((folder) => (
+                                    <FolderCard 
+                                        key={folder.path} 
+                                        folder={folder} 
+                                        onClick={(path) => handleFolderClick(path)}
+                                        isFavorite={isFavoriteFolder(folder.path)}
+                                        onToggleFavorite={(p) => handleToggleFavorite(p, 'folder')}
+                                        onRename={handleFolderRename}
+                                        onDelete={handleFolderDelete}
+                                    />
+                                ))}
                             </div>
                         </div>
                     )}
 
-                    {/* Gallery Section - Flex-1 ensures it fills remaining space and AutoSizer gets correct height */}
-                    {(viewMode === 'all' || (viewMode === 'folders' && currentPath !== '')) && (
+                    {(viewMode === 'all' || (viewMode === 'folders' && currentPath !== '') || viewMode === 'favorites') && (
                         <div className="flex-1 min-h-0 p-4 md:p-8 pt-4 w-full"> 
+                            {viewMode === 'favorites' && (
+                                <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2"><Icons.Image size={14} />{t('all_photos')}</h3>
+                            )}
                             <VirtualGallery 
                                     layout={layoutMode}
-                                    items={viewMode === 'all' ? processedFiles : (content.photos || [])}
+                                    items={viewMode === 'all' || viewMode === 'favorites' ? processedFiles : (content.photos || [])}
                                     onItemClick={setSelectedItem}
                                     hasNextPage={isServerMode ? hasMoreServer : false}
                                     isNextPageLoading={isFetchingMore}
                                     loadNextPage={loadMoreServerFiles}
-                                    itemCount={isServerMode && viewMode === 'all' ? serverTotal : processedFiles.length}
+                                    itemCount={isServerMode && (viewMode === 'all' || viewMode === 'favorites') ? serverTotal : processedFiles.length}
                             />
                         </div>
                     )}
@@ -1194,6 +1402,7 @@ export default function App() {
         onDelete={handleDelete}
         onRename={handleRename}
         onJumpToFolder={handleJumpToFolder}
+        onToggleFavorite={handleToggleFavorite}
       />
       
       {/* Scan Progress Modal */}
@@ -1217,48 +1426,167 @@ export default function App() {
                     <div className="p-6 border-b border-gray-100 dark:border-gray-700 flex justify-between items-center bg-gray-50 dark:bg-gray-800/50"><h2 className="font-bold text-xl text-gray-800 dark:text-white">{t('settings')}</h2><button onClick={() => setIsSettingsOpen(false)} className="p-2 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-full text-gray-500 dark:text-gray-400 transition-colors"><Icons.Close size={20}/></button></div>
                     <div className="p-6 overflow-y-auto space-y-8 flex-1">
                         
-                        {/* SERVER DASHBOARD */}
-                        {isServerMode && systemStatus && (
-                            <section className="pb-6 border-b border-gray-100 dark:border-gray-700">
-                                <h3 className="font-bold text-gray-800 dark:text-gray-200 flex items-center gap-2"><Icons.Activity size={18} /> {t('system_monitoring')}</h3>
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                                    <div className="bg-gray-50 dark:bg-gray-700/30 p-4 rounded-xl border border-gray-100 dark:border-gray-700">
-                                        <h4 className="text-xs uppercase font-bold text-gray-500 mb-2">{t('processors')}</h4>
-                                        <div className="space-y-2">
-                                            <div className="flex justify-between items-center text-sm">
-                                                <div className="flex items-center gap-2"><Icons.Cpu size={14} /> FFmpeg</div>
-                                                {systemStatus.ffmpeg ? <span className="text-green-500 bg-green-500/10 px-2 py-0.5 rounded text-[10px] font-bold">{t('active')}</span> : <span className="text-red-500 bg-red-500/10 px-2 py-0.5 rounded text-[10px] font-bold">{t('missing')}</span>}
-                                            </div>
-                                            <div className="flex justify-between items-center text-sm">
-                                                <div className="flex items-center gap-2"><Icons.Monitor size={14} /> {t('hw_acceleration')}</div>
-                                                {systemStatus.ffmpegHwAccels.length > 0 ? (
-                                                    <div className="flex gap-1">
-                                                        {systemStatus.ffmpegHwAccels.map(acc => <span key={acc} className="text-purple-500 bg-purple-500/10 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase">{acc}</span>)}
-                                                    </div>
-                                                ) : <span className="text-gray-400 text-[10px]">{t('cpu_only')}</span>}
-                                            </div>
-                                            <div className="flex justify-between items-center text-sm">
-                                                <div className="flex items-center gap-2"><Icons.Image size={14} /> Sharp (Img)</div>
-                                                {systemStatus.sharp ? <span className="text-green-500 bg-green-500/10 px-2 py-0.5 rounded text-[10px] font-bold">{t('active')}</span> : <span className="text-red-500 bg-red-500/10 px-2 py-0.5 rounded text-[10px] font-bold">{t('missing')}</span>}
-                                            </div>
-                                        </div>
-                                    </div>
-                                    <div className="bg-gray-50 dark:bg-gray-700/30 p-4 rounded-xl border border-gray-100 dark:border-gray-700">
-                                        <h4 className="text-xs uppercase font-bold text-gray-500 mb-2">{t('library_stats')}</h4>
-                                        <div className="flex justify-between items-end mb-2">
-                                            <span className="text-sm font-medium dark:text-white">{systemStatus.totalItems} {t('items_count')}</span>
-                                            <span className="text-xs text-gray-500">{systemStatus.cacheCount} {t('cached')}</span>
-                                        </div>
-                                        <div className="w-full bg-gray-200 dark:bg-gray-600 rounded-full h-2 mb-3">
-                                            <div className="bg-primary-500 h-2 rounded-full" style={{ width: `${Math.min(100, (systemStatus.cacheCount / (systemStatus.totalItems || 1)) * 100)}%` }} />
-                                        </div>
-                                        <div className="flex gap-2 text-[10px] text-gray-400">
-                                            <span className="bg-white dark:bg-gray-800 px-1.5 py-0.5 rounded border border-gray-200 dark:border-gray-600">{systemStatus.mediaBreakdown.image} IMG</span>
-                                            <span className="bg-white dark:bg-gray-800 px-1.5 py-0.5 rounded border border-gray-200 dark:border-gray-600">{systemStatus.mediaBreakdown.video} VID</span>
-                                            <span className="bg-white dark:bg-gray-800 px-1.5 py-0.5 rounded border border-gray-200 dark:border-gray-600">{systemStatus.mediaBreakdown.audio} AUD</span>
-                                        </div>
+                        {/* APPEARANCE SECTION (Both Modes) */}
+                        <section className="pb-6 border-b border-gray-100 dark:border-gray-700">
+                            <h3 className="font-bold text-gray-800 dark:text-gray-200 flex items-center gap-2 mb-4"><Icons.Monitor size={18} /> {t('appearance')}</h3>
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label className="text-sm font-medium text-gray-600 dark:text-gray-400 mb-2 block">{t('theme')}</label>
+                                    <div className="flex bg-gray-100 dark:bg-gray-700 rounded-lg p-1">
+                                        {['light', 'dark', 'system'].map((m) => (
+                                            <button
+                                                key={m}
+                                                className={`flex-1 py-1.5 text-xs font-medium rounded-md capitalize ${theme === m ? 'bg-white dark:bg-gray-600 shadow-sm text-gray-900 dark:text-white' : 'text-gray-500 dark:text-gray-400'}`}
+                                                onClick={() => { setTheme(m as any); localStorage.setItem(THEME_STORAGE_KEY, m); }}
+                                            >
+                                                {t(m === 'light' ? 'light_mode' : m === 'dark' ? 'dark_mode' : 'follow_system')}
+                                            </button>
+                                        ))}
                                     </div>
                                 </div>
+                                <div>
+                                    <label className="text-sm font-medium text-gray-600 dark:text-gray-400 mb-2 block">{t('language')}</label>
+                                    <div className="flex bg-gray-100 dark:bg-gray-700 rounded-lg p-1">
+                                        <button onClick={() => setLanguage('en')} className={`flex-1 py-1.5 text-xs font-medium rounded-md ${language === 'en' ? 'bg-white dark:bg-gray-600 shadow-sm text-gray-900 dark:text-white' : 'text-gray-500 dark:text-gray-400'}`}>English</button>
+                                        <button onClick={() => setLanguage('zh')} className={`flex-1 py-1.5 text-xs font-medium rounded-md ${language === 'zh' ? 'bg-white dark:bg-gray-600 shadow-sm text-gray-900 dark:text-white' : 'text-gray-500 dark:text-gray-400'}`}>中文</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </section>
+
+                        {/* CONNECTION SECTION */}
+                        <section className="pb-6 border-b border-gray-100 dark:border-gray-700">
+                            <h3 className="font-bold text-gray-800 dark:text-gray-200 flex items-center gap-2 mb-4"><Icons.Server size={18} /> {t('connection')}</h3>
+                            <div className="bg-gray-50 dark:bg-gray-700/30 p-4 rounded-xl border border-gray-100 dark:border-gray-700 flex justify-between items-center">
+                                <div>
+                                    <h4 className="text-sm font-bold text-gray-700 dark:text-gray-200 flex items-center gap-2">
+                                        {isServerMode ? t('server_mode') : t('client_mode')}
+                                        <span className={`w-2 h-2 rounded-full ${isServerMode ? (systemStatus ? 'bg-green-500' : 'bg-yellow-500') : 'bg-orange-500'}`} />
+                                    </h4>
+                                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                                        {isServerMode ? t('server_mode_description') : t('client_mode_description')}
+                                    </p>
+                                </div>
+                                <button 
+                                    onClick={() => {
+                                        if(isServerMode) {
+                                            setIsServerMode(false);
+                                            setSystemStatus(null);
+                                        } else {
+                                            setIsServerMode(true);
+                                            setTimeout(() => {
+                                                fetchSystemStatus(true);
+                                                fetchServerFolders();
+                                            }, 100);
+                                        }
+                                    }}
+                                    className="px-3 py-1.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-300 text-xs font-bold rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+                                >
+                                    {t('toggle')}
+                                </button>
+                            </div>
+                        </section>
+
+                        {/* SERVER DASHBOARD */}
+                        {isServerMode && (
+                            <section className="pb-6 border-b border-gray-100 dark:border-gray-700">
+                                <h3 className="font-bold text-gray-800 dark:text-gray-200 flex items-center gap-2"><Icons.Activity size={18} /> {t('system_monitoring')}</h3>
+                                {!systemStatus ? (
+                                     <div className="mt-4 p-4 bg-red-50 dark:bg-red-900/20 border border-red-100 dark:border-red-800 rounded-xl flex items-center gap-3 animate-in fade-in slide-in-from-top-2 duration-300">
+                                         <Icons.AlertTriangle className="text-red-500" />
+                                         <div>
+                                             <p className="text-sm font-bold text-red-700 dark:text-red-400">{t('server_offline')}</p>
+                                             <p className="text-xs text-red-600 dark:text-red-500">{t('server_offline_desc')}</p>
+                                         </div>
+                                         <button onClick={() => fetchSystemStatus(true)} className="ml-auto px-3 py-1 bg-white dark:bg-gray-800 shadow-sm rounded-lg text-xs font-bold text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">{t('retry')}</button>
+                                     </div>
+                                ) : (
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mt-4 animate-in fade-in slide-in-from-top-2 duration-300">
+                                        {/* Core Components Status */}
+                                        <div className="bg-gray-50 dark:bg-gray-700/30 p-4 rounded-xl border border-gray-100 dark:border-gray-700">
+                                            <h4 className="text-xs uppercase font-bold text-gray-500 mb-3">{t('backend_components')}</h4>
+                                            <div className="space-y-2">
+                                                <div className="flex justify-between items-center text-sm">
+                                                    <span className="flex items-center gap-2 text-gray-700 dark:text-gray-300"><Icons.Database size={14}/> {t('database')}</span>
+                                                    <span className="text-green-500 bg-green-500/10 px-2 py-0.5 rounded text-[10px] font-bold">ONLINE</span>
+                                                </div>
+                                                <div className="flex justify-between items-center text-sm">
+                                                    <span className="flex items-center gap-2 text-gray-700 dark:text-gray-300"><Icons.Cpu size={14}/> {t('video_engine')}</span>
+                                                     {systemStatus.ffmpeg ? <span className="text-green-500 bg-green-500/10 px-2 py-0.5 rounded text-[10px] font-bold">FFMPEG</span> : <span className="text-red-500 bg-red-500/10 px-2 py-0.5 rounded text-[10px] font-bold">MISSING</span>}
+                                                </div>
+                                                 <div className="flex justify-between items-center text-sm">
+                                                    <span className="flex items-center gap-2 text-gray-700 dark:text-gray-300"><Icons.Image size={14}/> {t('image_engine')}</span>
+                                                     {systemStatus.sharp ? <span className="text-green-500 bg-green-500/10 px-2 py-0.5 rounded text-[10px] font-bold">SHARP</span> : <span className="text-red-500 bg-red-500/10 px-2 py-0.5 rounded text-[10px] font-bold">MISSING</span>}
+                                                </div>
+                                                 <div className="flex justify-between items-center text-sm">
+                                                    <span className="flex items-center gap-2 text-gray-700 dark:text-gray-300"><Icons.Zap size={14}/> {t('hw_accel')}</span>
+                                                     {systemStatus.ffmpegHwAccels.length > 0 ? (
+                                                        <div className="flex gap-1">
+                                                            {systemStatus.ffmpegHwAccels.slice(0, 2).map(a => <span key={a} className="text-purple-500 bg-purple-500/10 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase">{a}</span>)}
+                                                        </div>
+                                                     ) : <span className="text-gray-400 text-[10px]">OFF</span>}
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        {/* Library Stats */}
+                                        <div className="bg-gray-50 dark:bg-gray-700/30 p-4 rounded-xl border border-gray-100 dark:border-gray-700">
+                                             <h4 className="text-xs uppercase font-bold text-gray-500 mb-3">{t('library_stats')}</h4>
+                                             <div className="flex items-end justify-between mb-4">
+                                                 <div>
+                                                     <p className="text-2xl font-bold text-gray-800 dark:text-white">{systemStatus.totalItems}</p>
+                                                     <p className="text-xs text-gray-400">{t('total_assets')}</p>
+                                                 </div>
+                                                 <div className="text-right">
+                                                     <p className="text-sm font-bold text-gray-700 dark:text-gray-200">{systemStatus.mediaBreakdown.video}</p>
+                                                     <p className="text-xs text-gray-400">Videos</p>
+                                                 </div>
+                                             </div>
+                                             <div className="flex gap-2 text-[10px]">
+                                                <div className="flex-1 bg-white dark:bg-gray-800 p-2 rounded border border-gray-200 dark:border-gray-600 text-center">
+                                                    <strong className="block text-gray-800 dark:text-gray-200">{systemStatus.mediaBreakdown.image}</strong> Images
+                                                </div>
+                                                <div className="flex-1 bg-white dark:bg-gray-800 p-2 rounded border border-gray-200 dark:border-gray-600 text-center">
+                                                    <strong className="block text-gray-800 dark:text-gray-200">{systemStatus.mediaBreakdown.audio}</strong> Audio
+                                                </div>
+                                             </div>
+                                        </div>
+
+                                        {/* Cache Stats */}
+                                        <div className="bg-gray-50 dark:bg-gray-700/30 p-4 rounded-xl border border-gray-100 dark:border-gray-700">
+                                             <h4 className="text-xs uppercase font-bold text-gray-500 mb-3">{t('cache_management')}</h4>
+                                             <div className="mb-3">
+                                                 <div className="flex justify-between text-sm mb-1">
+                                                     <span className="text-gray-600 dark:text-gray-400">Thumbnails</span>
+                                                     <span className="font-bold text-gray-800 dark:text-white">{systemStatus.cacheCount}</span>
+                                                 </div>
+                                                 <div className="w-full bg-gray-200 dark:bg-gray-600 rounded-full h-1.5">
+                                                    <div className="bg-blue-500 h-1.5 rounded-full" style={{ width: `${Math.min(100, (systemStatus.cacheCount / (systemStatus.totalItems || 1)) * 100)}%` }}></div>
+                                                 </div>
+                                             </div>
+                                             <div className="flex flex-col gap-2 mt-auto">
+                                                <button onClick={clearCache} className="w-full py-1.5 text-xs bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded hover:bg-red-50 dark:hover:bg-red-900/20 hover:text-red-500 hover:border-red-200 transition-colors">{t('clear_all_cache')}</button>
+                                             </div>
+                                        </div>
+
+                                         {/* Watcher (Full Width) */}
+                                         <div className="bg-gray-50 dark:bg-gray-700/30 p-4 rounded-xl border border-gray-100 dark:border-gray-700 sm:col-span-2 lg:col-span-3 flex justify-between items-center">
+                                            <div>
+                                                <h4 className="text-sm font-bold text-gray-700 dark:text-gray-200 flex items-center gap-2"><Icons.Scan size={16} /> {t('auto_scan')}</h4>
+                                                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Automatically detect changes in library folders.</p>
+                                            </div>
+                                            <div className="flex items-center gap-3">
+                                                <div className={`flex items-center gap-1.5 px-2 py-1 rounded text-xs font-bold uppercase ${systemStatus.watcherActive ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' : 'bg-gray-200 text-gray-500 dark:bg-gray-600 dark:text-gray-400'}`}>
+                                                    <div className={`w-2 h-2 rounded-full ${systemStatus.watcherActive ? 'bg-green-500 animate-pulse' : 'bg-gray-500'}`} />
+                                                    {systemStatus.watcherActive ? 'Running' : 'Stopped'}
+                                                </div>
+                                                <button onClick={toggleWatcher} className={`relative w-10 h-6 rounded-full transition-colors ${systemStatus.watcherActive ? 'bg-primary-600' : 'bg-gray-300 dark:bg-gray-600'}`}>
+                                                    <div className={`absolute top-1 left-1 bg-white w-4 h-4 rounded-full shadow transition-transform ${systemStatus.watcherActive ? 'translate-x-4' : 'translate-x-0'}`} />
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
                             </section>
                         )}
 
@@ -1276,144 +1604,138 @@ export default function App() {
                                         <label className="text-sm font-medium text-gray-600 dark:text-gray-400">{t('home_subtitle')}</label>
                                         <input type="text" value={homeSubtitle} onChange={(e) => handleUpdateSubtitle(e.target.value)} className="w-full px-3 py-2 text-sm border rounded-lg focus:ring-2 focus:ring-primary-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white border-gray-200 dark:border-gray-600 placeholder-gray-400 dark:placeholder-gray-500" />
                                     </div>
-
-                                    <div className="space-y-2">
-                                        <label className="text-sm font-medium text-gray-600 dark:text-gray-400">{t('home_screen_bg')}</label>
-                                        <div className="grid grid-cols-3 gap-2 mb-2">
-                                            <button onClick={() => persistData(undefined, undefined, undefined, undefined, undefined, { ...homeConfig, mode: 'random' })} className={`px-2 py-1.5 text-xs font-medium rounded border transition-colors ${homeConfig.mode === 'random' ? 'bg-primary-50 dark:bg-primary-900/30 border-primary-500 text-primary-600 dark:text-primary-400' : 'bg-white dark:bg-gray-700 border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-300'}`}>{t('random_all')}</button>
-                                            <button onClick={() => persistData(undefined, undefined, undefined, undefined, undefined, { ...homeConfig, mode: 'folder' })} className={`px-2 py-1.5 text-xs font-medium rounded border transition-colors ${homeConfig.mode === 'folder' ? 'bg-primary-50 dark:bg-primary-900/30 border-primary-500 text-primary-600 dark:text-primary-400' : 'bg-white dark:bg-gray-700 border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-300'}`}>{t('specific_folder')}</button>
-                                            <button onClick={() => persistData(undefined, undefined, undefined, undefined, undefined, { ...homeConfig, mode: 'single' })} className={`px-2 py-1.5 text-xs font-medium rounded border transition-colors ${homeConfig.mode === 'single' ? 'bg-primary-50 dark:bg-primary-900/30 border-primary-500 text-primary-600 dark:text-primary-400' : 'bg-white dark:bg-gray-700 border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-300'}`}>{t('single_item')}</button>
-                                        </div>
-                                        {homeConfig.mode !== 'random' && (
-                                            <div>
-                                                 {isServerMode ? (
-                                                     <PathAutocomplete 
-                                                        value={homeConfig.path || ''} 
-                                                        onChange={(val) => persistData(undefined, undefined, undefined, undefined, undefined, { ...homeConfig, path: val })}
-                                                        onAdd={() => {}}
-                                                     />
-                                                 ) : (
-                                                     <input 
-                                                        type="text" 
-                                                        placeholder={homeConfig.mode === 'folder' ? "Exact folder path (e.g. Vacation/2023)" : "Exact file path (e.g. Vacation/photo.jpg)"}
-                                                        value={homeConfig.path || ''}
-                                                        onChange={(e) => persistData(undefined, undefined, undefined, undefined, undefined, { ...homeConfig, path: e.target.value })}
-                                                        className="w-full px-3 py-2 text-sm border rounded-lg focus:ring-2 focus:ring-primary-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white border-gray-200 dark:border-gray-600 placeholder-gray-400 dark:placeholder-gray-500" 
-                                                     />
-                                                 )}
-                                                 <p className="text-[10px] text-gray-400 mt-1">{t('enter_rel_path')}</p>
-                                            </div>
-                                        )}
-                                    </div>
                                     
-                                    <div className="space-y-3">
-                                        <label className="text-sm font-medium text-gray-600 dark:text-gray-400 block">{t('connection_mode')}</label>
-                                        <div className="flex bg-gray-100 dark:bg-gray-700/50 p-1 rounded-lg">
-                                            <button onClick={() => setIsServerMode(false)} className={`flex-1 py-2 text-sm font-medium rounded-md transition-all ${!isServerMode ? 'bg-white dark:bg-gray-600 shadow-sm text-gray-900 dark:text-white' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700'}`}>{t('client_mode')}</button>
-                                            <button onClick={() => setIsServerMode(true)} className={`flex-1 py-2 text-sm font-medium rounded-md transition-all ${isServerMode ? 'bg-primary-600 shadow-sm text-white' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700'}`}>{t('server_mode')}</button>
-                                        </div>
-                                    </div>
-
-                                    <div className="space-y-3">
-                                        <label className="text-sm font-medium text-gray-600 dark:text-gray-400 block">{t('language')}</label>
-                                        <div className="flex bg-gray-100 dark:bg-gray-700/50 p-1 rounded-lg">
-                                            <button onClick={() => setLanguage('en')} className={`flex-1 py-2 text-sm font-medium rounded-md transition-all ${language === 'en' ? 'bg-white dark:bg-gray-600 shadow-sm text-gray-900 dark:text-white' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700'}`}>English</button>
-                                            <button onClick={() => setLanguage('zh')} className={`flex-1 py-2 text-sm font-medium rounded-md transition-all ${language === 'zh' ? 'bg-white dark:bg-gray-600 shadow-sm text-gray-900 dark:text-white' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700'}`}>简体中文</button>
-                                        </div>
+                                    <div className="pt-4 mt-4 border-t border-gray-100 dark:border-gray-700">
+                                         <label className="text-sm font-medium text-gray-600 dark:text-gray-400 mb-2 block">{t('home_screen_conf')}</label>
+                                         <div className="space-y-2">
+                                            <div className="flex flex-col sm:flex-row gap-4">
+                                                 <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+                                                     <input type="radio" checked={homeConfig.mode === 'random'} onChange={() => handleUpdateHomeConfig({ mode: 'random' })} />
+                                                     {t('random_all')}
+                                                 </label>
+                                                 <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+                                                     <input type="radio" checked={homeConfig.mode === 'folder'} onChange={() => handleUpdateHomeConfig({ mode: 'folder', path: homeConfig.path || '' })} />
+                                                     {t('specific_folder')}
+                                                 </label>
+                                                  <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+                                                     <input type="radio" checked={homeConfig.mode === 'single'} onChange={() => handleUpdateHomeConfig({ mode: 'single', path: homeConfig.path || '' })} />
+                                                     {t('single_item')}
+                                                 </label>
+                                            </div>
+                                            {(homeConfig.mode === 'folder' || homeConfig.mode === 'single') && (
+                                                <input 
+                                                    type="text" 
+                                                    value={homeConfig.path || ''} 
+                                                    onChange={(e) => handleUpdateHomeConfig({ ...homeConfig, path: e.target.value })}
+                                                    placeholder={t('enter_rel_path')}
+                                                    className="w-full px-3 py-2 text-sm border rounded-lg outline-none bg-white dark:bg-gray-700 border-gray-200 dark:border-gray-600 placeholder-gray-400 dark:placeholder-gray-500"
+                                                />
+                                            )}
+                                         </div>
                                     </div>
                                 </div>
                             </section>
-
+                            
+                            {/* STORAGE & DATABASE SECTION */}
                             <section className="pb-6 border-b border-gray-100 dark:border-gray-700">
-                                <h3 className="font-bold text-gray-800 dark:text-gray-200 flex items-center gap-2 mb-4"><Icons.FileJson size={18} /> {t('storage_database')}</h3>
+                                <h3 className="font-bold text-gray-800 dark:text-gray-200 flex items-center gap-2 mb-4"><Icons.Folder size={18} /> {t('storage_database')}</h3>
+                                
                                 {isServerMode ? (
                                     <div className="space-y-4">
-                                        <div className="bg-green-50 dark:bg-green-900/20 p-4 rounded-xl border border-green-100 dark:border-green-900/50 space-y-3">
-                                            <div className="flex items-center gap-2 text-green-800 dark:text-green-300 font-semibold text-sm"><Icons.Check size={16} /> {t('server_persistence')}</div>
-                                            <p className="text-sm text-green-700 dark:text-green-400">{t('media_served')}</p>
-                                        </div>
-
-                                        {/* Watcher Toggle */}
-                                        <div className="flex items-center justify-between bg-gray-50 dark:bg-gray-700/30 p-4 rounded-xl border border-gray-100 dark:border-gray-700">
-                                            <div>
-                                                <h4 className="text-sm font-medium text-gray-800 dark:text-gray-200">{t('realtime_monitoring')}</h4>
-                                                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{systemStatus?.watcherActive ? t('enabled') : t('disabled')}</p>
+                                        <div className="bg-primary-50 dark:bg-primary-900/20 p-4 rounded-xl border border-primary-100 dark:border-primary-800/50">
+                                            <div className="flex items-start gap-3">
+                                                <Icons.Check className="text-primary-600 dark:text-primary-400 mt-1" size={20} />
+                                                <div>
+                                                    <h4 className="font-bold text-primary-900 dark:text-primary-100 text-sm">{t('server_persistence')}</h4>
+                                                    <p className="text-xs text-primary-700 dark:text-primary-300 mt-1">{t('media_served')}</p>
+                                                </div>
                                             </div>
-                                            <button 
-                                                onClick={toggleWatcher}
-                                                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${systemStatus?.watcherActive ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' : 'bg-gray-200 text-gray-600 dark:bg-gray-600 dark:text-gray-300'}`}
-                                            >
-                                                {t('toggle')}
-                                            </button>
                                         </div>
 
-                                        <div>
-                                            <label className="text-sm font-medium text-gray-600 dark:text-gray-400 mb-2 block">{t('library_scan_paths')}</label>
-                                            <div className="space-y-2 mb-3">
-                                                {libraryPaths.length === 0 && <div className="text-sm text-gray-400 italic bg-gray-50 dark:bg-gray-700/50 p-2 rounded">{t('scanning_default')}: /media</div>}
+                                        <div className="space-y-2">
+                                            <label className="text-sm font-medium text-gray-600 dark:text-gray-400">{t('library_scan_paths')}</label>
+                                            <div className="flex flex-col gap-2">
+                                                {libraryPaths.length === 0 && (
+                                                    <div className="text-sm text-gray-400 italic bg-gray-50 dark:bg-gray-800 px-3 py-2 rounded-lg border border-dashed border-gray-200 dark:border-gray-700">{t('scanning_default')} (/media)</div>
+                                                )}
                                                 {libraryPaths.map(path => (
-                                                    <div key={path} className="flex justify-between items-center bg-gray-50 dark:bg-gray-700/50 p-2 rounded text-sm">
-                                                        <span className="font-mono text-gray-600 dark:text-gray-300">{path}</span>
-                                                        <button onClick={() => handleRemoveLibraryPath(path)} className="text-red-500 hover:text-red-700 p-1"><Icons.Trash size={14}/></button>
+                                                    <div key={path} className="flex items-center gap-2 bg-gray-50 dark:bg-gray-800 px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700">
+                                                        <Icons.Folder size={14} className="text-gray-400" />
+                                                        <span className="text-sm font-mono flex-1 truncate">{path}</span>
+                                                        <button onClick={() => handleRemoveLibraryPath(path)} className="text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30 p-1 rounded"><Icons.Trash size={14} /></button>
                                                     </div>
                                                 ))}
+                                                <form onSubmit={handleAddLibraryPath} className="flex gap-2 mt-1">
+                                                     <PathAutocomplete value={newPathInput} onChange={setNewPathInput} onAdd={handleAddLibraryPath} />
+                                                     <button type="submit" disabled={!newPathInput} className="bg-gray-900 dark:bg-gray-700 text-white px-3 rounded-lg text-sm font-medium disabled:opacity-50">{t('add_path')}</button>
+                                                </form>
                                             </div>
+                                        </div>
 
-                                            <form onSubmit={handleAddLibraryPath} className="flex gap-2">
-                                                <PathAutocomplete value={newPathInput} onChange={setNewPathInput} onAdd={handleAddLibraryPath} />
-                                                <button type="submit" className="bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-200 px-3 py-2 rounded-lg text-sm font-medium hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors">{t('add_path')}</button>
-                                            </form>
+                                        <div className="grid grid-cols-2 gap-3 pt-2">
+                                            <button onClick={startServerScan} className="flex flex-col items-center justify-center p-4 bg-gray-50 dark:bg-gray-800 hover:bg-primary-50 dark:hover:bg-primary-900/20 border border-gray-200 dark:border-gray-700 hover:border-primary-200 dark:hover:border-primary-800 rounded-xl transition-all group">
+                                                <Icons.Refresh size={24} className="text-gray-400 group-hover:text-primary-600 mb-2" />
+                                                <span className="text-sm font-bold text-gray-700 dark:text-gray-200">{t('scan_library')}</span>
+                                                <span className="text-[10px] text-gray-400 mt-1">{t('scan_started')}</span>
+                                            </button>
+                                            <button onClick={startThumbnailGen} className="flex flex-col items-center justify-center p-4 bg-gray-50 dark:bg-gray-800 hover:bg-primary-50 dark:hover:bg-primary-900/20 border border-gray-200 dark:border-gray-700 hover:border-primary-200 dark:hover:border-primary-800 rounded-xl transition-all group">
+                                                <Icons.Image size={24} className="text-gray-400 group-hover:text-primary-600 mb-2" />
+                                                <span className="text-sm font-bold text-gray-700 dark:text-gray-200">{t('generate_thumbs')}</span>
+                                                <span className="text-[10px] text-gray-400 mt-1">{t('thumbs_started')}</span>
+                                            </button>
                                         </div>
                                         
-                                        <div className="grid grid-cols-2 gap-3">
-                                            <button onClick={() => startServerScan()} disabled={scanStatus === 'scanning'} className="py-2 bg-primary-50 dark:bg-primary-900/30 border border-primary-200 dark:border-primary-800 text-primary-700 dark:text-primary-300 rounded-lg text-sm font-medium hover:bg-primary-100 dark:hover:bg-primary-900/50 flex items-center justify-center gap-2 transition-colors">
-                                                <Icons.Refresh size={14} className={scanStatus === 'scanning' && jobType === 'scan' ? 'animate-spin' : ''} />
-                                                {scanStatus === 'scanning' && jobType === 'scan' ? t('scanning_library') : t('scan_library')}
-                                            </button>
-                                            <button onClick={() => startThumbnailGen()} disabled={scanStatus === 'scanning'} className="py-2 bg-purple-50 dark:bg-purple-900/30 border border-purple-200 dark:border-purple-800 text-purple-700 dark:text-purple-300 rounded-lg text-sm font-medium hover:bg-purple-100 dark:hover:bg-purple-900/50 flex items-center justify-center gap-2 transition-colors">
-                                                <Icons.Image size={14} className={scanStatus === 'scanning' && jobType === 'thumb' ? 'animate-spin' : ''} />
-                                                {scanStatus === 'scanning' && jobType === 'thumb' ? t('generating_thumbnails') : t('generate_thumbs')}
-                                            </button>
+                                        <div className="pt-4 border-t border-gray-100 dark:border-gray-700">
+                                            <h4 className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-3">{t('cache_management')}</h4>
+                                            <div className="flex gap-3">
+                                                 <button onClick={clearCache} className="px-3 py-2 text-xs font-medium text-red-600 bg-red-50 dark:bg-red-900/20 hover:bg-red-100 rounded-lg transition-colors flex items-center gap-2"><Icons.Trash size={14}/> {t('clear_all_cache')}</button>
+                                                 <button onClick={pruneCache} className="px-3 py-2 text-xs font-medium text-orange-600 bg-orange-50 dark:bg-orange-900/20 hover:bg-orange-100 rounded-lg transition-colors flex items-center gap-2"><Icons.Filter size={14}/> {t('prune_legacy_cache')}</button>
+                                            </div>
                                         </div>
                                     </div>
                                 ) : (
-                                    <div className="bg-yellow-50 dark:bg-yellow-900/20 p-4 rounded-xl border border-yellow-100 dark:border-yellow-900/30">
-                                        <p className="text-sm text-yellow-800 dark:text-yellow-400 font-medium mb-2">{t('running_client_mode')}</p>
-                                        <button onClick={handleExportConfig} className="flex items-center gap-2 px-3 py-1.5 bg-white dark:bg-gray-700 border border-yellow-200 dark:border-yellow-800 text-yellow-800 dark:text-yellow-300 rounded-lg text-xs font-medium transition-colors"><Icons.Download size={12} /> {t('backup_config')}</button>
-                                    </div>
+                                    <div className="bg-orange-50 dark:bg-orange-900/20 p-4 rounded-xl border border-orange-100 dark:border-orange-800/50">
+                                         <div className="flex items-start gap-3">
+                                             <Icons.Alert size={20} className="text-orange-600 dark:text-orange-400 mt-1" />
+                                             <div>
+                                                 <h4 className="font-bold text-orange-900 dark:text-orange-100 text-sm">{t('running_client_mode')}</h4>
+                                                 <p className="text-xs text-orange-700 dark:text-orange-300 mt-1">Data is stored in your browser's LocalStorage. Clearing browser data will lose your library index.</p>
+                                                 <button onClick={handleExportConfig} className="mt-3 text-xs bg-orange-200 dark:bg-orange-800 text-orange-800 dark:text-orange-100 px-3 py-1.5 rounded-lg font-bold hover:bg-orange-300 transition-colors flex items-center gap-2 w-fit"><Icons.Download size={12} /> {t('backup_config')}</button>
+                                             </div>
+                                         </div>
+                                     </div>
                                 )}
                             </section>
 
-                            {/* Cache Management Section */}
-                            {isServerMode && (
-                                <section className="pb-6 border-b border-gray-100 dark:border-gray-700">
-                                    <h3 className="font-bold text-gray-800 dark:text-gray-200 flex items-center gap-2 mb-4"><Icons.Trash size={18} /> {t('cache_management')}</h3>
-                                    <div className="grid grid-cols-2 gap-3">
-                                        <button onClick={clearCache} className="py-2 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300 rounded-lg text-sm font-medium hover:bg-red-100 dark:hover:bg-red-900/40 transition-colors">
-                                            {t('clear_all_cache')}
-                                        </button>
-                                        <button onClick={pruneCache} className="py-2 bg-orange-50 dark:bg-orange-900/20 border border-orange-200 dark:border-orange-800 text-orange-700 dark:text-orange-300 rounded-lg text-sm font-medium hover:bg-orange-100 dark:hover:bg-orange-900/40 transition-colors">
-                                            {t('prune_legacy_cache')}
-                                        </button>
-                                    </div>
-                                </section>
-                            )}
-                            </>
-                        )}
-                         {currentUser?.isAdmin && (
-                            <section className="pt-6 border-t border-gray-100 dark:border-gray-700">
-                                <div className="flex justify-between items-center mb-4"><h3 className="font-bold text-gray-800 dark:text-gray-200 flex items-center gap-2"><Icons.User size={18} /> {t('users')}</h3><button onClick={() => setIsUserPanelOpen(!isUserPanelOpen)} className="text-xs font-medium text-primary-600 hover:underline">{isUserPanelOpen ? t('hide') : t('manage')}</button></div>
+                            {/* USER MANAGEMENT SECTION */}
+                            <section>
+                                <div className="flex justify-between items-center mb-4">
+                                    <h3 className="font-bold text-gray-800 dark:text-gray-200 flex items-center gap-2"><Icons.User size={18} /> {t('users')}</h3>
+                                    <button onClick={() => setIsUserPanelOpen(!isUserPanelOpen)} className="text-xs font-bold text-primary-600 hover:bg-primary-50 px-2 py-1 rounded transition-colors">{isUserPanelOpen ? t('hide') : t('manage')}</button>
+                                </div>
+                                
                                 {isUserPanelOpen && (
-                                    <div className="bg-gray-50 dark:bg-gray-700/30 rounded-xl p-4 space-y-4 border border-gray-100 dark:border-gray-700">
-                                        <div className="space-y-2">{users.map(u => (<div key={u.username} className="flex justify-between items-center text-sm p-3 bg-white dark:bg-gray-700 rounded-lg border border-gray-100 dark:border-gray-600"><span className="font-medium flex items-center gap-2 text-gray-900 dark:text-white">{u.username} {u.isAdmin && <span className="text-[10px] bg-primary-100 dark:bg-primary-900 text-primary-700 dark:text-primary-300 px-1.5 py-0.5 rounded font-bold">ADMIN</span>}</span><div className="text-xs flex gap-2"><span className="text-gray-400">Pass: {u.password}</span></div></div>))}</div>
-                                        <form onSubmit={handleAddUser} className="flex gap-2 items-end pt-2">
-                                            <input placeholder="Username" value={newUserForm.username} onChange={e => setNewUserForm({...newUserForm, username: e.target.value})} className="w-full px-3 py-2 text-sm border rounded-lg focus:ring-2 focus:ring-primary-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white border-gray-200 dark:border-gray-600 placeholder-gray-400 dark:placeholder-gray-500" />
-                                            <input type="password" placeholder="Pass" value={newUserForm.password} onChange={e => setNewUserForm({...newUserForm, password: e.target.value})} className="w-full px-3 py-2 text-sm border rounded-lg focus:ring-2 focus:ring-primary-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white border-gray-200 dark:border-gray-600 placeholder-gray-400 dark:placeholder-gray-500" />
-                                            <button type="submit" className="bg-gray-900 dark:bg-gray-600 text-white p-2 rounded-lg hover:bg-gray-800 dark:hover:bg-gray-500 transition-colors"><Icons.Plus size={18}/></button>
+                                    <div className="space-y-4 animate-in fade-in slide-in-from-top-2 duration-300">
+                                        <div className="space-y-2">
+                                            {users.map(u => (
+                                                <div key={u.username} className="flex justify-between items-center bg-gray-50 dark:bg-gray-800 px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700">
+                                                    <div className="flex items-center gap-2">
+                                                        <div className={`w-2 h-2 rounded-full ${u.isAdmin ? 'bg-purple-500' : 'bg-gray-400'}`} />
+                                                        <span className="text-sm font-medium">{u.username}</span>
+                                                    </div>
+                                                    <span className="text-[10px] bg-gray-200 dark:bg-gray-700 px-2 py-0.5 rounded text-gray-600 dark:text-gray-300">{u.isAdmin ? 'Admin' : 'User'}</span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                        <form onSubmit={handleAddUser} className="flex gap-2 p-3 bg-gray-50 dark:bg-gray-800/50 rounded-xl border border-dashed border-gray-300 dark:border-gray-700">
+                                            <input placeholder="New Username" value={newUserForm.username} onChange={e => setNewUserForm({...newUserForm, username: e.target.value})} className="flex-1 px-3 py-1.5 text-sm border rounded-lg outline-none bg-white dark:bg-gray-700 border-gray-200 dark:border-gray-600" />
+                                            <input type="password" placeholder="Password" value={newUserForm.password} onChange={e => setNewUserForm({...newUserForm, password: e.target.value})} className="flex-1 px-3 py-1.5 text-sm border rounded-lg outline-none bg-white dark:bg-gray-700 border-gray-200 dark:border-gray-600" />
+                                            <button type="submit" className="bg-gray-900 dark:bg-gray-600 text-white px-3 rounded-lg text-sm font-bold"><Icons.Plus size={16}/></button>
                                         </form>
                                     </div>
                                 )}
                             </section>
+                            </>
                         )}
                     </div>
                     <div className="p-4 border-t border-gray-100 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 flex justify-between items-center">

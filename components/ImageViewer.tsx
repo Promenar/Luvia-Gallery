@@ -15,6 +15,7 @@ interface ImageViewerProps {
   onDelete?: (item: MediaItem) => void;
   onRename?: (item: MediaItem, newName: string) => void;
   onJumpToFolder?: (item: MediaItem) => void;
+  onToggleFavorite?: (item: MediaItem, type: 'file') => void;
 }
 
 interface TransformState {
@@ -23,7 +24,7 @@ interface TransformState {
   y: number;
 }
 
-export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext, onPrev, onDelete, onRename, onJumpToFolder }) => {
+export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext, onPrev, onDelete, onRename, onJumpToFolder, onToggleFavorite }) => {
   const { t } = useLanguage();
   const [transform, setTransform] = useState<TransformState>({ scale: 1, x: 0, y: 0 });
   const containerRef = useRef<HTMLDivElement>(null);
@@ -56,8 +57,6 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
     lastDist.current = null;
     setIsRenaming(false);
     setPlaybackRate(1.0);
-    // Don't reset showInfo preferably, but user might want it closed on next
-    // Clear EXIF
     setExifData(null);
   }, [item?.id]);
 
@@ -74,11 +73,8 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
           const fetchExif = async () => {
               setIsExifLoading(true);
               try {
-                  // exifr can parse File object (Client Mode) or URL (Server Mode)
-                  // It uses Range requests for URLs to be efficient
                   const input = item.file || item.url;
                   const output = await exifr.parse(input, {
-                      // Only fetch fields we care about to save bandwidth/time
                       pick: ['Make', 'Model', 'ExposureTime', 'FNumber', 'ISO', 'FocalLength', 'LensModel', 'DateTimeOriginal', 'ExifImageWidth', 'ExifImageHeight'],
                       tiff: true,
                       exif: true,
@@ -101,7 +97,7 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
     if (isPlaying) {
       slideshowIntervalRef.current = setInterval(() => {
         if (onNext) onNext();
-      }, 4000); // 4 seconds per slide
+      }, 4000); 
     } else {
       if (slideshowIntervalRef.current) clearInterval(slideshowIntervalRef.current);
     }
@@ -124,7 +120,6 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
 
     const updateConstraints = () => {
       if (!containerRef.current) return;
-      // Calculate allowed drag range based on viewport size and scale
       const { width, height } = containerRef.current.getBoundingClientRect();
       const xLimit = (width * transform.scale - width) / 2;
       const yLimit = (height * transform.scale - height) / 2;
@@ -146,13 +141,13 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (!item) return;
-      if (isRenaming) return; // Don't handle nav keys while typing
+      if (isRenaming) return; 
       
       if (e.key === 'Escape') onClose();
       // Only allow navigation if not zoomed in
       if (transform.scale === 1) {
           if (e.key === 'ArrowRight' && onNext) {
-            setIsPlaying(false); // Stop autoplay on manual nav
+            setIsPlaying(false); 
             onNext();
           }
           if (e.key === 'ArrowLeft' && onPrev) {
@@ -179,14 +174,12 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
   const handleWheel = (e: React.WheelEvent) => {
     if (item.mediaType === 'video' || item.mediaType === 'audio') return;
     
-    // Check if we are zooming
     if (e.ctrlKey || Math.abs(e.deltaY) > 0) {
         setIsPlaying(false);
         const container = containerRef.current;
         if (!container) return;
 
         const rect = container.getBoundingClientRect();
-        // Mouse position relative to center of the container
         const pointerX = e.clientX - rect.left - rect.width / 2;
         const pointerY = e.clientY - rect.top - rect.height / 2;
 
@@ -267,7 +260,6 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
       if (transform.scale > 1) {
           setTransform({ scale: 1, x: 0, y: 0 });
       } else {
-          // Zoom to 2.5x at the clicked position
           const container = containerRef.current;
           if (container) {
               const rect = container.getBoundingClientRect();
@@ -363,6 +355,17 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
             <span className="text-xs opacity-60 truncate">{item.folderPath || 'Root'}</span>
           </div>
           <div className="flex items-center gap-2 pointer-events-auto">
+             {/* Favorite Button */}
+             {onToggleFavorite && (
+                 <button
+                    onClick={(e) => { e.stopPropagation(); onToggleFavorite(item, 'file'); }}
+                    className={`p-2 rounded-full transition-colors ${item.isFavorite ? 'text-red-500 hover:bg-white/10' : 'hover:bg-white/10 text-white/70'}`}
+                    title="Toggle Favorite"
+                 >
+                     <Icons.Heart size={20} fill={item.isFavorite ? "currentColor" : "none"} />
+                 </button>
+             )}
+
              {/* Info Button */}
              <button
                 onClick={(e) => { e.stopPropagation(); setShowInfo(!showInfo); }}
@@ -549,7 +552,6 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
                   onEnded={() => { if(isPlaying && onNext) onNext(); }}
                   className="max-w-full max-h-full shadow-2xl rounded-sm focus:outline-none"
                 />
-                {/* Custom Video Controls overlay for Speed */}
                 <div className="absolute top-1/2 right-4 -translate-y-1/2 bg-black/60 rounded-lg backdrop-blur px-2 py-3 flex flex-col items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
                     <Icons.Clock size={16} className="text-white/70 mb-1" />
                     {[0.5, 1.0, 1.5, 2.0].map(speed => (
@@ -589,7 +591,6 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
               onClick={(e) => e.stopPropagation()}
               onDoubleClick={toggleZoom}
               
-              // Smooth Zoom Animation
               animate={{ 
                   scale: transform.scale,
                   x: transform.x,
@@ -597,11 +598,10 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
               }}
               transition={{ type: 'spring', stiffness: 300, damping: 30 }}
 
-              // Pan Dragging
               drag={transform.scale > 1}
               dragConstraints={dragConstraints || undefined}
               dragElastic={0.05}
-              dragMomentum={false} // Disable momentum to prevent conflict with state sync
+              dragMomentum={false} 
               onDrag={handleDrag}
               whileDrag={{ cursor: 'grabbing' }}
             />

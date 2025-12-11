@@ -1,29 +1,32 @@
 
 import React, { useMemo, useRef, useState } from 'react';
-import { motion } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
 import { FolderNode } from '../types';
 import { Icons } from './ui/Icon';
 
 interface FolderCardProps {
   folder: FolderNode;
   onClick: (path: string) => void;
+  isFavorite?: boolean;
+  onToggleFavorite?: (path: string) => void;
+  onRename?: (path: string, newName: string) => void;
+  onDelete?: (path: string) => void;
 }
 
-export const FolderCard: React.FC<FolderCardProps> = ({ folder, onClick }) => {
+export const FolderCard: React.FC<FolderCardProps> = ({ folder, onClick, isFavorite, onToggleFavorite, onRename, onDelete }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [showMenu, setShowMenu] = useState(false);
+  const [isRenaming, setIsRenaming] = useState(false);
+  const [renameValue, setRenameValue] = useState('');
 
   // Resolve thumbnail URL for cover
   const thumbUrl = useMemo(() => {
     if (!folder.coverMedia) return null;
-    
-    // Server Mode: Allow both Image and Video
     if (folder.coverMedia.url.startsWith('/media-stream/')) {
             const pathPart = folder.coverMedia.url.split('/media-stream/')[1];
             return `/api/thumbnail?path=${pathPart}`;
     }
-    
-    // Client mode: Only Images
     if (folder.coverMedia.mediaType === 'image') {
         return folder.coverMedia.url;
     }
@@ -42,6 +45,36 @@ export const FolderCard: React.FC<FolderCardProps> = ({ folder, onClick }) => {
           videoRef.current.pause();
           setIsPlaying(false);
       }
+      setShowMenu(false);
+  };
+
+  const handleMenuClick = (e: React.MouseEvent) => {
+      e.stopPropagation();
+      setShowMenu(!showMenu);
+  };
+
+  const handleAction = (action: 'fav' | 'rename' | 'delete', e: React.MouseEvent) => {
+      e.stopPropagation();
+      setShowMenu(false);
+      
+      if (action === 'fav' && onToggleFavorite) {
+          onToggleFavorite(folder.path);
+      }
+      if (action === 'rename') {
+          setRenameValue(folder.name);
+          setIsRenaming(true);
+      }
+      if (action === 'delete' && onDelete) {
+          onDelete(folder.path);
+      }
+  };
+
+  const submitRename = (e?: React.FormEvent) => {
+      if (e) e.preventDefault();
+      if (onRename && renameValue.trim() && renameValue !== folder.name) {
+          onRename(folder.path, renameValue.trim());
+      }
+      setIsRenaming(false);
   };
 
   return (
@@ -51,11 +84,11 @@ export const FolderCard: React.FC<FolderCardProps> = ({ folder, onClick }) => {
       whileHover={{ scale: 1.03, y: -2 }}
       whileTap={{ scale: 0.98 }}
       className="relative group cursor-pointer"
-      onClick={() => onClick(folder.path)}
+      onClick={() => !isRenaming && onClick(folder.path)}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
     >
-      {/* Stack Effect (Pseudo-cards behind) */}
+      {/* Stack Effect */}
       <div className="absolute top-1 left-1 w-full h-full bg-gray-200 dark:bg-gray-700 rounded-xl opacity-0 group-hover:opacity-100 transition-opacity duration-300 transform translate-y-1" />
       <div className="absolute top-2 left-2 w-full h-full bg-gray-100 dark:bg-gray-800 rounded-xl opacity-0 group-hover:opacity-60 transition-opacity duration-300 transform translate-y-2" />
 
@@ -65,10 +98,7 @@ export const FolderCard: React.FC<FolderCardProps> = ({ folder, onClick }) => {
           {folder.coverMedia ? (
               folder.coverMedia.mediaType === 'video' ? (
                   <div className="w-full h-full bg-gray-800 flex items-center justify-center group-hover:scale-105 transition-transform duration-700 relative overflow-hidden">
-                      {/* Video Pattern / Placeholder */}
                       <div className="absolute inset-0 bg-gradient-to-tr from-gray-900 to-gray-700 opacity-100" />
-                      
-                      {/* Static Thumbnail for Server Mode Video if available */}
                       {thumbUrl && (
                           <img 
                               src={thumbUrl} 
@@ -76,8 +106,6 @@ export const FolderCard: React.FC<FolderCardProps> = ({ folder, onClick }) => {
                               className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-300 ${isPlaying ? 'opacity-0' : 'opacity-100'}`}
                           />
                       )}
-                      
-                      {/* Video Preview on Hover */}
                       <video 
                           ref={videoRef}
                           src={folder.coverMedia.url}
@@ -86,7 +114,6 @@ export const FolderCard: React.FC<FolderCardProps> = ({ folder, onClick }) => {
                           playsInline
                           className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-300 ${isPlaying ? 'opacity-100' : 'opacity-0'}`}
                       />
-
                       <div className={`absolute inset-0 flex items-center justify-center z-10 transition-opacity ${isPlaying ? 'opacity-0' : 'opacity-100'}`}>
                         <div className="w-12 h-12 rounded-full bg-white/10 backdrop-blur-sm flex items-center justify-center border border-white/20">
                              <Icons.Video className="text-white/90" size={24} />
@@ -113,11 +140,53 @@ export const FolderCard: React.FC<FolderCardProps> = ({ folder, onClick }) => {
           {/* Overlay Gradient */}
           <div className="absolute inset-0 bg-gradient-to-t from-black/50 to-transparent opacity-60" />
           
-          {/* Count Badge on Image */}
+          {/* Count Badge */}
           <div className="absolute bottom-2 right-2 bg-black/40 backdrop-blur-sm text-white text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 border border-white/10">
               <Icons.Image size={10} />
               {folder.mediaCount}
           </div>
+
+          {/* Favorite Indicator */}
+          {isFavorite && (
+              <div className="absolute top-2 right-2 text-red-500 drop-shadow-md">
+                  <Icons.Heart size={18} fill="currentColor" />
+              </div>
+          )}
+
+          {/* Menu Button */}
+          <button 
+             onClick={handleMenuClick}
+             className={`absolute top-2 left-2 p-1.5 rounded-full bg-black/40 hover:bg-black/60 backdrop-blur-sm text-white opacity-0 group-hover:opacity-100 transition-opacity ${showMenu ? 'opacity-100' : ''}`}
+          >
+              <Icons.More size={16} />
+          </button>
+          
+          {/* Dropdown Menu */}
+          <AnimatePresence>
+            {showMenu && (
+                <motion.div 
+                    initial={{ opacity: 0, scale: 0.9, x: -10, y: -10 }}
+                    animate={{ opacity: 1, scale: 1, x: 0, y: 0 }}
+                    exit={{ opacity: 0, scale: 0.9 }}
+                    className="absolute top-10 left-2 bg-white dark:bg-gray-800 rounded-lg shadow-xl border border-gray-100 dark:border-gray-700 py-1 min-w-[120px] z-50 overflow-hidden"
+                    onClick={(e) => e.stopPropagation()}
+                >
+                    <button onClick={(e) => handleAction('fav', e)} className="w-full text-left px-3 py-2 text-xs hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200 flex items-center gap-2">
+                        <Icons.Heart size={12} className={isFavorite ? 'text-red-500' : ''} fill={isFavorite ? 'currentColor' : 'none'}/> {isFavorite ? 'Unfavorite' : 'Favorite'}
+                    </button>
+                    {onRename && (
+                        <button onClick={(e) => handleAction('rename', e)} className="w-full text-left px-3 py-2 text-xs hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200 flex items-center gap-2">
+                            <Icons.Edit size={12} /> Rename
+                        </button>
+                    )}
+                    {onDelete && (
+                        <button onClick={(e) => handleAction('delete', e)} className="w-full text-left px-3 py-2 text-xs hover:bg-red-50 dark:hover:bg-red-900/20 text-red-600 dark:text-red-400 flex items-center gap-2">
+                            <Icons.Trash size={12} /> Delete
+                        </button>
+                    )}
+                </motion.div>
+            )}
+          </AnimatePresence>
         </div>
         
         <div className="p-3 flex items-start gap-3 bg-white dark:bg-gray-800 transition-colors">
@@ -125,7 +194,19 @@ export const FolderCard: React.FC<FolderCardProps> = ({ folder, onClick }) => {
             <Icons.Folder size={18} />
           </div>
           <div className="flex-1 min-w-0">
-            <h3 className="text-sm font-semibold text-gray-800 dark:text-gray-200 truncate leading-tight" title={folder.name}>{folder.name}</h3>
+            {isRenaming ? (
+                 <form onSubmit={submitRename} onClick={e => e.stopPropagation()}>
+                    <input 
+                        autoFocus
+                        value={renameValue}
+                        onChange={(e) => setRenameValue(e.target.value)}
+                        onBlur={() => submitRename()}
+                        className="w-full text-sm font-semibold text-gray-800 dark:text-gray-200 bg-gray-100 dark:bg-gray-700 rounded px-1 outline-none border border-primary-500"
+                    />
+                 </form>
+            ) : (
+                <h3 className="text-sm font-semibold text-gray-800 dark:text-gray-200 truncate leading-tight" title={folder.name}>{folder.name}</h3>
+            )}
             <p className="text-[10px] text-gray-400 dark:text-gray-500 mt-0.5">{folder.mediaCount} items</p>
           </div>
         </div>
