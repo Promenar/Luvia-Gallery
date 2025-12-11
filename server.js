@@ -135,7 +135,7 @@ let thumbJob = {
 
 // --- Watcher State ---
 let watcher = null;
-let isWatcherActive = true;
+let isWatcherActive = false; // Default to false to prevent startup freeze
 
 // --- System Capabilities ---
 let systemCaps = {
@@ -560,6 +560,12 @@ app.get('/api/watcher/toggle', (req, res) => {
         }
     } catch (e) {}
     
+    // Save watcher preference so it persists across restarts
+    config.watcherEnabled = isWatcherActive;
+    try {
+        fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2));
+    } catch(e) {}
+    
     const paths = config.libraryPaths || [MEDIA_ROOT];
     startWatcher(paths);
 
@@ -952,11 +958,24 @@ app.get('/api/config', (req, res) => {
 });
 
 app.post('/api/config', (req, res) => {
-    fs.writeFileSync(CONFIG_FILE, JSON.stringify(req.body, null, 2));
+    // Preserve existing watcherEnabled state since frontend doesn't send it
+    let currentConfig = {};
+    try {
+        if (fs.existsSync(CONFIG_FILE)) {
+            currentConfig = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+        }
+    } catch (e) {}
+
+    const newConfig = {
+        ...req.body,
+        watcherEnabled: currentConfig.watcherEnabled
+    };
+
+    fs.writeFileSync(CONFIG_FILE, JSON.stringify(newConfig, null, 2));
     
     // Update watcher if paths changed
     if (isWatcherActive) {
-        startWatcher(req.body.libraryPaths || [MEDIA_ROOT]);
+        startWatcher(newConfig.libraryPaths || [MEDIA_ROOT]);
     }
     
     res.json({ success: true });
@@ -998,6 +1017,14 @@ let startupConfig = {};
 try {
     if (fs.existsSync(CONFIG_FILE)) startupConfig = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
 } catch (e) {}
+
+// Restore watcher state from config, default to false
+if (startupConfig.watcherEnabled === true) {
+    isWatcherActive = true;
+} else {
+    isWatcherActive = false;
+}
+
 startWatcher(startupConfig.libraryPaths || [MEDIA_ROOT]);
 
 app.listen(PORT, () => console.log(`Lumina Server (SQLite + Watcher) running on port ${PORT}`));
