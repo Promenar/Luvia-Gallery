@@ -1,4 +1,3 @@
-
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { MediaItem, ViewMode, GridLayout, User, UserData, SortOption, FilterOption, AppConfig, FolderNode, SystemStatus, HomeScreenConfig } from './types';
@@ -40,6 +39,12 @@ export default function App() {
   const [loginForm, setLoginForm] = useState({ username: '', password: '' });
   const [setupForm, setSetupForm] = useState({ username: '', password: '', confirmPassword: '' });
   const [authError, setAuthError] = useState('');
+  
+  // --- User Management State ---
+  const [isUserModalOpen, setIsUserModalOpen] = useState(false);
+  const [userFormType, setUserFormType] = useState<'add' | 'reset'>('add');
+  const [targetUser, setTargetUser] = useState<User | null>(null);
+  const [newUserForm, setNewUserForm] = useState({ username: '', password: '', isAdmin: false });
   
   // --- Server Mode State ---
   const [isServerMode, setIsServerMode] = useState(false);
@@ -284,18 +289,17 @@ export default function App() {
                       if (savedViewMode === 'favorites') {
                            // Directly fetch favorites only on init if that's the view
                            fetchServerFiles(user.username, loadedData, 0, true, null, true);
-                           fetchServerFolders(true);
+                           fetchServerFolders(null, true);
                            fetchServerFavorites();
                       } else if (savedViewMode === 'folders') {
-                           // If folders view, we assume root unless path is persisted (future enhancement)
-                           // For now, load folders
-                           fetchServerFolders(false);
+                           // Default to root on load if no specific path logic yet
+                           fetchServerFolders('', false);
                            fetchServerFavorites();
-                           // We don't fetch all files in folders mode initially
+                           // Don't fetch files immediately in folders view unless path is set
                       } else {
                            // Default / All Photos / Home
                            fetchServerFiles(user.username, loadedData, 0, true, null);
-                           fetchServerFolders(false);
+                           fetchServerFolders('', false); // Fetch root folders
                            fetchServerFavorites();
                       }
                   }, 50);
@@ -325,12 +329,14 @@ export default function App() {
                setCurrentPath(path);
                if(viewMode === 'folders' && isServerMode && currentUser) {
                     fetchServerFiles(currentUser.username, allUserData, 0, true, path);
+                    fetchServerFolders(path); // Update subfolders
                }
           } else {
                if (currentPath !== '') {
                    setCurrentPath('');
                    if(isServerMode && currentUser) {
                        fetchServerFiles(currentUser.username, allUserData, 0, true, '');
+                       fetchServerFolders('');
                    }
                }
           }
@@ -343,9 +349,17 @@ export default function App() {
 
   // --- Server Logic: Scan & Poll ---
 
-  const fetchServerFolders = async (favoritesOnly = false) => {
+  const fetchServerFolders = async (parentPath: string | null = null, favoritesOnly = false) => {
     try {
-        const res = await fetch(`/api/library/folders${favoritesOnly ? '?favorites=true' : ''}`);
+        let url = `/api/library/folders`;
+        const params = [];
+        if (favoritesOnly) params.push('favorites=true');
+        // Only append parent if we are not in favorites mode (favorites shows flat list of fav folders)
+        if (parentPath !== null && !favoritesOnly) params.push(`parent=${encodeURIComponent(parentPath)}`);
+        
+        if (params.length > 0) url += `?${params.join('&')}`;
+
+        const res = await fetch(url);
         if (res.ok) {
             const text = await res.text();
             try {
@@ -597,7 +611,7 @@ export default function App() {
   useEffect(() => {
     if (scanStatus === 'completed' && currentUser && jobType === 'scan') {
         fetchServerFiles(currentUser.username, allUserData, 0, true, null);
-        fetchServerFolders();
+        fetchServerFolders('', false); // Reload root folders
     }
   }, [scanStatus, jobType]);
 
@@ -635,13 +649,15 @@ export default function App() {
 
         if (mode === 'all' || mode === 'home') {
              fetchServerFiles(currentUser.username, clearedData, 0, true, null);
-             fetchServerFolders(false); // Get all folders
+             fetchServerFolders(null, false); // Get all folders usually not needed for 'all', but if needed
         } else if (mode === 'favorites') {
              fetchServerFiles(currentUser.username, clearedData, 0, true, null, true);
-             fetchServerFolders(true); // Get favorite folders
+             fetchServerFolders(null, true); // Get favorite folders
              fetchServerFavorites();
+        } else if (mode === 'folders') {
+             fetchServerFolders('', false); // Get ROOT folders
         } else {
-             fetchServerFolders(false);
+             fetchServerFolders('', false);
         }
     }
   };
@@ -663,6 +679,7 @@ export default function App() {
           setAllUserData(clearedData);
           
           fetchServerFiles(currentUser.username, clearedData, 0, true, path);
+          fetchServerFolders(path); // Fetch sub-folders for the new path
       }
   };
 
@@ -677,6 +694,60 @@ export default function App() {
       setViewMode('folders');
       localStorage.setItem(VIEW_MODE_KEY, 'folders');
       handleFolderClick(item.folderPath);
+  };
+
+  // User Management Handlers
+  const handleAddUser = () => {
+      setNewUserForm({ username: '', password: '', isAdmin: false });
+      setUserFormType('add');
+      setIsUserModalOpen(true);
+  };
+
+  const handleDeleteUser = (user: User) => {
+      if (user.username === currentUser?.username) return; // Can't delete self
+      if (confirm(t('delete_user_confirm'))) {
+          const updatedUsers = users.filter(u => u.username !== user.username);
+          const updatedData = { ...allUserData };
+          delete updatedData[user.username];
+          persistData(updatedUsers, undefined, updatedData);
+      }
+  };
+
+  const handleResetPassword = (user: User) => {
+      setTargetUser(user);
+      setNewUserForm({ username: user.username, password: '', isAdmin: user.isAdmin });
+      setUserFormType('reset');
+      setIsUserModalOpen(true);
+  };
+
+  const submitUserForm = (e: React.FormEvent) => {
+      e.preventDefault();
+      if (!newUserForm.username || !newUserForm.password) return;
+
+      if (userFormType === 'add') {
+          if (users.find(u => u.username === newUserForm.username)) {
+              alert('User already exists');
+              return;
+          }
+          const newUser: User = {
+              username: newUserForm.username,
+              password: newUserForm.password,
+              isAdmin: newUserForm.isAdmin,
+              avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${newUserForm.username}`
+          };
+          const updatedUsers = [...users, newUser];
+          const updatedData = { ...allUserData, [newUser.username]: { sources: [], files: [], favoriteFolderPaths: [] } };
+          persistData(updatedUsers, undefined, updatedData);
+      } else if (userFormType === 'reset' && targetUser) {
+          const updatedUsers = users.map(u => {
+              if (u.username === targetUser.username) {
+                  return { ...u, password: newUserForm.password, isAdmin: newUserForm.isAdmin };
+              }
+              return u;
+          });
+          persistData(updatedUsers);
+      }
+      setIsUserModalOpen(false);
   };
 
   const handleToggleFavorite = async (item: MediaItem | string, type: 'file' | 'folder') => {
@@ -716,7 +787,7 @@ export default function App() {
                       } else {
                           setServerFavoriteIds(prev => ({...prev, folders: prev.folders.filter(id => id !== targetId)}));
                       }
-                      if (viewMode === 'favorites') fetchServerFolders(true);
+                      if (viewMode === 'favorites') fetchServerFolders(null, true);
                   }
               }
           } catch(e) {}
@@ -813,7 +884,11 @@ export default function App() {
              const data = await res.json();
              if (data.success) {
                  alert("Folder renamed. Please rescan library to update database.");
-                 fetchServerFolders(viewMode === 'favorites');
+                 if (viewMode === 'favorites') {
+                     fetchServerFolders(null, true);
+                 } else if (viewMode === 'folders') {
+                     fetchServerFolders(currentPath);
+                 }
              } else {
                  alert("Error: " + data.error);
              }
@@ -849,10 +924,12 @@ export default function App() {
             });
             const data = await res.json();
             if (data.success) {
-                fetchServerFolders(viewMode === 'favorites');
                 // If current view was inside this folder, go up
                 if (currentPath.startsWith(pathStr)) {
-                    setCurrentPath('');
+                    const parent = pathStr.split('/').slice(0, -1).join('/');
+                    handleFolderClick(parent);
+                } else {
+                    fetchServerFolders(currentPath);
                 }
             } else {
                 alert("Error: " + data.error);
@@ -1089,7 +1166,7 @@ export default function App() {
                             if (isServerMode) {
                                 setTimeout(() => {
                                    fetchServerFiles(user.username, allUserData, 0, true, null);
-                                   fetchServerFolders();
+                                   fetchServerFolders('', false);
                                 }, 100);
                             }
                         } else {
@@ -1402,6 +1479,23 @@ export default function App() {
                                          {systemStatus.cacheCount.toLocaleString()} {t('cached')}
                                      </div>
                                  </div>
+                                 
+                                 {/* Coverage Bar */}
+                                 <div className="mb-6">
+                                     <div className="flex justify-between text-xs mb-1.5">
+                                         <span className="text-gray-500 dark:text-gray-400">{t('cache_coverage')}</span>
+                                         <span className="font-bold text-gray-700 dark:text-gray-300">
+                                             {systemStatus.totalItems > 0 ? Math.round((systemStatus.cacheCount / systemStatus.totalItems) * 100) : 0}%
+                                         </span>
+                                     </div>
+                                     <div className="w-full h-2 bg-gray-100 dark:bg-gray-700 rounded-full overflow-hidden">
+                                         <div 
+                                             className="h-full bg-green-500 rounded-full transition-all duration-1000"
+                                             style={{ width: `${systemStatus.totalItems > 0 ? Math.min(100, (systemStatus.cacheCount / systemStatus.totalItems) * 100) : 0}%` }}
+                                         />
+                                     </div>
+                                 </div>
+
                                  <div className="grid grid-cols-2 gap-3">
                                      <button onClick={pruneCache} className="px-4 py-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200 rounded-xl text-sm font-medium transition-colors border border-transparent hover:border-gray-300 dark:hover:border-gray-500">
                                          {t('prune_legacy_cache')}
@@ -1425,23 +1519,55 @@ export default function App() {
             return (
                 <div className="space-y-8 animate-in fade-in slide-in-from-right-4 duration-300">
                      <section>
-                         <h4 className="text-sm font-bold uppercase text-gray-400 tracking-wider mb-4">{t('users')}</h4>
-                         <div className="bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded-2xl p-6 flex items-center justify-between shadow-sm">
-                             <div className="flex items-center gap-4">
-                                 <div className="w-12 h-12 rounded-full bg-primary-100 dark:bg-primary-900 text-primary-600 dark:text-primary-400 flex items-center justify-center text-xl font-bold">
-                                     {currentUser?.username.charAt(0).toUpperCase()}
+                         <div className="flex items-center justify-between mb-4 pr-12">
+                             <h4 className="text-sm font-bold uppercase text-gray-400 tracking-wider">{t('users')}</h4>
+                             {currentUser?.isAdmin && (
+                                 <button onClick={handleAddUser} className="text-sm font-medium text-primary-600 hover:underline flex items-center gap-1">
+                                     <Icons.Plus size={16} /> {t('add_user')}
+                                 </button>
+                             )}
+                         </div>
+                         <div className="bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded-2xl overflow-hidden shadow-sm">
+                             {users.map((user, idx) => (
+                                 <div key={user.username} className={`p-4 flex items-center justify-between ${idx !== users.length - 1 ? 'border-b border-gray-50 dark:border-gray-700/50' : ''}`}>
+                                     <div className="flex items-center gap-4">
+                                         <div className={`w-10 h-10 rounded-full flex items-center justify-center text-lg font-bold ${user.username === currentUser?.username ? 'bg-primary-100 dark:bg-primary-900 text-primary-600 dark:text-primary-400' : 'bg-gray-100 dark:bg-gray-700 text-gray-500'}`}>
+                                             {user.username.charAt(0).toUpperCase()}
+                                         </div>
+                                         <div>
+                                             <div className="flex items-center gap-2">
+                                                 <h5 className="font-bold text-gray-900 dark:text-white">{user.username}</h5>
+                                                 {user.username === currentUser?.username && <span className="text-[10px] bg-green-100 text-green-700 px-1.5 py-0.5 rounded font-bold">YOU</span>}
+                                             </div>
+                                             <p className="text-xs text-gray-500">{user.isAdmin ? 'Administrator' : 'User'}</p>
+                                         </div>
+                                     </div>
+                                     
+                                     <div className="flex items-center gap-2">
+                                         {currentUser?.isAdmin && (
+                                             <>
+                                                 <button onClick={() => handleResetPassword(user)} className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg transition-colors" title={t('reset_password')}>
+                                                     <Icons.Lock size={16} />
+                                                 </button>
+                                                 {user.username !== currentUser.username && (
+                                                     <button onClick={() => handleDeleteUser(user)} className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors" title={t('delete_user')}>
+                                                         <Icons.Trash size={16} />
+                                                     </button>
+                                                 )}
+                                             </>
+                                         )}
+                                     </div>
                                  </div>
-                                 <div>
-                                     <h5 className="font-bold text-lg">{currentUser?.username}</h5>
-                                     <p className="text-sm text-gray-500">{currentUser?.isAdmin ? 'Administrator' : 'User'}</p>
-                                 </div>
-                             </div>
-                             <button onClick={() => { setCurrentUser(null); setAuthStep('login'); localStorage.removeItem(AUTH_USER_KEY); }} className="px-4 py-2 bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/30 text-red-600 dark:text-red-400 rounded-lg font-medium transition-colors flex items-center gap-2">
-                                 <Icons.LogOut size={18} />
-                                 <span className="hidden md:inline">{t('sign_out')}</span>
-                             </button>
+                             ))}
                          </div>
                      </section>
+                     
+                     <div className="flex justify-end">
+                         <button onClick={() => { setCurrentUser(null); setAuthStep('login'); localStorage.removeItem(AUTH_USER_KEY); }} className="px-4 py-2 bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/30 text-red-600 dark:text-red-400 rounded-lg font-medium transition-colors flex items-center gap-2">
+                             <Icons.LogOut size={18} />
+                             <span>{t('sign_out')}</span>
+                         </button>
+                     </div>
                 </div>
             );
         default:
@@ -1554,47 +1680,63 @@ export default function App() {
                  )}
 
                  {/* Views */}
-                 {viewMode === 'folders' && !currentPath ? (
-                     <div className="w-full h-full overflow-y-auto p-4 md:p-8">
+                 {viewMode === 'folders' ? (
+                     <div className="w-full h-full flex flex-col">
+                         {/* Sub-Folders Section (Drill-down logic) */}
                          {isServerMode ? (
-                             serverFolders.length === 0 ? (
-                                 <div className="flex items-center justify-center h-64 text-gray-500">No folders found</div>
-                             ) : (
-                                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 md:gap-6">
-                                    {serverFolders.map(folder => (
-                                        <FolderCard 
-                                            key={folder.path}
-                                            folder={{
-                                                name: folder.path.split('/').pop() || 'Root',
-                                                path: folder.path,
-                                                mediaCount: folder.count,
-                                                children: {},
-                                                coverMedia: folder.coverItem
-                                            }}
-                                            onClick={handleFolderClick}
-                                            isFavorite={serverFavoriteIds.folders.includes(folder.path)}
-                                            onToggleFavorite={(path) => handleToggleFavorite(path, 'folder')}
-                                            onRename={handleFolderRename}
-                                            onDelete={handleFolderDelete}
-                                        />
-                                    ))}
-                                </div>
-                             )
+                             <div className="p-4 md:p-8 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 md:gap-6 overflow-y-auto shrink-0 max-h-[50vh]">
+                                {serverFolders.map(folder => (
+                                    <FolderCard 
+                                        key={folder.path}
+                                        folder={{
+                                            name: folder.path.split('/').pop() || 'Root',
+                                            path: folder.path,
+                                            mediaCount: folder.count,
+                                            children: {},
+                                            coverMedia: folder.coverItem
+                                        }}
+                                        onClick={handleFolderClick}
+                                        isFavorite={serverFavoriteIds.folders.includes(folder.path)}
+                                        onToggleFavorite={(path) => handleToggleFavorite(path, 'folder')}
+                                        onRename={handleFolderRename}
+                                        onDelete={handleFolderDelete}
+                                    />
+                                ))}
+                             </div>
                          ) : (
                             // Client Side Folder Grid
-                            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 md:gap-6">
-                                {Object.values(buildFolderTree(files).children).map(node => (
-                                     <FolderCard 
-                                         key={node.path}
-                                         folder={node}
-                                         onClick={handleFolderClick}
-                                         isFavorite={(allUserData[currentUser?.username || '']?.favoriteFolderPaths || []).includes(node.path)}
-                                         onToggleFavorite={(path) => handleToggleFavorite(path, 'folder')}
-                                         onRename={handleFolderRename}
-                                         onDelete={handleFolderDelete}
-                                     />
-                                ))}
-                            </div>
+                            !currentPath && (
+                                <div className="w-full h-full overflow-y-auto p-4 md:p-8">
+                                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 md:gap-6">
+                                        {Object.values(buildFolderTree(files).children).map(node => (
+                                            <FolderCard 
+                                                key={node.path}
+                                                folder={node}
+                                                onClick={handleFolderClick}
+                                                isFavorite={(allUserData[currentUser?.username || '']?.favoriteFolderPaths || []).includes(node.path)}
+                                                onToggleFavorite={(path) => handleToggleFavorite(path, 'folder')}
+                                                onRename={handleFolderRename}
+                                                onDelete={handleFolderDelete}
+                                            />
+                                        ))}
+                                    </div>
+                                </div>
+                            )
+                         )}
+                         
+                         {/* Files Section (Mixed view for inside folders) */}
+                         {isServerMode && currentPath && (
+                             <div className="flex-1 min-h-0 border-t border-gray-100 dark:border-gray-800 relative">
+                                 <VirtualGallery 
+                                     items={processedFiles} 
+                                     onItemClick={setSelectedItem}
+                                     hasNextPage={isServerMode && hasMoreServer}
+                                     isNextPageLoading={isFetchingMore}
+                                     loadNextPage={loadMoreServerFiles}
+                                     itemCount={isServerMode ? serverTotal : processedFiles.length}
+                                     layout={layoutMode}
+                                 />
+                             </div>
                          )}
                      </div>
                  ) : (
@@ -1614,7 +1756,7 @@ export default function App() {
          )}
       </main>
 
-      {/* Settings Modal - Modern Two-Column Layout */}
+      {/* Settings Modal */}
       <AnimatePresence>
         {isSettingsOpen && (
             <motion.div
@@ -1668,17 +1810,81 @@ export default function App() {
                     {/* Settings Content */}
                     <div className="flex-1 overflow-y-auto p-6 md:p-10 bg-white dark:bg-gray-900 relative">
                          {/* Close Button Mobile - Absolute position inside content area */}
-                         <button onClick={() => setIsSettingsOpen(false)} className="absolute top-6 right-6 p-2 bg-gray-100 dark:bg-gray-800 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors z-50">
+                         <button onClick={() => setIsSettingsOpen(false)} className="absolute top-4 right-4 p-2 bg-gray-100 dark:bg-gray-800 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors z-50">
                             <Icons.Close size={20} />
                          </button>
 
-                         <div className="max-w-3xl mx-auto pt-2">
+                         <div className="max-w-3xl mx-auto pt-6">
                             {renderSettingsContent()}
                          </div>
                     </div>
                 </motion.div>
             </motion.div>
         )}
+      </AnimatePresence>
+
+      {/* User Management Modal */}
+      <AnimatePresence>
+          {isUserModalOpen && (
+              <motion.div
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  className="fixed inset-0 z-[60] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4"
+              >
+                  <motion.div
+                      initial={{ scale: 0.95, y: 20 }}
+                      animate={{ scale: 1, y: 0 }}
+                      exit={{ scale: 0.95, y: 20 }}
+                      className="bg-white dark:bg-gray-800 w-full max-w-md rounded-2xl shadow-xl p-6"
+                  >
+                      <h3 className="text-xl font-bold mb-4 flex items-center gap-2">
+                          <Icons.User size={24} className="text-primary-600" />
+                          {userFormType === 'add' ? t('add_user') : t('reset_password')}
+                      </h3>
+                      <form onSubmit={submitUserForm} className="space-y-4">
+                          {userFormType === 'add' && (
+                              <div>
+                                  <label className="block text-sm font-medium mb-1">{t('username')}</label>
+                                  <input 
+                                      type="text"
+                                      required
+                                      className="w-full px-4 py-2 rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 outline-none focus:ring-2 focus:ring-primary-500"
+                                      value={newUserForm.username}
+                                      onChange={e => setNewUserForm({...newUserForm, username: e.target.value})}
+                                  />
+                              </div>
+                          )}
+                          <div>
+                              <label className="block text-sm font-medium mb-1">{t('password')}</label>
+                              <input 
+                                  type="password"
+                                  required
+                                  className="w-full px-4 py-2 rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 outline-none focus:ring-2 focus:ring-primary-500"
+                                  value={newUserForm.password}
+                                  onChange={e => setNewUserForm({...newUserForm, password: e.target.value})}
+                              />
+                          </div>
+                          {userFormType === 'add' && (
+                              <div className="flex items-center gap-2">
+                                  <input 
+                                      type="checkbox"
+                                      id="isAdmin"
+                                      checked={newUserForm.isAdmin}
+                                      onChange={e => setNewUserForm({...newUserForm, isAdmin: e.target.checked})}
+                                      className="w-4 h-4 rounded text-primary-600 focus:ring-primary-500"
+                                  />
+                                  <label htmlFor="isAdmin" className="text-sm font-medium">{t('is_admin')}</label>
+                              </div>
+                          )}
+                          <div className="flex justify-end gap-3 pt-4">
+                              <button type="button" onClick={() => setIsUserModalOpen(false)} className="px-4 py-2 text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors">{t('cancel')}</button>
+                              <button type="submit" className="px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded-lg font-bold transition-colors">{t('save')}</button>
+                          </div>
+                      </form>
+                  </motion.div>
+              </motion.div>
+          )}
       </AnimatePresence>
 
       <ImageViewer 

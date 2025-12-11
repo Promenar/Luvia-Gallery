@@ -99,6 +99,7 @@ const translations = {
     enabled: 'ENABLED',
     disabled: 'DISABLED',
     toggle: 'Toggle',
+    cache_coverage: 'Thumbnail Coverage',
     
     // Settings - General
     general: 'General',
@@ -150,6 +151,16 @@ const translations = {
     manage: 'Manage',
     sign_out: 'Sign Out',
     done: 'Done',
+    user_management: 'User Management',
+    add_user: 'Add User',
+    reset_password: 'Reset Password',
+    delete_user: 'Delete User',
+    username: 'Username',
+    password: 'Password',
+    is_admin: 'Administrator Access',
+    cancel: 'Cancel',
+    save: 'Save',
+    delete_user_confirm: 'Are you sure you want to delete this user?',
     
     // Auth
     welcome: 'Welcome',
@@ -264,6 +275,7 @@ const translations = {
     enabled: '已启用',
     disabled: '已禁用',
     toggle: '切换',
+    cache_coverage: '缩略图覆盖率',
     
     // Settings - General
     general: '常规设置',
@@ -315,6 +327,16 @@ const translations = {
     manage: '管理',
     sign_out: '退出登录',
     done: '完成',
+    user_management: '用户管理',
+    add_user: '添加用户',
+    reset_password: '重置密码',
+    delete_user: '删除用户',
+    username: '用户名',
+    password: '密码',
+    is_admin: '管理员权限',
+    cancel: '取消',
+    save: '保存',
+    delete_user_confirm: '确定要删除该用户吗？',
     
     // Auth
     welcome: '欢迎',

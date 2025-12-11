@@ -100,6 +100,7 @@ try {
             file_count INTEGER DEFAULT 0,
             cover_file_path TEXT
         );
+        CREATE INDEX IF NOT EXISTS idx_folders_parent ON folders(parent_path);
 
         CREATE TABLE IF NOT EXISTS favorite_folders (
             path TEXT PRIMARY KEY
@@ -394,16 +395,25 @@ const rebuildFolderStats = () => {
     console.log("Rebuilding folder stats...");
     db.exec(`DELETE FROM folders`);
     
-    // SQLite string manipulation to extract parent path.
-    // Logic: Remove the last segment after the last slash.
-    // Parent of "Photos/Vacation" is "Photos".
-    // Parent of "Photos" is empty string (handled carefully).
+    // Logic to properly extract parent paths for root items and sub items
+    // If folder_path is "Photos", parent is "".
+    // If folder_path is "Photos/2023", parent is "Photos".
+    // We use a recursive logic or simple string manipulation in SQL.
+    
     db.exec(`
         INSERT INTO folders (path, name, parent_path, file_count, cover_file_path)
         SELECT 
             folder_path,
-            replace(folder_path, rtrim(folder_path, replace(folder_path, '/', '')), ''),
-            substr(folder_path, 0, length(folder_path) - length(replace(folder_path, rtrim(folder_path, replace(folder_path, '/', '')), ''))),
+            -- Name is everything after last slash, or full string if no slash
+            CASE 
+                WHEN instr(folder_path, '/') > 0 THEN substr(folder_path, length(folder_path) - length(substr(folder_path, rtrim(folder_path, replace(folder_path, '/', '')) + 1)) + 1)
+                ELSE folder_path
+            END,
+            -- Parent is everything before last slash, or empty string if no slash
+            CASE 
+                WHEN instr(folder_path, '/') > 0 THEN substr(folder_path, 1, length(folder_path) - length(substr(folder_path, rtrim(folder_path, replace(folder_path, '/', '')) + 1)) - 1)
+                ELSE ''
+            END,
             COUNT(*),
             (SELECT path FROM files f2 WHERE f2.folder_path = files.folder_path AND f2.media_type = 'image' ORDER BY mtime DESC LIMIT 1)
         FROM files
@@ -506,6 +516,10 @@ const handleWatcherEvent = async (event, filePath, libraryPaths) => {
                     mtime: stat.mtimeMs,
                     source_id: `nas-${Buffer.from(matchedConfigPath).toString('base64')}`
                 });
+                
+                // Trigger quick folder stats rebuild for new folders
+                // In production this might be debounced
+                rebuildFolderStats();
             }
         }
     } catch (e) {
@@ -785,18 +799,26 @@ app.get('/api/scan/results', (req, res) => {
 app.get('/api/library/folders', (req, res) => {
     try {
         const favorites = req.query.favorites === 'true';
+        const parent = req.query.parent; // Optional parent filter for drill-down
+
         let query = `
             SELECT f.path, f.file_count as count, f.cover_file_path 
             FROM folders f
         `;
         
+        const params = [];
+
         if (favorites) {
             query += ` JOIN favorite_folders ff ON f.path = ff.path`;
+        } else if (parent !== undefined) {
+            // Drill-down logic: Select folders where parent_path matches requested parent
+            query += ` WHERE f.parent_path = ?`;
+            params.push(parent);
         }
         
         query += ` ORDER BY f.path ASC`;
 
-        const rows = db.prepare(query).all();
+        const rows = db.prepare(query).all(...params);
         
         const folders = rows.map(r => {
              let coverItem = null;
