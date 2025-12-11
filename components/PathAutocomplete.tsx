@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef } from 'react';
 import { Icons } from './ui/Icon';
 
@@ -67,9 +68,16 @@ export const PathAutocomplete: React.FC<PathAutocompleteProps> = ({ value, onCha
     }, []);
 
     const handleSelect = (path: string) => {
-        onChange(path);
-        setIsOpen(false);
-        // Keep focus on input? 
+        // Automatically append slash to indicate directory drill-down
+        const newPath = path.endsWith('/') ? path : path + '/';
+        onChange(newPath);
+        // Keep focus on input so users can continue typing or clicking subfolders
+        if (wrapperRef.current) {
+            const input = wrapperRef.current.querySelector('input');
+            if(input) input.focus();
+        }
+        // Ensure dropdown stays open to show new suggestions from the effect hook
+        setIsOpen(true); 
     };
 
     return (

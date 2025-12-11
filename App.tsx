@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { MediaItem, ViewMode, GridLayout, User, UserData, SortOption, FilterOption, AppConfig, FolderNode, SystemStatus, HomeScreenConfig } from './types';
-import { buildFolderTree, generateId, isVideo, isAudio, sortMedia } from './utils/fileUtils';
+import { buildFolderTree, generateId, isVideo, isAudio, sortMedia, getImmediateSubfolders } from './utils/fileUtils';
 import { Icons } from './components/ui/Icon';
 import { Navigation } from './components/Navigation';
 import { MediaCard } from './components/PhotoCard';
@@ -1100,6 +1100,20 @@ export default function App() {
     return result;
   }, [files, viewMode, currentPath, filterOption, sortOption, isServerMode]);
 
+  // Client-side folder logic
+  const folderTree = useMemo(() => {
+      if (isServerMode || files.length === 0) return null;
+      return buildFolderTree(files);
+  }, [files, isServerMode]);
+
+  const clientSubfolders = useMemo(() => {
+      if (isServerMode || !folderTree) return [];
+      return getImmediateSubfolders(folderTree, currentPath);
+  }, [folderTree, currentPath, isServerMode]);
+
+  // Combined folders for view
+  const visibleFolders = isServerMode ? serverFolders : clientSubfolders;
+
 
   // Auth/Setup Screens
   if (authStep === 'loading') {
@@ -1683,49 +1697,32 @@ export default function App() {
                  {viewMode === 'folders' ? (
                      <div className="w-full h-full flex flex-col">
                          {/* Sub-Folders Section (Drill-down logic) */}
-                         {isServerMode ? (
-                             <div className="p-4 md:p-8 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 md:gap-6 overflow-y-auto shrink-0 max-h-[50vh]">
-                                {serverFolders.map(folder => (
-                                    <FolderCard 
-                                        key={folder.path}
-                                        folder={{
-                                            name: folder.path.split('/').pop() || 'Root',
-                                            path: folder.path,
-                                            mediaCount: folder.count,
-                                            children: {},
-                                            coverMedia: folder.coverItem
-                                        }}
-                                        onClick={handleFolderClick}
-                                        isFavorite={serverFavoriteIds.folders.includes(folder.path)}
-                                        onToggleFavorite={(path) => handleToggleFavorite(path, 'folder')}
-                                        onRename={handleFolderRename}
-                                        onDelete={handleFolderDelete}
-                                    />
-                                ))}
-                             </div>
-                         ) : (
-                            // Client Side Folder Grid
-                            !currentPath && (
-                                <div className="w-full h-full overflow-y-auto p-4 md:p-8">
-                                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 md:gap-6">
-                                        {Object.values(buildFolderTree(files).children).map(node => (
-                                            <FolderCard 
-                                                key={node.path}
-                                                folder={node}
-                                                onClick={handleFolderClick}
-                                                isFavorite={(allUserData[currentUser?.username || '']?.favoriteFolderPaths || []).includes(node.path)}
-                                                onToggleFavorite={(path) => handleToggleFavorite(path, 'folder')}
-                                                onRename={handleFolderRename}
-                                                onDelete={handleFolderDelete}
-                                            />
-                                        ))}
-                                    </div>
-                                </div>
-                            )
-                         )}
+                         <div className="p-4 md:p-8 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 md:gap-6 overflow-y-auto shrink-0 max-h-[50vh]">
+                            {visibleFolders.map(folder => (
+                                <FolderCard 
+                                    key={folder.path}
+                                    folder={{
+                                        name: folder.name || folder.path.split('/').pop() || 'Root',
+                                        path: folder.path,
+                                        mediaCount: folder.mediaCount !== undefined ? folder.mediaCount : folder.count,
+                                        children: folder.children || {},
+                                        coverMedia: folder.coverMedia || folder.coverItem
+                                    }}
+                                    onClick={handleFolderClick}
+                                    isFavorite={
+                                        isServerMode 
+                                        ? serverFavoriteIds.folders.includes(folder.path)
+                                        : (allUserData[currentUser?.username || '']?.favoriteFolderPaths || []).includes(folder.path)
+                                    }
+                                    onToggleFavorite={(path) => handleToggleFavorite(path, 'folder')}
+                                    onRename={handleFolderRename}
+                                    onDelete={handleFolderDelete}
+                                />
+                            ))}
+                         </div>
                          
                          {/* Files Section (Mixed view for inside folders) */}
-                         {isServerMode && currentPath && (
+                         {currentPath && (
                              <div className="flex-1 min-h-0 border-t border-gray-100 dark:border-gray-800 relative">
                                  <VirtualGallery 
                                      items={processedFiles} 

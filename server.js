@@ -395,38 +395,92 @@ const rebuildFolderStats = () => {
     console.log("Rebuilding folder stats...");
     db.exec(`DELETE FROM folders`);
     
-    // Logic to properly extract parent paths for root items and sub items
-    // If folder_path is "Photos", parent is "".
-    // If folder_path is "Photos/2023", parent is "Photos".
-    // We use a recursive logic or simple string manipulation in SQL.
-    
-    db.exec(`
-        INSERT INTO folders (path, name, parent_path, file_count, cover_file_path)
+    // 1. Get stats for folders that actually contain files (leaf nodes or mixed nodes)
+    const folderStats = db.prepare(`
         SELECT 
-            folder_path,
-            -- Name is everything after last slash, or full string if no slash
-            CASE 
-                WHEN instr(folder_path, '/') > 0 THEN substr(folder_path, length(folder_path) - length(substr(folder_path, rtrim(folder_path, replace(folder_path, '/', '')) + 1)) + 1)
-                ELSE folder_path
-            END,
-            -- Parent is everything before last slash, or empty string if no slash
-            CASE 
-                WHEN instr(folder_path, '/') > 0 THEN substr(folder_path, 1, length(folder_path) - length(substr(folder_path, rtrim(folder_path, replace(folder_path, '/', '')) + 1)) - 1)
-                ELSE ''
-            END,
-            COUNT(*),
-            (SELECT path FROM files f2 WHERE f2.folder_path = files.folder_path AND f2.media_type = 'image' ORDER BY mtime DESC LIMIT 1)
+            folder_path, 
+            COUNT(*) as file_count,
+            (SELECT path FROM files f2 WHERE f2.folder_path = files.folder_path AND f2.media_type = 'image' ORDER BY mtime DESC LIMIT 1) as cover_image,
+            (SELECT path FROM files f3 WHERE f3.folder_path = files.folder_path AND f3.media_type = 'video' ORDER BY mtime DESC LIMIT 1) as cover_video
         FROM files
         GROUP BY folder_path
-    `);
+    `).all();
 
-    // Fill missing video covers
-    db.exec(`
-        UPDATE folders 
-        SET cover_file_path = (SELECT path FROM files WHERE files.folder_path = folders.path AND files.media_type = 'video' LIMIT 1)
-        WHERE cover_file_path IS NULL
-    `);
-    console.log("Folder stats rebuilt.");
+    const foldersMap = new Map();
+
+    // 2. Populate map and ensure all ancestor paths exist
+    for (const stat of folderStats) {
+        let currentPath = stat.folder_path;
+        
+        // Add the leaf/mixed node with stats
+        if (!foldersMap.has(currentPath)) {
+            foldersMap.set(currentPath, {
+                path: currentPath,
+                name: currentPath.split('/').pop() || currentPath,
+                parent: '', // Will be calculated in the crawl loop
+                count: stat.file_count,
+                cover: stat.cover_image || stat.cover_video
+            });
+        } else {
+            const existing = foldersMap.get(currentPath);
+            existing.count = stat.file_count;
+            existing.cover = stat.cover_image || stat.cover_video;
+        }
+
+        // Crawl up to create hierarchy (Ancestor nodes)
+        // Example: /media/photos/vacation -> /media/photos -> /media -> /
+        while (true) {
+            const lastSlash = currentPath.lastIndexOf('/');
+            if (lastSlash === -1) break; // No more slashes, top level relative path
+            
+            // Handle root path case properly. If path is "/media", parent is "/".
+            // If path is "media", lastSlash is -1, break.
+            let parentPath = currentPath.substring(0, lastSlash);
+            if (lastSlash === 0) parentPath = '/'; // Parent of /media is /
+
+            // Ensure parent exists in map
+            if (!foldersMap.has(parentPath)) {
+                foldersMap.set(parentPath, {
+                    path: parentPath,
+                    name: parentPath === '/' ? 'Root' : parentPath.split('/').pop(),
+                    parent: '', 
+                    count: 0,
+                    cover: null
+                });
+            }
+            
+            // Link current to parent
+            const childNode = foldersMap.get(currentPath);
+            if (childNode) {
+                // If parent is '/', we set parent_path to '' so it appears at root in the API query `WHERE parent_path = ?` with val ''
+                // OR we strictly use '/' as root. 
+                // Let's assume frontend requests parent='' for top level.
+                // If we have "/media", parent is "/". 
+                // If we have "C:", parent is "".
+                childNode.parent = parentPath === '/' ? '' : parentPath;
+            }
+
+            if (currentPath === '/') break; // Can't go up from root
+            currentPath = parentPath;
+        }
+        
+        // Handle top-level items that didn't hit the loop break (no slashes)
+        // e.g. "Photos" -> parent is ""
+        const node = foldersMap.get(stat.folder_path);
+        if (node && !node.parent && node.path.lastIndexOf('/') > 0) {
+             // It was handled in loop
+        }
+    }
+
+    // 3. Batch Insert
+    const insert = db.prepare(`INSERT OR REPLACE INTO folders (path, name, parent_path, file_count, cover_file_path) VALUES (@path, @name, @parent, @count, @cover)`);
+    
+    const txn = db.transaction((items) => {
+        for (const item of items) insert.run(item);
+    });
+    
+    txn(foldersMap.values());
+    console.log(`Folder stats rebuilt. Total folders: ${foldersMap.size}`);
 };
 
 // --- File Watcher Logic ---
