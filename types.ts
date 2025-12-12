@@ -1,7 +1,7 @@
 
 import React from 'react';
 
-export type MediaType = 'image' | 'video' | 'audio';
+export type MediaType = 'image' | 'video' | 'audio' | 'folder';
 
 export interface MediaItem {
   id: string;
@@ -16,6 +16,8 @@ export interface MediaItem {
   mediaType: MediaType;
   sourceId: string;   // To identify which "import" this came from
   isFavorite?: boolean; // New: Favorite status
+  mediaCount?: number;
+  coverMedia?: MediaItem;
 }
 
 export interface ExifData {

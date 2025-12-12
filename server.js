@@ -457,13 +457,41 @@ app.get('/api/library/folders', (req, res) => {
 
     // Normal folder browsing (non-favorites)
     // Decode if it came from encoded param
-    let parentPath = req.query.parentPath || req.query.parent || MEDIA_ROOT;
+    let parentPath = req.query.parentPath || req.query.parent;
 
-    // If client passes "root" or "/", map to MEDIA_ROOT
-    if (!parentPath || parentPath === 'root' || parentPath === '/') parentPath = MEDIA_ROOT;
+    // If client passes "root" or "/", treat as root request
+    const isRootRequest = !parentPath || parentPath === 'root' || parentPath === '/';
 
-    console.log(`[DEBUG] /api/library/folders request. mappedPath: ${parentPath}`);
-    const subs = getSubfolders(parentPath);
+    // If it's a root request, we need to decide what to show
+    let subs = [];
+
+    if (isRootRequest) {
+        // 1. Try to read config for library paths
+        let libraryPaths = [];
+        if (fs.existsSync(CONFIG_FILE)) {
+            try {
+                const config = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+                if (config.libraryPaths && config.libraryPaths.length > 0) {
+                    // Filter out paths that don't exist
+                    libraryPaths = config.libraryPaths.filter(p => fs.existsSync(p));
+                }
+            } catch (e) { }
+        }
+
+        if (libraryPaths.length > 0) {
+            // If we have specific library paths configured, ONLY show those
+            subs = libraryPaths;
+            console.log(`[DEBUG] Root request: Showing configured library paths: ${subs.join(', ')}`);
+        } else {
+            // Fallback to MEDIA_ROOT if no config
+            subs = getSubfolders(MEDIA_ROOT);
+            console.log(`[DEBUG] Root request: No config, showing MEDIA_ROOT subfolders: ${subs.join(', ')}`);
+        }
+    } else {
+        // Not root, just get subfolders of the requested parent
+        console.log(`[DEBUG] /api/library/folders request. mappedPath: ${parentPath}`);
+        subs = getSubfolders(parentPath);
+    }
 
     const folders = subs.map(f => {
         let coverMedia = null;
@@ -609,6 +637,34 @@ async function processScan() {
 
     // Save Results to Database
     if (!scanState.shouldStop) {
+        // SYNC: Remove files that are no longer on disk
+        console.log('Syncing database with scan results...');
+        try {
+            const allDbPaths = database.getAllFilePaths();
+            const foundPaths = new Set(totalFiles.map(f => f.path));
+            const pathsToDelete = allDbPaths.filter(p => !foundPaths.has(p));
+
+            // Only delete if the file path is within one of the scanned library paths
+            // This prevents accidental deletion if we are only scanning a subset (though currently we scan all configured paths)
+            const pathsReallyToDelete = pathsToDelete.filter(p => {
+                return libraryPaths.some(libPath => p.startsWith(libPath));
+            });
+
+            if (pathsReallyToDelete.length > 0) {
+                console.log(`Found ${pathsReallyToDelete.length} missing files to delete.`);
+                for (const p of pathsReallyToDelete) {
+                    // ID generation must match what was used to insert
+                    const id = Buffer.from(p).toString('base64');
+                    database.deleteFile(p, id);
+                }
+                console.log('Cleanup complete.');
+            } else {
+                console.log('No missing files found.');
+            }
+        } catch (err) {
+            console.error('Error during database sync/cleanup:', err);
+        }
+
         console.log(`Saving ${totalFiles.length} files to database...`);
         const filesToInsert = totalFiles.map(f => ({
             id: Buffer.from(f.path).toString('base64'),
@@ -885,6 +941,7 @@ async function processThumbnails() {
     console.log('Starting processThumbnails...');
     thumbState.status = 'scanning'; // Use 'scanning' to match client polling expectation
     thumbState.shouldStop = false;
+    thumbState.shouldPause = false; // Ensure pause is reset
     thumbState.count = 0;
 
     try {
@@ -897,21 +954,28 @@ async function processThumbnails() {
         thumbState.total = queue.length;
 
         for (const file of queue) {
-            if (thumbState.shouldStop) break;
+            // Enhanced active check
+            if (thumbState.shouldStop) {
+                console.log('Thumbnail generation stopped by user');
+                break;
+            }
 
+            // Enhanced pause loop
             while (thumbState.shouldPause) {
                 if (thumbState.shouldStop) break;
                 thumbState.status = 'paused';
-                await new Promise(r => setTimeout(r, 500));
+                await new Promise(r => setTimeout(r, 200)); // Check more frequently
             }
-            thumbState.status = 'scanning';
+            if (thumbState.shouldStop) break; // Double check after pause
 
+            thumbState.status = 'scanning';
             thumbState.currentPath = file.path;
+
             await generateThumbnail(file);
             thumbState.count++;
 
-            // Delay removed for speed
-            // await new Promise(r => setTimeout(r, 20));
+            // Brief delay to allow event loop to process control signals
+            await new Promise(r => setTimeout(r, 0));
         }
     } catch (e) {
         console.error("Thumb gen error:", e);
@@ -935,6 +999,7 @@ app.post('/api/thumb-gen/start', (req, res) => {
     if (thumbState.status === 'scanning' || thumbState.status === 'paused') {
         return res.json({ success: true, message: 'Already running' });
     }
+    // Only reset if trying to start from idle
     thumbState = { ...thumbState, count: 0, total: 0, shouldStop: false, shouldPause: false };
     processThumbnails();
     res.json({ success: true });
@@ -942,15 +1007,20 @@ app.post('/api/thumb-gen/start', (req, res) => {
 
 app.post('/api/thumb-gen/control', (req, res) => {
     const { action } = req.body;
-    if (action === 'pause') thumbState.shouldPause = true;
-    if (action === 'resume') thumbState.shouldPause = false;
-    if (action === 'stop') {
-        thumbState.shouldStop = true;
+    console.log(`[ThumbControl] Action received: ${action}`);
+
+    if (action === 'pause') {
+        thumbState.shouldPause = true;
+    } else if (action === 'resume') {
         thumbState.shouldPause = false;
-    }
-    if (action === 'close') {
+    } else if (action === 'stop') {
+        thumbState.shouldStop = true;
+        thumbState.shouldPause = false; // Break the pause loop so it can see the stop signal
+    } else if (action === 'close') {
         // Reset state on close
-        thumbState.status = 'idle';
+        if (thumbState.status !== 'scanning' && thumbState.status !== 'paused') {
+            thumbState.status = 'idle';
+        }
     }
     res.json({ success: true, status: thumbState.status });
 });

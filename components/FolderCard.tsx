@@ -11,9 +11,10 @@ interface FolderCardProps {
     onToggleFavorite?: (path: string) => void;
     onRename?: (path: string, newName: string) => void;
     onDelete?: (path: string) => void;
+    animate?: boolean;
 }
 
-export const FolderCard: React.FC<FolderCardProps> = ({ folder, onClick, isFavorite, onToggleFavorite, onRename, onDelete }) => {
+export const FolderCard: React.FC<FolderCardProps> = ({ folder, onClick, isFavorite, onToggleFavorite, onRename, onDelete, animate = true }) => {
     const videoRef = useRef<HTMLVideoElement>(null);
     const [isPlaying, setIsPlaying] = useState(false);
     const [showMenu, setShowMenu] = useState(false);
@@ -80,7 +81,7 @@ export const FolderCard: React.FC<FolderCardProps> = ({ folder, onClick, isFavor
 
     return (
         <motion.div
-            initial={{ opacity: 0, scale: 0.95 }}
+            initial={animate ? { opacity: 0, scale: 0.95 } : { opacity: 1, scale: 1 }}
             animate={{ opacity: 1, scale: 1 }}
             whileHover={{ scale: 1.03, y: -2 }}
             whileTap={{ scale: 0.98 }}

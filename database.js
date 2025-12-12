@@ -474,6 +474,20 @@ function countFavoriteFiles(userId) {
     return result.count || 0;
 }
 
+
+/**
+ * Get all file paths (for sync)
+ */
+function getAllFilePaths() {
+    const stmt = db.prepare('SELECT path FROM files');
+    const paths = [];
+    while (stmt.step()) {
+        paths.push(stmt.getAsObject().path);
+    }
+    stmt.free();
+    return paths;
+}
+
 module.exports = {
     initDatabase,
     saveDatabase,
@@ -490,5 +504,6 @@ module.exports = {
     toggleFavorite,
     getFavoriteIds,
     queryFavoriteFiles,
-    countFavoriteFiles
+    countFavoriteFiles,
+    getAllFilePaths
 };

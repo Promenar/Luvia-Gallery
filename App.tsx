@@ -808,17 +808,7 @@ export default function App() {
             window.history.pushState({ path }, '', '#folder=' + encodeURIComponent(path));
         }
         if (isServerMode && currentUser) {
-            // Clear current files to avoid "flash" of old directory content
-            const clearedData = {
-                ...allUserData,
-                [currentUser.username]: {
-                    ...allUserData[currentUser.username],
-                    files: []
-                }
-            };
-            setAllUserData(clearedData);
-
-            fetchServerFiles(currentUser.username, clearedData, 0, true, path);
+            fetchServerFiles(currentUser.username, allUserData, 0, true, path);
             fetchServerFolders(path); // Fetch sub-folders for the new path
         }
     };
@@ -1287,6 +1277,31 @@ export default function App() {
 
     // Combined folders for view
     const visibleFolders = isServerMode ? serverFolders : clientSubfolders;
+
+    const mixedItems = useMemo(() => {
+        // Map folders to compatible MediaItem shape
+        const folderItems: MediaItem[] = visibleFolders.map(f => ({
+            id: f.path, // Use path as ID for folders
+            name: f.name || f.path.split('/').pop() || 'Root',
+            path: f.path,
+            folderPath: f.path.split('/').slice(0, -1).join('/'),
+            url: '', // Folders don't have a direct URL
+            type: 'application/x-directory',
+            mediaType: 'folder', // Now valid in types
+            size: 0,
+            lastModified: 0,
+            sourceId: 'system',
+            // Folder specific props
+            mediaCount: f.mediaCount !== undefined ? f.mediaCount : (f as any).count,
+            coverMedia: f.coverMedia || (f as any).coverItem,
+            isFavorite: isServerMode
+                ? serverFavoriteIds.folders.includes(f.path)
+                : (allUserData[currentUser?.username || '']?.favoriteFolderPaths || []).includes(f.path)
+        }));
+
+        // Folders always first
+        return [...folderItems, ...processedFiles];
+    }, [visibleFolders, processedFiles, isServerMode, serverFavoriteIds, allUserData, currentUser]);
 
 
     // Auth/Setup Screens
@@ -1974,69 +1989,42 @@ export default function App() {
                         )}
 
                         {/* Views */}
+                        {/* Views */}
                         {viewMode === 'folders' ? (
-                            <div className="w-full h-full flex flex-col">
-                                {/* Sub-Folders Section (Drill-down logic) */}
-                                {visibleFolders.length > 0 && (
-                                    <div className="p-4 md:p-8 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 md:gap-6 overflow-y-auto shrink-0 max-h-[50vh]">
-                                        {visibleFolders.map(folder => (
-                                            <FolderCard
-                                                key={folder.path}
-                                                folder={{
-                                                    name: folder.name || folder.path.split('/').pop() || 'Root',
-                                                    path: folder.path,
-                                                    mediaCount: folder.mediaCount !== undefined ? folder.mediaCount : folder.count,
-                                                    children: folder.children || {},
-                                                    coverMedia: folder.coverMedia || folder.coverItem
-                                                }}
-                                                onClick={(path) => {
-                                                    setViewMode('folders');
-                                                    localStorage.setItem(VIEW_MODE_KEY, 'folders');
-                                                    handleFolderClick(path);
-                                                }}
-                                                isFavorite={
-                                                    isServerMode
-                                                        ? serverFavoriteIds.folders.includes(folder.path)
-                                                        : (allUserData[currentUser?.username || '']?.favoriteFolderPaths || []).includes(folder.path)
-                                                }
-                                                onToggleFavorite={(path) => handleToggleFavorite(path, 'folder')}
-                                                onRename={handleFolderRename}
-                                                onDelete={handleFolderDelete}
-                                            />
-                                        ))}
-                                    </div>
-                                )}
-
-
-                                {/* Files Section (Mixed view for inside folders) */}
-                                {currentPath && (
-                                    <div className="flex-1 min-h-0 border-t border-gray-100 dark:border-gray-800 flex flex-col">
-                                        <div className="flex-1 min-h-0 p-4 md:p-8">
-                                            <VirtualGallery
-                                                items={processedFiles.filter(Boolean)}
-                                                onItemClick={(item) => {
-                                                    if (item.mediaType === 'audio') {
-                                                        // Create playlist from all audio files in current folder
-                                                        const audioFiles = processedFiles.filter(f => f && f.mediaType === 'audio');
-                                                        const clickedIndex = audioFiles.findIndex(f => f.id === item.id);
-                                                        setAudioPlaylist(audioFiles);
-                                                        setCurrentAudioIndex(clickedIndex >= 0 ? clickedIndex : 0);
-                                                        setCurrentAudio(item);
-                                                        setIsPlayerMinimized(false);
-                                                    } else {
-                                                        setSelectedItem(item);
-                                                    }
-                                                }}
-                                                hasNextPage={isServerMode && hasMoreServer}
-                                                isNextPageLoading={isFetchingMore}
-                                                loadNextPage={loadMoreServerFiles}
-                                                itemCount={isServerMode ? serverTotal : processedFiles.filter(Boolean).length}
-                                                layout={layoutMode}
-                                            />
-                                        </div>
-                                    </div>
-                                )}
-                            </div>
+                            /* Unified View (Folders + Files) */
+                            (viewMode === 'folders' || currentPath) && (
+                                <div className="flex-1 w-full h-full p-4 md:p-8 flex flex-col min-h-0">
+                                    <VirtualGallery
+                                        items={mixedItems.filter(Boolean)}
+                                        onItemClick={(item) => {
+                                            if (item.mediaType === 'folder') {
+                                                setViewMode('folders');
+                                                localStorage.setItem(VIEW_MODE_KEY, 'folders');
+                                                handleFolderClick(item.path);
+                                            } else if (item.mediaType === 'audio') {
+                                                // Create playlist from all audio files in effective list
+                                                // Filter mixedItems to just audio for the playlist
+                                                const audioFiles = mixedItems.filter(f => f && f.mediaType === 'audio');
+                                                const clickedIndex = audioFiles.findIndex(f => f.id === item.id);
+                                                setAudioPlaylist(audioFiles);
+                                                setCurrentAudioIndex(clickedIndex >= 0 ? clickedIndex : 0);
+                                                setCurrentAudio(item);
+                                                setIsPlayerMinimized(false);
+                                            } else {
+                                                setSelectedItem(item);
+                                            }
+                                        }}
+                                        hasNextPage={isServerMode && hasMoreServer}
+                                        isNextPageLoading={isFetchingMore}
+                                        loadNextPage={() => loadMoreServerFiles()}
+                                        itemCount={isServerMode ? serverTotal + visibleFolders.length : mixedItems.length}
+                                        layout={viewMode === 'folders' && layoutMode === 'timeline' ? 'masonry' : layoutMode}
+                                        onToggleFavorite={handleToggleFavorite}
+                                        onRename={handleFolderRename}
+                                        onDelete={handleFolderDelete}
+                                    />
+                                </div>
+                            )
                         ) : (
                             <div className="w-full h-full flex flex-col">
                                 {/* Favorite Folders Section (only in favorites view) */}
@@ -2105,141 +2093,146 @@ export default function App() {
                             </div>
                         )}
                     </div>
-                )}
-            </main>
+                )
+                }
+            </main >
 
             {/* Settings Modal */}
             <AnimatePresence>
-                {isSettingsOpen && (
-                    <motion.div
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        exit={{ opacity: 0 }}
-                        className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 md:p-12"
-                        onClick={() => setIsSettingsOpen(false)}
-                    >
+                {
+                    isSettingsOpen && (
                         <motion.div
-                            initial={{ scale: 0.95, y: 20 }}
-                            animate={{ scale: 1, y: 0 }}
-                            exit={{ scale: 0.95, y: 20 }}
-                            className="bg-white dark:bg-gray-900 w-full max-w-5xl h-[85vh] rounded-3xl shadow-2xl overflow-hidden flex flex-col md:flex-row"
-                            onClick={e => e.stopPropagation()}
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            exit={{ opacity: 0 }}
+                            className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 md:p-12"
+                            onClick={() => setIsSettingsOpen(false)}
                         >
-                            {/* Settings Sidebar */}
-                            <div className="w-full md:w-64 bg-gray-50 dark:bg-gray-950/50 border-r border-gray-100 dark:border-gray-800 p-6 flex flex-col gap-1 shrink-0">
-                                <h3 className="text-xl font-bold mb-6 px-2 flex items-center gap-2 text-gray-800 dark:text-white">
-                                    <Icons.Settings size={24} className="text-primary-600" /> {t('settings')}
-                                </h3>
+                            <motion.div
+                                initial={{ scale: 0.95, y: 20 }}
+                                animate={{ scale: 1, y: 0 }}
+                                exit={{ scale: 0.95, y: 20 }}
+                                className="bg-white dark:bg-gray-900 w-full max-w-5xl h-[85vh] rounded-3xl shadow-2xl overflow-hidden flex flex-col md:flex-row"
+                                onClick={e => e.stopPropagation()}
+                            >
+                                {/* Settings Sidebar */}
+                                <div className="w-full md:w-64 bg-gray-50 dark:bg-gray-950/50 border-r border-gray-100 dark:border-gray-800 p-6 flex flex-col gap-1 shrink-0">
+                                    <h3 className="text-xl font-bold mb-6 px-2 flex items-center gap-2 text-gray-800 dark:text-white">
+                                        <Icons.Settings size={24} className="text-primary-600" /> {t('settings')}
+                                    </h3>
 
-                                <div className="space-y-1">
-                                    <button
-                                        onClick={() => setSettingsTab('general')}
-                                        className={`w-full text-left px-4 py-3 rounded-xl flex items-center gap-3 transition-colors ${settingsTab === 'general' ? 'bg-white dark:bg-gray-800 shadow-sm font-medium text-primary-600 dark:text-primary-400' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800/50'}`}
-                                    >
-                                        <Icons.Settings size={18} /> {t('general')}
-                                    </button>
-                                    <button
-                                        onClick={() => setSettingsTab('library')}
-                                        className={`w-full text-left px-4 py-3 rounded-xl flex items-center gap-3 transition-colors ${settingsTab === 'library' ? 'bg-white dark:bg-gray-800 shadow-sm font-medium text-primary-600 dark:text-primary-400' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800/50'}`}
-                                    >
-                                        <Icons.Database size={18} /> {t('storage_database')}
-                                    </button>
-                                    <button
-                                        onClick={() => setSettingsTab('system')}
-                                        className={`w-full text-left px-4 py-3 rounded-xl flex items-center gap-3 transition-colors ${settingsTab === 'system' ? 'bg-white dark:bg-gray-800 shadow-sm font-medium text-primary-600 dark:text-primary-400' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800/50'}`}
-                                    >
-                                        <Icons.Cpu size={18} /> {t('system')}
-                                    </button>
-                                    <button
-                                        onClick={() => setSettingsTab('account')}
-                                        className={`w-full text-left px-4 py-3 rounded-xl flex items-center gap-3 transition-colors ${settingsTab === 'account' ? 'bg-white dark:bg-gray-800 shadow-sm font-medium text-primary-600 dark:text-primary-400' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800/50'}`}
-                                    >
-                                        <Icons.User size={18} /> {t('users')}
-                                    </button>
+                                    <div className="space-y-1">
+                                        <button
+                                            onClick={() => setSettingsTab('general')}
+                                            className={`w-full text-left px-4 py-3 rounded-xl flex items-center gap-3 transition-colors ${settingsTab === 'general' ? 'bg-white dark:bg-gray-800 shadow-sm font-medium text-primary-600 dark:text-primary-400' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800/50'}`}
+                                        >
+                                            <Icons.Settings size={18} /> {t('general')}
+                                        </button>
+                                        <button
+                                            onClick={() => setSettingsTab('library')}
+                                            className={`w-full text-left px-4 py-3 rounded-xl flex items-center gap-3 transition-colors ${settingsTab === 'library' ? 'bg-white dark:bg-gray-800 shadow-sm font-medium text-primary-600 dark:text-primary-400' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800/50'}`}
+                                        >
+                                            <Icons.Database size={18} /> {t('storage_database')}
+                                        </button>
+                                        <button
+                                            onClick={() => setSettingsTab('system')}
+                                            className={`w-full text-left px-4 py-3 rounded-xl flex items-center gap-3 transition-colors ${settingsTab === 'system' ? 'bg-white dark:bg-gray-800 shadow-sm font-medium text-primary-600 dark:text-primary-400' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800/50'}`}
+                                        >
+                                            <Icons.Cpu size={18} /> {t('system')}
+                                        </button>
+                                        <button
+                                            onClick={() => setSettingsTab('account')}
+                                            className={`w-full text-left px-4 py-3 rounded-xl flex items-center gap-3 transition-colors ${settingsTab === 'account' ? 'bg-white dark:bg-gray-800 shadow-sm font-medium text-primary-600 dark:text-primary-400' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800/50'}`}
+                                        >
+                                            <Icons.User size={18} /> {t('users')}
+                                        </button>
+                                    </div>
                                 </div>
-                            </div>
 
-                            {/* Settings Content */}
-                            <div className="flex-1 overflow-y-auto custom-scrollbar p-6 md:p-10 bg-white dark:bg-gray-900 relative">
-                                {/* Close Button Mobile - Absolute position inside content area */}
-                                <button onClick={() => setIsSettingsOpen(false)} className="absolute top-4 right-4 p-2 bg-gray-100 dark:bg-gray-800 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors z-50">
-                                    <Icons.Close size={20} />
-                                </button>
+                                {/* Settings Content */}
+                                <div className="flex-1 overflow-y-auto custom-scrollbar p-6 md:p-10 bg-white dark:bg-gray-900 relative">
+                                    {/* Close Button Mobile - Absolute position inside content area */}
+                                    <button onClick={() => setIsSettingsOpen(false)} className="absolute top-4 right-4 p-2 bg-gray-100 dark:bg-gray-800 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors z-50">
+                                        <Icons.Close size={20} />
+                                    </button>
 
-                                <div className="max-w-3xl mx-auto pt-6">
-                                    {renderSettingsContent()}
+                                    <div className="max-w-3xl mx-auto pt-6">
+                                        {renderSettingsContent()}
+                                    </div>
                                 </div>
-                            </div>
+                            </motion.div>
                         </motion.div>
-                    </motion.div>
-                )}
-            </AnimatePresence>
+                    )
+                }
+            </AnimatePresence >
 
             {/* User Management Modal */}
             <AnimatePresence>
-                {isUserModalOpen && (
-                    <motion.div
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        exit={{ opacity: 0 }}
-                        className="fixed inset-0 z-[60] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4"
-                    >
+                {
+                    isUserModalOpen && (
                         <motion.div
-                            initial={{ scale: 0.95, y: 20 }}
-                            animate={{ scale: 1, y: 0 }}
-                            exit={{ scale: 0.95, y: 20 }}
-                            className="bg-white dark:bg-gray-800 w-full max-w-md rounded-2xl shadow-xl p-6"
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            exit={{ opacity: 0 }}
+                            className="fixed inset-0 z-[60] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4"
                         >
-                            <h3 className="text-xl font-bold mb-4 flex items-center gap-2">
-                                <Icons.User size={24} className="text-primary-600" />
-                                {userFormType === 'add' ? t('add_user') : (userFormType === 'rename' ? 'Rename User' : t('reset_password'))}
-                            </h3>
-                            <form onSubmit={submitUserForm} className="space-y-4">
-                                {(userFormType === 'add' || userFormType === 'rename') && (
-                                    <div>
-                                        <label className="block text-sm font-medium mb-1">{t('username')}</label>
-                                        <input
-                                            type="text"
-                                            required
-                                            className="w-full px-4 py-2 rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 outline-none focus:ring-2 focus:ring-primary-500"
-                                            value={newUserForm.username}
-                                            onChange={e => setNewUserForm({ ...newUserForm, username: e.target.value })}
-                                        />
+                            <motion.div
+                                initial={{ scale: 0.95, y: 20 }}
+                                animate={{ scale: 1, y: 0 }}
+                                exit={{ scale: 0.95, y: 20 }}
+                                className="bg-white dark:bg-gray-800 w-full max-w-md rounded-2xl shadow-xl p-6"
+                            >
+                                <h3 className="text-xl font-bold mb-4 flex items-center gap-2">
+                                    <Icons.User size={24} className="text-primary-600" />
+                                    {userFormType === 'add' ? t('add_user') : (userFormType === 'rename' ? 'Rename User' : t('reset_password'))}
+                                </h3>
+                                <form onSubmit={submitUserForm} className="space-y-4">
+                                    {(userFormType === 'add' || userFormType === 'rename') && (
+                                        <div>
+                                            <label className="block text-sm font-medium mb-1">{t('username')}</label>
+                                            <input
+                                                type="text"
+                                                required
+                                                className="w-full px-4 py-2 rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 outline-none focus:ring-2 focus:ring-primary-500"
+                                                value={newUserForm.username}
+                                                onChange={e => setNewUserForm({ ...newUserForm, username: e.target.value })}
+                                            />
+                                        </div>
+                                    )}
+                                    {userFormType !== 'rename' && (
+                                        <div>
+                                            <label className="block text-sm font-medium mb-1">{t('password')}</label>
+                                            <input
+                                                type="password"
+                                                required={userFormType !== 'rename'}
+                                                className="w-full px-4 py-2 rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 outline-none focus:ring-2 focus:ring-primary-500"
+                                                value={newUserForm.password}
+                                                onChange={e => setNewUserForm({ ...newUserForm, password: e.target.value })}
+                                            />
+                                        </div>
+                                    )}
+                                    {userFormType === 'add' && (
+                                        <div className="flex items-center gap-2">
+                                            <input
+                                                type="checkbox"
+                                                id="isAdmin"
+                                                checked={newUserForm.isAdmin}
+                                                onChange={e => setNewUserForm({ ...newUserForm, isAdmin: e.target.checked })}
+                                                className="w-4 h-4 rounded text-primary-600 focus:ring-primary-500"
+                                            />
+                                            <label htmlFor="isAdmin" className="text-sm font-medium">{t('is_admin')}</label>
+                                        </div>
+                                    )}
+                                    <div className="flex justify-end gap-3 pt-4">
+                                        <button type="button" onClick={() => setIsUserModalOpen(false)} className="px-4 py-2 text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors">{t('cancel')}</button>
+                                        <button type="submit" className="px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded-lg font-bold transition-colors">{t('save')}</button>
                                     </div>
-                                )}
-                                {userFormType !== 'rename' && (
-                                    <div>
-                                        <label className="block text-sm font-medium mb-1">{t('password')}</label>
-                                        <input
-                                            type="password"
-                                            required={userFormType !== 'rename'}
-                                            className="w-full px-4 py-2 rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 outline-none focus:ring-2 focus:ring-primary-500"
-                                            value={newUserForm.password}
-                                            onChange={e => setNewUserForm({ ...newUserForm, password: e.target.value })}
-                                        />
-                                    </div>
-                                )}
-                                {userFormType === 'add' && (
-                                    <div className="flex items-center gap-2">
-                                        <input
-                                            type="checkbox"
-                                            id="isAdmin"
-                                            checked={newUserForm.isAdmin}
-                                            onChange={e => setNewUserForm({ ...newUserForm, isAdmin: e.target.checked })}
-                                            className="w-4 h-4 rounded text-primary-600 focus:ring-primary-500"
-                                        />
-                                        <label htmlFor="isAdmin" className="text-sm font-medium">{t('is_admin')}</label>
-                                    </div>
-                                )}
-                                <div className="flex justify-end gap-3 pt-4">
-                                    <button type="button" onClick={() => setIsUserModalOpen(false)} className="px-4 py-2 text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors">{t('cancel')}</button>
-                                    <button type="submit" className="px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded-lg font-bold transition-colors">{t('save')}</button>
-                                </div>
-                            </form>
+                                </form>
+                            </motion.div>
                         </motion.div>
-                    </motion.div>
-                )}
-            </AnimatePresence>
+                    )
+                }
+            </AnimatePresence >
 
             <ImageViewer
                 item={selectedItem}
@@ -2261,34 +2254,36 @@ export default function App() {
             />
 
             {/* Audio Player */}
-            {currentAudio && (
-                <AudioPlayer
-                    audio={currentAudio}
-                    isMinimized={isPlayerMinimized}
-                    onMinimize={() => setIsPlayerMinimized(true)}
-                    onExpand={() => setIsPlayerMinimized(false)}
-                    onClose={() => {
-                        setCurrentAudio(null);
-                        setAudioPlaylist([]);
-                        setCurrentAudioIndex(0);
-                    }}
-                    playlist={audioPlaylist}
-                    onNext={() => {
-                        if (currentAudioIndex < audioPlaylist.length - 1) {
-                            const nextIndex = currentAudioIndex + 1;
-                            setCurrentAudioIndex(nextIndex);
-                            setCurrentAudio(audioPlaylist[nextIndex]);
-                        }
-                    }}
-                    onPrevious={() => {
-                        if (currentAudioIndex > 0) {
-                            const prevIndex = currentAudioIndex - 1;
-                            setCurrentAudioIndex(prevIndex);
-                            setCurrentAudio(audioPlaylist[prevIndex]);
-                        }
-                    }}
-                />
-            )}
+            {
+                currentAudio && (
+                    <AudioPlayer
+                        audio={currentAudio}
+                        isMinimized={isPlayerMinimized}
+                        onMinimize={() => setIsPlayerMinimized(true)}
+                        onExpand={() => setIsPlayerMinimized(false)}
+                        onClose={() => {
+                            setCurrentAudio(null);
+                            setAudioPlaylist([]);
+                            setCurrentAudioIndex(0);
+                        }}
+                        playlist={audioPlaylist}
+                        onNext={() => {
+                            if (currentAudioIndex < audioPlaylist.length - 1) {
+                                const nextIndex = currentAudioIndex + 1;
+                                setCurrentAudioIndex(nextIndex);
+                                setCurrentAudio(audioPlaylist[nextIndex]);
+                            }
+                        }}
+                        onPrevious={() => {
+                            if (currentAudioIndex > 0) {
+                                const prevIndex = currentAudioIndex - 1;
+                                setCurrentAudioIndex(prevIndex);
+                                setCurrentAudio(audioPlaylist[prevIndex]);
+                            }
+                        }}
+                    />
+                )
+            }
 
             <ScanProgressModal
                 isOpen={isScanModalOpen}
@@ -2324,6 +2319,6 @@ export default function App() {
                 title={jobType === 'scan' ? t('scanning_library') : t('generating_thumbnails')}
             />
 
-        </div>
+        </div >
     );
 }

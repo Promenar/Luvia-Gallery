@@ -4,6 +4,7 @@ import * as ReactWindow from 'react-window';
 import AutoSizer from 'react-virtualized-auto-sizer';
 import { MediaItem } from '../types';
 import { MediaCard } from './PhotoCard';
+import { FolderCard } from './FolderCard';
 import { Icons } from './ui/Icon';
 import { groupMediaByDate } from '../utils/fileUtils';
 import { TimelineScrubber } from './TimelineScrubber';
@@ -21,6 +22,10 @@ interface VirtualGalleryProps {
     loadNextPage: (startIndex: number, stopIndex: number) => Promise<void> | void;
     itemCount: number; // Total count if known, or items.length
     layout: 'grid' | 'masonry' | 'timeline';
+    // Folder Actions
+    onToggleFavorite?: (path: string, type: 'file' | 'folder') => void;
+    onRename?: (path: string, newName: string) => void;
+    onDelete?: (path: string) => void;
 }
 
 interface VisualRow {
@@ -180,7 +185,10 @@ export const VirtualGallery: React.FC<VirtualGalleryProps> = ({
     isNextPageLoading,
     loadNextPage,
     itemCount,
-    layout
+    layout,
+    onToggleFavorite,
+    onRename,
+    onDelete
 }) => {
 
     // -- MASONRY LAYOUT --
@@ -208,13 +216,31 @@ export const VirtualGallery: React.FC<VirtualGalleryProps> = ({
                     {columns.map((colItems, colIndex) => (
                         <div key={colIndex} className="flex-1 flex flex-col gap-4">
                             {colItems.filter(item => item && item.id).map((item) => (
-                                <MediaCard
-                                    key={item.id}
-                                    item={item}
-                                    onClick={onItemClick}
-                                    layout="masonry"
-                                    isVirtual={false}
-                                />
+                                item.mediaType === 'folder' ? (
+                                    <FolderCard
+                                        key={item.path}
+                                        folder={{
+                                            name: item.name,
+                                            path: item.path,
+                                            children: item.children || {},
+                                            mediaCount: item.mediaCount || 0,
+                                            coverMedia: item.coverMedia
+                                        }}
+                                        onClick={() => onItemClick(item)}
+                                        isFavorite={item.isFavorite}
+                                        onToggleFavorite={onToggleFavorite ? (path) => onToggleFavorite(path, 'folder') : undefined}
+                                        onRename={onRename}
+                                        onDelete={onDelete}
+                                    />
+                                ) : (
+                                    <MediaCard
+                                        key={item.id}
+                                        item={item}
+                                        onClick={onItemClick}
+                                        layout="masonry"
+                                        isVirtual={false}
+                                    />
+                                )
                             ))}
                         </div>
                     ))}
@@ -313,7 +339,26 @@ export const VirtualGallery: React.FC<VirtualGalleryProps> = ({
                                 if (!item || !item.id) return null;
                                 return (
                                     <div style={itemStyle}>
-                                        <MediaCard item={item} onClick={onItemClick} layout="grid" isVirtual={true} />
+                                        {item.mediaType === 'folder' ? (
+                                            <div className="w-full h-full p-1">
+                                                <FolderCard
+                                                    folder={{
+                                                        name: item.name,
+                                                        path: item.path,
+                                                        children: item.children || {},
+                                                        mediaCount: item.mediaCount || 0,
+                                                        coverMedia: item.coverMedia
+                                                    }}
+                                                    onClick={() => onItemClick(item)}
+                                                    isFavorite={item.isFavorite}
+                                                    onToggleFavorite={onToggleFavorite ? (path) => onToggleFavorite(path, 'folder') : undefined}
+                                                    onRename={onRename}
+                                                    onDelete={onDelete}
+                                                />
+                                            </div>
+                                        ) : (
+                                            <MediaCard item={item} onClick={onItemClick} layout="grid" isVirtual={true} />
+                                        )}
                                     </div>
                                 );
                             }}
