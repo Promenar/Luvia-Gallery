@@ -96,7 +96,7 @@ export const FolderCard: React.FC<FolderCardProps> = ({ folder, onClick, isFavor
 
             {/* Main Card */}
             <div className="relative bg-white dark:bg-gray-800 rounded-xl shadow-sm hover:shadow-lg border border-gray-100 dark:border-gray-700 overflow-hidden flex flex-col h-full z-10 transition-all duration-300">
-                <div className="aspect-[4/3] bg-gray-100 dark:bg-gray-900 relative overflow-hidden flex items-center justify-center">
+                <div className="aspect-[4/3] bg-gray-100 dark:bg-gray-900 relative overflow-hidden flex items-center justify-center w-full">
                     {folder.coverMedia && !imgError ? (
                         folder.coverMedia.mediaType === 'video' ? (
                             <div className="w-full h-full bg-gray-800 flex items-center justify-center group-hover:scale-105 transition-transform duration-700 relative overflow-hidden">
@@ -118,6 +118,7 @@ export const FolderCard: React.FC<FolderCardProps> = ({ folder, onClick, isFavor
                                         playsInline
                                         className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-300 ${isPlaying ? 'opacity-100' : 'opacity-0'}`}
                                         onError={() => { }}
+                                        style={{ objectFit: 'cover' }}
                                     />
                                 )}
                                 <div className={`absolute inset-0 flex items-center justify-center z-10 transition-opacity ${isPlaying ? 'opacity-0' : 'opacity-100'}`}>
@@ -134,8 +135,9 @@ export const FolderCard: React.FC<FolderCardProps> = ({ folder, onClick, isFavor
                             <img
                                 src={thumbUrl || folder.coverMedia.url}
                                 alt={folder.name}
-                                className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700"
+                                className="absolute inset-0 w-full h-full object-cover group-hover:scale-105 transition-transform duration-700"
                                 onError={() => setImgError(true)}
+                                style={{ objectFit: 'cover' }}
                             />
                         )
                     ) : (

@@ -683,12 +683,20 @@ async function processScan() {
 
             if (pathsReallyToDelete.length > 0) {
                 console.log(`Found ${pathsReallyToDelete.length} missing/out-of-scope files to delete.`);
-                for (const p of pathsReallyToDelete) {
-                    // ID generation must match what was used to insert
-                    const id = Buffer.from(p).toString('base64');
-                    database.deleteFile(p, id);
-                }
+
+                // Prepare batch
+                const deleteBatch = pathsReallyToDelete.map(p => ({
+                    path: p,
+                    id: Buffer.from(p).toString('base64')
+                }));
+
+                // Use efficient batch deletion
+                database.deleteFilesBatch(deleteBatch);
+
                 console.log('Cleanup complete.');
+
+                // Trigger immediate thumbnail regeneration for remaining files if needed?
+                // No, just finish.
             } else {
                 console.log('No missing files found.');
             }
