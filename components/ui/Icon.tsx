@@ -57,7 +57,8 @@ import {
   Scan,
   SkipBack,
   SkipForward,
-  Volume2
+  Volume2,
+  Search
 } from 'lucide-react';
 
 export const Icons = {
@@ -120,6 +121,7 @@ export const Icons = {
   Scan,
   SkipBack,
   SkipForward,
-  Volume2
+  Volume2,
+  Search
 };
 

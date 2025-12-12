@@ -299,29 +299,141 @@ function deleteFile(filePath, id = null) {
 /**
  * Batch delete files
  */
-function deleteFilesBatch(items) {
-    if (!items || items.length === 0) return;
-
-    console.log(`[DB] Batch deleting ${items.length} items...`);
-    const deleteFileStmt = db.prepare('DELETE FROM files WHERE path = ? OR id = ?');
-    const deleteFavStmt = db.prepare('DELETE FROM favorites WHERE item_id = ?');
-
-    const txn = db.transaction((batch) => {
-        for (const item of batch) {
-            deleteFileStmt.run(item.path, item.id);
-            if (item.id) deleteFavStmt.run(item.id);
-        }
-    });
-
+function deleteFilesBatch(files, shouldSave = true) {
+    db.run('BEGIN TRANSACTION');
     try {
-        txn(items);
-        saveDatabase(); // Save once at the end
+        const stmt = db.prepare('DELETE FROM files WHERE id = ?');
+        const favStmt = db.prepare('DELETE FROM favorites WHERE item_id = ?');
+
+        for (const file of files) {
+            stmt.run([file.id]);
+            favStmt.run([file.id]);
+        }
+
+        stmt.free();
+        favStmt.free();
+
+        db.run('COMMIT');
+        if (shouldSave) saveDatabase();
         return true;
-    } catch (error) {
-        console.error('Batch delete failed:', error);
+    } catch (e) {
+        db.run('ROLLBACK');
+        console.error('Batch delete failed:', e);
         return false;
     }
 }
+
+/**
+ * Get all file paths and their last modified times for incremental scan
+ * Returns a Map<path, lastModified>
+ */
+function getAllFilesMtime() {
+    const stmt = db.prepare('SELECT path, last_modified FROM files');
+    const mtimeMap = new Map();
+
+    while (stmt.step()) {
+        const row = stmt.getAsObject();
+        mtimeMap.set(row.path, row.last_modified);
+    }
+    stmt.free();
+    return mtimeMap;
+}
+
+module.exports = {
+    initDatabase,
+    insertFilesBatch,
+    queryFiles,
+    countFiles,
+    deleteFile,
+    deleteFilesBatch, // Export this
+    getAllFilesMtime, // Export this
+    getFavoriteIds: (userId) => {
+        // ... (existing helper logic or simple query if needed)
+        // Since getFavoriteIds was called in server.js but not defined in snippet, 
+        // I verify if it exists below or if I need to add it.
+        // Looking at snippet, it was not visible. I will stick to what I see.
+        // Wait, server.js calls database.getFavoriteIds. It must be there but outside 1-300 range?
+        // Let's check the bottom of the file.
+        const stmt = db.prepare('SELECT item_id FROM favorites WHERE user_id = ?');
+        stmt.bind([userId]);
+        const ids = [];
+        while (stmt.step()) {
+            ids.push(stmt.getAsObject().item_id);
+        }
+        stmt.free();
+        return ids;
+    },
+    // ... other exports
+    saveDatabase,
+    toggleFavorite: (userId, itemId, itemType) => {
+        // Check if exists
+        const check = db.prepare('SELECT id FROM favorites WHERE user_id = ? AND item_id = ?');
+        check.bind([userId, itemId]);
+        const exists = check.step();
+        check.free();
+
+        if (exists) {
+            const del = db.prepare('DELETE FROM favorites WHERE user_id = ? AND item_id = ?');
+            del.run([userId, itemId]);
+            del.free();
+            saveDatabase();
+            return false;
+        } else {
+            const ins = db.prepare('INSERT INTO favorites (user_id, item_id, item_type) VALUES (?, ?, ?)');
+            ins.run([userId, itemId, itemType]);
+            ins.free();
+            saveDatabase();
+            return true;
+        }
+    },
+    queryFavoriteFiles: (userId, options) => {
+        const limit = options.limit || 100;
+        const offset = options.offset || 0;
+        const stmt = db.prepare(`
+            SELECT f.* FROM files f
+            JOIN favorites fav ON f.id = fav.item_id
+            WHERE fav.user_id = ?
+            ORDER BY fav.created_at DESC
+            LIMIT ? OFFSET ?
+        `);
+        stmt.bind([userId, limit, offset]);
+        const results = [];
+        while (stmt.step()) {
+            const row = stmt.getAsObject();
+            results.push({
+                id: row.id,
+                path: row.path,
+                name: row.name,
+                folderPath: row.folder_path,
+                size: row.size,
+                type: row.type,
+                mediaType: row.media_type,
+                lastModified: row.last_modified,
+                sourceId: row.source_id
+            });
+        }
+        stmt.free();
+        return results;
+    },
+    countFavoriteFiles: (userId) => {
+        const stmt = db.prepare('SELECT COUNT(*) as count FROM favorites WHERE user_id = ?');
+        stmt.bind([userId]);
+        stmt.step();
+        const res = stmt.getAsObject();
+        stmt.free();
+        return res.count || 0;
+    },
+    getAllFilePaths: () => {
+        const stmt = db.prepare('SELECT path FROM files');
+        const paths = [];
+        while (stmt.step()) {
+            paths.push(stmt.getAsObject().path);
+        }
+        stmt.free();
+        return paths;
+    }
+};
+
 
 /**
  * Delete files by folder path
@@ -538,5 +650,7 @@ module.exports = {
     getFavoriteIds,
     queryFavoriteFiles,
     countFavoriteFiles,
-    getAllFilePaths
+    getAllFilePaths,
+    deleteFilesBatch,
+    getAllFilesMtime
 };

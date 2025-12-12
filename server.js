@@ -605,6 +605,11 @@ async function processScan() {
         scanState.status = 'scanning';
     };
 
+    // Incremental Scan: Fetch all existing files mtime
+    console.log('Fetching existing file stats for incremental scan...');
+    const existingFilesMtime = database.getAllFilesMtime();
+    console.log(`Loaded ${existingFilesMtime.size} existing files from database.`);
+
     // Streaming batch processing - avoid memory accumulation
     let batchBuffer = [];
     const BATCH_SIZE = 1000;
@@ -644,6 +649,16 @@ async function processScan() {
                         if (allSupportedExts.includes(ext)) {
                             // OPTIMIZATION: Single stat call instead of two
                             const stats = fs.statSync(fullPath);
+
+                            // INCREMENTAL SCAN CHECK
+                            const lastMtime = existingFilesMtime.get(fullPath);
+                            if (lastMtime && Math.abs(lastMtime - stats.mtimeMs) < 100) {
+                                // File unchanged, skip detailed processing
+                                allScannedPaths.add(fullPath);
+                                totalProcessed++;
+                                if (totalProcessed % 50 === 0) scanState.count = totalProcessed; // Update UI less frequently for speed
+                                continue;
+                            }
 
                             let fileType = 'image/jpeg';
                             if (videoExts.includes(ext)) {
@@ -1039,7 +1054,27 @@ async function processThumbnails() {
 
     try {
         const allFiles = database.queryFiles({ offset: 0, limit: 999999 });
-        const queue = allFiles.map(f => ({ path: f.path, id: f.id }));
+
+        // INCREMENTAL CHECK: Read cache dir first
+        console.log('Checking existing thumbnails...');
+        const existingThumbs = new Set();
+        if (fs.existsSync(CACHE_DIR)) {
+            const files = fs.readdirSync(CACHE_DIR);
+            for (const file of files) {
+                if (file.endsWith('.webp')) {
+                    existingThumbs.add(path.parse(file).name);
+                }
+            }
+        }
+
+        // Filter queue to only missing thumbnails
+        const queue = allFiles.filter(f => {
+            // File ID is base64 of path, which is the thumb name
+            const id = f.id;
+            return !existingThumbs.has(id);
+        }).map(f => ({ path: f.path, id: f.id }));
+
+        console.log(`Found ${allFiles.length} total files, ${queue.length} need thumbnails.`);
         thumbState.total = queue.length;
 
         const activePool = new Set();
@@ -1390,12 +1425,17 @@ app.post('/api/cache/prune', (req, res) => {
 
             for (const file of files) {
                 // file is like "base64id.webp"
-                const id = path.parse(file).name;
+                const parsed = path.parse(file);
+                if (parsed.ext !== '.webp') continue; // Skip non-webp if any
+
+                const id = parsed.name;
                 if (!validIds.has(id)) {
+                    // Orphaned cache file
                     fs.unlinkSync(path.join(CACHE_DIR, file));
                     count++;
                 }
             }
+            console.log(`Pruned ${count} orphaned cache files.`);
         }
         res.json({ success: true, count });
     } catch (e) {

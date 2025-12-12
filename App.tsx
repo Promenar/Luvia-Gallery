@@ -7,7 +7,8 @@ import { Navigation } from './components/Navigation';
 import { MediaCard } from './components/PhotoCard';
 import { FolderCard } from './components/FolderCard';
 import { ImageViewer } from './components/ImageViewer';
-import { ScanProgressModal, ScanStatus } from './components/ScanProgressModal';
+import { UnifiedProgressModal } from './components/UnifiedProgressModal';
+import { ScanStatus } from './components/ScanProgressModal'; // Keeping Type for now if needed, or define in unified
 import { VirtualGallery } from './components/VirtualGallery';
 import { PathAutocomplete } from './components/PathAutocomplete';
 import { Home } from './components/Home';
@@ -76,13 +77,19 @@ export default function App() {
     const [showWatcherLogs, setShowWatcherLogs] = useState(false);
 
     // --- Scanning & Thumbnail Gen State ---
-    const [isScanModalOpen, setIsScanModalOpen] = useState(false);
+    const [isUnifiedModalOpen, setIsUnifiedModalOpen] = useState(false);
+
+    // Scan State
     const [scanStatus, setScanStatus] = useState<ScanStatus>('idle');
     const [scanProgress, setScanProgress] = useState({ count: 0, currentPath: '', currentEngine: '' });
-    const [jobType, setJobType] = useState<'scan' | 'thumb'>('scan');
+
+    // Thumb State
+    const [thumbStatus, setThumbStatus] = useState<'idle' | 'scanning' | 'paused' | 'error'>('idle');
+    const [thumbProgress, setThumbProgress] = useState({ count: 0, total: 0, currentPath: '' });
 
     const scanProgressRef = useRef({ count: 0 }); // Added ref for progress
     const scanStatusRef = useRef<ScanStatus>('idle'); // Added ref for status
+    const thumbStatusRef = useRef<'idle' | 'scanning' | 'paused' | 'error'>('idle');
     const scanTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     // --- App Data State ---
@@ -343,31 +350,36 @@ export default function App() {
                         // Restore background task state
                         setTimeout(async () => {
                             try {
-                                // Check Scan Status
-                                const scanRes = await fetch('/api/scan/status');
+                                const [scanRes, thumbRes] = await Promise.all([
+                                    fetch('/api/scan/status'),
+                                    fetch('/api/thumb-gen/status')
+                                ]);
+
+                                let foundActive = false;
+
                                 if (scanRes.ok) {
                                     const scanData = await scanRes.json();
-                                    if (scanData.status === 'scanning' || scanData.status === 'processing') {
-                                        console.log('[Restore] Found active scan task');
-                                        setJobType('scan');
-                                        setIsScanModalOpen(true);
+                                    if (scanData.status === 'scanning' || scanData.status === 'paused') {
                                         setScanStatus(scanData.status);
-                                        startPolling('scan');
-                                        return;
+                                        setScanProgress({ count: scanData.count, currentPath: scanData.currentPath || '', currentEngine: '' });
+                                        scanStatusRef.current = scanData.status;
+                                        foundActive = true;
                                     }
                                 }
 
-                                // Check Thumbnail Status (only if no scan found)
-                                const thumbRes = await fetch('/api/thumb-gen/status');
                                 if (thumbRes.ok) {
                                     const thumbData = await thumbRes.json();
-                                    if (thumbData.status === 'processing' || thumbData.status === 'scanning') {
-                                        console.log('[Restore] Found active thumbnail task');
-                                        setJobType('thumb');
-                                        setIsScanModalOpen(true);
-                                        setScanStatus('processing');
-                                        startPolling('thumb');
+                                    if (thumbData.status === 'scanning' || thumbData.status === 'paused') {
+                                        setThumbStatus(thumbData.status);
+                                        setThumbProgress({ count: thumbData.count, total: thumbData.total, currentPath: thumbData.currentPath });
+                                        thumbStatusRef.current = thumbData.status;
+                                        foundActive = true;
                                     }
+                                }
+
+                                if (foundActive) {
+                                    setIsUnifiedModalOpen(true);
+                                    startUnifiedPolling();
                                 }
                             } catch (e) {
                                 console.error('[Restore] Failed to check background tasks', e);
@@ -587,104 +599,67 @@ export default function App() {
         } catch (e) { }
     };
 
-    const startPolling = (type: 'scan' | 'thumb' = 'scan') => {
+    const startUnifiedPolling = () => {
         stopPolling();
 
-        const apiEndpoint = type === 'scan' ? '/api/scan/status' : '/api/thumb-gen/status';
-
         const poll = async () => {
+            // Poll Scan
             try {
-                const statusRes = await fetch(apiEndpoint);
-                if (statusRes.ok) {
-                    const text = await statusRes.text();
-                    let statusData;
-                    try {
-                        statusData = JSON.parse(text);
-                    } catch (e) { }
+                const scanRes = await fetch('/api/scan/status');
+                if (scanRes.ok) {
+                    const scanData = await scanRes.json();
+                    const newScanStatus = scanData.status as ScanStatus;
 
-                    if (statusData) {
-                        const newStatus = statusData.status as ScanStatus;
-                        const prevStatus = scanStatusRef.current;
+                    setScanStatus(newScanStatus);
+                    scanStatusRef.current = newScanStatus;
 
-                        // Check for completion transition (Scanning -> Idle)
-                        // This handles cases where server finishes and resets to idle
-                        if (newStatus === 'idle' && prevStatus === 'scanning') {
-                            setScanStatus('completed');
-                            scanStatusRef.current = 'completed';
-                            if (statusData.count !== undefined) {
-                                setScanProgress(p => ({ ...p, count: statusData.count }));
-                            }
-                            stopPolling();
-                            fetchSystemStatus();
-                            if (currentUser) {
-                                fetchServerFiles(currentUser.username, allUserData, 0, true, currentPath, viewMode === 'favorites');
-                                fetchServerFolders(currentPath);
-                            }
-                            return;
-                        }
-
-                        setScanStatus(newStatus);
-                        scanStatusRef.current = newStatus;
-
+                    if (newScanStatus !== 'idle') {
                         setScanProgress({
-                            count: statusData.count || 0,
-                            currentPath: statusData.currentPath || '',
-                            currentEngine: statusData.currentEngine || ''
+                            count: scanData.count || 0,
+                            currentPath: scanData.currentPath || '',
+                            currentEngine: ''
                         });
-                        scanProgressRef.current = { count: statusData.count || 0 };
-
-                        // Continue polling if active
-                        if (newStatus === 'scanning' || newStatus === 'paused') {
-                            scanTimeoutRef.current = setTimeout(poll, 1000);
-                            return;
-                        }
-
-                        // Handle Completion
-                        if (statusData.status === 'completed') {
-                            setScanStatus('completed');
-                            stopPolling();
-                            fetchSystemStatus();
-                            if (currentUser) {
-                                fetchServerFiles(currentUser.username, allUserData, 0, true, currentPath, viewMode === 'favorites');
-                                fetchServerFolders(currentPath);
-                            }
-                            return;
-                        }
-
-                        // Handle Edge Case: Idle but finished?
-                        if (statusData.status === 'idle' && scanStatusRef.current === 'scanning' && statusData.count > 0) {
-                            setScanStatus('completed'); // Force completed if we have results
-                            scanStatusRef.current = 'completed';
-                            stopPolling();
-                            fetchSystemStatus();
-                            if (currentUser) {
-                                fetchServerFiles(currentUser.username, allUserData, 0, true, currentPath, viewMode === 'favorites');
-                                fetchServerFolders(currentPath);
-                            }
-                            return;
-                        }
-
-                        // Default Stop (if error or explicitly idle without count)
-                        stopPolling();
-                        fetchSystemStatus();
-                        if (currentUser) {
-                            fetchServerFiles(currentUser.username, allUserData, 0, true, currentPath, viewMode === 'favorites');
-                            fetchServerFolders(currentPath);
-                        }
-                    } else {
-                        // JSON parse failed or empty
-                        scanTimeoutRef.current = setTimeout(poll, 1000);
+                        scanProgressRef.current = { count: scanData.count || 0 };
                     }
-                } else {
-                    // HTTP Error
-                    scanTimeoutRef.current = setTimeout(poll, 2000);
                 }
-            } catch (e) {
-                console.error("Poll failed", e);
-                scanTimeoutRef.current = setTimeout(poll, 2000);
+            } catch (e) { }
+
+            // Poll Thumb
+            try {
+                const thumbRes = await fetch('/api/thumb-gen/status');
+                if (thumbRes.ok) {
+                    const thumbData = await thumbRes.json();
+                    const newThumbStatus = thumbData.status === 'scanning' || thumbData.status === 'paused' ? thumbData.status : 'idle';
+
+                    // If we encounter an error or finished state that isn't idle, we might want to show it
+                    // but for now, track active states.
+                    setThumbStatus(thumbData.status);
+                    thumbStatusRef.current = thumbData.status;
+
+                    setThumbProgress({
+                        count: thumbData.count || 0,
+                        total: thumbData.total || 0, // Ensure total is captured
+                        currentPath: thumbData.currentPath || ''
+                    });
+                }
+            } catch (e) { }
+
+            // Continue polling if ANY active
+            const isScanActive = scanStatusRef.current === 'scanning' || scanStatusRef.current === 'paused';
+            const isThumbActive = thumbStatusRef.current === 'scanning' || thumbStatusRef.current === 'paused';
+
+            if (isScanActive || isThumbActive) {
+                scanTimeoutRef.current = setTimeout(poll, 1000);
+            } else {
+                fetchSystemStatus();
+                if (currentUser) {
+                    // Refresh library if tasks just finished
+                    // This might trigger too often if both finish at slightly different times, but it's safe
+                    fetchServerFiles(currentUser.username, allUserData, 0, true, currentPath, viewMode === 'favorites');
+                    fetchServerFolders(currentPath);
+                }
             }
         };
-
         poll();
     };
 
@@ -692,15 +667,12 @@ export default function App() {
         if (!isServerMode || !currentUser) return;
         try {
             const startRes = await fetch('/api/scan/start', { method: 'POST' });
-            if (!startRes.ok && startRes.status !== 409) {
-                alert("Failed to start scan");
-                return;
-            }
-            setJobType('scan');
-            setIsScanModalOpen(true);
+            if (!startRes.ok && startRes.status !== 409) return;
+
+            setIsUnifiedModalOpen(true);
             setScanStatus('scanning');
-            scanStatusRef.current = 'scanning'; // Init ref
-            startPolling('scan');
+            scanStatusRef.current = 'scanning';
+            startUnifiedPolling();
         } catch (e) { }
     };
 
@@ -708,29 +680,21 @@ export default function App() {
         if (!isServerMode || !currentUser) return;
         try {
             const startRes = await fetch('/api/thumb-gen/start', { method: 'POST' });
-            if (!startRes.ok) {
-                const data = await startRes.json();
-                alert("Failed to start thumbnail generation: " + (data.error || 'Unknown error'));
-                return;
-            }
-            setJobType('thumb');
-            setIsScanModalOpen(true);
-            setScanStatus('scanning');
-            scanStatusRef.current = 'scanning';
-            startPolling('thumb');
-        } catch (e) { console.error(e); }
+            if (!startRes.ok) return;
+
+            setIsUnifiedModalOpen(true);
+            setThumbStatus('scanning');
+            thumbStatusRef.current = 'scanning';
+            startUnifiedPolling();
+        } catch (e) { }
     };
 
     const clearCache = async () => {
         if (!isServerMode || !confirm('Are you sure you want to clear all cache? Thumbnails will need to be regenerated.')) return;
         try {
-            const res = await fetch('/api/cache/clear', { method: 'POST' });
-            if (res.ok) {
-                fetchSystemStatus(true);
-                alert(t('cache_cleared'));
-            } else {
-                alert('Failed to clear cache');
-            }
+            await fetch('/api/cache/clear', { method: 'POST' });
+            fetchSystemStatus(true);
+            alert(t('cache_cleared'));
         } catch (e) { alert('Network error'); }
     };
 
@@ -742,32 +706,45 @@ export default function App() {
                 const data = await res.json();
                 alert(`${t('cache_pruned')}: ${data.count} items`);
                 fetchSystemStatus(true);
-            } else {
-                alert('Failed to prune cache');
             }
         } catch (e) { alert('Network error'); }
     };
 
+    // Restore State on Mount
     useEffect(() => {
         let isMounted = true;
         if (isServerMode && currentUser) {
             fetchSystemStatus(true);
             fetchServerFavorites();
-            // Check Scan Status on Mount
-            fetch('/api/scan/status')
-                .then(async r => {
-                    if (!r.ok) return;
-                    const d = await r.json();
-                    if (isMounted && d && (d.status === 'scanning' || d.status === 'paused')) {
-                        setJobType('scan');
-                        setIsScanModalOpen(true);
-                        setScanStatus(d.status);
-                        setScanProgress({ count: d.count, currentPath: d.currentPath, currentEngine: '' });
-                        // Resume polling if active
-                        startPolling('scan');
-                    }
-                })
-                .catch(e => { });
+
+            // Check both
+            Promise.all([
+                fetch('/api/scan/status').then(r => r.json()),
+                fetch('/api/thumb-gen/status').then(r => r.json())
+            ]).then(([scanData, thumbData]) => {
+                if (!isMounted) return;
+
+                let foundActive = false;
+
+                if (scanData && (scanData.status === 'scanning' || scanData.status === 'paused')) {
+                    setScanStatus(scanData.status);
+                    setScanProgress({ count: scanData.count, currentPath: scanData.currentPath || '', currentEngine: '' });
+                    scanStatusRef.current = scanData.status;
+                    foundActive = true;
+                }
+
+                if (thumbData && (thumbData.status === 'scanning' || thumbData.status === 'paused')) {
+                    setThumbStatus(thumbData.status);
+                    setThumbProgress({ count: thumbData.count, total: thumbData.total, currentPath: thumbData.currentPath });
+                    thumbStatusRef.current = thumbData.status;
+                    foundActive = true;
+                }
+
+                if (foundActive) {
+                    setIsUnifiedModalOpen(true);
+                    startUnifiedPolling();
+                }
+            }).catch(() => { });
         }
         return () => {
             isMounted = false;
@@ -775,38 +752,42 @@ export default function App() {
         };
     }, [isServerMode, currentUser]);
 
-    const handleScanClose = async () => {
-        setIsScanModalOpen(false);
-        // Inform server to reset status to idle
+    const handleUnifiedClose = () => {
+        // If both idle, we can close
+        // If one is active, user probably just wants to hide the modal? 
+        // Or we strictly follow: Close button only appears if both IDLE (in Component).
+        // So here we just set open false.
+        setIsUnifiedModalOpen(false);
+    };
+
+    // Control Handlers
+    const controlScan = async (action: 'pause' | 'resume' | 'stop') => {
+        // Map 'stop' to 'cancel' for API if needed, or update API to accept 'stop'
+        // API accepts 'stop' or 'cancel'. 'stop' is safer for user intent (graceful).
         try {
             await fetch('/api/scan/control', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ action: 'close' })
+                body: JSON.stringify({ action: action === 'stop' ? 'cancel' : action })
             });
+            // Optimistic update
+            if (action === 'pause') setScanStatus('paused');
+            if (action === 'resume') { setScanStatus('scanning'); startUnifiedPolling(); }
+            if (action === 'stop') setScanStatus('cancelled');
         } catch (e) { }
     };
 
-    useEffect(() => {
-        if (scanStatus === 'completed' && currentUser && jobType === 'scan') {
-            fetchServerFiles(currentUser.username, allUserData, 0, true, null);
-            fetchServerFolders('', false); // Reload root folders
-        }
-    }, [scanStatus, jobType]);
-
-    const handleScanControl = async (action: 'pause' | 'resume' | 'cancel') => {
-        const apiEndpoint = jobType === 'scan' ? '/api/scan/control' : '/api/thumb-gen/control';
+    const controlThumb = async (action: 'pause' | 'resume' | 'stop') => {
         try {
-            await fetch(apiEndpoint, {
+            await fetch('/api/thumb-gen/control', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ action })
             });
-            if (action === 'pause') setScanStatus('paused');
-            if (action === 'resume') setScanStatus('scanning');
-            if (action === 'cancel') setScanStatus('cancelled');
-
-            if (action === 'resume') startPolling(jobType);
+            // Optimistic update
+            if (action === 'pause') setThumbStatus('paused');
+            if (action === 'resume') { setThumbStatus('scanning'); startUnifiedPolling(); }
+            if (action === 'stop') setThumbStatus('idle'); // Stop resets to idle usually
         } catch (e) { }
     };
 
@@ -1891,7 +1872,7 @@ export default function App() {
 
                                         <div className="grid grid-cols-2 gap-3 mt-4">
                                             <button onClick={pruneCache} className="px-4 py-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200 rounded-xl text-sm font-medium transition-colors border border-transparent hover:border-gray-300 dark:hover:border-gray-500">
-                                                {t('prune_cache')}
+                                                Clean Duplicate Cache
                                             </button>
                                             <button onClick={clearCache} className="px-4 py-2 bg-red-50 dark:bg-red-900/10 hover:bg-red-100 dark:hover:bg-red-900/20 text-red-600 dark:text-red-400 rounded-xl text-sm font-medium transition-colors border border-transparent hover:border-red-200 dark:hover:border-red-900/30">
                                                 {t('clear_all_cache')}
@@ -2294,7 +2275,7 @@ export default function App() {
                                             <label className="block text-sm font-medium mb-1">{t('password')}</label>
                                             <input
                                                 type="password"
-                                                required={userFormType !== 'rename'}
+                                                required
                                                 className="w-full px-4 py-2 rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 outline-none focus:ring-2 focus:ring-primary-500"
                                                 value={newUserForm.password}
                                                 onChange={e => setNewUserForm({ ...newUserForm, password: e.target.value })}
@@ -2375,17 +2356,22 @@ export default function App() {
                 )
             }
 
-            <ScanProgressModal
-                isOpen={isScanModalOpen}
-                status={scanStatus}
-                count={scanProgress.count}
-                currentPath={scanProgress.currentPath}
-                onPause={() => handleScanControl('pause')}
-                onResume={() => handleScanControl('resume')}
-                onCancel={() => handleScanControl('cancel')}
-                onClose={handleScanClose}
-                type={jobType}
-                title={jobType === 'scan' ? t('scanning_library') : t('generating_thumbnails')}
+            <UnifiedProgressModal
+                isOpen={isUnifiedModalOpen}
+                onClose={handleUnifiedClose}
+                scanStatus={scanStatus}
+                scanCount={scanProgress.count}
+                scanCurrentPath={scanProgress.currentPath}
+                onScanPause={() => controlScan('pause')}
+                onScanResume={() => controlScan('resume')}
+                onScanStop={() => controlScan('stop')}
+                thumbStatus={thumbStatus}
+                thumbCount={thumbProgress.count}
+                thumbTotal={thumbProgress.total}
+                thumbCurrentPath={thumbProgress.currentPath}
+                onThumbPause={() => controlThumb('pause')}
+                onThumbResume={() => controlThumb('resume')}
+                onThumbStop={() => controlThumb('stop')}
             />
 
         </div >
