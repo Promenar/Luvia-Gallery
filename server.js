@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const chokidar = require('chokidar');
 const database = require('./database');
 
@@ -40,6 +41,9 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, 'dist')));
 
 // Watcher State
+let monitorMode = 'manual'; // manual, real-time, periodic
+let scanInterval = 60; // Minutes
+let periodicIntervalId = null;
 let isWatcherActive = false;
 let watcher = null;
 let watcherLogs = [];
@@ -131,6 +135,38 @@ async function processFileForDB(filePath) {
         console.error(`Error processing file ${filePath}:`, error);
         return null;
     }
+}
+
+// --- Monitoring Helpers ---
+function stopAllMonitoring() {
+    stopWatcher();
+    stopPeriodicScanner();
+    monitorMode = 'manual';
+}
+
+function stopPeriodicScanner() {
+    if (periodicIntervalId) {
+        clearInterval(periodicIntervalId);
+        periodicIntervalId = null;
+        console.log('Periodic scanner stopped');
+    }
+}
+
+function startPeriodicScanner(paths, intervalMinutes) {
+    stopPeriodicScanner();
+    const ms = (intervalMinutes || 60) * 60 * 1000;
+    console.log(`Periodic scanner scheduled every ${intervalMinutes} minutes`);
+
+    periodicIntervalId = setInterval(() => {
+        if (scanState.status === 'idle') {
+            console.log('[Periodic] Starting scheduled scan...');
+            processScan();
+        } else {
+            console.log('[Periodic] Skipping scan, system busy.');
+        }
+    }, ms);
+
+    monitorMode = 'periodic';
 }
 
 function startWatcher(paths) {
@@ -552,9 +588,14 @@ app.get('/api/library/folders', (req, res) => {
 
 // Autocomplete API (matches PathAutocomplete.tsx)
 app.get('/api/fs/list', (req, res) => {
-    let queryPath = req.query.path || '/'; // Changed const to let
-    // If client passes "root" or "/", map to MEDIA_ROOT
-    if (queryPath === 'root' || queryPath === '/') queryPath = MEDIA_ROOT;
+    let queryPath = req.query.path || '/';
+
+    // Allow browsing from system root if requested explicitly
+    if (queryPath === 'root') queryPath = '/';
+
+    // If empty or null, default to MEDIA_ROOT for convenience, unless it's '/'
+    if (!queryPath) queryPath = MEDIA_ROOT;
+
     const dirs = getSubfolders(queryPath).map(p => path.basename(p));
     res.json({ dirs });
 });
@@ -863,8 +904,8 @@ app.get('/api/scan/results', (req, res) => {
     // Transform to API format
     const transformedFiles = files.map(f => ({
         id: f.id,
-        url: `/api/file/${f.id}`,
-        thumbnailUrl: `/api/thumb/${f.id}`,
+        url: `/api/file/${encodeURIComponent(f.id)}`,
+        thumbnailUrl: `/api/thumb/${encodeURIComponent(f.id)}`,
         name: f.name,
         path: f.path,
         folderPath: f.folderPath,
@@ -968,8 +1009,10 @@ detectHardwareAcceleration();
 
 async function generateThumbnail(file) {
     // Switch to WebP
-    const thumbName = `${Buffer.from(file.path).toString('base64')}.webp`;
-    const thumbPath = path.join(CACHE_DIR, thumbName);
+    // USE MD5 hash of the ID for the filename to avoid length limits and directory separator issues
+    const fileId = Buffer.from(file.path).toString('base64');
+    const thumbFilename = crypto.createHash('md5').update(fileId).digest('hex') + '.webp';
+    const thumbPath = path.join(CACHE_DIR, thumbFilename);
 
     if (fs.existsSync(thumbPath)) return true;
 
@@ -1179,7 +1222,9 @@ app.post('/api/thumb-gen/control', (req, res) => {
 // Serve Thumbs (WebP)
 // Serve Thumbs (WebP)
 app.get('/api/thumb/:id', async (req, res) => {
-    const thumbPath = path.join(CACHE_DIR, `${req.params.id}.webp`);
+    // Use MD5 hash of the ID to look up the file
+    const thumbFilename = crypto.createHash('md5').update(req.params.id).digest('hex') + '.webp';
+    const thumbPath = path.join(CACHE_DIR, thumbFilename);
 
     if (fs.existsSync(thumbPath)) {
         res.setHeader('Content-Type', 'image/webp');
@@ -1279,15 +1324,32 @@ app.get('/api/system/status', (req, res) => {
     let cacheSize = 0;
     try {
         if (fs.existsSync(CACHE_DIR)) {
-            const files = fs.readdirSync(CACHE_DIR);
-            cacheCount = files.length;
-            // Approximate size (stats on every file is slow, so just do mock or sample?)
-            // Or just do real stats if count < 1000
-            if (cacheCount < 5000) {
-                cacheSize = files.reduce((acc, file) => {
-                    try { return acc + fs.statSync(path.join(CACHE_DIR, file)).size; } catch { return acc; }
-                }, 0);
-            }
+            // Recursive count function
+            const countRecursive = (dir) => {
+                let count = 0;
+                let size = 0;
+                if (!fs.existsSync(dir)) return { count: 0, size: 0 };
+
+                try {
+                    const items = fs.readdirSync(dir, { withFileTypes: true });
+                    for (const item of items) {
+                        const fullPath = path.join(dir, item.name);
+                        if (item.isDirectory()) {
+                            const sub = countRecursive(fullPath);
+                            count += sub.count;
+                            size += sub.size;
+                        } else {
+                            count++;
+                            try { size += fs.statSync(fullPath).size; } catch (e) { }
+                        }
+                    }
+                } catch (e) { }
+                return { count, size };
+            };
+
+            const stats = countRecursive(CACHE_DIR);
+            cacheCount = stats.count;
+            cacheSize = stats.size;
         }
     } catch (e) { }
 
@@ -1297,7 +1359,11 @@ app.get('/api/system/status', (req, res) => {
         cpu: 0,
         memory: 0,
         storage: cacheSize,
+        memory: 0,
+        storage: cacheSize,
         watcherActive: isWatcherActive,
+        mode: monitorMode,
+        scanInterval: scanInterval,
         ffmpeg: true,
         sharp: false,
         imageProcessor: 'ffmpeg',
@@ -1315,7 +1381,61 @@ app.get('/api/system/status', (req, res) => {
     });
 });
 
-// Watcher control endpoint
+// Monitor Control Endpoint
+app.post('/api/system/monitor', (req, res) => {
+    const { mode, interval, enabled } = req.body;
+
+    try {
+        let currentConfig = {};
+        if (fs.existsSync(CONFIG_FILE)) {
+            try {
+                const content = fs.readFileSync(CONFIG_FILE, 'utf8');
+                if (content.trim()) currentConfig = JSON.parse(content);
+            } catch (e) { }
+        }
+
+        // Stop everything first
+        stopAllMonitoring();
+
+        let newMode = 'manual';
+        let paths = currentConfig.libraryPaths || [MEDIA_ROOT];
+
+        if (mode === 'periodic') {
+            newMode = 'periodic';
+            const newInterval = interval || scanInterval || 60;
+            scanInterval = newInterval;
+            currentConfig.scanInterval = newInterval;
+            startPeriodicScanner(paths, newInterval);
+        } else if (mode === 'realtime') {
+            newMode = 'realtime';
+            startWatcher(paths);
+        } else if (mode === 'manual') {
+            newMode = 'manual';
+        } else if (enabled === true) {
+            // Legacy toggle support
+            newMode = 'realtime';
+            startWatcher(paths);
+        }
+
+        // Update Config
+        currentConfig.monitorMode = newMode;
+        currentConfig.watcherEnabled = (newMode === 'realtime'); // Back-compat
+
+        fs.writeFileSync(CONFIG_FILE, JSON.stringify(currentConfig, null, 2));
+
+        res.json({
+            success: true,
+            active: isWatcherActive,
+            mode: monitorMode,
+            scanInterval: scanInterval
+        });
+    } catch (e) {
+        console.error("Monitor control failed:", e);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// Watcher control endpoint (Legacy)
 app.get('/api/watcher/toggle', (req, res) => {
     try {
         let currentConfig = {};
@@ -1398,11 +1518,22 @@ app.post('/api/favorites/toggle', (req, res) => {
 app.post('/api/cache/clear', (req, res) => {
     try {
         if (fs.existsSync(CACHE_DIR)) {
-            const files = fs.readdirSync(CACHE_DIR);
-            for (const file of files) {
-                fs.unlinkSync(path.join(CACHE_DIR, file));
+            // Recursive delete of valid cache directory
+            fs.rmSync(CACHE_DIR, { recursive: true, force: true });
+
+            // Re-create the empty directory
+            if (!fs.existsSync(CACHE_DIR)) {
+                fs.mkdirSync(CACHE_DIR, { recursive: true });
             }
         }
+
+        // Also clear database references to thumbnails
+        try {
+            database.run('UPDATE media_files SET thumbnail_path = NULL, blurhash = NULL');
+        } catch (dbErr) {
+            console.error("Failed to clear thumbnails from DB", dbErr);
+        }
+
         res.json({ success: true });
     } catch (e) {
         console.error("Clear cache failed", e);
@@ -1458,16 +1589,29 @@ app.listen(port, () => {
             const content = fs.readFileSync(CONFIG_FILE, 'utf8');
             if (content.trim()) {
                 const config = JSON.parse(content);
-                if (config.watcherEnabled) {
-                    console.log('Watcher enabled in config, starting...');
-                    const libraryPaths = (config.libraryPaths && config.libraryPaths.length > 0)
-                        ? config.libraryPaths
-                        : [MEDIA_ROOT];
+
+                // Restore settings
+                if (config.scanInterval) scanInterval = config.scanInterval;
+
+                const libraryPaths = (config.libraryPaths && config.libraryPaths.length > 0)
+                    ? config.libraryPaths
+                    : [MEDIA_ROOT];
+
+                // Determine mode
+                if (config.monitorMode === 'periodic') {
+                    console.log(`Starting periodic scanner (every ${scanInterval}m)...`);
+                    monitorMode = 'periodic';
+                    startPeriodicScanner(libraryPaths, scanInterval);
+                } else if (config.monitorMode === 'realtime' || config.watcherEnabled) {
+                    console.log('Starting real-time watcher...');
+                    monitorMode = 'realtime';
                     startWatcher(libraryPaths);
+                } else {
+                    monitorMode = 'manual';
                 }
             }
         }
     } catch (e) {
-        console.error("Failed to auto-start watcher:", e);
+        console.error("Failed to auto-start monitoring:", e);
     }
 });

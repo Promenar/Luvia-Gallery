@@ -10,7 +10,7 @@ import { ImageViewer } from './components/ImageViewer';
 import { UnifiedProgressModal } from './components/UnifiedProgressModal';
 import { ScanStatus } from './components/ScanProgressModal'; // Keeping Type for now if needed, or define in unified
 import { VirtualGallery } from './components/VirtualGallery';
-import { PathAutocomplete } from './components/PathAutocomplete';
+import { DirectoryPicker } from './components/DirectoryPicker';
 import { Home } from './components/Home';
 import { useLanguage } from './contexts/LanguageContext';
 import { AudioPlayer } from './components/AudioPlayer';
@@ -27,6 +27,8 @@ const AUTH_USER_KEY = 'lumina_auth_user';
 
 interface ExtendedSystemStatus extends SystemStatus {
     watcherActive?: boolean;
+    mode?: 'realtime' | 'periodic' | 'manual';
+    scanInterval?: number;
     dbStatus?: string;
     mediaStats?: {
         totalFiles: number;
@@ -97,6 +99,7 @@ export default function App() {
     const [appTitle, setAppTitle] = useState('Lumina Gallery');
     const [homeSubtitle, setHomeSubtitle] = useState('Your memories, beautifully organized. Rediscover your collection.');
     const [homeConfig, setHomeConfig] = useState<HomeScreenConfig>({ mode: 'random' });
+    const [showDirPicker, setShowDirPicker] = useState(false);
 
     // Derived state for current user
     const files = useMemo(() =>
@@ -573,15 +576,24 @@ export default function App() {
         }
     };
 
-    const toggleWatcher = async () => {
+    const handleMonitorUpdate = async (mode: 'realtime' | 'periodic' | 'manual', interval?: number) => {
         if (!isServerMode) return;
         try {
-            const res = await fetch('/api/watcher/toggle');
+            const res = await fetch('/api/system/monitor', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ mode, interval, enabled: mode !== 'manual' }) // enabled for legacy back-compat
+            });
             if (res.ok) {
                 const data = await res.json();
-                setSystemStatus(prev => prev ? { ...prev, watcherActive: data.active } : prev);
-                // Fetch logs after toggling
-                if (data.active) {
+                setSystemStatus(prev => prev ? {
+                    ...prev,
+                    watcherActive: data.active,
+                    mode: data.mode || mode,
+                    scanInterval: interval
+                } : prev);
+
+                if (mode !== 'manual') {
                     fetchWatcherLogs();
                 }
             }
@@ -1550,11 +1562,22 @@ export default function App() {
                                             <h5 className="font-bold text-lg mb-2">{t('library_scan_paths')}</h5>
                                             <p className="text-sm text-gray-500 mb-4">{t('media_served')}</p>
                                             <form onSubmit={handleAddLibraryPath} className="flex gap-2">
-                                                <PathAutocomplete
-                                                    value={newPathInput}
-                                                    onChange={setNewPathInput}
-                                                    onAdd={() => { }}
-                                                />
+                                                <div className="flex-1 relative">
+                                                    <input
+                                                        value={newPathInput}
+                                                        onChange={(e) => setNewPathInput(e.target.value)}
+                                                        placeholder="/media"
+                                                        className="w-full px-4 py-2 pr-12 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-500 outline-none"
+                                                    />
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setShowDirPicker(true)}
+                                                        className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-gray-400 hover:text-primary-500 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-md transition-colors"
+                                                        title={t('browse')}
+                                                    >
+                                                        <Icons.FolderOpen size={16} />
+                                                    </button>
+                                                </div>
                                                 <button type="submit" className="px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white font-medium rounded-lg transition-colors flex items-center gap-2">
                                                     <Icons.Plus size={18} /> {t('add_path')}
                                                 </button>
@@ -1579,24 +1602,61 @@ export default function App() {
                                             ))}
                                         </div>
 
-                                        {/* Integrated Real-time Monitoring Toggle */}
+                                        {/* Integrated Monitoring Strategy Selector */}
                                         {systemStatus && (
                                             <div className="p-4 bg-blue-50/50 dark:bg-blue-900/10 border-t border-gray-100 dark:border-gray-700">
-                                                <div className="flex items-center justify-between mb-3">
-                                                    <div className="flex items-center gap-3">
-                                                        <div className={`p-2 rounded-lg ${systemStatus.watcherActive ? 'bg-green-100 dark:bg-green-900/30 text-green-600' : 'bg-gray-200 dark:bg-gray-700 text-gray-500'}`}>
-                                                            <Icons.Activity size={20} />
-                                                        </div>
-                                                        <div>
-                                                            <div className="font-medium text-sm text-gray-900 dark:text-gray-100">{t('realtime_monitoring')}</div>
-                                                            <div className="text-xs text-gray-500">Automatically scan changes in above paths</div>
-                                                        </div>
+                                                <div className="mb-3">
+                                                    <div className="flex items-center gap-2 mb-2">
+                                                        <Icons.Activity size={18} className="text-gray-500" />
+                                                        <span className="text-sm font-bold text-gray-700 dark:text-gray-300">{t('monitoring_strategy')}</span>
                                                     </div>
-                                                    <div
-                                                        onClick={toggleWatcher}
-                                                        className={`w-12 h-6 rounded-full cursor-pointer relative transition-colors duration-300 ${systemStatus.watcherActive ? 'bg-green-500' : 'bg-gray-300 dark:bg-gray-600'}`}
-                                                    >
-                                                        <div className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow-sm transition-all duration-300 ${systemStatus.watcherActive ? 'left-7' : 'left-1'}`} />
+
+                                                    <div className="flex flex-col gap-3">
+                                                        {/* Mode Selector */}
+                                                        <div className="grid grid-cols-3 gap-2">
+                                                            {(['manual', 'periodic', 'realtime'] as const).map((m) => (
+                                                                <button
+                                                                    key={m}
+                                                                    onClick={() => handleMonitorUpdate(m, systemStatus.scanInterval)}
+                                                                    className={`px-3 py-2 rounded-lg text-xs font-medium border capitalize transition-all ${(systemStatus.mode || (systemStatus.watcherActive ? 'realtime' : 'manual')) === m
+                                                                        ? 'bg-blue-100 dark:bg-blue-900/40 border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-300 shadow-sm'
+                                                                        : 'bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700'
+                                                                        }`}
+                                                                >
+                                                                    {t((m + '_mode') as any)}
+                                                                </button>
+                                                            ))}
+                                                        </div>
+
+                                                        {/* Description & Interval Settings */}
+                                                        <div className="text-xs text-gray-500 dark:text-gray-400 bg-white dark:bg-gray-800/50 p-3 rounded-lg border border-gray-100 dark:border-gray-700/50">
+                                                            {(systemStatus.mode || (systemStatus.watcherActive ? 'realtime' : 'manual')) === 'realtime' && (
+                                                                <p>{t('monitoring_desc_realtime')}</p>
+                                                            )}
+                                                            {(systemStatus.mode || (systemStatus.watcherActive ? 'realtime' : 'manual')) === 'manual' && (
+                                                                <p>{t('monitoring_desc_manual')}</p>
+                                                            )}
+                                                            {(systemStatus.mode || (systemStatus.watcherActive ? 'realtime' : 'manual')) === 'periodic' && (
+                                                                <div className="space-y-2">
+                                                                    <p>{t('monitoring_desc_periodic')}</p>
+                                                                    <div className="flex items-center gap-2 mt-2">
+                                                                        <span>{t('scan_every')}:</span>
+                                                                        <select
+                                                                            value={systemStatus.scanInterval || 60}
+                                                                            onChange={(e) => handleMonitorUpdate('periodic', parseInt(e.target.value))}
+                                                                            className="bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded px-2 py-1 text-xs"
+                                                                        >
+                                                                            <option value="15">15 {t('minutes')}</option>
+                                                                            <option value="30">30 {t('minutes')}</option>
+                                                                            <option value="60">1 {t('hour')}</option>
+                                                                            <option value="360">6 {t('hours')}</option>
+                                                                            <option value="720">12 {t('hours')}</option>
+                                                                            <option value="1440">24 {t('hours')}</option>
+                                                                        </select>
+                                                                    </div>
+                                                                </div>
+                                                            )}
+                                                        </div>
                                                     </div>
                                                 </div>
 
@@ -1784,7 +1844,7 @@ export default function App() {
                                                     <input
                                                         type="range"
                                                         min="1"
-                                                        max="36"
+                                                        max="100"
                                                         step="1"
                                                         value={threadCount}
                                                         onChange={(e) => {
@@ -1872,7 +1932,7 @@ export default function App() {
 
                                         <div className="grid grid-cols-2 gap-3 mt-4">
                                             <button onClick={pruneCache} className="px-4 py-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200 rounded-xl text-sm font-medium transition-colors border border-transparent hover:border-gray-300 dark:hover:border-gray-500">
-                                                Clean Duplicate Cache
+                                                {t('clean_duplicate_cache')}
                                             </button>
                                             <button onClick={clearCache} className="px-4 py-2 bg-red-50 dark:bg-red-900/10 hover:bg-red-100 dark:hover:bg-red-900/20 text-red-600 dark:text-red-400 rounded-xl text-sm font-medium transition-colors border border-transparent hover:border-red-200 dark:hover:border-red-900/30">
                                                 {t('clear_all_cache')}
@@ -2010,6 +2070,8 @@ export default function App() {
                                     <button className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg text-gray-600 dark:text-gray-300">
                                         <Icons.Sort size={20} />
                                     </button>
+                                    {/* Invisible bridge to prevent menu closing */}
+                                    <div className="absolute left-0 right-0 top-full h-2 bg-transparent" />
                                     <div className="absolute right-0 top-full mt-2 w-48 bg-white dark:bg-gray-800 rounded-xl shadow-xl border border-gray-100 dark:border-gray-700 p-1 hidden group-hover:block z-50">
                                         <button onClick={() => setSortOption('dateDesc')} className={`w-full text-left px-3 py-2 rounded-lg text-sm ${sortOption === 'dateDesc' ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600' : 'hover:bg-gray-100 dark:hover:bg-gray-700'}`}>{t('newest_first')}</button>
                                         <button onClick={() => setSortOption('dateAsc')} className={`w-full text-left px-3 py-2 rounded-lg text-sm ${sortOption === 'dateAsc' ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600' : 'hover:bg-gray-100 dark:hover:bg-gray-700'}`}>{t('oldest_first')}</button>
@@ -2374,6 +2436,14 @@ export default function App() {
                 onThumbStop={() => controlThumb('stop')}
             />
 
+            {showDirPicker && (
+                <DirectoryPicker
+                    isOpen={showDirPicker}
+                    onClose={() => setShowDirPicker(false)}
+                    onSelect={(path) => setNewPathInput(path)}
+                    initialPath={newPathInput}
+                />
+            )}
         </div >
     );
 }

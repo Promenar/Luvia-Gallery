@@ -74,6 +74,14 @@ const translations = {
     resume: 'Resume',
     stop: 'Stop',
     close: 'Close',
+    background_tasks: 'Background Tasks',
+    library_scan: 'Library Scan',
+    thumbnails: 'Thumbnails',
+    waiting_finished: 'Waiting / Finished',
+    tasks_completed: 'Tasks Completed',
+    all_jobs_finished: 'All background jobs finished',
+    files_processed: 'files processed',
+    percent_complete: '% complete',
 
     // Settings - Dashboard
     system_monitoring: 'System Monitoring',
@@ -150,8 +158,31 @@ const translations = {
     clear_all_cache: 'Clear All Cache',
     prune_cache: 'Prune Cache',
     prune_legacy_cache: 'Prune Legacy Cache (JPG)',
+    clean_duplicate_cache: 'Clean Duplicate Cache',
     cache_cleared: 'Cache Cleared',
     cache_pruned: 'Cache Pruned',
+
+    // Settings - Monitoring
+    monitoring_strategy: 'Monitoring Strategy',
+    manual_mode: 'Manual',
+    periodic_mode: 'Periodic',
+    realtime_mode: 'Real-time',
+    scan_every: 'Scan every',
+    minutes: 'Minutes',
+    hour: 'Hour',
+    hours: 'Hours',
+    monitoring_desc_realtime: 'Real-time monitoring uses system watchers to instantly detect changes. Best for small libraries. May hit system limits on large libraries.',
+    monitoring_desc_manual: 'Automatic scanning is disabled. You must manually start scans to update the library.',
+    monitoring_desc_periodic: 'Periodic mode runs a quick check for changes at a set interval. Recommended for large libraries.',
+
+
+    // Directory Picker
+    select_folder: 'Select Folder',
+    go_up: 'Up',
+    loading_folders: 'Loading folders',
+    no_subfolders: 'No subfolders found',
+    select_this_folder: 'Select This Folder',
+    browse: 'Browse',
 
     // Settings - Users
     users: 'Users',
@@ -268,6 +299,14 @@ const translations = {
     resume: '继续',
     stop: '停止',
     close: '关闭',
+    background_tasks: '后台任务',
+    library_scan: '图库扫描',
+    thumbnails: '缩略图',
+    waiting_finished: '等待 / 完成',
+    tasks_completed: '任务已完成',
+    all_jobs_finished: '所有后台任务已结束',
+    files_processed: '个文件已处理',
+    percent_complete: '% 完成',
 
     // Settings - Dashboard
     system_monitoring: '系统监控',
@@ -344,8 +383,30 @@ const translations = {
     clear_all_cache: '清除所有缓存',
     prune_cache: '清理无效缓存',
     prune_legacy_cache: '清除旧缓存 (JPG)',
+    clean_duplicate_cache: '清理重复缓存',
     cache_cleared: '缓存已清除',
     cache_pruned: '缓存已清理',
+
+    // Settings - Monitoring
+    monitoring_strategy: '监控策略',
+    manual_mode: '手动',
+    periodic_mode: '周期性',
+    realtime_mode: '实时',
+    scan_every: '扫描间隔',
+    minutes: '分钟',
+    hour: '小时',
+    hours: '小时',
+    monitoring_desc_realtime: '实时监控使用系统文件监视器即时检测更改。最适合小型图库。在大型图库上可能会达到系统限制。',
+    monitoring_desc_manual: '自动扫描已禁用。您必须手动开始扫描以更新图库。',
+    monitoring_desc_periodic: '周期模式会按设定的间隔快速检查更改。推荐用于大型图库。',
+
+    // Directory Picker
+    select_folder: '选择文件夹',
+    go_up: '返回上级',
+    loading_folders: '正在加载文件夹',
+    no_subfolders: '未发现子文件夹',
+    select_this_folder: '选择此文件夹',
+    browse: '浏览',
 
     // Settings - Users
     users: '用户管理',
