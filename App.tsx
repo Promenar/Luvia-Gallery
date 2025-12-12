@@ -339,6 +339,40 @@ export default function App() {
                                 fetchServerFolders('', false); // Fetch root folders
                             }
                         }, 50);
+
+                        // Restore background task state
+                        setTimeout(async () => {
+                            try {
+                                // Check Scan Status
+                                const scanRes = await fetch('/api/scan/status');
+                                if (scanRes.ok) {
+                                    const scanData = await scanRes.json();
+                                    if (scanData.status === 'scanning' || scanData.status === 'processing') {
+                                        console.log('[Restore] Found active scan task');
+                                        setJobType('scan');
+                                        setIsScanModalOpen(true);
+                                        setScanStatus(scanData.status);
+                                        startPolling('scan');
+                                        return;
+                                    }
+                                }
+
+                                // Check Thumbnail Status (only if no scan found)
+                                const thumbRes = await fetch('/api/thumb-gen/status');
+                                if (thumbRes.ok) {
+                                    const thumbData = await thumbRes.json();
+                                    if (thumbData.status === 'processing' || thumbData.status === 'scanning') {
+                                        console.log('[Restore] Found active thumbnail task');
+                                        setJobType('thumb');
+                                        setIsScanModalOpen(true);
+                                        setScanStatus('processing');
+                                        startPolling('thumb');
+                                    }
+                                }
+                            } catch (e) {
+                                console.error('[Restore] Failed to check background tasks', e);
+                            }
+                        }, 100);
                     }
                     return;
                 }
@@ -1758,18 +1792,18 @@ export default function App() {
                                     <div className="bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded-2xl p-5 shadow-sm flex flex-col justify-between">
                                         <div>
                                             <h5 className="flex items-center gap-2 font-bold text-gray-900 dark:text-white mb-4">
-                                                <Icons.Cpu size={18} className="text-orange-500" /> Performance Settings
+                                                <Icons.Cpu size={18} className="text-orange-500" /> {t('performance_settings')}
                                             </h5>
                                             <div className="space-y-4">
                                                 <div>
                                                     <div className="flex justify-between mb-2">
-                                                        <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Thumbnail Threads</label>
+                                                        <label className="text-sm font-medium text-gray-700 dark:text-gray-300">{t('thumbnail_threads')}</label>
                                                         <span className="text-xs font-bold bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400 px-2 py-0.5 rounded">{threadCount}</span>
                                                     </div>
                                                     <input
                                                         type="range"
                                                         min="1"
-                                                        max="8"
+                                                        max="36"
                                                         step="1"
                                                         value={threadCount}
                                                         onChange={(e) => {
@@ -1779,11 +1813,13 @@ export default function App() {
                                                         }}
                                                         className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700 accent-orange-500"
                                                     />
-                                                    <p className="text-xs text-gray-400 mt-1">Controls how many thumbnails are generated in parallel.</p>
+                                                    <p className="text-xs text-gray-400 mt-1">{t('thumbnail_threads_desc')}</p>
                                                 </div>
                                             </div>
                                         </div>
                                     </div>
+                                </div>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
 
                                     {/* Media Statistics */}
                                     {systemStatus.mediaStats && (
@@ -1824,43 +1860,43 @@ export default function App() {
                                         </div>
                                     )}
 
+                                    {/* Cache Control */}
+                                    <div className="bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded-2xl p-5 shadow-sm flex flex-col justify-between">
+                                        <div>
+                                            <div className="flex items-center justify-between mb-4">
+                                                <h5 className="flex items-center gap-2 font-bold text-gray-900 dark:text-white">
+                                                    <Icons.Database size={18} className="text-blue-500" /> {t('cache_management')}
+                                                </h5>
+                                                <div className="bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 px-3 py-1 rounded-full text-xs font-bold">
+                                                    {systemStatus.cacheCount.toLocaleString()} {t('cached')}
+                                                </div>
+                                            </div>
 
-                                </div>
-
-                                {/* Cache Control */}
-                                <div className="bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded-2xl p-5 shadow-sm">
-                                    <div className="flex items-center justify-between mb-4">
-                                        <h5 className="flex items-center gap-2 font-bold text-gray-900 dark:text-white">
-                                            <Icons.Database size={18} className="text-blue-500" /> {t('cache_management')}
-                                        </h5>
-                                        <div className="bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 px-3 py-1 rounded-full text-xs font-bold">
-                                            {systemStatus.cacheCount.toLocaleString()} {t('cached')}
+                                            {/* Coverage Bar */}
+                                            <div className="mb-6">
+                                                <div className="flex justify-between text-xs mb-1.5">
+                                                    <span className="text-gray-500 dark:text-gray-400">{t('cache_coverage')}</span>
+                                                    <span className="font-bold text-gray-700 dark:text-gray-300">
+                                                        {systemStatus.totalItems > 0 ? Math.round((systemStatus.cacheCount / systemStatus.totalItems) * 100) : 0}%
+                                                    </span>
+                                                </div>
+                                                <div className="w-full h-2 bg-gray-100 dark:bg-gray-700 rounded-full overflow-hidden">
+                                                    <div
+                                                        className="h-full bg-green-500 rounded-full transition-all duration-1000"
+                                                        style={{ width: `${systemStatus.totalItems > 0 ? Math.min(100, (systemStatus.cacheCount / systemStatus.totalItems) * 100) : 0}%` }}
+                                                    />
+                                                </div>
+                                            </div>
                                         </div>
-                                    </div>
 
-                                    {/* Coverage Bar */}
-                                    <div className="mb-6">
-                                        <div className="flex justify-between text-xs mb-1.5">
-                                            <span className="text-gray-500 dark:text-gray-400">{t('cache_coverage')}</span>
-                                            <span className="font-bold text-gray-700 dark:text-gray-300">
-                                                {systemStatus.totalItems > 0 ? Math.round((systemStatus.cacheCount / systemStatus.totalItems) * 100) : 0}%
-                                            </span>
+                                        <div className="grid grid-cols-2 gap-3 mt-4">
+                                            <button onClick={pruneCache} className="px-4 py-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200 rounded-xl text-sm font-medium transition-colors border border-transparent hover:border-gray-300 dark:hover:border-gray-500">
+                                                {t('prune_cache')}
+                                            </button>
+                                            <button onClick={clearCache} className="px-4 py-2 bg-red-50 dark:bg-red-900/10 hover:bg-red-100 dark:hover:bg-red-900/20 text-red-600 dark:text-red-400 rounded-xl text-sm font-medium transition-colors border border-transparent hover:border-red-200 dark:hover:border-red-900/30">
+                                                {t('clear_all_cache')}
+                                            </button>
                                         </div>
-                                        <div className="w-full h-2 bg-gray-100 dark:bg-gray-700 rounded-full overflow-hidden">
-                                            <div
-                                                className="h-full bg-green-500 rounded-full transition-all duration-1000"
-                                                style={{ width: `${systemStatus.totalItems > 0 ? Math.min(100, (systemStatus.cacheCount / systemStatus.totalItems) * 100) : 0}%` }}
-                                            />
-                                        </div>
-                                    </div>
-
-                                    <div className="grid grid-cols-2 gap-3">
-                                        <button onClick={pruneCache} className="px-4 py-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200 rounded-xl text-sm font-medium transition-colors border border-transparent hover:border-gray-300 dark:hover:border-gray-500">
-                                            {t('prune_cache')}
-                                        </button>
-                                        <button onClick={clearCache} className="px-4 py-2 bg-red-50 dark:bg-red-900/10 hover:bg-red-100 dark:hover:bg-red-900/20 text-red-600 dark:text-red-400 rounded-xl text-sm font-medium transition-colors border border-transparent hover:border-red-200 dark:hover:border-red-900/30">
-                                            {t('clear_all_cache')}
-                                        </button>
                                     </div>
                                 </div>
                             </div>
@@ -2344,30 +2380,9 @@ export default function App() {
                 status={scanStatus}
                 count={scanProgress.count}
                 currentPath={scanProgress.currentPath}
-                onPause={async () => {
-                    setScanStatus('paused');
-                    await fetch('/api/scan/control', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ action: 'pause' })
-                    });
-                }}
-                onResume={async () => {
-                    setScanStatus('scanning');
-                    await fetch('/api/scan/control', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ action: 'resume' })
-                    });
-                    startPolling(jobType);
-                }}
-                onCancel={async () => {
-                    await fetch('/api/scan/control', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ action: 'stop' })
-                    });
-                }}
+                onPause={() => handleScanControl('pause')}
+                onResume={() => handleScanControl('resume')}
+                onCancel={() => handleScanControl('cancel')}
                 onClose={handleScanClose}
                 type={jobType}
                 title={jobType === 'scan' ? t('scanning_library') : t('generating_thumbnails')}

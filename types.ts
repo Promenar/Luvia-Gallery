@@ -18,6 +18,7 @@ export interface MediaItem {
   isFavorite?: boolean; // New: Favorite status
   mediaCount?: number;
   coverMedia?: MediaItem;
+  children?: Record<string, FolderNode>; // For folder items
 }
 
 export interface ExifData {

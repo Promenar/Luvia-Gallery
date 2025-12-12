@@ -192,22 +192,36 @@ export const VirtualGallery: React.FC<VirtualGalleryProps> = ({
 }) => {
 
     // -- MASONRY LAYOUT --
+    // -- MASONRY LAYOUT --
+    const [columnCount, setColumnCount] = useState(3);
+
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+
+        const updateColumns = () => {
+            const width = window.innerWidth;
+            let cols = 2;
+            if (width >= 640) cols = 3;
+            if (width >= 1024) cols = 4;
+            if (width >= 1280) cols = 5;
+            setColumnCount(cols);
+        };
+
+        updateColumns();
+        window.addEventListener('resize', updateColumns);
+        return () => window.removeEventListener('resize', updateColumns);
+    }, []);
+
     const columns = useMemo(() => {
         if (layout !== 'masonry') return [];
 
-        const width = typeof window !== 'undefined' ? window.innerWidth : 1200;
-        let numCols = 2;
-        if (width >= 640) numCols = 3;
-        if (width >= 1024) numCols = 4;
-        if (width >= 1280) numCols = 5;
-
-        const cols: MediaItem[][] = Array.from({ length: numCols }, () => []);
+        const cols: MediaItem[][] = Array.from({ length: columnCount }, () => []);
         items.forEach((item, i) => {
-            cols[i % numCols].push(item);
+            cols[i % columnCount].push(item);
         });
 
         return cols;
-    }, [items, layout]);
+    }, [items, layout, columnCount]);
 
     if (layout === 'masonry') {
         return (
@@ -217,21 +231,25 @@ export const VirtualGallery: React.FC<VirtualGalleryProps> = ({
                         <div key={colIndex} className="flex-1 flex flex-col gap-4">
                             {colItems.filter(item => item && item.id).map((item) => (
                                 item.mediaType === 'folder' ? (
-                                    <FolderCard
-                                        key={item.path}
-                                        folder={{
-                                            name: item.name,
-                                            path: item.path,
-                                            children: item.children || {},
-                                            mediaCount: item.mediaCount || 0,
-                                            coverMedia: item.coverMedia
-                                        }}
-                                        onClick={() => onItemClick(item)}
-                                        isFavorite={item.isFavorite}
-                                        onToggleFavorite={onToggleFavorite ? (path) => onToggleFavorite(path, 'folder') : undefined}
-                                        onRename={onRename}
-                                        onDelete={onDelete}
-                                    />
+                                    <div key={item.path} className="relative w-full pb-[100%]">
+                                        <div className="absolute inset-0">
+                                            <FolderCard
+                                                folder={{
+                                                    name: item.name,
+                                                    path: item.path,
+                                                    children: item.children || {},
+                                                    mediaCount: item.mediaCount || 0,
+                                                    coverMedia: item.coverMedia
+                                                }}
+                                                onClick={() => onItemClick(item)}
+                                                isFavorite={item.isFavorite}
+                                                onToggleFavorite={onToggleFavorite ? (path) => onToggleFavorite(path, 'folder') : undefined}
+                                                onRename={onRename}
+                                                onDelete={onDelete}
+                                                layout="masonry"
+                                            />
+                                        </div>
+                                    </div>
                                 ) : (
                                     <MediaCard
                                         key={item.id}

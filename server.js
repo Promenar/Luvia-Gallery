@@ -605,7 +605,13 @@ async function processScan() {
         scanState.status = 'scanning';
     };
 
-    let totalFiles = [];
+    // Streaming batch processing - avoid memory accumulation
+    let batchBuffer = [];
+    const BATCH_SIZE = 1000;
+    const SAVE_INTERVAL = 10000; // Save database every 10k files for safety
+    let totalProcessed = 0;
+    let allScannedPaths = new Set(); // Track scanned paths for cleanup
+
     const queue = [...libraryPaths];
 
     while (queue.length > 0) {
@@ -636,6 +642,9 @@ async function processScan() {
                         const allSupportedExts = [...imageExts, ...videoExts, ...audioExts];
 
                         if (allSupportedExts.includes(ext)) {
+                            // OPTIMIZATION: Single stat call instead of two
+                            const stats = fs.statSync(fullPath);
+
                             let fileType = 'image/jpeg';
                             if (videoExts.includes(ext)) {
                                 fileType = ext === '.mp4' ? 'video/mp4' : ext === '.webm' ? 'video/webm' : 'video/quicktime';
@@ -649,17 +658,32 @@ async function processScan() {
                                 else if (ext === '.wma') fileType = 'audio/x-ms-wma';
                             }
 
-                            totalFiles.push({
-                                name: item.name,
+                            const fileData = {
+                                id: Buffer.from(fullPath).toString('base64'),
                                 path: fullPath,
-                                size: fs.statSync(fullPath).size,
-                                lastModified: fs.statSync(fullPath).mtimeMs,
-                                type: fileType
-                            });
-                            scanState.count = totalFiles.length;
+                                name: item.name,
+                                folderPath: path.dirname(fullPath),
+                                size: stats.size,
+                                type: fileType,
+                                mediaType: fileType.startsWith('video') ? 'video' : (fileType.startsWith('audio') ? 'audio' : 'image'),
+                                lastModified: stats.mtimeMs,
+                                sourceId: 'local'
+                            };
 
-                            // Delay data removed for speed
-                            // await new Promise(r => setTimeout(r, 50));
+                            batchBuffer.push(fileData);
+                            allScannedPaths.add(fullPath);
+                            totalProcessed++;
+                            scanState.count = totalProcessed;
+
+                            // OPTIMIZATION: Batch insert without saving to disk
+                            if (batchBuffer.length >= BATCH_SIZE) {
+                                const shouldSave = (totalProcessed % SAVE_INTERVAL) === 0;
+                                database.insertFilesBatch(batchBuffer, shouldSave);
+                                if (shouldSave) {
+                                    console.log(`Checkpoint: Saved database at ${totalProcessed} files`);
+                                }
+                                batchBuffer = []; // Clear buffer
+                            }
                         }
                     }
                 }
@@ -669,61 +693,42 @@ async function processScan() {
         }
     }
 
+    // Insert remaining files in buffer
+    if (!scanState.shouldStop && batchBuffer.length > 0) {
+        database.insertFilesBatch(batchBuffer, false);
+        batchBuffer = [];
+    }
+
     // Save Results to Database
     if (!scanState.shouldStop) {
-        // SYNC: Remove files that are no longer on disk
+        console.log(`Scan complete. Total files processed: ${totalProcessed}`);
+
+        // OPTIMIZATION: Optional cleanup - can be skipped for performance
+        // Uncomment if you want to remove deleted files from database
+        /*
         console.log('Syncing database with scan results...');
         try {
             const allDbPaths = database.getAllFilePaths();
-            const foundPaths = new Set(totalFiles.map(f => f.path));
-            const pathsToDelete = allDbPaths.filter(p => !foundPaths.has(p));
+            const pathsToDelete = allDbPaths.filter(p => !allScannedPaths.has(p));
 
-            // Delete files that are no longer in the library roots or have been removed
-            const pathsReallyToDelete = pathsToDelete;
-
-            if (pathsReallyToDelete.length > 0) {
-                console.log(`Found ${pathsReallyToDelete.length} missing/out-of-scope files to delete.`);
-
-                // Prepare batch
-                const deleteBatch = pathsReallyToDelete.map(p => ({
+            if (pathsToDelete.length > 0) {
+                console.log(`Found ${pathsToDelete.length} missing files to delete.`);
+                const deleteBatch = pathsToDelete.map(p => ({
                     path: p,
                     id: Buffer.from(p).toString('base64')
                 }));
-
-                // Use efficient batch deletion
                 database.deleteFilesBatch(deleteBatch);
-
                 console.log('Cleanup complete.');
-
-                // Trigger immediate thumbnail regeneration for remaining files if needed?
-                // No, just finish.
             } else {
                 console.log('No missing files found.');
             }
         } catch (err) {
             console.error('Error during database sync/cleanup:', err);
         }
+        */
 
-        console.log(`Saving ${totalFiles.length} files to database...`);
-        const filesToInsert = totalFiles.map(f => ({
-            id: Buffer.from(f.path).toString('base64'),
-            path: f.path,
-            name: f.name,
-            folderPath: path.dirname(f.path),
-            size: f.size,
-            type: f.type,
-            mediaType: f.type.startsWith('video') ? 'video' : (f.type.startsWith('audio') ? 'audio' : 'image'),
-            lastModified: f.lastModified,
-            sourceId: 'local'
-        }));
-
-        // Insert in batches of 1000
-        const batchSize = 1000;
-        for (let i = 0; i < filesToInsert.length; i += batchSize) {
-            const batch = filesToInsert.slice(i, i + batchSize);
-            database.insertFilesBatch(batch);
-        }
-
+        // Final save
+        database.saveDatabase();
         console.log('Database save complete');
         scanState.status = 'idle';
     } else {
@@ -761,7 +766,7 @@ app.post('/api/scan/control', (req, res) => {
         scanState.shouldPause = true;
     } else if (action === 'resume') {
         scanState.shouldPause = false;
-    } else if (action === 'stop') {
+    } else if (action === 'stop' || action === 'cancel') {
         scanState.shouldStop = true;
         scanState.shouldPause = false; // Break out of pause loop
     }
@@ -1124,7 +1129,7 @@ app.post('/api/thumb-gen/control', (req, res) => {
         thumbState.shouldPause = true;
     } else if (action === 'resume') {
         thumbState.shouldPause = false;
-    } else if (action === 'stop') {
+    } else if (action === 'stop' || action === 'cancel') {
         thumbState.shouldStop = true;
         thumbState.shouldPause = false; // Break the pause loop so it can see the stop signal
     } else if (action === 'close') {

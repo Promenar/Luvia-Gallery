@@ -1,20 +1,27 @@
 
 import React, { useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { FolderNode } from '../types';
+import { FolderNode, MediaItem } from '../types';
 import { Icons } from './ui/Icon';
 
 interface FolderCardProps {
-    folder: FolderNode;
+    folder: {
+        name: string;
+        path: string;
+        children: Record<string, FolderNode>;
+        mediaCount: number;
+        coverMedia?: MediaItem;
+    };
     onClick: (path: string) => void;
     isFavorite?: boolean;
     onToggleFavorite?: (path: string) => void;
-    onRename?: (path: string, newName: string) => void;
+    onRename?: (oldPath: string, newPath: string) => void;
     onDelete?: (path: string) => void;
+    layout?: 'grid' | 'masonry';
     animate?: boolean;
 }
 
-export const FolderCard: React.FC<FolderCardProps> = ({ folder, onClick, isFavorite, onToggleFavorite, onRename, onDelete, animate = true }) => {
+export const FolderCard: React.FC<FolderCardProps> = ({ folder, onClick, isFavorite, onToggleFavorite, onRename, onDelete, animate = true, layout = 'grid' }) => {
     const videoRef = useRef<HTMLVideoElement>(null);
     const [isPlaying, setIsPlaying] = useState(false);
     const [showMenu, setShowMenu] = useState(false);
@@ -85,7 +92,7 @@ export const FolderCard: React.FC<FolderCardProps> = ({ folder, onClick, isFavor
             animate={{ opacity: 1, scale: 1 }}
             whileHover={{ scale: 1.03, y: -2 }}
             whileTap={{ scale: 0.98 }}
-            className="relative group cursor-pointer"
+            className={`relative group cursor-pointer ${layout === 'masonry' ? 'h-full' : ''}`}
             onClick={() => !isRenaming && onClick(folder.path)}
             onMouseEnter={handleMouseEnter}
             onMouseLeave={handleMouseLeave}
@@ -95,8 +102,8 @@ export const FolderCard: React.FC<FolderCardProps> = ({ folder, onClick, isFavor
             <div className="absolute top-2 left-2 w-full h-full bg-gray-100 dark:bg-gray-800 rounded-xl opacity-0 group-hover:opacity-60 transition-opacity duration-300 transform translate-y-2" />
 
             {/* Main Card */}
-            <div className="relative bg-white dark:bg-gray-800 rounded-xl shadow-sm hover:shadow-lg border border-gray-100 dark:border-gray-700 overflow-hidden flex flex-col h-full z-10 transition-all duration-300">
-                <div className="aspect-[4/3] bg-gray-100 dark:bg-gray-900 relative overflow-hidden flex items-center justify-center w-full">
+            <div className={`relative bg-white dark:bg-gray-800 rounded-xl shadow-sm hover:shadow-lg border border-gray-100 dark:border-gray-700 overflow-hidden flex flex-col z-10 transition-all duration-300 ${layout === 'masonry' ? 'h-full' : ''}`}>
+                <div className={`${layout === 'masonry' ? 'flex-1 min-h-0' : 'aspect-[4/3]'} bg-gray-100 dark:bg-gray-900 relative overflow-hidden flex items-center justify-center w-full`}>
                     {folder.coverMedia && !imgError ? (
                         folder.coverMedia.mediaType === 'video' ? (
                             <div className="w-full h-full bg-gray-800 flex items-center justify-center group-hover:scale-105 transition-transform duration-700 relative overflow-hidden">

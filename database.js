@@ -160,7 +160,7 @@ function upsertFile(file) {
 /**
  * Insert files in batch (transaction)
  */
-function insertFilesBatch(files) {
+function insertFilesBatch(files, shouldSave = true) {
     db.run('BEGIN TRANSACTION');
 
     try {
@@ -168,7 +168,9 @@ function insertFilesBatch(files) {
             upsertFile(file);
         }
         db.run('COMMIT');
-        saveDatabase();
+        if (shouldSave) {
+            saveDatabase();
+        }
         return true;
     } catch (error) {
         db.run('ROLLBACK');

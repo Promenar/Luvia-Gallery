@@ -102,6 +102,12 @@ const translations = {
     toggle: 'Toggle',
     cache_coverage: 'Thumbnail Coverage',
 
+    // Settings - Performance
+    performance_settings: 'Performance Settings',
+    thumbnail_threads: 'Thumbnail Threads',
+    thumbnail_threads_desc: 'Controls how many thumbnails are generated in parallel.',
+
+
     // Settings - General
     general: 'General',
     appearance: 'Appearance',
@@ -289,6 +295,12 @@ const translations = {
     disabled: '已禁用',
     toggle: '切换',
     cache_coverage: '缩略图覆盖率',
+
+    // Settings - Performance
+    performance_settings: '性能设置',
+    thumbnail_threads: '缩略图线程数',
+    thumbnail_threads_desc: '控制并行生成缩略图的数量。',
+
 
     // Settings - General
     general: '常规设置',
