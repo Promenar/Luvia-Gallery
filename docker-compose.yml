@@ -4,26 +4,38 @@ services:
   lumina-gallery:
     build:
       context: .
-      dockerfile: Dockerfile.txt
+      dockerfile: Dockerfile
     container_name: lumina-gallery
     restart: unless-stopped
     ports:
-      - "3000:80"
+      - "3000:3001"
+    # Enable Hardware Acceleration
+    # For Intel/AMD VAAPI/QSV (uncomment if device exists, usually Linux/WSL2):
+    # devices:
+    #   - /dev/dri:/dev/dri
+    # For NVIDIA (requires nvidia-container-toolkit):
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [ gpu ]
     volumes:
       # Map your NAS media folders here.
       # You can map to subfolders of /media OR to arbitrary root folders.
       # If you map to root folders (e.g. /photos), add "/photos" to Library Scan Paths in settings.
-      
+
       # Example 1: Standard /media mapping
       - ./media_test:/media
-      
+
       # Example 2: Multiple Roots
       # - /volume1/family_photos:/photos
       # - /volume1/movies:/movies
-      
+
       # Persistence for configuration - Mapped to a directory to avoid 'touch' requirements
       - ./data:/app/data
-      
+
       # Persistence for generated thumbnails (Recommended for performance)
       - ./cache:/app/cache
     environment:
@@ -35,7 +47,6 @@ services:
       # They are harmless if the runtime is not used, but required if it is.
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,video,utility
-    
     # -------------------------------------------------------------------------
     # GPU CONFIGURATION NOTE:
     # The error "could not select device driver nvidia" occurs if the host machine
@@ -49,7 +60,7 @@ services:
     #    b. Restart Docker daemon.
     #    c. Uncomment the 'deploy' section below.
     # -------------------------------------------------------------------------
-    
+
     # deploy:
     #   resources:
     #     reservations:

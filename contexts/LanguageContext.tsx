@@ -18,12 +18,12 @@ const translations = {
     menu: 'Menu',
     system: 'System',
     load_folder: 'Load Folder',
-    
+
     // Home Screen
     enter_library: 'Enter Library',
     items_count: 'Items',
     view_in: 'View in',
-    
+
     // Sort & Filter
     sort_filter: 'Sort & Filter',
     newest_first: 'Newest First',
@@ -32,11 +32,11 @@ const translations = {
     all_types: 'All Types',
     videos_only: 'Videos Only',
     audio_only: 'Audio Only',
-    
+
     // Photo Card
     video_badge: 'VIDEO',
     audio_badge: 'AUDIO',
-    
+
     // Viewer
     file_info: 'Info',
     file_details: 'File Details',
@@ -57,7 +57,7 @@ const translations = {
     no_exif: 'No EXIF data found.',
     loading_metadata: 'Loading metadata...',
     delete_confirm: 'Are you sure you want to delete',
-    
+
     // Scan Modal
     scanning_library: 'Scanning Library',
     generating_thumbnails: 'Generating Thumbnails',
@@ -74,20 +74,21 @@ const translations = {
     resume: 'Resume',
     stop: 'Stop',
     close: 'Close',
-    
+
     // Settings - Dashboard
     system_monitoring: 'System Monitoring',
     backend_components: 'Backend Components',
     database: 'Database',
     video_engine: 'Video Engine',
     image_engine: 'Image Engine',
+    image_processor: 'Image Processor',
     hw_accel: 'HW Acceleration',
     total_assets: 'Total Assets',
     server_offline: 'Server Offline or Unreachable',
     server_offline_desc: 'Backend monitoring is unavailable. Ensure server is running.',
     retry: 'Retry',
     auto_scan: 'Auto-Scan / Watcher',
-    
+
     processors: 'Processors',
     hw_acceleration: 'HW Acceleration',
     cpu_only: 'CPU ONLY',
@@ -100,7 +101,7 @@ const translations = {
     disabled: 'DISABLED',
     toggle: 'Toggle',
     cache_coverage: 'Thumbnail Coverage',
-    
+
     // Settings - General
     general: 'General',
     appearance: 'Appearance',
@@ -123,7 +124,7 @@ const translations = {
     switch_to_client: 'Switch to Client',
     switch_to_server: 'Switch to Server',
     language: 'Language',
-    
+
     // Settings - Storage
     storage_database: 'Storage & Database',
     server_persistence: 'Server Persistence Active',
@@ -141,10 +142,11 @@ const translations = {
     backup_config: 'Backup Config',
     cache_management: 'Cache Management',
     clear_all_cache: 'Clear All Cache',
+    prune_cache: 'Prune Cache',
     prune_legacy_cache: 'Prune Legacy Cache (JPG)',
     cache_cleared: 'Cache Cleared',
-    cache_pruned: 'Legacy Cache Pruned',
-    
+    cache_pruned: 'Cache Pruned',
+
     // Settings - Users
     users: 'Users',
     hide: 'Hide',
@@ -161,7 +163,7 @@ const translations = {
     cancel: 'Cancel',
     save: 'Save',
     delete_user_confirm: 'Are you sure you want to delete this user?',
-    
+
     // Auth
     welcome: 'Welcome',
     init_nas: 'Initialize your NAS Gallery.',
@@ -172,19 +174,29 @@ const translations = {
     nas_connected: 'NAS Server Connected',
     invalid_credentials: 'Invalid credentials',
     passwords_not_match: 'Passwords do not match',
-    
+
     // Errors/Empty
     empty_library: 'Library is empty',
     import_local: 'Import local folders to begin.',
     configure_nas: 'Connected to NAS. Configure Library Paths in Settings and Scan.',
     configure_library: 'Configure Library',
     import_local_folder: 'Import Local Folder',
+    no_favorites: 'No Favorites Yet',
+    click_heart_to_favorite: 'Click the heart icon to add favorites',
+
+    // Media Statistics
+    media_statistics: 'Media Statistics',
+    images: 'Images',
+    videos: 'Videos',
+    audio: 'Audio',
+    total_files: 'Total Files',
+    favorite_folders: 'Favorite Folders',
   },
   zh: {
     // Navigation & General
     home: '首页',
     library: '图库',
-    all_photos: '所有照片',
+    all_photos: '媒体库',
     folders: '文件夹',
     favorites: '收藏夹',
     settings: '设置',
@@ -194,12 +206,12 @@ const translations = {
     menu: '菜单',
     system: '系统',
     load_folder: '加载文件夹',
-    
+
     // Home Screen
     enter_library: '进入图库',
     items_count: '项',
     view_in: '查看于',
-    
+
     // Sort & Filter
     sort_filter: '排序与筛选',
     newest_first: '最新优先',
@@ -208,11 +220,11 @@ const translations = {
     all_types: '所有类型',
     videos_only: '仅视频',
     audio_only: '仅音频',
-    
+
     // Photo Card
     video_badge: '视频',
     audio_badge: '音频',
-    
+
     // Viewer
     file_info: '信息',
     file_details: '文件详情',
@@ -233,7 +245,7 @@ const translations = {
     no_exif: '未找到 EXIF 数据',
     loading_metadata: '正在加载元数据...',
     delete_confirm: '你确定要删除',
-    
+
     // Scan Modal
     scanning_library: '正在扫描图库',
     generating_thumbnails: '正在生成缩略图',
@@ -250,20 +262,21 @@ const translations = {
     resume: '继续',
     stop: '停止',
     close: '关闭',
-    
+
     // Settings - Dashboard
     system_monitoring: '系统监控',
     backend_components: '后端组件状态',
     database: '数据库',
     video_engine: '视频引擎',
     image_engine: '图像引擎',
+    image_processor: '图像处理',
     hw_accel: '硬件加速',
     total_assets: '总资产',
     server_offline: '服务器离线或无法连接',
     server_offline_desc: '后端监控不可用，请确保服务器正在运行。',
     retry: '重试',
     auto_scan: '自动扫描 / 监控',
-    
+
     processors: '处理器',
     hw_acceleration: '硬件加速',
     cpu_only: '仅 CPU',
@@ -276,7 +289,7 @@ const translations = {
     disabled: '已禁用',
     toggle: '切换',
     cache_coverage: '缩略图覆盖率',
-    
+
     // Settings - General
     general: '常规设置',
     appearance: '外观设置',
@@ -299,7 +312,7 @@ const translations = {
     switch_to_client: '切到客户端',
     switch_to_server: '切到服务器',
     language: '语言 / Language',
-    
+
     // Settings - Storage
     storage_database: '存储与数据库',
     server_persistence: '服务器持久化已激活',
@@ -317,10 +330,11 @@ const translations = {
     backup_config: '备份配置',
     cache_management: '缓存管理',
     clear_all_cache: '清除所有缓存',
+    prune_cache: '清理无效缓存',
     prune_legacy_cache: '清除旧缓存 (JPG)',
     cache_cleared: '缓存已清除',
-    cache_pruned: '旧缓存已清除',
-    
+    cache_pruned: '缓存已清理',
+
     // Settings - Users
     users: '用户管理',
     hide: '隐藏',
@@ -337,7 +351,7 @@ const translations = {
     cancel: '取消',
     save: '保存',
     delete_user_confirm: '确定要删除该用户吗？',
-    
+
     // Auth
     welcome: '欢迎',
     init_nas: '初始化您的 NAS 图库。',
@@ -348,13 +362,23 @@ const translations = {
     nas_connected: 'NAS 服务器已连接',
     invalid_credentials: '凭证无效',
     passwords_not_match: '两次输入的密码不匹配',
-    
+
     // Errors/Empty
     empty_library: '图库为空',
     import_local: '导入本地文件夹以开始使用。',
     configure_nas: '已连接至 NAS。请在设置中配置扫描路径并开始扫描。',
     configure_library: '配置图库',
     import_local_folder: '导入本地文件夹',
+    no_favorites: '暂无收藏',
+    click_heart_to_favorite: '点击红心图标添加收藏',
+
+    // Media Statistics
+    media_statistics: '媒体统计',
+    images: '图片',
+    videos: '视频',
+    audio: '音频',
+    total_files: '总文件数',
+    favorite_folders: '收藏的文件夹',
   }
 };
 
@@ -374,11 +398,11 @@ export const LanguageProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     if (savedLang && (savedLang === 'en' || savedLang === 'zh')) {
       setLanguageState(savedLang);
     } else {
-        // Auto-detect
-        const browserLang = navigator.language;
-        if (browserLang.toLowerCase().includes('zh')) {
-            setLanguageState('zh');
-        }
+      // Auto-detect
+      const browserLang = navigator.language;
+      if (browserLang.toLowerCase().includes('zh')) {
+        setLanguageState('zh');
+      }
     }
   }, []);
 

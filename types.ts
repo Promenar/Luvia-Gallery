@@ -19,16 +19,16 @@ export interface MediaItem {
 }
 
 export interface ExifData {
-    Make?: string;
-    Model?: string;
-    ExposureTime?: number;
-    FNumber?: number;
-    ISO?: number;
-    FocalLength?: number;
-    LensModel?: string;
-    DateTimeOriginal?: Date;
-    width?: number;
-    height?: number;
+  Make?: string;
+  Model?: string;
+  ExposureTime?: number;
+  FNumber?: number;
+  ISO?: number;
+  FocalLength?: number;
+  LensModel?: string;
+  DateTimeOriginal?: Date;
+  width?: number;
+  height?: number;
 }
 
 export interface FolderNode {
@@ -36,7 +36,7 @@ export interface FolderNode {
   path: string;
   children: Record<string, FolderNode>;
   mediaCount: number;
-  coverMedia?: MediaItem; 
+  coverMedia?: MediaItem;
 }
 
 export interface User {
@@ -48,14 +48,14 @@ export interface User {
 
 // New interface for per-user data persistence
 export interface UserData {
-    files: MediaItem[];
-    sources: {id: string, name: string, count: number}[];
-    favoriteFolderPaths?: string[]; // New: Persist favorite folders in client mode
+  files: MediaItem[];
+  sources: { id: string, name: string, count: number }[];
+  favoriteFolderPaths?: string[]; // New: Persist favorite folders in client mode
 }
 
 export interface HomeScreenConfig {
-    mode: 'random' | 'folder' | 'single';
-    path?: string; // Used for folder or single file mode
+  mode: 'random' | 'folder' | 'single';
+  path?: string; // Used for folder or single file mode
 }
 
 // The serializable configuration structure
@@ -65,24 +65,25 @@ export interface AppConfig {
   homeScreen?: HomeScreenConfig;
   users: User[];
   // We only store source metadata, not the file blobs themselves due to browser security
-  userSources: Record<string, {id: string, name: string, count: number}[]>; 
+  userSources: Record<string, { id: string, name: string, count: number }[]>;
   // List of relative paths within MEDIA_ROOT to scan
   libraryPaths?: string[];
   lastModified: number;
 }
 
 export interface SystemStatus {
-    ffmpeg: boolean;
-    ffmpegHwAccels: string[];
-    sharp: boolean;
-    cacheCount: number;
-    totalItems: number;
-    mediaBreakdown: {
-        image: number;
-        video: number;
-        audio: number;
-    };
-    platform: string;
+  ffmpeg: boolean;
+  ffmpegHwAccels: string[];
+  sharp: boolean;
+  imageProcessor?: string;
+  cacheCount: number;
+  totalItems: number;
+  mediaBreakdown: {
+    image: number;
+    video: number;
+    audio: number;
+  };
+  platform: string;
 }
 
 export type ViewMode = 'home' | 'all' | 'folders' | 'favorites';

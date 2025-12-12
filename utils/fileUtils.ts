@@ -9,7 +9,7 @@ export const isVideo = (mimeType: string): boolean => {
 };
 
 export const isAudio = (mimeType: string): boolean => {
-    return mimeType.startsWith('audio/');
+  return mimeType.startsWith('audio/');
 };
 
 export const buildFolderTree = (items: MediaItem[]): FolderNode => {
@@ -39,12 +39,12 @@ export const buildFolderTree = (items: MediaItem[]): FolderNode => {
       }
       currentNode = currentNode.children[part];
       currentNode.mediaCount++;
-      
+
       // Set a cover photo if none exists (prefer images over videos/audio for covers)
       if (!currentNode.coverMedia || (currentNode.coverMedia.mediaType !== 'image' && item.mediaType === 'image')) {
         currentNode.coverMedia = item;
       } else if (!currentNode.coverMedia) {
-         currentNode.coverMedia = item;
+        currentNode.coverMedia = item;
       }
     });
   });
@@ -76,12 +76,12 @@ export const getImmediateSubfolders = (root: FolderNode, currentPath: string): F
 
 // Fisher-Yates shuffle
 const shuffleArray = (array: MediaItem[]): MediaItem[] => {
-    const arr = [...array];
-    for (let i = arr.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [arr[i], arr[j]] = [arr[j], arr[i]];
-    }
-    return arr;
+  const arr = [...array];
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
 };
 
 export const sortMedia = (items: MediaItem[], sortOption: SortOption): MediaItem[] => {
@@ -106,9 +106,12 @@ export const sortMedia = (items: MediaItem[], sortOption: SortOption): MediaItem
 
 export const groupMediaByDate = (items: MediaItem[]): Record<string, MediaItem[]> => {
   const groups: Record<string, MediaItem[]> = {};
-  
+
+  // Filter out items without lastModified to prevent crashes
+  const validItems = items.filter(item => item && item.lastModified);
+
   // Sort by date descending first to ensure groups are in order if iterated
-  const sorted = [...items].sort((a, b) => b.lastModified - a.lastModified);
+  const sorted = [...validItems].sort((a, b) => b.lastModified - a.lastModified);
 
   sorted.forEach(item => {
     const date = new Date(item.lastModified);

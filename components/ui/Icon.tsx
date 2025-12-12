@@ -1,13 +1,15 @@
 
-import { 
-  Folder, 
-  Image as ImageIcon, 
-  Grid, 
-  LayoutTemplate, 
-  ArrowLeft, 
-  Upload, 
-  X, 
+import {
+  Folder,
+  Image as ImageIcon,
+  Grid,
+  LayoutTemplate,
+  ArrowLeft,
+  Upload,
+  X,
   ChevronRight,
+  ChevronUp,
+  ChevronDown,
   Menu,
   Maximize2,
   MoreVertical,
@@ -52,7 +54,10 @@ import {
   Server,
   Database,
   Zap,
-  Scan
+  Scan,
+  SkipBack,
+  SkipForward,
+  Volume2
 } from 'lucide-react';
 
 export const Icons = {
@@ -63,7 +68,10 @@ export const Icons = {
   Back: ArrowLeft,
   Upload,
   Close: X,
+  X,
   ChevronRight,
+  ChevronUp,
+  ChevronDown,
   Menu,
   Maximize: Maximize2,
   Minimize: Minimize2,
@@ -109,5 +117,9 @@ export const Icons = {
   Server,
   Database,
   Zap,
-  Scan
+  Scan,
+  SkipBack,
+  SkipForward,
+  Volume2
 };
+
