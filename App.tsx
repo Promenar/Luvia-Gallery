@@ -172,14 +172,17 @@ export default function App() {
         localStorage.setItem(THEME_STORAGE_KEY, newTheme);
     };
 
+    const [threadCount, setThreadCount] = useState<number>(2);
+
     // --- Persistence Helper ---
-    const persistData = async (newUsers?: User[], newTitle?: string, newAllUserData?: Record<string, UserData>, newLibraryPaths?: string[], newHomeSubtitle?: string, newHomeConfig?: HomeScreenConfig) => {
+    const persistData = async (newUsers?: User[], newTitle?: string, newAllUserData?: Record<string, UserData>, newLibraryPaths?: string[], newHomeSubtitle?: string, newHomeConfig?: HomeScreenConfig, newThreadCount?: number) => {
         const u = newUsers || users;
         const t = newTitle || appTitle;
         const s = newHomeSubtitle || homeSubtitle;
         const hc = newHomeConfig || homeConfig;
         const d = newAllUserData || allUserData;
         const l = newLibraryPaths || libraryPaths;
+        const tc = newThreadCount !== undefined ? newThreadCount : threadCount;
 
         // Update React State
         if (newUsers) setUsers(newUsers);
@@ -188,6 +191,7 @@ export default function App() {
         if (newHomeConfig) setHomeConfig(newHomeConfig);
         if (newAllUserData) setAllUserData(newAllUserData);
         if (newLibraryPaths) setLibraryPaths(newLibraryPaths);
+        if (newThreadCount !== undefined) setThreadCount(newThreadCount);
 
         // Construct Config Object
         const userSources: Record<string, any[]> = {};
@@ -202,6 +206,7 @@ export default function App() {
             users: u,
             userSources: userSources,
             libraryPaths: l,
+            threadCount: tc,
             lastModified: Date.now()
         };
 
@@ -232,6 +237,7 @@ export default function App() {
             let loadedSubtitle = 'Your memories, beautifully organized. Rediscover your collection.';
             let loadedHomeConfig: HomeScreenConfig = { mode: 'random' };
             let serverMode = false;
+            let loadedThreadCount = 2;
 
             try {
                 const res = await fetch('/api/config');
@@ -251,6 +257,9 @@ export default function App() {
                         if (config.homeSubtitle) loadedSubtitle = config.homeSubtitle;
                         if (config.homeScreen) loadedHomeConfig = config.homeScreen;
                         setLibraryPaths(config.libraryPaths || []);
+                        if (config.threadCount) loadedThreadCount = config.threadCount;
+
+                        setThreadCount(loadedThreadCount);
 
                         config.users.forEach((u: User) => {
                             loadedData[u.username] = { sources: [], files: [], favoriteFolderPaths: [] };
@@ -1733,6 +1742,8 @@ export default function App() {
                                                             </span>
                                                         ))}
                                                     </div>
+
+
                                                 )}
                                             </div>
                                         </div>
@@ -1740,6 +1751,37 @@ export default function App() {
                                         <div className="flex justify-between items-center pt-3 mt-3 border-t border-gray-100 dark:border-gray-700">
                                             <span className="text-xs text-gray-400">Platform</span>
                                             <span className="text-xs font-mono text-gray-500 bg-gray-50 dark:bg-gray-900/50 px-2 py-0.5 rounded">{systemStatus.platform}</span>
+                                        </div>
+                                    </div>
+
+                                    {/* Performance Settings */}
+                                    <div className="bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded-2xl p-5 shadow-sm flex flex-col justify-between">
+                                        <div>
+                                            <h5 className="flex items-center gap-2 font-bold text-gray-900 dark:text-white mb-4">
+                                                <Icons.Cpu size={18} className="text-orange-500" /> Performance Settings
+                                            </h5>
+                                            <div className="space-y-4">
+                                                <div>
+                                                    <div className="flex justify-between mb-2">
+                                                        <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Thumbnail Threads</label>
+                                                        <span className="text-xs font-bold bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400 px-2 py-0.5 rounded">{threadCount}</span>
+                                                    </div>
+                                                    <input
+                                                        type="range"
+                                                        min="1"
+                                                        max="8"
+                                                        step="1"
+                                                        value={threadCount}
+                                                        onChange={(e) => {
+                                                            const val = parseInt(e.target.value);
+                                                            setThreadCount(val);
+                                                            persistData(undefined, undefined, undefined, undefined, undefined, undefined, val);
+                                                        }}
+                                                        className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700 accent-orange-500"
+                                                    />
+                                                    <p className="text-xs text-gray-400 mt-1">Controls how many thumbnails are generated in parallel.</p>
+                                                </div>
+                                            </div>
                                         </div>
                                     </div>
 

@@ -70,6 +70,7 @@ export interface AppConfig {
   userSources: Record<string, { id: string, name: string, count: number }[]>;
   // List of relative paths within MEDIA_ROOT to scan
   libraryPaths?: string[];
+  threadCount?: number; // Number of parallel thumbnail generation threads
   lastModified: number;
 }
 

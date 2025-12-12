@@ -1015,44 +1015,79 @@ async function generateThumbnail(file) {
 
 async function processThumbnails() {
     console.log('Starting processThumbnails...');
-    thumbState.status = 'scanning'; // Use 'scanning' to match client polling expectation
+    thumbState.status = 'scanning';
     thumbState.shouldStop = false;
-    thumbState.shouldPause = false; // Ensure pause is reset
+    thumbState.shouldPause = false;
     thumbState.count = 0;
 
+    let threadCount = 2; // Default
     try {
-        // Create work queue from database
+        if (fs.existsSync(CONFIG_FILE)) {
+            const config = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+            if (config.threadCount && config.threadCount > 0) {
+                threadCount = config.threadCount;
+            }
+        }
+    } catch (e) { }
+
+    console.log(`Thumbnail generation starting with ${threadCount} threads.`);
+
+    try {
         const allFiles = database.queryFiles({ offset: 0, limit: 999999 });
-        const queue = allFiles.map(f => ({
-            path: f.path,
-            id: f.id
-        }));
+        const queue = allFiles.map(f => ({ path: f.path, id: f.id }));
         thumbState.total = queue.length;
 
+        const activePool = new Set();
+
         for (const file of queue) {
-            // Enhanced active check
+            // Check Stop
             if (thumbState.shouldStop) {
-                console.log('Thumbnail generation stopped by user');
+                console.log('Thumbnail generation stop signal received.');
                 break;
             }
 
-            // Enhanced pause loop
+            // Check Pause
             while (thumbState.shouldPause) {
                 if (thumbState.shouldStop) break;
                 thumbState.status = 'paused';
-                await new Promise(r => setTimeout(r, 200)); // Check more frequently
+                await new Promise(r => setTimeout(r, 200));
             }
-            if (thumbState.shouldStop) break; // Double check after pause
+            if (thumbState.shouldStop) break;
 
             thumbState.status = 'scanning';
-            thumbState.currentPath = file.path;
 
-            await generateThumbnail(file);
-            thumbState.count++;
+            // Wait if pool is full
+            // Race against any promise in the pool to free up a slot
+            while (activePool.size >= threadCount) {
+                await Promise.race(activePool);
+            }
 
-            // Brief delay to allow event loop to process control signals
-            await new Promise(r => setTimeout(r, 0));
+            // Double check stop after waiting
+            if (thumbState.shouldStop) break;
+
+            thumbState.currentPath = file.path; // Note: In parallel mode, this only shows the *latest* started
+
+            // Start processing
+            const promise = generateThumbnail(file).then(() => {
+                thumbState.count++;
+                activePool.delete(promise);
+            }).catch(e => {
+                console.error("Task failed", e);
+                activePool.delete(promise);
+            });
+
+            activePool.add(promise);
+
+            // Allow event loop tick
+            await new Promise(r => setImmediate(r));
         }
+
+        // Wait for remaining tasks
+        if (activePool.size > 0) {
+            console.log(`Waiting for ${activePool.size} active tasks to finish...`);
+            await Promise.all(activePool);
+        }
+
     } catch (e) {
         console.error("Thumb gen error:", e);
     } finally {
