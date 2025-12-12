@@ -814,6 +814,18 @@ export default function App() {
     };
 
     const handleGoBackFolder = () => {
+        // Flattened Navigation:
+        // If the current path corresponds to one of the configured library roots,
+        // pressing "Back" should return to the top-level view, skipping intermediate folders.
+        if (libraryPaths && libraryPaths.some(lp => {
+            const normalizedLp = lp.replace(/\\/g, '/');
+            const normalizedCurrent = currentPath.replace(/\\/g, '/');
+            return normalizedLp === normalizedCurrent || normalizedLp === normalizedCurrent + '/';
+        })) {
+            handleFolderClick('');
+            return;
+        }
+
         const parts = currentPath.split('/');
         parts.pop();
         const parentPath = parts.join('/');

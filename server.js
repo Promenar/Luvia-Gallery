@@ -490,7 +490,41 @@ app.get('/api/library/folders', (req, res) => {
     } else {
         // Not root, just get subfolders of the requested parent
         console.log(`[DEBUG] /api/library/folders request. mappedPath: ${parentPath}`);
-        subs = getSubfolders(parentPath);
+        let rawSubs = getSubfolders(parentPath);
+
+        // Security/Scope Check:
+        // Ensure that the requested folder and its returned subfolders are visually valid
+        // based on the libraryPaths config.
+        let libraryPaths = [];
+        if (fs.existsSync(CONFIG_FILE)) {
+            try {
+                const config = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+                if (config.libraryPaths && config.libraryPaths.length > 0) {
+                    libraryPaths = config.libraryPaths.filter(p => fs.existsSync(p));
+                }
+            } catch (e) { }
+        }
+
+        if (libraryPaths.length > 0) {
+            // Filter rawSubs
+            // A folder is valid to show IF:
+            // 1. It is a descendant of a libraryPath (i.e. we are deep in the allowed tree)
+            // 2. It is an ancestor of a libraryPath (i.e. we are navigating down to an allowed tree)
+            subs = rawSubs.filter(subPath => {
+                // Check 1: Is subPath inside any libraryPath?
+                const isDescendant = libraryPaths.some(lp => subPath.startsWith(lp));
+                if (isDescendant) return true;
+
+                // Check 2: Is subPath on the way to any libraryPath?
+                // i.e. does some libraryPath start with subPath?
+                const isAncestor = libraryPaths.some(lp => lp.startsWith(subPath));
+                if (isAncestor) return true;
+
+                return false;
+            });
+        } else {
+            subs = rawSubs;
+        }
     }
 
     const folders = subs.map(f => {
@@ -644,14 +678,11 @@ async function processScan() {
             const foundPaths = new Set(totalFiles.map(f => f.path));
             const pathsToDelete = allDbPaths.filter(p => !foundPaths.has(p));
 
-            // Only delete if the file path is within one of the scanned library paths
-            // This prevents accidental deletion if we are only scanning a subset (though currently we scan all configured paths)
-            const pathsReallyToDelete = pathsToDelete.filter(p => {
-                return libraryPaths.some(libPath => p.startsWith(libPath));
-            });
+            // Delete files that are no longer in the library roots or have been removed
+            const pathsReallyToDelete = pathsToDelete;
 
             if (pathsReallyToDelete.length > 0) {
-                console.log(`Found ${pathsReallyToDelete.length} missing files to delete.`);
+                console.log(`Found ${pathsReallyToDelete.length} missing/out-of-scope files to delete.`);
                 for (const p of pathsReallyToDelete) {
                     // ID generation must match what was used to insert
                     const id = Buffer.from(p).toString('base64');
@@ -755,13 +786,50 @@ app.get('/api/scan/results', (req, res) => {
         files = database.queryFavoriteFiles(userId, { offset, limit });
         total = database.countFavoriteFiles(userId);
     } else {
-        // Query database normally
-        const queryOptions = { offset, limit };
-        if (folderPath) {
-            queryOptions.folderPath = path.resolve(folderPath);
+        // Security Check: Restrict files based on libraryPaths
+        let libraryPaths = [];
+        if (fs.existsSync(CONFIG_FILE)) {
+            try {
+                const config = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+                if (config.libraryPaths && config.libraryPaths.length > 0) {
+                    libraryPaths = config.libraryPaths.filter(p => fs.existsSync(p));
+                }
+            } catch (e) { }
         }
-        files = database.queryFiles(queryOptions);
-        total = database.countFiles(folderPath ? { folderPath: path.resolve(folderPath) } : {});
+
+        let isBasePathValid = true;
+
+        // If specific library paths are configured, and a folderPath is requested
+        if (libraryPaths.length > 0 && folderPath) {
+            const resolvedPath = path.resolve(folderPath);
+            // We only show files if the requested folder is:
+            // 1. One of the library paths (Exact)
+            // 2. A subdirectory of a library path (Descendant)
+            // We do NOT show files if the folder is an Ancestor (e.g. /media containing /media/Photos).
+
+            const isDescendantOrEqual = libraryPaths.some(lp => {
+                const resolvedLp = path.resolve(lp);
+                return resolvedPath === resolvedLp || resolvedPath.startsWith(resolvedLp + path.sep) || resolvedPath.startsWith(resolvedLp + '/');
+            });
+
+            if (!isDescendantOrEqual) {
+                isBasePathValid = false;
+                console.log(`[Security] Blocking file listing for ancestor/unrelated path: ${resolvedPath}`);
+            }
+        }
+
+        if (!isBasePathValid) {
+            files = [];
+            total = 0;
+        } else {
+            // Query database normally
+            const queryOptions = { offset, limit };
+            if (folderPath) {
+                queryOptions.folderPath = path.resolve(folderPath);
+            }
+            files = database.queryFiles(queryOptions);
+            total = database.countFiles(folderPath ? { folderPath: path.resolve(folderPath) } : {});
+        }
     }
 
     // Transform to API format
