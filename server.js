@@ -3,7 +3,8 @@ const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const chokidar = require('chokidar');
+const os = require('os');
+// const chokidar = require('chokidar'); // REMOVED: Realtime watcher deprecated for performance
 const database = require('./database');
 
 const app = express();
@@ -41,33 +42,21 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, 'dist')));
 
 // Watcher State
-let monitorMode = 'manual'; // manual, real-time, periodic
+let monitorMode = 'manual'; // 'manual' | 'periodic'
 let scanInterval = 60; // Minutes
 let periodicIntervalId = null;
-let isWatcherActive = false;
-let watcher = null;
-let watcherLogs = [];
-const MAX_LOGS = 50;
+// Watcher state variables removed.
+// let isWatcherActive = false;
+// let watcher = null;
+// let watcherLogs = [];
+// const MAX_LOGS = 50;
 
-// Debounce state for file changes
+// Debounce state for file changes (No longer used without watcher)
 let pendingChanges = new Map(); // path -> timeout
 const DEBOUNCE_DELAY = 500; // ms
 
 // --- Helper Functions ---
-function addWatcherLog(type, path, message) {
-    const log = {
-        timestamp: Date.now(),
-        type, // 'add', 'change', 'unlink', 'error'
-        path,
-        message
-    };
-    watcherLogs.unshift(log);
-    if (watcherLogs.length > MAX_LOGS) {
-        watcherLogs = watcherLogs.slice(0, MAX_LOGS);
-    }
-    console.log(`[Watcher] ${type.toUpperCase()}: ${path} - ${message}`);
-}
-
+// addWatcherLog function removed.
 function rebuildFolderStats() {
     console.log("Rebuilding folder stats...");
 }
@@ -139,7 +128,7 @@ async function processFileForDB(filePath) {
 
 // --- Monitoring Helpers ---
 function stopAllMonitoring() {
-    stopWatcher();
+    stopWatcher(); // This will now be a no-op
     stopPeriodicScanner();
     monitorMode = 'manual';
 }
@@ -169,123 +158,17 @@ function startPeriodicScanner(paths, intervalMinutes) {
     monitorMode = 'periodic';
 }
 
+// --- Watcher State (Deprecated) ---
+let isWatcherActive = false;
+let watcherInstance = null;
+// Watcher functions removed.
 function startWatcher(paths) {
-    if (watcher) {
-        console.log("Watcher already running");
-        return;
-    }
-
-    console.log("Starting watcher on paths:", paths);
-    isWatcherActive = true;
-
-    watcher = chokidar.watch(paths, {
-        ignored: /(^|[\/\\])\../, // Ignore dotfiles
-        persistent: true,
-        ignoreInitial: true, // Don't trigger events for existing files
-        awaitWriteFinish: {
-            stabilityThreshold: 1000,
-            pollInterval: 100
-        }
-    });
-
-    // Event: File added
-    watcher.on('add', (filePath) => {
-        if (!dbReady) return;
-
-        // Debounce
-        if (pendingChanges.has(filePath)) {
-            clearTimeout(pendingChanges.get(filePath));
-        }
-
-        const timeout = setTimeout(async () => {
-            pendingChanges.delete(filePath);
-
-            const fileData = await processFileForDB(filePath);
-            if (fileData) {
-                database.upsertFile(fileData);
-                database.saveDatabase();
-                addWatcherLog('add', filePath, 'File added to database');
-            }
-        }, DEBOUNCE_DELAY);
-
-        pendingChanges.set(filePath, timeout);
-    });
-
-    // Event: File changed
-    watcher.on('change', (filePath) => {
-        if (!dbReady) return;
-
-        // Debounce
-        if (pendingChanges.has(filePath)) {
-            clearTimeout(pendingChanges.get(filePath));
-        }
-
-        const timeout = setTimeout(async () => {
-            pendingChanges.delete(filePath);
-
-            const fileData = await processFileForDB(filePath);
-            if (fileData) {
-                database.upsertFile(fileData);
-                database.saveDatabase();
-                addWatcherLog('change', filePath, 'File updated in database');
-            }
-        }, DEBOUNCE_DELAY);
-
-        pendingChanges.set(filePath, timeout);
-    });
-
-    // Event: File removed
-    watcher.on('unlink', (filePath) => {
-        if (!dbReady) return;
-
-        // Debounce
-        if (pendingChanges.has(filePath)) {
-            clearTimeout(pendingChanges.get(filePath));
-        }
-
-        const timeout = setTimeout(() => {
-            pendingChanges.delete(filePath);
-
-            // Normalize path and generate ID for robust deletion
-            const normalizedPath = path.resolve(filePath);
-            const id = Buffer.from(normalizedPath).toString('base64');
-
-            console.log(`[Watcher] Deleting file: ${normalizedPath} (ID: ${id})`);
-
-            database.deleteFile(normalizedPath, id);
-            addWatcherLog('unlink', normalizedPath, 'File removed from database');
-        }, DEBOUNCE_DELAY);
-
-        pendingChanges.set(filePath, timeout);
-    });
-
-    // Event: Error
-    watcher.on('error', (error) => {
-        console.error('Watcher error:', error);
-        addWatcherLog('error', '', error.message);
-    });
-
-    // Event: Ready
-    watcher.on('ready', () => {
-        console.log('Watcher is ready and monitoring for changes');
-        addWatcherLog('info', '', 'Watcher initialized and monitoring');
-    });
+    console.log('[Watcher] Realtime monitoring is deprecated and disabled.');
 }
-
 function stopWatcher() {
-    if (watcher) {
-        watcher.close();
-        watcher = null;
+    if (isWatcherActive) {
+        console.log('[Watcher] Stopping (noop)...');
         isWatcherActive = false;
-
-        // Clear pending debounced changes
-        for (const timeout of pendingChanges.values()) {
-            clearTimeout(timeout);
-        }
-        pendingChanges.clear();
-
-        console.log('Watcher stopped');
-        addWatcherLog('info', '', 'Watcher stopped');
     }
 }
 
@@ -333,7 +216,7 @@ app.post('/api/config', (req, res) => {
 
     const newConfig = {
         ...req.body,
-        watcherEnabled: currentConfig.watcherEnabled
+        // watcherEnabled: currentConfig.watcherEnabled // Removed as watcher is deprecated
     };
 
     fs.writeFileSync(CONFIG_FILE, JSON.stringify(newConfig, null, 2));
@@ -343,8 +226,8 @@ app.post('/api/config', (req, res) => {
     if (removedPaths.length > 0) {
         console.log("Removing data for deleted paths:", removedPaths);
         try {
-            const deleteStmt = db.prepare("DELETE FROM files WHERE source_id = ?");
-            const txn = db.transaction((paths) => {
+            const deleteStmt = database.db.prepare("DELETE FROM files WHERE source_id = ?");
+            const txn = database.db.transaction((paths) => {
                 for (const p of paths) {
                     // Normalize path string to match how it was stored (see startServerScan)
                     let cleanSource = p.trim();
@@ -364,9 +247,9 @@ app.post('/api/config', (req, res) => {
         }
     }
 
-    if (isWatcherActive) {
-        startWatcher(newConfig.libraryPaths || [MEDIA_ROOT]);
-    }
+    // if (isWatcherActive) { // Removed as watcher is deprecated
+    //     startWatcher(newConfig.libraryPaths || [MEDIA_ROOT]);
+    // }
 
     res.json({ success: true });
 });
@@ -621,6 +504,9 @@ app.get('/api/file/:id', (req, res) => {
 // --- Scanning Logic ---
 
 async function processScan() {
+    // Non-blocking yield to allow API response
+    await new Promise(r => setImmediate(r));
+
     console.log('Starting processScan...');
     scanState.status = 'scanning';
     scanState.shouldStop = false;
@@ -1007,7 +893,34 @@ async function detectHardwareAcceleration() {
 detectHardwareAcceleration();
 
 
+
+// Helper to get video duration
+async function getVideoDuration(filePath) {
+    return new Promise((resolve) => {
+        const child = exec(`ffmpeg -i "${filePath}"`, { timeout: 10000 }, (err, stdout, stderr) => {
+            if (err && err.signal === 'SIGTERM') {
+                console.warn(`[VideoDuration] Timeout extracting duration for ${filePath}`);
+                resolve(0);
+                return;
+            }
+            // ffmpeg -i always fails if no output is specified, but prints info to stderr
+            const output = stderr || stdout || '';
+            const match = output.match(/Duration: (\d{2}):(\d{2}):(\d{2}\.\d+)/);
+            if (match) {
+                const hours = parseFloat(match[1]);
+                const minutes = parseFloat(match[2]);
+                const seconds = parseFloat(match[3]);
+                const totalSeconds = (hours * 3600) + (minutes * 60) + seconds;
+                resolve(totalSeconds);
+            } else {
+                resolve(0);
+            }
+        });
+    });
+}
+
 async function generateThumbnail(file) {
+
     // Switch to WebP
     // USE MD5 hash of the ID for the filename to avoid length limits and directory separator issues
     const fileId = Buffer.from(file.path).toString('base64');
@@ -1016,7 +929,23 @@ async function generateThumbnail(file) {
 
     if (fs.existsSync(thumbPath)) return true;
 
-    return new Promise((resolve) => {
+
+    return new Promise(async (resolve) => {
+        // Determine seek time
+        let seekTime = 3; // Default fallback to 3 seconds
+        if (file.mediaType === 'video') {
+            const duration = await getVideoDuration(file.path);
+            if (duration > 0) {
+                // Use 20% of video length
+                seekTime = duration * 0.2;
+            } else {
+                // If duration retrieval failed, stick to 3s (ffmpeg handles seeking past end gracefully usually by picking last frame)
+                seekTime = 3;
+            }
+        } else {
+            seekTime = 0;
+        }
+
         // Build FFmpeg command with HW acceleration if available
         let inputFlags = [];
         let filterChain = 'scale=300:-1';
@@ -1046,17 +975,18 @@ async function generateThumbnail(file) {
 
         // Construct command
         // Note: For VAAPI, input flags must be BEFORE -i
+        // Add -ss (seek) to input flags to apply before -i
         const flagsStr = inputFlags.join(' ');
 
         // Base command
-        let cmd = `ffmpeg -y ${flagsStr} -i "${file.path}" -vf "${filterChain}" -vcodec libwebp -q:v 50 -frames:v 1 "${thumbPath}"`;
+        let cmd = `ffmpeg -y ${flagsStr} -ss ${seekTime} -i "${file.path}" -vf "${filterChain}" -vcodec libwebp -q:v 50 -frames:v 1 "${thumbPath}"`;
 
         exec(cmd, { timeout: 15000 }, (err) => {
             if (err) {
                 // If HW accel failed, retry with software only
                 if (hwAccel.type !== 'none') {
                     console.warn(`HW Thumbnail failed for ${file.path}, retrying with software...`);
-                    const swCmd = `ffmpeg -y -i "${file.path}" -vf "scale=300:-1" -vcodec libwebp -q:v 50 -frames:v 1 "${thumbPath}"`;
+                    const swCmd = `ffmpeg -y -ss ${seekTime} -i "${file.path}" -vf "scale=300:-1" -vcodec libwebp -q:v 50 -frames:v 1 "${thumbPath}"`;
                     exec(swCmd, { timeout: 20000 }, (retryErr) => {
                         if (retryErr) {
                             console.error(`Software fallback failed for ${file.path}:`, retryErr);
@@ -1077,6 +1007,9 @@ async function generateThumbnail(file) {
 }
 
 async function processThumbnails() {
+    // Non-blocking yield to allow API response
+    await new Promise(r => setImmediate(r));
+
     console.log('Starting processThumbnails...');
     thumbState.status = 'scanning';
     thumbState.shouldStop = false;
@@ -1151,6 +1084,7 @@ async function processThumbnails() {
             thumbState.currentPath = file.path; // Note: In parallel mode, this only shows the *latest* started
 
             // Start processing
+            console.log(`[ThumbGen] Starting: ${file.path} (Active: ${activePool.size + 1}/${threadCount})`);
             const promise = generateThumbnail(file).then(() => {
                 thumbState.count++;
                 activePool.delete(promise);
@@ -1359,9 +1293,7 @@ app.get('/api/system/status', (req, res) => {
         cpu: 0,
         memory: 0,
         storage: cacheSize,
-        memory: 0,
-        storage: cacheSize,
-        watcherActive: isWatcherActive,
+        watcherActive: isWatcherActive, // This will always be false now
         mode: monitorMode,
         scanInterval: scanInterval,
         ffmpeg: true,
@@ -1401,25 +1333,25 @@ app.post('/api/system/monitor', (req, res) => {
         let paths = currentConfig.libraryPaths || [MEDIA_ROOT];
 
         if (mode === 'periodic') {
+            console.log(`[Monitor] Switched to Periodic (Every ${interval}m)`);
             newMode = 'periodic';
             const newInterval = interval || scanInterval || 60;
             scanInterval = newInterval;
             currentConfig.scanInterval = newInterval;
             startPeriodicScanner(paths, newInterval);
-        } else if (mode === 'realtime') {
-            newMode = 'realtime';
-            startWatcher(paths);
-        } else if (mode === 'manual') {
+        } else {
+            console.log(`[Monitor] Switched to Manual`);
             newMode = 'manual';
-        } else if (enabled === true) {
-            // Legacy toggle support
-            newMode = 'realtime';
-            startWatcher(paths);
+            // No periodic, no watcher
         }
 
-        // Update Config
+        // Realtime is removed/ignored
+
+        monitorMode = newMode;
         currentConfig.monitorMode = newMode;
-        currentConfig.watcherEnabled = (newMode === 'realtime'); // Back-compat
+
+        // Remove watcherEnabled flag as it's confusing now
+        delete currentConfig.watcherEnabled;
 
         fs.writeFileSync(CONFIG_FILE, JSON.stringify(currentConfig, null, 2));
 
@@ -1602,10 +1534,7 @@ app.listen(port, () => {
                     console.log(`Starting periodic scanner (every ${scanInterval}m)...`);
                     monitorMode = 'periodic';
                     startPeriodicScanner(libraryPaths, scanInterval);
-                } else if (config.monitorMode === 'realtime' || config.watcherEnabled) {
-                    console.log('Starting real-time watcher...');
-                    monitorMode = 'realtime';
-                    startWatcher(libraryPaths);
+                    startPeriodicScanner(libraryPaths, scanInterval);
                 } else {
                     monitorMode = 'manual';
                 }

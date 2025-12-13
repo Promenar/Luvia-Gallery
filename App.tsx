@@ -26,8 +26,8 @@ const THEME_STORAGE_KEY = 'lumina_theme';
 const AUTH_USER_KEY = 'lumina_auth_user';
 
 interface ExtendedSystemStatus extends SystemStatus {
-    watcherActive?: boolean;
-    mode?: 'realtime' | 'periodic' | 'manual';
+    // watcherActive?: boolean; // Deprecated
+    mode?: 'periodic' | 'manual';
     scanInterval?: number;
     dbStatus?: string;
     mediaStats?: {
@@ -588,7 +588,6 @@ export default function App() {
                 const data = await res.json();
                 setSystemStatus(prev => prev ? {
                     ...prev,
-                    watcherActive: data.active,
                     mode: data.mode || mode,
                     scanInterval: interval
                 } : prev);
@@ -677,28 +676,52 @@ export default function App() {
 
     const startServerScan = async () => {
         if (!isServerMode || !currentUser) return;
+
+        // Optimistic UI: Open modal immediately
+        setIsUnifiedModalOpen(true);
+        setScanStatus('scanning');
+        scanStatusRef.current = 'scanning';
+
+        // Ensure polling starts to pick up progress once server is ready
+        startUnifiedPolling();
+
         try {
             const startRes = await fetch('/api/scan/start', { method: 'POST' });
-            if (!startRes.ok && startRes.status !== 409) return;
-
-            setIsUnifiedModalOpen(true);
-            setScanStatus('scanning');
-            scanStatusRef.current = 'scanning';
-            startUnifiedPolling();
-        } catch (e) { }
+            if (!startRes.ok && startRes.status !== 409) {
+                // Revert if failed (except 409 conflict which means already running)
+                setScanStatus('idle');
+                scanStatusRef.current = 'idle';
+                alert("Failed to start scan");
+            }
+        } catch (e) {
+            setScanStatus('idle');
+            scanStatusRef.current = 'idle';
+            alert("Network error starting scan");
+        }
     };
 
     const startThumbnailGen = async () => {
         if (!isServerMode || !currentUser) return;
+
+        // Optimistic UI: Open modal immediately
+        setIsUnifiedModalOpen(true);
+        setThumbStatus('scanning');
+        thumbStatusRef.current = 'scanning';
+
+        startUnifiedPolling();
+
         try {
             const startRes = await fetch('/api/thumb-gen/start', { method: 'POST' });
-            if (!startRes.ok) return;
-
-            setIsUnifiedModalOpen(true);
-            setThumbStatus('scanning');
-            thumbStatusRef.current = 'scanning';
-            startUnifiedPolling();
-        } catch (e) { }
+            if (!startRes.ok && startRes.status !== 409) {
+                setThumbStatus('idle');
+                thumbStatusRef.current = 'idle';
+                alert("Failed to start thumbnail generation");
+            }
+        } catch (e) {
+            setThumbStatus('idle');
+            thumbStatusRef.current = 'idle';
+            alert("Network error starting thumbnail generation");
+        }
     };
 
     const clearCache = async () => {
@@ -1612,13 +1635,12 @@ export default function App() {
                                                     </div>
 
                                                     <div className="flex flex-col gap-3">
-                                                        {/* Mode Selector */}
-                                                        <div className="grid grid-cols-3 gap-2">
-                                                            {(['manual', 'periodic', 'realtime'] as const).map((m) => (
+                                                        <div className="grid grid-cols-2 gap-2">
+                                                            {(['manual', 'periodic'] as const).map((m) => (
                                                                 <button
                                                                     key={m}
                                                                     onClick={() => handleMonitorUpdate(m, systemStatus.scanInterval)}
-                                                                    className={`px-3 py-2 rounded-lg text-xs font-medium border capitalize transition-all ${(systemStatus.mode || (systemStatus.watcherActive ? 'realtime' : 'manual')) === m
+                                                                    className={`px-3 py-2 rounded-lg text-xs font-medium border capitalize transition-all ${(systemStatus.mode || 'manual') === m
                                                                         ? 'bg-blue-100 dark:bg-blue-900/40 border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-300 shadow-sm'
                                                                         : 'bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700'
                                                                         }`}
@@ -1628,15 +1650,9 @@ export default function App() {
                                                             ))}
                                                         </div>
 
-                                                        {/* Description & Interval Settings */}
                                                         <div className="text-xs text-gray-500 dark:text-gray-400 bg-white dark:bg-gray-800/50 p-3 rounded-lg border border-gray-100 dark:border-gray-700/50">
-                                                            {(systemStatus.mode || (systemStatus.watcherActive ? 'realtime' : 'manual')) === 'realtime' && (
-                                                                <p>{t('monitoring_desc_realtime')}</p>
-                                                            )}
-                                                            {(systemStatus.mode || (systemStatus.watcherActive ? 'realtime' : 'manual')) === 'manual' && (
-                                                                <p>{t('monitoring_desc_manual')}</p>
-                                                            )}
-                                                            {(systemStatus.mode || (systemStatus.watcherActive ? 'realtime' : 'manual')) === 'periodic' && (
+                                                            {(systemStatus.mode || 'manual') === 'manual' && <p>{t('monitoring_desc_manual')}</p>}
+                                                            {(systemStatus.mode || 'manual') === 'periodic' && (
                                                                 <div className="space-y-2">
                                                                     <p>{t('monitoring_desc_periodic')}</p>
                                                                     <div className="flex items-center gap-2 mt-2">
@@ -1644,7 +1660,7 @@ export default function App() {
                                                                         <select
                                                                             value={systemStatus.scanInterval || 60}
                                                                             onChange={(e) => handleMonitorUpdate('periodic', parseInt(e.target.value))}
-                                                                            className="bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded px-2 py-1 text-xs"
+                                                                            className="bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded px-2 py-1 text-xs outline-none focus:ring-1 focus:ring-primary-500"
                                                                         >
                                                                             <option value="15">15 {t('minutes')}</option>
                                                                             <option value="30">30 {t('minutes')}</option>
@@ -1660,52 +1676,6 @@ export default function App() {
                                                     </div>
                                                 </div>
 
-                                                {/* Watcher Logs Section */}
-                                                {systemStatus.watcherActive && (
-                                                    <div className="mt-3 pt-3 border-t border-blue-100 dark:border-blue-900/30">
-                                                        <div className="flex items-center justify-between mb-2">
-                                                            <span className="text-xs font-medium text-gray-600 dark:text-gray-400">Activity Logs</span>
-                                                            <button
-                                                                onClick={() => {
-                                                                    setShowWatcherLogs(!showWatcherLogs);
-                                                                    if (!showWatcherLogs) fetchWatcherLogs();
-                                                                }}
-                                                                className="text-xs text-primary-600 hover:underline"
-                                                            >
-                                                                {showWatcherLogs ? 'Hide' : 'Show'}
-                                                            </button>
-                                                        </div>
-                                                        {showWatcherLogs && (
-                                                            <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 max-h-48 overflow-y-auto">
-                                                                {watcherLogs.length === 0 ? (
-                                                                    <div className="p-3 text-center text-xs text-gray-400">No activity yet</div>
-                                                                ) : (
-                                                                    <div className="divide-y divide-gray-100 dark:divide-gray-700">
-                                                                        {watcherLogs.map((log, idx) => (
-                                                                            <div key={idx} className="p-2 hover:bg-gray-50 dark:hover:bg-gray-700/50">
-                                                                                <div className="flex items-start gap-2">
-                                                                                    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded uppercase ${log.type === 'add' ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' :
-                                                                                        log.type === 'change' ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400' :
-                                                                                            log.type === 'unlink' ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400' :
-                                                                                                log.type === 'error' ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400' :
-                                                                                                    'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-400'
-                                                                                        }`}>
-                                                                                        {log.type}
-                                                                                    </span>
-                                                                                    <div className="flex-1 min-w-0">
-                                                                                        <div className="text-xs text-gray-600 dark:text-gray-300 truncate">{log.message}</div>
-                                                                                        {log.path && <div className="text-[10px] text-gray-400 font-mono truncate">{log.path}</div>}
-                                                                                        <div className="text-[10px] text-gray-400">{new Date(log.timestamp).toLocaleTimeString()}</div>
-                                                                                    </div>
-                                                                                </div>
-                                                                            </div>
-                                                                        ))}
-                                                                    </div>
-                                                                )}
-                                                            </div>
-                                                        )}
-                                                    </div>
-                                                )}
                                             </div>
                                         )}
                                     </div>
@@ -1742,9 +1712,11 @@ export default function App() {
                                         </div>
                                     </div>
                                 </section>
+
                             </>
-                        )}
-                    </div>
+                        )
+                        }
+                    </div >
                 );
             case 'system':
                 return (
@@ -1948,7 +1920,7 @@ export default function App() {
                                 <Icons.Download size={16} /> {t('backup_config')}
                             </button>
                         </section>
-                    </div>
+                    </div >
                 );
             case 'account':
                 return (
