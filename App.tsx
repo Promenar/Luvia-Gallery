@@ -88,6 +88,36 @@ export default function App() {
     // Thumb State
     const [thumbStatus, setThumbStatus] = useState<'idle' | 'scanning' | 'paused' | 'error'>('idle');
     const [thumbProgress, setThumbProgress] = useState({ count: 0, total: 0, currentPath: '' });
+    const [smartScanResults, setSmartScanResults] = useState<{ missing: any[], error: any[], timestamp: number } | null>(null);
+
+    const handleSmartScan = async () => {
+        try {
+            await fetch('/api/thumb/smart-scan', { method: 'POST' });
+            setThumbStatus('scanning'); // Optimistic
+            startUnifiedPolling();
+        } catch (e) { console.error(e); }
+    };
+
+    const handleFetchSmartResults = async () => {
+        try {
+            const res = await fetch('/api/thumb/smart-results');
+            if (res.ok) setSmartScanResults(await res.json());
+        } catch (e) { }
+    };
+
+    const handleSmartRepair = async () => {
+        try {
+            await fetch('/api/thumb/smart-repair', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ repairMissing: true, repairError: true })
+            });
+            setThumbStatus('scanning');
+            startUnifiedPolling();
+        } catch (e) { console.error(e); }
+    };
+
+
 
     const scanProgressRef = useRef({ count: 0 }); // Added ref for progress
     const scanStatusRef = useRef<ScanStatus>('idle'); // Added ref for status
@@ -133,6 +163,13 @@ export default function App() {
     const [filterOption, setFilterOption] = useState<FilterOption>('all');
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
     const [settingsTab, setSettingsTab] = useState<SettingsTab>('general'); // New state for tabs
+
+    useEffect(() => {
+        if (settingsTab === 'system') {
+            handleFetchSmartResults();
+        }
+    }, [settingsTab]);
+
 
     // --- Random Sort Stability ---
     const [randomizedFiles, setRandomizedFiles] = useState<MediaItem[]>([]);
@@ -314,11 +351,28 @@ export default function App() {
             setUsers(loadedUsers);
             setAppTitle(loadedTitle);
             setHomeSubtitle(loadedSubtitle);
+
             setHomeConfig(loadedHomeConfig);
+
+            // Check Persistent Login & Load Cache (Performance)
+            const savedUser = localStorage.getItem(AUTH_USER_KEY);
+            const savedViewMode = localStorage.getItem(VIEW_MODE_KEY) as ViewMode;
+
+            if (savedUser && (!savedViewMode || savedViewMode === 'home' || savedViewMode === 'all')) {
+                try {
+                    const cached = localStorage.getItem('lumina_cache_home');
+                    if (cached && loadedData[savedUser]) {
+                        const cData = JSON.parse(cached);
+                        if (cData && Array.isArray(cData.files)) {
+                            loadedData[savedUser].files = cData.files;
+                            console.log('Processed Initial Cache:', cData.files.length);
+                        }
+                    }
+                } catch (e) { }
+            }
+
             setAllUserData(loadedData);
 
-            // Check Persistent Login
-            const savedUser = localStorage.getItem(AUTH_USER_KEY);
             if (savedUser) {
                 const user = loadedUsers.find(u => u.username === savedUser);
                 if (user) {
@@ -539,7 +593,20 @@ export default function App() {
             setServerTotal(data.total);
             if (folderFilter === null && !favoritesOnly) {
                 setLibraryTotalCount(data.total);
+
+                // Cache First Page (Performance Optimization)
+                if (offset === 0) {
+                    try {
+                        const cacheData = {
+                            files: filesWithFavorites.slice(0, 200), // Cache first 200 items
+                            total: data.total,
+                            timestamp: Date.now()
+                        };
+                        localStorage.setItem('lumina_cache_home', JSON.stringify(cacheData));
+                    } catch (e) { console.error('Cache save failed', e); }
+                }
             }
+
 
             setServerOffset(offset + limit);
             setHasMoreServer(data.hasMore);
@@ -889,11 +956,26 @@ export default function App() {
 
         if (isServerMode && currentUser) {
             // Clear current files to avoid "flash" of old content when switching views
+            // OPTIMIZED: Try to load from cache for 'home'/'all' views
+            let initialFiles: MediaItem[] = [];
+            if (mode === 'all' || mode === 'home') {
+                try {
+                    const cached = localStorage.getItem('lumina_cache_home');
+                    if (cached) {
+                        const cData = JSON.parse(cached);
+                        if (cData && Array.isArray(cData.files)) {
+                            initialFiles = cData.files;
+                            console.log('Loaded from cache:', initialFiles.length);
+                        }
+                    }
+                } catch (e) { }
+            }
+
             const clearedData = {
                 ...allUserData,
                 [currentUser.username]: {
                     ...allUserData[currentUser.username],
-                    files: []
+                    files: initialFiles
                 }
             };
             setAllUserData(clearedData);
@@ -1967,6 +2049,59 @@ export default function App() {
                                             </button>
                                         </div>
                                     </div>
+                                </div>
+
+                                {/* Smart Repair */}
+                                <div className="bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded-2xl p-5 shadow-sm">
+                                    <h5 className="flex items-center gap-2 font-bold text-gray-900 dark:text-white mb-4">
+                                        <Icons.Zap size={18} className="text-yellow-500" /> {t('smart_repair') || 'Smart Repair'}
+                                    </h5>
+                                    <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+                                        {t('smart_repair_desc') || 'Scan for missing or broken thumbnails and verify system integrity.'}
+                                    </p>
+
+                                    {smartScanResults && smartScanResults.timestamp > 0 ? (
+                                        <div className="space-y-4">
+                                            <div className="bg-gray-50 dark:bg-gray-900/50 p-4 rounded-xl border border-gray-100 dark:border-gray-700/50">
+                                                <div className="flex justify-between items-center mb-2">
+                                                    <span className="text-sm font-medium">{t('missing_thumbs') || 'Missing Thumbnails'}</span>
+                                                    <span className="font-bold text-red-500">{smartScanResults.missing.length}</span>
+                                                </div>
+                                                <div className="flex justify-between items-center">
+                                                    <span className="text-sm font-medium">{t('broken_thumbs') || 'Corrupted Thumbnails'}</span>
+                                                    <span className="font-bold text-orange-500">{smartScanResults.error.length}</span>
+                                                </div>
+                                                <div className="mt-2 text-xs text-gray-400 text-right">
+                                                    {t('last_scan') || 'Last Scan'}: {new Date(smartScanResults.timestamp).toLocaleTimeString()}
+                                                </div>
+                                            </div>
+
+                                            <div className="flex gap-2">
+                                                <button
+                                                    onClick={handleSmartRepair}
+                                                    disabled={thumbStatus === 'scanning' || (smartScanResults.missing.length === 0 && smartScanResults.error.length === 0)}
+                                                    className={`flex-1 py-2 rounded-xl text-sm font-medium transition-colors ${thumbStatus === 'scanning' || (smartScanResults.missing.length === 0 && smartScanResults.error.length === 0) ? 'bg-gray-200 dark:bg-gray-700 text-gray-400 cursor-not-allowed' : 'bg-yellow-500 hover:bg-yellow-600 text-white shadow-sm shadow-yellow-500/20'}`}
+                                                >
+                                                    {thumbStatus === 'scanning' ? (t('processing') || 'Processing...') : (t('repair_now') || 'Repair Issues')}
+                                                </button>
+                                                <button
+                                                    onClick={handleSmartScan}
+                                                    disabled={thumbStatus === 'scanning'}
+                                                    className="px-4 py-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200 rounded-xl text-sm font-medium transition-colors"
+                                                >
+                                                    {t('rescan') || 'Rescan'}
+                                                </button>
+                                            </div>
+                                        </div>
+                                    ) : (
+                                        <button
+                                            onClick={handleSmartScan}
+                                            disabled={thumbStatus === 'scanning'}
+                                            className={`w-full py-2.5 rounded-xl font-medium text-sm transition-colors ${thumbStatus === 'scanning' ? 'bg-gray-200 dark:bg-gray-700 text-gray-400' : 'bg-yellow-50 dark:bg-yellow-900/20 text-yellow-600 dark:text-yellow-400 hover:bg-yellow-100 dark:hover:bg-yellow-900/30'}`}
+                                        >
+                                            {thumbStatus === 'scanning' ? (t('processing') || 'Processing...') : (t('start_smart_scan') || 'Start Analysis')}
+                                        </button>
+                                    )}
                                 </div>
                             </div>
                         )}

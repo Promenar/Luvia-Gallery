@@ -628,6 +628,9 @@ function countFavoriteFiles(userId) {
 /**
  * Get all file paths (for sync)
  */
+/**
+ * Get all file paths (for sync)
+ */
 function getAllFilePaths() {
     const stmt = db.prepare('SELECT path FROM files');
     const paths = [];
@@ -636,6 +639,67 @@ function getAllFilePaths() {
     }
     stmt.free();
     return paths;
+}
+
+/**
+ * Rename file and update ID/references
+ */
+function renameFile(oldPath, newPath, newName) {
+    const oldId = Buffer.from(oldPath).toString('base64');
+    const newId = Buffer.from(newPath).toString('base64');
+    const folderPath = path.dirname(newPath);
+
+    db.run('BEGIN TRANSACTION');
+    try {
+        // 1. Files table
+        // We delete old and insert new, OR update.
+        // If we update, we must update ID.
+        // SQLite allows updating PK if cascades are set, but here we do manually.
+        const file = getFileByPath(oldPath);
+        if (file) {
+            // Delete old
+            db.prepare('DELETE FROM files WHERE id = ?').run([oldId]);
+
+            // Insert new (copy props)
+            const stmt = db.prepare(`
+                INSERT INTO files (id, path, name, folder_path, size, type, media_type, last_modified, source_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `);
+            stmt.run([
+                newId,
+                newPath,
+                newName,
+                folderPath,
+                file.size,
+                file.type,
+                file.mediaType,
+                Date.now(), // Update modified time or keep old? Usually rename updates mtime on disk? 
+                // fs.rename updates ctime, not mtime usually. Let's keep old or use Date.now().
+                file.sourceId
+            ]);
+            stmt.free();
+
+            // 2. Favorites
+            db.prepare('UPDATE favorites SET item_id = ? WHERE item_id = ?').run([newId, oldId]);
+
+            // 3. Thumbnails
+            db.prepare('UPDATE thumbnails SET file_id = ? WHERE file_id = ?').run([newId, oldId]);
+        }
+
+        db.run('COMMIT');
+        return true;
+    } catch (e) {
+        db.run('ROLLBACK');
+        console.error("Rename DB error:", e);
+        return false;
+    }
+}
+
+/**
+ * Clear thumbnails table
+ */
+function clearThumbnails() {
+    db.run('DELETE FROM thumbnails');
 }
 
 module.exports = {
@@ -657,5 +721,7 @@ module.exports = {
     countFavoriteFiles,
     getAllFilePaths,
     deleteFilesBatch,
-    getAllFilesMtime
+    getAllFilesMtime,
+    renameFile,      // NEW
+    clearThumbnails  // NEW
 };

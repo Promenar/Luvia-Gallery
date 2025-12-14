@@ -164,6 +164,17 @@ const translations = {
     cache_cleared: 'Cache Cleared',
     cache_pruned: 'Cache Pruned',
 
+    // Settings - Smart Repair
+    smart_repair: 'Smart Repair',
+    smart_repair_desc: 'Scan for missing or broken thumbnails and verify system integrity.',
+    missing_thumbs: 'Missing Thumbnails',
+    broken_thumbs: 'Corrupted Thumbnails',
+    last_scan: 'Last Scan',
+    repair_now: 'Repair Issues',
+    rescan: 'Rescan',
+    start_smart_scan: 'Start Analysis',
+
+
     // Settings - Monitoring
     monitoring_strategy: 'Monitoring Strategy',
     manual_mode: 'Manual',
@@ -390,6 +401,17 @@ const translations = {
     clean_duplicate_cache: '清理重复缓存',
     cache_cleared: '缓存已清除',
     cache_pruned: '缓存已清理',
+
+    // Settings - Smart Repair
+    smart_repair: '智能修复',
+    smart_repair_desc: '扫描缺失或损坏的缩略图并验证系统完整性。',
+    missing_thumbs: '缺失缩略图',
+    broken_thumbs: '损坏缩略图',
+    last_scan: '上次扫描',
+    repair_now: '修复',
+    rescan: '重新扫描',
+    start_smart_scan: '开始分析',
+
 
     // Settings - Monitoring
     monitoring_strategy: '监控策略',
