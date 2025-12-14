@@ -354,8 +354,18 @@ app.get('/api/library/folders', (req, res) => {
                     // Find smart cover
                     const found = findCoverMedia(folderPath);
                     if (found) {
+                        const b64Id = Buffer.from(found.path).toString('base64');
+                        let url = `/api/thumb/${b64Id}`;
+                        try {
+                            const thumbFilename = crypto.createHash('md5').update(b64Id).digest('hex') + '.webp';
+                            const thumbPath = path.join(CACHE_DIR, thumbFilename);
+                            if (fs.existsSync(thumbPath)) {
+                                url += `?t=${fs.statSync(thumbPath).mtimeMs}`;
+                            }
+                        } catch (e) { }
+
                         coverMedia = {
-                            url: `/api/thumb/${Buffer.from(found.path).toString('base64')}`,
+                            url: url,
                             mediaType: found.type,
                             name: found.name
                         };
@@ -451,8 +461,18 @@ app.get('/api/library/folders', (req, res) => {
         try {
             const found = findCoverMedia(f);
             if (found) {
+                const b64Id = Buffer.from(found.path).toString('base64');
+                let url = `/api/thumb/${b64Id}`;
+                try {
+                    const thumbFilename = crypto.createHash('md5').update(b64Id).digest('hex') + '.webp';
+                    const thumbPath = path.join(CACHE_DIR, thumbFilename);
+                    if (fs.existsSync(thumbPath)) {
+                        url += `?t=${fs.statSync(thumbPath).mtimeMs}`;
+                    }
+                } catch (e) { }
+
                 coverMedia = {
-                    url: `/api/thumb/${Buffer.from(found.path).toString('base64')}`,
+                    url: url,
                     mediaType: found.type,
                     name: found.name
                 };
@@ -919,7 +939,7 @@ async function getVideoDuration(filePath) {
     });
 }
 
-async function generateThumbnail(file) {
+async function generateThumbnail(file, force = false) {
 
     // Switch to WebP
     // USE MD5 hash of the ID for the filename to avoid length limits and directory separator issues
@@ -927,7 +947,7 @@ async function generateThumbnail(file) {
     const thumbFilename = crypto.createHash('md5').update(fileId).digest('hex') + '.webp';
     const thumbPath = path.join(CACHE_DIR, thumbFilename);
 
-    if (fs.existsSync(thumbPath)) return true;
+    if (!force && fs.existsSync(thumbPath)) return true;
 
 
     return new Promise(async (resolve) => {
@@ -979,178 +999,316 @@ async function generateThumbnail(file) {
         const flagsStr = inputFlags.join(' ');
 
         // Base command
-        let cmd = `ffmpeg -y ${flagsStr} -ss ${seekTime} -i "${file.path}" -vf "${filterChain}" -vcodec libwebp -q:v 50 -frames:v 1 "${thumbPath}"`;
+        let seekPart = file.mediaType === 'video' ? `-ss ${seekTime}` : '';
+        let cmd = `ffmpeg -y ${flagsStr} ${seekPart} -i "${file.path}" -vf "${filterChain}" -vcodec libwebp -q:v 50 -frames:v 1 "${thumbPath}"`;
 
-        exec(cmd, { timeout: 15000 }, (err) => {
+        exec(cmd, { timeout: 15000 }, (err, stdout, stderr) => {
             if (err) {
+                console.error(`[Thumb] Primary FFmpeg command failed for ${file.path}`);
+                console.error(`[Thumb] Command: ${cmd}`);
+                console.error(`[Thumb] Error: ${err.message}`);
+                console.error(`[Thumb] Stderr: ${stderr}`);
+
                 // If HW accel failed, retry with software only
                 if (hwAccel.type !== 'none') {
-                    console.warn(`HW Thumbnail failed for ${file.path}, retrying with software...`);
-                    const swCmd = `ffmpeg -y -ss ${seekTime} -i "${file.path}" -vf "scale=300:-1" -vcodec libwebp -q:v 50 -frames:v 1 "${thumbPath}"`;
-                    exec(swCmd, { timeout: 20000 }, (retryErr) => {
+                    console.warn(`[Thumb] Retrying with software fallback...`);
+                    const swCmd = `ffmpeg -y ${seekPart} -i "${file.path}" -vf "scale=300:-1" -vcodec libwebp -q:v 50 -frames:v 1 "${thumbPath}"`;
+                    exec(swCmd, { timeout: 20000 }, (retryErr, swStdout, swStderr) => {
                         if (retryErr) {
-                            console.error(`Software fallback failed for ${file.path}:`, retryErr);
+                            console.error(`[Thumb] Software fallback failed for ${file.path}`);
+                            console.error(`[Thumb] Command: ${swCmd}`);
+                            console.error(`[Thumb] Error: ${retryErr.message}`);
+                            console.error(`[Thumb] Stderr: ${swStderr}`);
                             resolve(false);
                         } else {
-                            resolve(true);
+                            if (fs.existsSync(thumbPath) && fs.statSync(thumbPath).size > 0) {
+                                resolve(true);
+                            } else {
+                                console.error(`[Thumb] Software fallback success but empty file: ${thumbPath}`);
+                                resolve(false);
+                            }
                         }
                     });
                 } else {
-                    console.error(`Error generating thumb for ${file.path}:`, err);
                     resolve(false);
                 }
             } else {
-                resolve(true);
+                if (fs.existsSync(thumbPath) && fs.statSync(thumbPath).size > 0) {
+                    resolve(true);
+                } else {
+                    console.error(`[Thumb] Primary success but empty file: ${thumbPath}`);
+                    console.error(`[Thumb] Stderr: ${stderr}`);
+                    resolve(false);
+                }
             }
         });
     });
 }
 
-async function processThumbnails() {
-    // Non-blocking yield to allow API response
-    await new Promise(r => setImmediate(r));
+// --- Thumbnail Generation (Queue & Concurrency) ---
+// Global Queue State
+let thumbQueue = [];
+let currentTask = null;
+let isTaskProcessorRunning = false;
+// thumbState is already defined below implicitly or reused? 
+// Wait, thumbState is NOT global in this file scope usually? 
+// Ah, let me check where thumbState is defined. It was NOT defined in the top 100 lines.
+// In the previous code (Chunk 0 view), it was used inside processThumbnails AND API endpoints.
+// It must be defined globally somewhere.
+// Let me check line 1048 again. "thumbState.status = ...". It implies thumbState exists.
+// I will search for "let thumbState".
 
-    console.log('Starting processThumbnails...');
-    thumbState.status = 'scanning';
-    thumbState.shouldStop = false;
-    thumbState.shouldPause = false;
-    thumbState.count = 0;
 
-    let threadCount = 2; // Default
-    try {
-        if (fs.existsSync(CONFIG_FILE)) {
-            const config = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
-            if (config.threadCount && config.threadCount > 0) {
-                threadCount = config.threadCount;
-            }
+
+// Helper for Concurrency
+async function processFilesConcurrently(files, concurrency, onProgress, getControlState) {
+    const queue = [...files];
+    const activePromises = new Set();
+
+    // Loop until all processed
+    while (queue.length > 0 || activePromises.size > 0) {
+        // Check Control
+        const { shouldStop, shouldPause } = getControlState();
+        if (shouldStop) break;
+
+        if (shouldPause) {
+            await new Promise(r => setTimeout(r, 500));
+            continue;
         }
-    } catch (e) { }
 
-    console.log(`Thumbnail generation starting with ${threadCount} threads.`);
+        // Fill pool
+        while (queue.length > 0 && activePromises.size < concurrency) {
+            const file = queue.shift();
+            onProgress(file);
 
-    try {
-        const allFiles = database.queryFiles({ offset: 0, limit: 999999 });
-
-        // INCREMENTAL CHECK: Read cache dir first
-        console.log('Checking existing thumbnails...');
-        const existingThumbs = new Set();
-        if (fs.existsSync(CACHE_DIR)) {
-            const files = fs.readdirSync(CACHE_DIR);
-            for (const file of files) {
-                if (file.endsWith('.webp')) {
-                    existingThumbs.add(path.parse(file).name);
+            const p = (async () => {
+                try {
+                    await generateThumbnail(file, true); // Force regenerate
+                } catch (e) {
+                    console.error(`Error generating thumb for ${file.path}:`, e);
                 }
-            }
+            })();
+
+            // Add to set
+            activePromises.add(p);
+
+            // Remove from set when done
+            p.finally(() => {
+                activePromises.delete(p);
+            });
         }
 
-        // Filter queue to only missing thumbnails
-        const queue = allFiles.filter(f => {
-            // File ID is base64 of path, which is the thumb name
-            const id = f.id;
-            return !existingThumbs.has(id);
-        }).map(f => ({ path: f.path, id: f.id }));
+        // Wait for one to finish if full or queue empty but active
+        if (activePromises.size >= concurrency || (queue.length === 0 && activePromises.size > 0)) {
+            await Promise.race(activePromises);
+        }
+    }
+}
 
-        console.log(`Found ${allFiles.length} total files, ${queue.length} need thumbnails.`);
-        thumbState.total = queue.length;
+// Wrapper to check control state safely
+function getThumbControl() {
+    return { shouldStop: thumbState.shouldStop, shouldPause: thumbState.shouldPause };
+}
 
-        const activePool = new Set();
+// Queue Processor
+async function processTaskQueue() {
+    if (isTaskProcessorRunning) return;
+    isTaskProcessorRunning = true;
 
-        for (const file of queue) {
-            // Check Stop
-            if (thumbState.shouldStop) {
-                console.log('Thumbnail generation stop signal received.');
-                break;
-            }
+    try {
+        while (thumbQueue.length > 0) {
+            currentTask = thumbQueue.shift(); // Dequeue
 
-            // Check Pause
-            while (thumbState.shouldPause) {
-                if (thumbState.shouldStop) break;
-                thumbState.status = 'paused';
-                await new Promise(r => setTimeout(r, 200));
-            }
-            if (thumbState.shouldStop) break;
-
+            // Setup global state for UI
             thumbState.status = 'scanning';
+            thumbState.total = currentTask.total || (currentTask.files ? currentTask.files.length : 0);
+            thumbState.count = 0;
+            thumbState.currentPath = `Starting: ${currentTask.name}`;
+            thumbState.shouldStop = false;
+            thumbState.shouldPause = false;
 
-            // Wait if pool is full
-            // Race against any promise in the pool to free up a slot
-            while (activePool.size >= threadCount) {
-                await Promise.race(activePool);
+            console.log(`[Queue] Starting Task: ${currentTask.name} (${thumbState.total} files)`);
+
+            // Determine Thread Count
+            let threadCount = 2; // Default
+            if (fs.existsSync(CONFIG_FILE)) {
+                try {
+                    const config = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+                    if (config.threadCount && config.threadCount > 0) threadCount = config.threadCount;
+                } catch (e) { }
+            }
+            // Use logical cores if not set or aggressive
+            // const osThreads = os.cpus().length;
+            // if (threadCount > osThreads) threadCount = osThreads; 
+
+            // Process Files
+            if (currentTask.files && currentTask.files.length > 0) {
+                await processFilesConcurrently(
+                    currentTask.files,
+                    threadCount,
+                    (file) => {
+                        thumbState.currentPath = file.path;
+                        thumbState.count++;
+                    },
+                    getThumbControl
+                );
             }
 
-            // Double check stop after waiting
-            if (thumbState.shouldStop) break;
+            if (thumbState.shouldStop) {
+                console.log(`[Queue] Task cancelled: ${currentTask.name}`);
+            } else {
+                console.log(`[Queue] Task completed: ${currentTask.name}`);
+            }
 
-            thumbState.currentPath = file.path; // Note: In parallel mode, this only shows the *latest* started
-
-            // Start processing
-            console.log(`[ThumbGen] Starting: ${file.path} (Active: ${activePool.size + 1}/${threadCount})`);
-            const promise = generateThumbnail(file).then(() => {
-                thumbState.count++;
-                activePool.delete(promise);
-            }).catch(e => {
-                console.error("Task failed", e);
-                activePool.delete(promise);
-            });
-
-            activePool.add(promise);
-
-            // Allow event loop tick
+            // allow events
             await new Promise(r => setImmediate(r));
         }
-
-        // Wait for remaining tasks
-        if (activePool.size > 0) {
-            console.log(`Waiting for ${activePool.size} active tasks to finish...`);
-            await Promise.all(activePool);
-        }
-
     } catch (e) {
-        console.error("Thumb gen error:", e);
+        console.error('[Queue] Processor fatal error:', e);
     } finally {
+        isTaskProcessorRunning = false;
+        currentTask = null;
         thumbState.status = 'idle';
-        console.log('Thumbnail generation finished/stopped');
+        thumbState.currentPath = '';
     }
+}
+
+// Enqueue Helper
+function enqueueTask(task) {
+    // task: { id, type, name, files: [], total }
+    console.log(`[Queue] Enqueuing task: ${task.name}`);
+    thumbQueue.push(task);
+    processTaskQueue(); // Trigger loop if idle
+}
+
+async function processThumbnails() {
+    // Legacy "Scan All" behavior -> Queue system scan
+    (async () => {
+        try {
+            console.log("Identifying missing thumbnails for System Scan...");
+            const allFiles = database.queryFiles({ offset: 0, limit: 999999 });
+
+            // Quick check existing
+            const existingThumbs = new Set();
+            if (fs.existsSync(CACHE_DIR)) {
+                const files = fs.readdirSync(CACHE_DIR);
+                for (const file of files) { if (file.endsWith('.webp')) existingThumbs.add(path.parse(file).name); }
+            }
+
+            const missing = allFiles.filter(f => !existingThumbs.has(f.id));
+
+            if (missing.length === 0) {
+                console.log("No missing thumbnails found.");
+                return;
+            }
+
+            enqueueTask({
+                id: 'system-scan-' + Date.now(),
+                type: 'system_scan',
+                name: 'System Thumbnail Scan',
+                files: missing,
+                total: missing.length
+            });
+
+        } catch (e) { console.error("Error queueing system scan:", e); }
+    })();
 }
 
 // Thumb Gen API
 app.get('/api/thumb-gen/status', (req, res) => {
+    // Return queue summary
+    const queueSummary = thumbQueue.map(t => ({ id: t.id, name: t.name, total: t.total, type: t.type }));
+
     res.json({
         status: thumbState.status,
         count: thumbState.count,
         total: thumbState.total,
-        currentPath: thumbState.currentPath
+        currentPath: thumbState.currentPath,
+        currentTaskName: currentTask ? currentTask.name : null,
+        queue: queueSummary
     });
 });
 
 app.post('/api/thumb-gen/start', (req, res) => {
-    if (thumbState.status === 'scanning' || thumbState.status === 'paused') {
-        return res.json({ success: true, message: 'Already running' });
-    }
-    // Only reset if trying to start from idle
-    thumbState = { ...thumbState, count: 0, total: 0, shouldStop: false, shouldPause: false };
-    processThumbnails();
-    res.json({ success: true });
+    // Start System Scan
+    processThumbnails(); // This now queues
+    res.json({ success: true, message: 'System scan queued' });
 });
 
 app.post('/api/thumb-gen/control', (req, res) => {
-    const { action } = req.body;
-    console.log(`[ThumbControl] Action received: ${action}`);
+    const { action, taskId } = req.body;
 
     if (action === 'pause') {
         thumbState.shouldPause = true;
     } else if (action === 'resume') {
         thumbState.shouldPause = false;
     } else if (action === 'stop' || action === 'cancel') {
+        // Stops CURRENT task
         thumbState.shouldStop = true;
-        thumbState.shouldPause = false; // Break the pause loop so it can see the stop signal
-    } else if (action === 'close') {
-        // Reset state on close
-        if (thumbState.status !== 'scanning' && thumbState.status !== 'paused') {
-            thumbState.status = 'idle';
+        thumbState.shouldPause = false;
+    } else if (action === 'cancel-item') {
+        // Remove specific task from queue
+        if (currentTask && currentTask.id === taskId) {
+            thumbState.shouldStop = true;
+            thumbState.shouldPause = false;
+        } else {
+            thumbQueue = thumbQueue.filter(t => t.id !== taskId);
         }
     }
     res.json({ success: true, status: thumbState.status });
+});
+
+// Regenerate Endpoint (Queue Based)
+app.post('/api/thumb/regenerate', async (req, res) => {
+    const { id, folderPath } = req.body;
+
+    try {
+        if (id) {
+            // Single File - Execute Immediately
+            const filePath = Buffer.from(id, 'base64').toString('utf8');
+            if (fs.existsSync(filePath)) {
+                const ext = path.extname(filePath).toLowerCase();
+                let mediaType = (['.mp4', '.webm', '.mov'].includes(ext)) ? 'video' : 'image';
+                // We need to construct a robust file object if generateThumbnail relies on it
+                // The old code passed { path, mediaType }
+                await generateThumbnail({ path: filePath, mediaType, id }, true);
+                return res.json({ success: true });
+            }
+            return res.status(404).json({ error: 'File not found' });
+        }
+        else if (folderPath) {
+            // Batch Folder
+            let targetPath = folderPath;
+            if (targetPath === 'root') targetPath = MEDIA_ROOT;
+
+            // Recursively find files
+            // ensure { recursive: true } is supported by database.queryFiles (it was added in V6)
+            const files = database.queryFiles({ folderPath: targetPath, limit: 99999, recursive: true });
+
+            if (files.length === 0) {
+                return res.json({ success: true, message: 'No files to regenerate.' });
+            }
+
+            const taskName = path.basename(targetPath) || 'Root';
+
+            enqueueTask({
+                id: crypto.randomUUID(),
+                type: 'folder_repair',
+                name: `Repair: ${taskName}`,
+                files: files,
+                total: files.length
+            });
+
+            res.json({ success: true, message: 'Task queued' });
+
+        } else {
+            res.status(400).json({ error: 'Missing params' });
+        }
+
+    } catch (e) {
+        console.error("Regenerate Error:", e);
+        res.status(500).json({ error: e.message });
+    }
 });
 
 // Serve Thumbs (WebP)

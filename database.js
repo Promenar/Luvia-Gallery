@@ -195,8 +195,13 @@ function queryFiles(options = {}) {
     const params = [];
 
     if (folderPath !== null) {
-        query += ' AND folder_path = ?';
-        params.push(folderPath);
+        if (options.recursive) {
+            query += ' AND (folder_path = ? OR folder_path LIKE ?)';
+            params.push(folderPath, folderPath + '/%');
+        } else {
+            query += ' AND folder_path = ?';
+            params.push(folderPath);
+        }
     }
 
     if (mediaType) {

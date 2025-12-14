@@ -137,6 +137,10 @@ export default function App() {
     // --- Random Sort Stability ---
     const [randomizedFiles, setRandomizedFiles] = useState<MediaItem[]>([]);
 
+    // --- Batch Operations State ---
+    const [isRegenerating, setIsRegenerating] = useState(false);
+    const [thumbQueue, setThumbQueue] = useState<Array<{ id: string, name: string, total: number }>>([]);
+
     // --- Theme Logic ---
     useEffect(() => {
         const savedTheme = localStorage.getItem(THEME_STORAGE_KEY) as 'light' | 'dark' | 'system' | null;
@@ -642,6 +646,13 @@ export default function App() {
                     const thumbData = await thumbRes.json();
                     const newThumbStatus = thumbData.status === 'scanning' || thumbData.status === 'paused' ? thumbData.status : 'idle';
 
+                    // Update Queue (if available)
+                    if (thumbData.queue) {
+                        setThumbQueue(thumbData.queue);
+                    } else {
+                        setThumbQueue([]);
+                    }
+
                     // If we encounter an error or finished state that isn't idle, we might want to show it
                     // but for now, track active states.
                     setThumbStatus(thumbData.status);
@@ -655,9 +666,16 @@ export default function App() {
                 }
             } catch (e) { }
 
-            // Continue polling if ANY active
+            // Continue polling if ANY active OR queue has items
             const isScanActive = scanStatusRef.current === 'scanning' || scanStatusRef.current === 'paused';
             const isThumbActive = thumbStatusRef.current === 'scanning' || thumbStatusRef.current === 'paused';
+
+            // Check queue length from state is risky due to closure stale state
+            // relying on active status for poll continuation is safer for now.
+            // If the queue has items, the status SHOULD be scanning (processing queue)
+            // But if we just finished one task and waiting for next tick, it might arguably briefly be idle.
+            // But the backend sets status to scanning immediately if queue > 0.
+            // So checking status is sufficient.
 
             if (isScanActive || isThumbActive) {
                 scanTimeoutRef.current = setTimeout(poll, 1000);
@@ -745,6 +763,38 @@ export default function App() {
         } catch (e) { alert('Network error'); }
     };
 
+    const handleRegenerateFolder = async (folderPathArg?: string) => {
+        const targetPath = folderPathArg || currentPath;
+        if (!isServerMode || !targetPath || isRegenerating) return;
+        if (!confirm(t('confirm_regenerate_folder') || "Are you sure you want to regenerate thumbnails for this folder and its subfolders?")) return;
+
+        setIsRegenerating(true);
+        // Optimistic UI update
+        setThumbStatus('scanning');
+        setIsUnifiedModalOpen(true);
+        startUnifiedPolling(); // Start polling immediately
+
+        try {
+            const res = await fetch('/api/thumb/regenerate', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ folderPath: targetPath })
+            });
+            if (res.ok) {
+                // Success - background task started. Polling will pick up status.
+                // We don't need to alert.
+            } else {
+                alert('Failed to start regeneration');
+                setIsUnifiedModalOpen(false); // Close if failed to start
+            }
+        } catch (e) {
+            alert('Network error');
+            setIsUnifiedModalOpen(false);
+        } finally {
+            setIsRegenerating(false);
+        }
+    };
+
     // Restore State on Mount
     useEffect(() => {
         let isMounted = true;
@@ -812,19 +862,25 @@ export default function App() {
         } catch (e) { }
     };
 
-    const controlThumb = async (action: 'pause' | 'resume' | 'stop') => {
+    const controlThumb = async (action: 'pause' | 'resume' | 'stop' | 'cancel-item', taskId?: string) => {
+        // Map 'stop' to 'cancel'
         try {
             await fetch('/api/thumb-gen/control', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ action })
+                body: JSON.stringify({ action: action === 'stop' ? 'cancel' : action, taskId })
             });
-            // Optimistic update
             if (action === 'pause') setThumbStatus('paused');
             if (action === 'resume') { setThumbStatus('scanning'); startUnifiedPolling(); }
-            if (action === 'stop') setThumbStatus('idle'); // Stop resets to idle usually
+            if (action === 'stop') setThumbStatus('idle'); // Optimistic
+            // For cancel-item, polling will update the queue
         } catch (e) { }
     };
+
+    const handleCancelTask = (id: string) => {
+        controlThumb('cancel-item', id);
+    };
+
 
     const handleSetViewMode = async (mode: ViewMode) => {
         setViewMode(mode);
@@ -2017,10 +2073,15 @@ export default function App() {
 
                         <div className="hidden md:flex items-center gap-4">
                             {viewMode === 'folders' && currentPath && (
-                                <button onClick={handleGoBackFolder} className="flex items-center gap-2 text-gray-500 hover:text-gray-800 dark:hover:text-white transition-colors">
-                                    <Icons.Back size={20} />
-                                    <span className="font-medium text-lg">{currentPath.split('/').pop()}</span>
-                                </button>
+                                <div className="flex items-center gap-2">
+                                    <button onClick={handleGoBackFolder} className="flex items-center gap-2 text-gray-500 hover:text-gray-800 dark:hover:text-white transition-colors">
+                                        <Icons.Back size={20} />
+                                        <span className="font-medium text-lg">{currentPath.split('/').pop()}</span>
+                                    </button>
+                                    {isServerMode && (
+                                        <div />
+                                    )}
+                                </div>
                             )}
                             {(viewMode === 'all' || viewMode === 'favorites' || (viewMode === 'folders' && !currentPath)) && (
                                 <h2 className="text-xl font-bold">{t(viewMode === 'all' ? 'all_photos' : (viewMode === 'favorites' ? 'favorites' : 'folders'))}</h2>
@@ -2127,6 +2188,7 @@ export default function App() {
                                         onToggleFavorite={handleToggleFavorite}
                                         onRename={handleFolderRename}
                                         onDelete={handleFolderDelete}
+                                        onRegenerate={handleRegenerateFolder}
                                     />
                                 </div>
                             )
@@ -2157,6 +2219,7 @@ export default function App() {
                                                         onToggleFavorite={(path) => handleToggleFavorite(path, 'folder')}
                                                         onRename={handleFolderRename}
                                                         onDelete={handleFolderDelete}
+                                                        onRegenerate={handleRegenerateFolder}
                                                     />
                                                 ))}
                                         </div>
@@ -2192,6 +2255,7 @@ export default function App() {
                                             loadNextPage={loadMoreServerFiles}
                                             itemCount={isServerMode ? serverTotal : processedFiles.filter(Boolean).length}
                                             layout={layoutMode}
+                                            onRegenerate={handleRegenerateFolder}
                                         />
                                     )}
                                 </div>
@@ -2403,9 +2467,11 @@ export default function App() {
                 thumbCount={thumbProgress.count}
                 thumbTotal={thumbProgress.total}
                 thumbCurrentPath={thumbProgress.currentPath}
+                thumbQueue={thumbQueue}
                 onThumbPause={() => controlThumb('pause')}
                 onThumbResume={() => controlThumb('resume')}
                 onThumbStop={() => controlThumb('stop')}
+                onThumbCancelTask={handleCancelTask}
             />
 
             {showDirPicker && (

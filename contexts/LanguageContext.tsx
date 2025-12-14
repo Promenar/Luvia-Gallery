@@ -36,6 +36,8 @@ const translations = {
     // Photo Card
     video_badge: 'VIDEO',
     audio_badge: 'AUDIO',
+    confirm_regenerate_folder: 'Are you sure you want to regenerate thumbnails for this folder?',
+    regenerate_thumbnails: 'Regenerate Thumbnails',
 
     // Viewer
     file_info: 'Info',
@@ -261,6 +263,8 @@ const translations = {
     // Photo Card
     video_badge: '视频',
     audio_badge: '音频',
+    confirm_regenerate_folder: '您确定要为该文件夹重新生成缩略图吗？',
+    regenerate_thumbnails: '重新生成缩略图',
 
     // Viewer
     file_info: '信息',

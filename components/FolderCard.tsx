@@ -17,11 +17,12 @@ interface FolderCardProps {
     onToggleFavorite?: (path: string) => void;
     onRename?: (oldPath: string, newPath: string) => void;
     onDelete?: (path: string) => void;
+    onRegenerate?: (path: string) => void;
     layout?: 'grid' | 'masonry';
     animate?: boolean;
 }
 
-export const FolderCard: React.FC<FolderCardProps> = ({ folder, onClick, isFavorite, onToggleFavorite, onRename, onDelete, animate = true, layout = 'grid' }) => {
+export const FolderCard: React.FC<FolderCardProps> = ({ folder, onClick, isFavorite, onToggleFavorite, onRename, onDelete, onRegenerate, animate = true, layout = 'grid' }) => {
     const videoRef = useRef<HTMLVideoElement>(null);
     const [isPlaying, setIsPlaying] = useState(false);
     const [showMenu, setShowMenu] = useState(false);
@@ -32,6 +33,9 @@ export const FolderCard: React.FC<FolderCardProps> = ({ folder, onClick, isFavor
     // Resolve thumbnail URL for cover
     const thumbUrl = useMemo(() => {
         if (!folder.coverMedia || !folder.coverMedia.url) return null;
+        if (folder.coverMedia.thumbnailUrl) {
+            return folder.coverMedia.thumbnailUrl;
+        }
         if (folder.coverMedia.url.startsWith('/media-stream/')) {
             const pathPart = folder.coverMedia.url.split('/media-stream/')[1];
             return `/api/thumbnail?path=${pathPart}`;
@@ -193,6 +197,15 @@ export const FolderCard: React.FC<FolderCardProps> = ({ folder, onClick, isFavor
                                 {onRename && (
                                     <button onClick={(e) => handleAction('rename', e)} className="w-full text-left px-3 py-2 text-xs hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200 flex items-center gap-2">
                                         <Icons.Edit size={12} /> Rename
+                                    </button>
+                                )}
+                                {onRegenerate && (
+                                    <button onClick={(e) => {
+                                        e.stopPropagation();
+                                        setShowMenu(false);
+                                        onRegenerate(folder.path);
+                                    }} className="w-full text-left px-3 py-2 text-xs hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200 flex items-center gap-2">
+                                        <Icons.Refresh size={12} /> Regenerate
                                     </button>
                                 )}
                                 {onDelete && (

@@ -20,9 +20,11 @@ interface UnifiedProgressModalProps {
     thumbCount: number;
     thumbTotal: number;
     thumbCurrentPath: string;
+    thumbQueue?: Array<{ id: string, name: string, total: number }>; // New
     onThumbPause: () => void;
     onThumbResume: () => void;
-    onThumbStop: () => void;
+    onThumbStop: () => void; // Stops current
+    onThumbCancelTask?: (id: string) => void; // Cancels specific queued item
 }
 
 export const UnifiedProgressModal: React.FC<UnifiedProgressModalProps> = ({
@@ -38,9 +40,11 @@ export const UnifiedProgressModal: React.FC<UnifiedProgressModalProps> = ({
     thumbCount,
     thumbTotal,
     thumbCurrentPath,
+    thumbQueue = [],
     onThumbPause,
     onThumbResume,
-    onThumbStop
+    onThumbStop,
+    onThumbCancelTask
 }) => {
     const { t } = useLanguage();
     const [isMinimized, setIsMinimized] = React.useState(false);
@@ -52,6 +56,7 @@ export const UnifiedProgressModal: React.FC<UnifiedProgressModalProps> = ({
     // Show a task if it's active, OR if both are inactive (to show summary/finished state).
     const showScan = isScanActive || (!isScanActive && !isThumbActive);
     const showThumb = isThumbActive || (!isScanActive && !isThumbActive);
+    const showQueue = thumbQueue.length > 0;
 
     const renderProgressBar = (progress: number) => (
         <div className="h-2 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden mb-2">
@@ -75,10 +80,10 @@ export const UnifiedProgressModal: React.FC<UnifiedProgressModalProps> = ({
                                 initial={{ opacity: 0, scale: 0.95 }}
                                 animate={{ opacity: 1, scale: 1 }}
                                 exit={{ opacity: 0, scale: 0.95 }}
-                                className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl w-full max-w-lg overflow-hidden border border-gray-100 dark:border-gray-700"
+                                className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl w-full max-w-lg overflow-hidden border border-gray-100 dark:border-gray-700 max-h-[80vh] flex flex-col"
                             >
                                 {/* Header */}
-                                <div className="p-4 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between">
+                                <div className="p-4 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between shrink-0">
                                     <h3 className="font-semibold text-gray-800 dark:text-gray-200 flex items-center gap-2">
                                         <Icons.Refresh className={`animate-spin ${!isScanActive && !isThumbActive ? 'hidden' : ''}`} size={18} />
                                         {t('background_tasks')}
@@ -87,7 +92,7 @@ export const UnifiedProgressModal: React.FC<UnifiedProgressModalProps> = ({
                                         <button onClick={() => setIsMinimized(true)} className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-full transition-colors text-gray-500">
                                             <Icons.Minus size={20} />
                                         </button>
-                                        {(!isScanActive && !isThumbActive) && (
+                                        {(!isScanActive && !isThumbActive && thumbQueue.length === 0) && (
                                             <button onClick={onClose} className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-full transition-colors text-gray-500">
                                                 <Icons.Close size={20} />
                                             </button>
@@ -95,7 +100,7 @@ export const UnifiedProgressModal: React.FC<UnifiedProgressModalProps> = ({
                                     </div>
                                 </div>
 
-                                <div className="p-6 space-y-6">
+                                <div className="p-6 space-y-6 overflow-y-auto">
                                     {/* Library Scan Section */}
                                     {showScan && (
                                         <div className="space-y-3">
@@ -139,7 +144,7 @@ export const UnifiedProgressModal: React.FC<UnifiedProgressModalProps> = ({
                                     )}
 
                                     {/* Separator - only if both are shown */}
-                                    {showScan && showThumb && (
+                                    {showScan && (showThumb || showQueue) && (
                                         <div className="h-px bg-gray-100 dark:bg-gray-700" />
                                     )}
 
@@ -187,11 +192,40 @@ export const UnifiedProgressModal: React.FC<UnifiedProgressModalProps> = ({
                                             )}
                                         </div>
                                     )}
+
+                                    {/* Pending Queue Section */}
+                                    {showQueue && (
+                                        <>
+                                            <div className="h-px bg-gray-100 dark:bg-gray-700" />
+                                            <div className="space-y-3">
+                                                <h4 className="text-xs font-semibold uppercase text-gray-500 dark:text-gray-400 tracking-wider">Pending Tasks ({thumbQueue.length})</h4>
+                                                <div className="space-y-2">
+                                                    {thumbQueue.map((task) => (
+                                                        <div key={task.id} className="flex items-center justify-between p-2 rounded-lg bg-gray-50 dark:bg-gray-700/30 border border-gray-100 dark:border-gray-700">
+                                                            <div className="min-w-0">
+                                                                <p className="text-sm font-medium text-gray-700 dark:text-gray-300 truncate">{task.name}</p>
+                                                                <p className="text-xs text-gray-400">{task.total} files</p>
+                                                            </div>
+                                                            {onThumbCancelTask && (
+                                                                <button
+                                                                    onClick={() => onThumbCancelTask(task.id)}
+                                                                    className="p-1.5 hover:bg-red-50 dark:hover:bg-red-900/20 text-gray-400 hover:text-red-500 rounded-md transition-colors"
+                                                                    title="Cancel"
+                                                                >
+                                                                    <Icons.Close size={14} />
+                                                                </button>
+                                                            )}
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        </>
+                                    )}
                                 </div>
 
                                 {/* Footer - Close Button if both done */}
-                                {(!isScanActive && !isThumbActive) && (
-                                    <div className="bg-gray-50 dark:bg-gray-900/50 p-4 flex justify-end border-t border-gray-100 dark:border-gray-700">
+                                {(!isScanActive && !isThumbActive && thumbQueue.length === 0) && (
+                                    <div className="bg-gray-50 dark:bg-gray-900/50 p-4 flex justify-end border-t border-gray-100 dark:border-gray-700 shrink-0">
                                         <button
                                             onClick={onClose}
                                             className="px-4 py-2 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg text-sm font-medium hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"

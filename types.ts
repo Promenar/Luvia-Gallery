@@ -7,6 +7,7 @@ export interface MediaItem {
   id: string;
   file?: File;      // Optional because it might be missing after config load
   url: string;      // Blob URL (session only) or empty
+  thumbnailUrl?: string; // New: Thumbnail URL
   name: string;
   path: string;       // Full relative path: "Vacation/2023/beach.jpg"
   folderPath: string; // Directory path: "Vacation/2023"

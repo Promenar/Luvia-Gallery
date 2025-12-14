@@ -26,6 +26,7 @@ interface VirtualGalleryProps {
     onToggleFavorite?: (path: string, type: 'file' | 'folder') => void;
     onRename?: (path: string, newName: string) => void;
     onDelete?: (path: string) => void;
+    onRegenerate?: (path: string) => void;
 }
 
 interface VisualRow {
@@ -188,7 +189,8 @@ export const VirtualGallery: React.FC<VirtualGalleryProps> = ({
     layout,
     onToggleFavorite,
     onRename,
-    onDelete
+    onDelete,
+    onRegenerate
 }) => {
 
     // -- MASONRY LAYOUT --
@@ -246,6 +248,7 @@ export const VirtualGallery: React.FC<VirtualGalleryProps> = ({
                                                 onToggleFavorite={onToggleFavorite ? (path) => onToggleFavorite(path, 'folder') : undefined}
                                                 onRename={onRename}
                                                 onDelete={onDelete}
+                                                onRegenerate={onRegenerate}
                                                 layout="masonry"
                                             />
                                         </div>
@@ -372,6 +375,7 @@ export const VirtualGallery: React.FC<VirtualGalleryProps> = ({
                                                     onToggleFavorite={onToggleFavorite ? (path) => onToggleFavorite(path, 'folder') : undefined}
                                                     onRename={onRename}
                                                     onDelete={onDelete}
+                                                    onRegenerate={onRegenerate}
                                                 />
                                             </div>
                                         ) : (

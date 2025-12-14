@@ -26,35 +26,73 @@ export const MediaCard: React.FC<MediaCardProps> = React.memo(({ item, onClick, 
   const [isHovered, setIsHovered] = useState(false);
   const [isVideoLoaded, setIsVideoLoaded] = useState(false);
   const [imgError, setImgError] = useState(false);
+  const [hasError, setHasError] = useState(false);
+  const [isRepairing, setIsRepairing] = useState(false);
+  const [retryQuery, setRetryQuery] = useState(''); // Cache busting
 
   // Reset error when item changes
   useEffect(() => {
     setImgError(false);
+    setHasError(false);
+    setRetryQuery(''); // Reset retry query on item change
   }, [item.id, item.url]);
 
+  const handleRepair = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (isRepairing) return;
+    setIsRepairing(true);
+    try {
+      const res = await fetch('/api/thumb/regenerate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: item.id })
+      });
+      if (res.ok) {
+        // Reset error state to force reload of thumbnail
+        setHasError(false);
+        setImgError(false);
+        setRetryQuery(`?t=${Date.now()}`); // Force image reload
+      } else {
+        alert('Repair failed');
+      }
+    } catch (e) {
+      console.error("Repair failed", e);
+      alert('Repair failed');
+    } finally {
+      setIsRepairing(false);
+    }
+  };
+
+  // Determine thumbnail URL
   // Determine thumbnail URL
   const thumbnailSrc = useMemo(() => {
     if (item.mediaType === 'audio') return '';
     if (!item.url) return '';
 
-    // For videos, use thumbnailUrl if available
-    if (item.mediaType === 'video') {
-      return item.thumbnailUrl || '';
-    }
+    let src = '';
 
+    // Prefer explicit thumbnail URL if available
+    if (item.thumbnailUrl) {
+      src = item.thumbnailUrl;
+    }
     // For images from media-stream
-    if (item.url.startsWith('/media-stream/')) {
-      const pathPart = item.url.split('/media-stream/')[1];
-      return `/api/thumbnail?path=${pathPart}`;
+    // For images from media-stream
+    else if (item.url.startsWith('/media-stream/')) {
+      // Use standard thumbnail endpoint which expects base64 ID (which item.id should be)
+      src = `/api/thumb/${item.id}`;
+    }
+    // For regular images, use the URL directly as last resort
+    else if (item.mediaType === 'image') {
+      src = item.url;
     }
 
-    // For regular images, use the URL directly
-    if (item.mediaType === 'image') {
-      return item.url;
+    // Append retry query if exists and src is valid
+    if (src && retryQuery) {
+      return src + (src.includes('?') ? '&' : '?') + retryQuery.replace('?', '');
     }
 
-    return '';
-  }, [item.url, item.mediaType, item.thumbnailUrl]);
+    return src;
+  }, [item.url, item.mediaType, item.thumbnailUrl, retryQuery]);
 
   const handleMouseEnter = () => {
     setIsHovered(true);
@@ -145,28 +183,54 @@ export const MediaCard: React.FC<MediaCardProps> = React.memo(({ item, onClick, 
             <span>{t('video_badge')}</span>
           </div>
         </div>
-      ) : item.mediaType === 'audio' ? (
-        <div className={`relative w-full ${isGrid ? 'h-full absolute inset-0' : 'aspect-square min-h-[150px]'} flex items-center justify-center bg-gradient-to-br from-pink-500 to-orange-400`}>
-          <Icons.Music size={48} className="text-white opacity-80" />
-          <div className={`absolute top-2 right-2 bg-black/40 backdrop-blur-sm px-2 py-0.5 rounded text-[10px] text-white font-medium flex items-center gap-1 z-10`}>
-            <Icons.Music size={10} />
-            <span>{t('audio_badge')}</span>
-          </div>
-        </div>
       ) : (
-        !imgError ? (
+        !imgError && !hasError ? (
           <img
             src={thumbnailSrc}
             alt={item.name}
             loading="lazy"
             className={`w-full h-full object-cover transition-transform duration-700 group-hover:scale-105 ${isGrid ? 'absolute inset-0' : 'block'}`}
-            onError={() => setImgError(true)}
+            onError={() => {
+              // Smart Fallback Logic
+              if (item.thumbnailUrl && thumbnailSrc === item.thumbnailUrl) {
+                // Start of fallback sequence: Switch to original URL via state
+                setHasError(true);
+              } else if (thumbnailSrc.startsWith('/api/thumbnail')) { // Corrected from /api/thumb/
+                setHasError(true);
+              } else {
+                // Only error out completely if we were already using the original URL
+                setImgError(true);
+              }
+            }}
           />
         ) : (
-          <div className="w-full h-full flex flex-col items-center justify-center bg-gray-200 dark:bg-gray-800 text-gray-400">
-            <Icons.Image size={32} />
-            <span className="text-[10px] mt-2 font-mono uppercase font-bold bg-black/10 dark:bg-white/10 px-1 rounded">{item.type.split('/')[1] || 'IMG'}</span>
-          </div>
+          // Fallback Rendering
+          !imgError ? (
+            <div className="relative w-full h-full">
+              <img
+                src={item.url} // Use original URL
+                alt={item.name}
+                loading="lazy"
+                className={`w-full h-full object-cover transition-transform duration-700 group-hover:scale-105 ${isGrid ? 'absolute inset-0' : 'block'}`}
+                onError={() => setImgError(true)}
+              />
+              {/* Repair Button / Warning Indicator */}
+              <button
+                onClick={(e) => {
+                  handleRepair(e);
+                }}
+                className={`absolute top-2 right-2 bg-yellow-500/90 hover:bg-yellow-400 text-white p-1 rounded-full shadow-lg z-30 transition-transform hover:scale-110 ${isRepairing ? 'animate-spin' : ''}`}
+                title="Repair Thumbnail"
+              >
+                {isRepairing ? <Icons.Loader size={14} /> : <Icons.AlertTriangle size={14} />}
+              </button>
+            </div>
+          ) : (
+            <div className="w-full h-full flex flex-col items-center justify-center bg-gray-200 dark:bg-gray-800 text-gray-400">
+              <Icons.Image size={32} />
+              <span className="text-[10px] mt-2 font-mono uppercase font-bold bg-black/10 dark:bg-white/10 px-1 rounded">{item.type.split('/')[1] || 'IMG'}</span>
+            </div>
+          )
         )
       )}
 
