@@ -1,0 +1,37 @@
+services:
+  lumina-gallery:
+    build: .
+    image: promenarleng/lumina-gallery:latest
+    container_name: lumina-gallery
+    restart: unless-stopped
+    ports:
+      - "3000:3001"
+    volumes:
+      # Map your media folder
+      - ./media:/media
+
+      # Persistence for configuration
+      - ./data:/app/data
+
+      # Persistence for generated thumbnails
+      - ./cache:/app/cache
+    environment:
+      - NODE_ENV=production
+      - MEDIA_ROOT=/media
+      # GPU Support: Set these if using NVIDIA GPU
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,video,utility
+    # Hardware Acceleration Configuration
+    # Uncomment the following section to enable NVIDIA GPU support.
+    # Requires NVIDIA Container Toolkit installed on host.
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+    # For Intel/AMD VAAPI (Linux/WSL2), uncomment:
+    # devices:
+    #   - /dev/dri:/dev/dri
