@@ -18,14 +18,19 @@ export const initApi = async () => {
     try {
         const storedUrl = await AsyncStorage.getItem('lumina_api_url');
         const storedToken = await AsyncStorage.getItem('lumina_token');
+        const storedUsername = await AsyncStorage.getItem('lumina_username');
         if (storedUrl) API_URL = storedUrl;
         if (storedToken) authToken = storedToken;
-        return { token: storedToken };
+        return { token: storedToken, username: storedUsername };
     } catch (e) {
         console.error("Failed to load API configuration", e);
         return { token: null };
     }
 };
+
+// Logout Callback Mechanism
+let logoutCallback: (() => void) | null = null;
+export const onLogout = (cb: () => void) => { logoutCallback = cb; };
 
 const authenticatedFetch = async (url: string, options: RequestInit = {}) => {
     const headers = {
@@ -34,10 +39,11 @@ const authenticatedFetch = async (url: string, options: RequestInit = {}) => {
     };
 
     const res = await fetch(url, { ...options, headers });
-    if (res.status === 401) {
+
+    if (res.status === 401 || res.status === 403) {
         // Token expired or invalid
-        // Optionally trigger logout callback?
-        throw new Error('Unauthorized');
+        if (logoutCallback) logoutCallback();
+        throw new Error('Session Expired');
     }
     return res;
 };
@@ -55,6 +61,7 @@ export const login = async (username: string, password: string) => {
             if (data.token) {
                 authToken = data.token;
                 await AsyncStorage.setItem('lumina_token', data.token);
+                await AsyncStorage.setItem('lumina_username', username);
                 return data;
             }
         }
@@ -67,6 +74,8 @@ export const login = async (username: string, password: string) => {
 export const logout = async () => {
     authToken = null;
     await AsyncStorage.removeItem('lumina_token');
+    await AsyncStorage.removeItem('lumina_username');
+    if (logoutCallback) logoutCallback();
 };
 
 // Use encodeURIComponent for IDs (paths)
@@ -117,11 +126,11 @@ export const fetchFiles = async (folderPath?: string, offset = 0, limit = 100, f
 
 export const toggleFavorite = async (id: string, isFavorite: boolean) => {
     try {
-        const url = `${API_URL}/api/metadata/favorite`;
+        const url = `${API_URL}/api/favorites/toggle`;
         const res = await authenticatedFetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ id, isFavorite })
+            body: JSON.stringify({ id, type: 'file' })
         });
         return await res.json();
     } catch (error) {
