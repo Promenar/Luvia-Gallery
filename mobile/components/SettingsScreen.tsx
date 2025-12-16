@@ -3,12 +3,16 @@ import { View, Text, TextInput, TouchableOpacity, ScrollView, Alert, ActivityInd
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { API_URL, setBaseUrl } from '../utils/api';
-import { ArrowLeft, Save, Trash2, Activity, Server, Database } from 'lucide-react-native';
+import { ArrowLeft, Save, Trash2, Activity, Server, Database, User, Moon, Globe, HardDrive } from 'lucide-react-native';
 import { Image } from 'react-native';
+import { Header } from './Header';
+import { useLanguage } from '../utils/i18n';
+import { useTheme } from '../utils/ThemeContext';
 
 interface SettingsScreenProps {
     onBack?: () => void;
     onLogout?: () => void;
+    username?: string;
 }
 
 interface SystemStatus {
@@ -23,8 +27,10 @@ interface SystemStatus {
     mode: string;
 }
 
-export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBack, onLogout }) => {
+export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBack, onLogout, username }) => {
     const insets = useSafeAreaInsets();
+    const { t, language, setLanguage } = useLanguage();
+    const { mode, setMode } = useTheme();
     const [url, setUrl] = useState(API_URL);
     const [stats, setStats] = useState<SystemStatus | null>(null);
     const [loadingStats, setLoadingStats] = useState(false);
@@ -91,27 +97,78 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBack, onLogout
     };
 
     return (
-        <View className="flex-1 bg-white" style={{ paddingTop: insets.top }}>
-            {/* Standardized Header */}
-            <View className="px-6 pt-6 pb-4 bg-white border-b border-gray-100 flex-row items-center">
-                {onBack && (
-                    <TouchableOpacity onPress={onBack} className="mr-4">
-                        <ArrowLeft color="#000" size={24} />
-                    </TouchableOpacity>
-                )}
-                <View>
-                    <Text className="text-3xl font-bold text-gray-900 tracking-tighter">Settings</Text>
-                    <Text className="text-gray-500 font-medium">Configuration & Status</Text>
-                </View>
-            </View>
+        <View className="flex-1 bg-white dark:bg-black">
+            <Header
+                title={t('header.settings')}
+                subtitle={t('settings.subtitle')}
+                showBack={!!onBack}
+                onBack={onBack}
+            />
 
             <ScrollView className="flex-1 px-6 pt-6">
+
+                {/* User Account */}
+                <View className="mb-8">
+                    <View className="flex-row items-center mb-4 gap-2">
+                        <Activity color="#4b5563" size={20} />
+                        <Text className="text-lg font-bold text-gray-800">{t('section.user')}</Text>
+                    </View>
+                    <View className="bg-gray-50 p-4 rounded-xl border border-gray-100">
+                        <View className="flex-row items-center justify-between mb-4">
+                            <Text className="text-gray-500 font-medium">Username</Text>
+                            <Text className="text-gray-900 font-bold text-lg">{username || 'User'}</Text>
+                        </View>
+
+                        <TouchableOpacity
+                            onPress={onLogout}
+                            className="bg-red-500 flex-row items-center justify-center py-3 rounded-lg active:opacity-80"
+                        >
+                            <Text className="text-white font-bold">Logout</Text>
+                        </TouchableOpacity>
+                    </View>
+                </View>
+
+                {/* Appearance */}
+                <View className="mb-8">
+                    <View className="flex-row items-center mb-4 gap-2">
+                        <Activity color="#4b5563" size={20} />
+                        <Text className="text-lg font-bold text-gray-800">{t('settings.appearance')}</Text>
+                    </View>
+                    <View className="bg-gray-50 p-4 rounded-xl border border-gray-100 flex-row justify-between items-center">
+                        <Text className="text-gray-800 font-medium">{t('settings.dark_mode')}</Text>
+                        <TouchableOpacity
+                            onPress={() => setMode(mode === 'dark' ? 'light' : 'dark')}
+                            className={`px-4 py-2 rounded-full ${mode === 'dark' ? 'bg-black' : 'bg-gray-200'}`}
+                        >
+                            <Text className={`${mode === 'dark' ? 'text-white' : 'text-gray-800'} font-bold capitalize`}>
+                                {mode}
+                            </Text>
+                        </TouchableOpacity>
+                    </View>
+                </View>
+
+                {/* Language */}
+                <View className="mb-8">
+                    <View className="flex-row items-center mb-4 gap-2">
+                        <Activity color="#4b5563" size={20} />
+                        <Text className="text-lg font-bold text-gray-800">{t('settings.language')}</Text>
+                    </View>
+                    <View className="bg-gray-50 p-4 rounded-xl border border-gray-100 flex-row justify-between items-center">
+                        <Text className="text-gray-800 font-medium">{language === 'zh' ? '简体中文' : 'English'}</Text>
+                        <TouchableOpacity
+                            onPress={() => setLanguage(language === 'zh' ? 'en' : 'zh')}
+                            className="px-4 py-2 bg-black rounded-full"
+                        >
+                            <Text className="text-white font-bold">{t('action.switch')}</Text>
+                        </TouchableOpacity>
+                    </View>
+                </View>
 
                 {/* Server Configuration */}
                 <View className="mb-8">
                     <View className="flex-row items-center mb-4 gap-2">
                         <Server color="#4b5563" size={20} />
-                        <Text className="text-lg font-bold text-gray-800">Server Connection</Text>
+                        <Text className="text-lg font-bold text-gray-800">{t('settings.server')}</Text>
                     </View>
 
                     <View className="bg-gray-50 p-4 rounded-xl border border-gray-100">
