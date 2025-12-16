@@ -1,0 +1,231 @@
+
+import React from 'react';
+import { motion } from 'framer-motion';
+import { ViewMode } from '../types';
+import { Icons } from './ui/Icon';
+import { useLanguage } from '../contexts/LanguageContext';
+
+interface NavigationProps {
+  appTitle: string;
+  viewMode: ViewMode;
+  setViewMode: (mode: ViewMode) => void;
+  onUpload: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  isSidebarOpen: boolean;
+  toggleSidebar: () => void;
+  totalPhotos: number;
+  theme: 'light' | 'dark' | 'system';
+  toggleTheme: () => void;
+  isServerMode: boolean;
+  onOpenSettings: () => void;
+}
+
+export const Navigation: React.FC<NavigationProps> = ({
+  appTitle,
+  viewMode,
+  setViewMode,
+  onUpload,
+  isSidebarOpen,
+  toggleSidebar,
+  totalPhotos,
+  theme,
+  toggleTheme,
+  isServerMode,
+  onOpenSettings
+}) => {
+  const { t } = useLanguage();
+  const isHome = viewMode === 'home';
+
+  const handleNavClick = (mode: ViewMode) => {
+    setViewMode(mode);
+    if (window.innerWidth < 768) toggleSidebar();
+  };
+
+  const handleSettingsClick = () => {
+    onOpenSettings();
+    if (window.innerWidth < 768) toggleSidebar();
+  };
+
+
+  const sidebarBaseClass = isHome
+    ? "bg-gray-900 border-r border-gray-800 text-gray-100"
+    : "bg-surface-primary border-r border-border-default text-text-primary";
+
+  const navItemClass = (active: boolean) => {
+    if (isHome) {
+      return active
+        ? 'bg-primary-900/30 text-primary-400 font-medium shadow-sm'
+        : 'text-gray-400 hover:bg-gray-800 hover:text-gray-200';
+    }
+    return active
+      ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-700 dark:text-primary-400 font-medium shadow-sm'
+      : 'text-text-secondary hover:bg-surface-secondary hover:text-text-primary';
+  };
+
+  const iconColorClass = (active: boolean) => {
+    if (isHome) return active ? 'text-primary-400' : 'text-gray-500';
+    return active ? 'text-primary-600 dark:text-primary-400' : 'text-text-tertiary';
+  };
+
+  const sectionTitleClass = isHome ? "text-gray-500" : "text-text-tertiary";
+
+  const mobileHeaderClass = isHome
+    ? "bg-transparent border-none text-white absolute top-0 left-0 right-0 z-50 pointer-events-none"
+    : "bg-surface-primary border-b border-border-default shadow-sm transition-colors fixed top-0 left-0 right-0 z-30";
+
+  return (
+    <>
+      <div className={`md:hidden h-16 flex items-center px-4 justify-between transition-colors ${mobileHeaderClass} ${isSidebarOpen ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}>
+        {/* Home Gradient Overlay */}
+        {isHome && <div className="absolute inset-0 bg-gradient-to-b from-black/60 to-transparent z-[-1]" />}
+
+        <div className="flex items-center gap-3 pointer-events-auto">
+          <button onClick={toggleSidebar} className={`p-2 rounded-full transition-colors ${isHome ? 'text-white hover:bg-white/10' : 'text-text-secondary hover:bg-surface-secondary'}`}>
+            <Icons.Menu size={24} />
+          </button>
+          <span className={`font-bold text-xl tracking-tight truncate max-w-[200px] ${isHome ? 'text-white drop-shadow-md' : 'text-text-primary'}`}>{appTitle}</span>
+        </div>
+        <div className="flex items-center gap-2 pointer-events-auto">
+          <button onClick={toggleTheme} className={`p-2 rounded-full transition-colors ${isHome ? 'text-white hover:bg-white/10' : 'text-primary-600 dark:text-primary-400 hover:bg-primary-50 dark:hover:bg-gray-800'}`}>
+            {theme === 'system' ? <Icons.Monitor size={24} /> : (theme === 'dark' ? <Icons.Moon size={24} /> : <Icons.Sun size={24} />)}
+          </button>
+          {!isServerMode && (
+            <label className={`p-2 rounded-full cursor-pointer transition-colors ${isHome ? 'text-white hover:bg-white/10' : 'text-primary-600 dark:text-primary-400 hover:bg-primary-50 dark:hover:bg-gray-800'}`}>
+              <Icons.Upload size={24} />
+              <input
+                type="file"
+                multiple
+                {...({ webkitdirectory: "true", directory: "" } as any)}
+                onChange={onUpload}
+                className="hidden"
+              />
+            </label>
+          )}
+        </div>
+      </div>
+
+      {/* Backdrop overlay for mobile */}
+      {isSidebarOpen && (
+        <div
+          className="fixed inset-0 bg-black/50 z-30 md:hidden"
+          onClick={toggleSidebar}
+        />
+      )}
+
+      <motion.aside
+        initial={false}
+        animate={{
+          x: isSidebarOpen ? 0 : '-100%',
+          opacity: isSidebarOpen ? 1 : 0
+        }}
+        transition={{ type: "spring", stiffness: 300, damping: 30 }}
+        className={`fixed inset-y-0 left-0 w-64 z-40 flex flex-col md:!translate-x-0 md:!opacity-100 md:relative shadow-xl md:shadow-none transition-colors ${!isSidebarOpen && 'hidden md:flex'} ${sidebarBaseClass}`}
+      >
+        <div className={`h-16 flex items-center px-6 shrink-0 ${isHome ? 'border-gray-800 border-b' : 'border-b border-border-default'}`}>
+          <div className="w-8 h-8 bg-primary-600 rounded-lg flex items-center justify-center mr-3 shadow-lg shadow-primary-200 dark:shadow-none shrink-0">
+            <div className="w-4 h-4 bg-white/30 rounded-full" />
+          </div>
+          <span className={`font-bold text-xl truncate ${isHome ? 'text-gray-100' : 'text-text-primary'}`} title={appTitle}>{appTitle}</span>
+          <button onClick={toggleSidebar} className={`md:hidden ml-auto p-1 ${isHome ? 'text-gray-400' : 'text-text-tertiary'}`}>
+            <Icons.Close size={20} />
+          </button>
+        </div>
+
+        <div className="p-4 flex-1 overflow-y-auto">
+          <div className="space-y-6">
+
+            <div>
+              <p className={`px-4 text-xs font-semibold uppercase tracking-wider mb-2 ${sectionTitleClass}`}>{t('menu')}</p>
+              <button
+                onClick={() => handleNavClick('home')}
+                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all mb-1 ${navItemClass(viewMode === 'home')}`}
+              >
+                <Icons.Home size={20} className={iconColorClass(viewMode === 'home')} />
+                <span>{t('home')}</span>
+              </button>
+              <button
+                onClick={() => handleNavClick('favorites')}
+                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all mb-1 ${navItemClass(viewMode === 'favorites')}`}
+              >
+                <Icons.Heart size={20} className={viewMode === 'favorites' ? 'text-red-500' : (isHome ? 'text-gray-500' : 'text-text-tertiary')} fill={viewMode === 'favorites' ? "currentColor" : "none"} />
+                <span>{t('favorites')}</span>
+              </button>
+            </div>
+
+            <div>
+              <p className={`px-4 text-xs font-semibold uppercase tracking-wider mb-2 ${sectionTitleClass}`}>{t('library')}</p>
+              <button
+                onClick={() => handleNavClick('all')}
+                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all mb-1 ${navItemClass(viewMode === 'all')}`}
+              >
+                <Icons.Image size={20} className={iconColorClass(viewMode === 'all')} />
+                <span>{t('all_photos')}</span>
+                <span className={`ml-auto text-xs px-2 py-0.5 rounded-full transition-colors ${viewMode === 'all'
+                  ? (isHome ? 'bg-primary-800 text-primary-300' : 'bg-primary-100 dark:bg-primary-900/50 text-primary-700 dark:text-primary-300')
+                  : (isHome ? 'bg-gray-800 text-gray-400' : 'bg-surface-secondary text-text-secondary')
+                  }`}>{totalPhotos}</span>
+              </button>
+
+              <button
+                onClick={() => handleNavClick('folders')}
+                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${navItemClass(viewMode === 'folders')}`}
+              >
+                <Icons.Folder size={20} className={iconColorClass(viewMode === 'folders')} />
+                <span>{t('folders')}</span>
+              </button>
+            </div>
+
+            <div>
+              <p className={`px-4 text-xs font-semibold uppercase tracking-wider mb-2 ${sectionTitleClass}`}>{t('system')}</p>
+              <button
+                onClick={toggleTheme}
+                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-colors mb-1 ${navItemClass(false)}`}
+              >
+                {theme === 'system' ? <Icons.Monitor size={20} /> : (theme === 'dark' ? <Icons.Moon size={20} /> : <Icons.Sun size={20} />)}
+                <span>{theme === 'system' ? t('follow_system') : (theme === 'dark' ? t('dark_mode') : t('light_mode'))}</span>
+              </button>
+              <button
+                onClick={handleSettingsClick}
+                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-colors ${navItemClass(false)}`}
+              >
+                <Icons.Settings size={20} />
+                <span>{t('settings')}</span>
+              </button>
+            </div>
+
+          </div>
+
+          {!isServerMode && (
+            <div className="mt-8 px-4">
+              <div className={`border-t pt-6 ${isHome ? 'border-gray-800' : 'border-border-default'}`}>
+                <label className={`flex flex-col items-center justify-center gap-2 w-full px-4 py-6 rounded-xl border-2 border-dashed transition-all cursor-pointer active:scale-95 group ${isHome
+                  ? 'bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700 hover:border-gray-600 hover:text-gray-200'
+                  : 'bg-surface-secondary border-border-default text-text-secondary hover:bg-surface-tertiary hover:border-primary-300 dark:hover:border-primary-600 hover:text-primary-600 dark:hover:text-primary-400'
+                  }`}>
+                  <div className={`p-3 rounded-full shadow-sm group-hover:shadow-md transition-all ${isHome ? 'bg-gray-700' : 'bg-surface-primary'}`}>
+                    <Icons.Upload size={20} />
+                  </div>
+                  <span className="text-sm font-medium">{t('load_folder')}</span>
+                  <input
+                    type="file"
+                    multiple
+                    {...({ webkitdirectory: "true", directory: "" } as any)}
+                    onChange={onUpload}
+                    className="hidden"
+                  />
+                </label>
+              </div>
+            </div>
+          )}
+        </div>
+      </motion.aside >
+
+      {isSidebarOpen && (
+        <div
+          className="fixed inset-0 bg-black/20 dark:bg-black/50 z-30 md:hidden backdrop-blur-sm"
+          onClick={toggleSidebar}
+        />
+      )
+      }
+    </>
+  );
+};
