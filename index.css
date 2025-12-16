@@ -1,0 +1,78 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.dark ::-webkit-scrollbar-track {
+  background: #1f2937; /* gray-800 */
+}
+
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1; /* gray-300 */
+  border-radius: 5px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  background: #4b5563; /* gray-600 */
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8; /* gray-400 */
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: #6b7280; /* gray-500 */
+}
+
+
+@layer base {
+  :root {
+    /* Light Mode */
+    --surface-primary: #ffffff;
+    --surface-secondary: #f8fafc; /* slate-50 */
+    --surface-tertiary: #f1f5f9;  /* slate-100 */
+    
+    --text-primary: #0f172a;      /* slate-900 */
+    --text-secondary: #64748b;    /* slate-500 */
+    --text-tertiary: #94a3b8;     /* slate-400 */
+    
+    --border-default: #e2e8f0;    /* slate-200 */
+    --border-subtle: #f1f5f9;     /* slate-100 */
+  }
+
+  .dark {
+    /* Dark Mode */
+    --surface-primary: #020617;   /* slate-950 */
+    --surface-secondary: #0f172a; /* slate-900 */
+    --surface-tertiary: #1e293b;  /* slate-800 */
+    
+    --text-primary: #f1f5f9;      /* slate-100 */
+    --text-secondary: #94a3b8;    /* slate-400 */
+    --text-tertiary: #64748b;     /* slate-500 */
+    
+    --border-default: #1e293b;    /* slate-800 */
+    --border-subtle: #0f172a;     /* slate-900 */
+  }
+}
+
+/* Glassmorphism utility */
+.glass {
+  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.dark .glass {
+  background: rgba(2, 6, 23, 0.7);
+}

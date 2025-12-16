@@ -1,0 +1,65 @@
+# Build Stage
+FROM node:18-alpine as build
+WORKDIR /app
+
+# Install build dependencies for native modules (better-sqlite3)
+RUN apk add --no-cache python3 make g++
+
+# Copy dependency definitions
+COPY package*.json ./
+RUN npm install
+
+# Copy all project files
+COPY . .
+
+# Save server.js before restructuring (it needs to stay in root for production stage)
+RUN cp server.js server.js.bak
+
+# --- FIX STRUCTURE FOR CREATE REACT APP (CRA) ---
+# CRA expects specific folder structure: /public for index.html and /src for code.
+# The source files are currently in root, so we move them.
+
+# 1. Prepare directories
+RUN mkdir -p public src
+
+# 2. Move static assets to public (CRA looks for index.html here)
+RUN if [ -f index.html ]; then mv index.html public/; fi
+RUN if [ -f metadata.json ]; then mv metadata.json public/; fi
+
+# 3. Move source code to src (but exclude server.js)
+# We move .tsx, .ts files and component directories.
+RUN for file in *.tsx; do [ -f "$file" ] && [ "$file" != "server.js" ] && mv "$file" src/; done || true
+RUN for file in *.ts; do [ -f "$file" ] && [ "$file" != "server.js" ] && mv "$file" src/; done || true
+
+# Move directories if they exist
+RUN [ -d components ] && mv components src/ || true
+RUN [ -d utils ] && mv utils src/ || true
+RUN [ -d contexts ] && mv contexts src/ || true
+
+# ---------------------------------------
+# Build the React application using CRA (react-scripts)
+# This executes "react-scripts build" defined in package.json
+RUN npm run build
+
+# Production Stage
+FROM node:18-alpine
+WORKDIR /app
+
+# Install system dependencies (FFmpeg + SQLite libs)
+RUN apk add --no-cache ffmpeg python3 make g++
+
+# Install production dependencies only
+COPY package*.json ./
+RUN npm install --production
+
+# Copy built assets from build stage
+COPY --from=build /app/build ./build
+
+# Copy server script from build stage (preserved during restructuring)
+COPY --from=build /app/server.js.bak ./server.js
+
+# Create a placeholder for the config file
+RUN touch lumina-config.json
+
+EXPOSE 80
+CMD ["node", "server.js"]
