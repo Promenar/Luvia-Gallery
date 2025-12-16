@@ -5,6 +5,7 @@
   "private": true,
   "dependencies": {
     "cors": "^2.8.5",
+    "exif-parser": "^0.1.12",
     "exifr": "^7.1.3",
     "express": "^4.18.2",
     "framer-motion": "^12.23.25",
