@@ -1,19 +1,23 @@
 import "./global.css";
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { StatusBar } from 'expo-status-bar';
-import { View, FlatList, ActivityIndicator, BackHandler, Text, TouchableOpacity, ScrollView, Platform, LayoutAnimation, UIManager } from 'react-native';
+import { View, FlatList, ActivityIndicator, BackHandler, Text, TouchableOpacity, ScrollView, Platform, LayoutAnimation, UIManager, RefreshControl, Alert } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
-import { PaperProvider, MD3LightTheme, IconButton } from 'react-native-paper'; // MD3
+import { PaperProvider } from 'react-native-paper';
 import { MediaCard } from './components/MediaCard';
 import { FolderCard } from './components/FolderCard';
 import { Carousel } from './components/Carousel';
 import { BottomTabs, Tab } from './components/BottomTabs';
 import { SettingsScreen } from './components/SettingsScreen';
 import { LoginScreen } from './components/LoginScreen';
-import { fetchFolders, fetchFiles, initApi } from './utils/api';
+import { fetchFolders, fetchFiles, initApi, logout, onLogout } from './utils/api';
 import { MediaItem } from './types';
 import { MediaViewer } from './components/MediaViewer';
+import { ThemeProvider, useTheme } from './utils/ThemeContext';
+import { Header } from './components/Header';
+import * as Haptics from 'expo-haptics';
+import { useLanguage, initLanguage } from './utils/i18n';
 
 // Enable LayoutAnimation on Android
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
@@ -27,24 +31,19 @@ interface Folder {
   mediaCount: number;
 }
 
-const theme = {
-  ...MD3LightTheme,
-  colors: {
-    ...MD3LightTheme.colors,
-    primary: '#000000',
-    secondaryContainer: '#f0f0f0',
-  },
-};
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 const MainScreen = () => {
   const insets = useSafeAreaInsets();
+  const { mode, isDark, paperTheme } = useTheme();
+  const { t } = useLanguage();
 
   // Auth State
   const [checkingAuth, setCheckingAuth] = useState(true);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [username, setUsername] = useState<string | null>(null);
 
   const [activeTab, setActiveTab] = useState<Tab>('home');
-  // showSettings removed in favor of Tab
 
   // Data State
   const [recentMedia, setRecentMedia] = useState<MediaItem[]>([]);
@@ -64,37 +63,43 @@ const MainScreen = () => {
   const [history, setHistory] = useState<string[]>([]);
 
   const [loading, setLoading] = useState(false);
-  const [loadingMore, setLoadingMore] = useState(false); // Pagination
+  const [refreshing, setRefreshing] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
 
   // Media Viewer State
   const [viewerContext, setViewerContext] = useState<{ items: MediaItem[], index: number } | null>(null);
 
-  // Initial Load (Home Data & API URL & Auth)
+  // Initial Load
   useEffect(() => {
     const init = async () => {
-      const { token } = await initApi();
+      await initLanguage();
+      const { token, username } = await initApi();
       if (token) {
         setIsLoggedIn(true);
+        setUsername(username || 'User');
         loadHomeData();
       }
       setCheckingAuth(false);
     };
     init();
+
+    // Register Auto-Logout Callback
+    onLogout(() => {
+      Alert.alert(
+        "Session Expired",
+        "Your login session has expired. Please login again."
+      );
+      handleLogout();
+    });
   }, []);
 
   // Load Data when tab changes
   useEffect(() => {
-    if (!isLoggedIn) return; // Don't fetch if not logged in
+    if (!isLoggedIn) return;
 
-    if (activeTab === 'library' && libraryFiles.length === 0) {
-      loadLibraryData(0);
-    }
-    if (activeTab === 'folders' && folders.length === 0 && !currentPath) {
-      loadFolderData(null);
-    }
-    if (activeTab === 'favorites') {
-      loadFavoritesData();
-    }
+    if (activeTab === 'library' && libraryFiles.length === 0) loadLibraryData(0);
+    if (activeTab === 'folders' && folders.length === 0 && !currentPath) loadFolderData(null);
+    if (activeTab === 'favorites') loadFavoritesData();
   }, [activeTab, isLoggedIn]);
 
   // Load Folder Data when path changes
@@ -104,13 +109,22 @@ const MainScreen = () => {
     }
   }, [currentPath, isLoggedIn]);
 
-  // Handle Unauthorized (401)
   const handleApiError = (e: any) => {
     console.error(e);
     if (e.message === 'Unauthorized' || e.message?.includes('401')) {
-      setIsLoggedIn(false);
-      // initApi will clean storage if we implement logout properly, need to manually clear state
+      handleLogout();
     }
+  };
+
+  const handleLogout = async () => {
+    await logout();
+    setIsLoggedIn(false);
+    // Reset states
+    setActiveTab('home');
+    setRecentMedia([]);
+    setFolders([]);
+    setLibraryFiles([]);
+    setFavoriteFiles([]);
   };
 
   const loadHomeData = async () => {
@@ -118,11 +132,11 @@ const MainScreen = () => {
     try {
       const filesRes = await fetchFiles(undefined, 0, 5);
       setRecentMedia(filesRes.files || []);
-    } catch (e) { handleApiError(e); } finally { setLoading(false); }
+    } catch (e) { handleApiError(e); } finally { setLoading(false); setRefreshing(false); }
   };
 
   const loadLibraryData = async (offset: number, append = false) => {
-    if (offset === 0) setLoading(true);
+    if (offset === 0 && !append) setLoading(true);
     else setLoadingMore(true);
 
     try {
@@ -136,7 +150,7 @@ const MainScreen = () => {
       if (append) {
         setLibraryFiles(prev => {
           const existingIds = new Set(prev.map(p => p.id));
-          const uniqueNew = newFiles.filter(i => !existingIds.has(i.id));
+          const uniqueNew = newFiles.filter((i: MediaItem) => !existingIds.has(i.id));
           return [...prev, ...uniqueNew];
         });
       } else {
@@ -147,16 +161,26 @@ const MainScreen = () => {
     } catch (e) { handleApiError(e); } finally {
       setLoading(false);
       setLoadingMore(false);
+      setRefreshing(false);
     }
   };
 
   const loadFavoritesData = async () => {
     setLoading(true);
     try {
-      // Fetch files with FAVORITES=true param
+      console.log('Loading favorites...');
       const filesRes = await fetchFiles(undefined, 0, 100, true);
+      console.log('Favorites response:', JSON.stringify(filesRes));
+      if (!filesRes || !filesRes.files) {
+        console.error('Favorites response missing files array');
+        Alert.alert('Debug', `Invalid Favorites Response: ${JSON.stringify(filesRes)}`);
+      }
       setFavoriteFiles(filesRes.files || []);
-    } catch (e) { handleApiError(e); } finally { setLoading(false); }
+    } catch (e) {
+      console.error('Load Favorites Error:', e);
+      Alert.alert('Error', 'Failed to load favorites. Check console.');
+      handleApiError(e);
+    } finally { setLoading(false); setRefreshing(false); }
   };
 
   const loadFolderData = async (path: string | null) => {
@@ -170,19 +194,26 @@ const MainScreen = () => {
       ]);
       setFolders(foldersRes.folders || []);
       setFolderFiles(filesRes.files || []);
-    } catch (e) {
-      handleApiError(e);
-    } finally {
-      setLoading(false);
-    }
+    } catch (e) { handleApiError(e); } finally { setLoading(false); setRefreshing(false); }
   };
 
+  const onRefresh = useCallback(() => {
+    setRefreshing(true);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    if (activeTab === 'home') loadHomeData();
+    if (activeTab === 'library') loadLibraryData(0);
+    if (activeTab === 'favorites') loadFavoritesData();
+    if (activeTab === 'folders') loadFolderData(currentPath);
+  }, [activeTab, currentPath]);
+
   const handleFolderPress = (folder: Folder) => {
+    Haptics.selectionAsync();
     setHistory(prev => currentPath ? [...prev, currentPath] : [...prev, 'root']);
     setCurrentPath(folder.path);
   };
 
   const handleBack = () => {
+    Haptics.selectionAsync();
     if (history.length > 0) {
       const prev = history[history.length - 1];
       const newHistory = history.slice(0, -1);
@@ -194,6 +225,7 @@ const MainScreen = () => {
   };
 
   const handleMediaPress = (item: MediaItem, list: MediaItem[]) => {
+    Haptics.selectionAsync();
     const index = list.findIndex(i => i.id === item.id);
     setViewerContext({ items: list, index: index !== -1 ? index : 0 });
   };
@@ -223,8 +255,8 @@ const MainScreen = () => {
 
   if (checkingAuth) {
     return (
-      <View className="flex-1 bg-white items-center justify-center">
-        <ActivityIndicator size="large" color="#000" />
+      <View className="flex-1 bg-white dark:bg-black items-center justify-center">
+        <ActivityIndicator size="large" color={isDark ? "#fff" : "#000"} />
       </View>
     );
   }
@@ -245,11 +277,9 @@ const MainScreen = () => {
         initialIndex={viewerContext.index}
         onClose={() => {
           setViewerContext(null);
+          // Refresh favorites if needed when returning
           if (activeTab === 'favorites') loadFavoritesData();
         }}
-      // Pass auth token if context requires it? 
-      // MediaViewer uses <Image> which needs headers.
-      // We might need to pass token to MediaViewer.
       />
     );
   }
@@ -263,144 +293,141 @@ const MainScreen = () => {
         className="flex-1"
       >
         {activeTab === 'home' && (
-          <ScrollView className="flex-1 bg-gray-50/50" contentContainerStyle={{ paddingBottom: 100 }}>
-            {/* Standardized Header */}
-            <View className="pt-6 pb-4 px-6 bg-white border-b border-gray-100">
-              <Text className="text-3xl font-bold text-gray-900 tracking-tighter">Discover</Text>
-              <Text className="text-gray-500 font-medium">Your recent memories</Text>
-            </View>
-
-            <View className="mb-6 pt-6">
-              <Carousel data={recentMedia} onPress={(i: MediaItem) => handleMediaPress(i, recentMedia)} />
-            </View>
-
-            <View className="px-6">
-              <Text className="text-xl font-bold text-gray-900 mb-4 tracking-tight">Just Added</Text>
-              <View className="flex-row flex-wrap gap-1">
-                {recentMedia.slice(0, 6).map(item => (
-                  <View key={item.id} className="w-[32%] mb-1">
-                    <MediaCard item={item} onPress={(i: MediaItem) => handleMediaPress(i, recentMedia)} />
-                  </View>
-                ))}
+          <View className="flex-1">
+            <Header title={t('header.discover')} subtitle={t('header.discover.sub')} />
+            <ScrollView
+              className="flex-1 bg-gray-50/50 dark:bg-black"
+              contentContainerStyle={{ paddingBottom: 100 }}
+              refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+            >
+              <View className="mb-6 pt-6">
+                <Carousel data={recentMedia} onPress={(i: MediaItem) => handleMediaPress(i, recentMedia)} />
               </View>
-            </View>
-          </ScrollView>
+
+              <View className="px-6">
+                <Text className="text-xl font-bold text-gray-900 dark:text-white mb-4 tracking-tight">{t('section.just_added')}</Text>
+                <View className="flex-row flex-wrap justify-between">
+                  {recentMedia.slice(0, 6).map(item => (
+                    <View key={item.id} className="w-[32%] mb-1">
+                      <MediaCard item={item} onPress={(i: MediaItem) => handleMediaPress(i, recentMedia)} />
+                    </View>
+                  ))}
+                </View>
+              </View>
+            </ScrollView>
+          </View>
         )}
 
         {activeTab === 'library' && (
-          <FlatList
-            data={libraryFiles}
-            keyExtractor={item => item.id}
-            numColumns={3}
-            columnWrapperStyle={{ justifyContent: 'space-between' }}
-            contentContainerStyle={{ padding: 12, paddingBottom: 100 }}
-            ListHeaderComponent={
-              <View className="pt-6 pb-4 px-2">
-                <Text className="text-3xl font-bold text-gray-900 tracking-tighter">Library</Text>
-                <Text className="text-gray-500 font-medium">All photos and videos</Text>
-              </View>
-            }
-            onEndReached={() => {
-              if (hasMoreLibrary && !loadingMore && !loading) {
-                loadLibraryData(libraryOffset + 50, true);
-              }
-            }}
-            onEndReachedThreshold={0.5}
-            ListFooterComponent={loadingMore ? <ActivityIndicator className="py-4" /> : null}
-            renderItem={({ item }) => (
-              <View className="w-[32%] mb-2">
-                <MediaCard item={item} onPress={(i: MediaItem) => handleMediaPress(i, libraryFiles)} />
-              </View>
-            )}
-          />
+          <View className="flex-1">
+            <Header title={t('header.library')} subtitle={t('header.library.sub')} />
+            <FlatList
+              data={libraryFiles}
+              keyExtractor={item => item.id}
+              numColumns={3}
+              columnWrapperStyle={{ justifyContent: 'space-between' }}
+              contentContainerStyle={{ padding: 12, paddingBottom: 100 }}
+              refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+              onEndReached={() => {
+                if (hasMoreLibrary && !loadingMore && !loading) {
+                  loadLibraryData(libraryOffset + 50, true);
+                }
+              }}
+              onEndReachedThreshold={0.5}
+              ListFooterComponent={loadingMore ? <ActivityIndicator className="py-4" color={isDark ? "#fff" : "#000"} /> : null}
+              renderItem={({ item }) => (
+                <View className="w-[32%] mb-2">
+                  <MediaCard item={item} onPress={(i: MediaItem) => handleMediaPress(i, libraryFiles)} />
+                </View>
+              )}
+            />
+          </View>
         )}
 
         {activeTab === 'favorites' && (
-          <FlatList
-            data={favoriteFiles}
-            keyExtractor={item => item.id}
-            numColumns={3}
-            columnWrapperStyle={{ justifyContent: 'space-between' }}
-            contentContainerStyle={{ padding: 12, paddingBottom: 100 }}
-            ListHeaderComponent={
-              <View className="pt-6 pb-4 px-2">
-                <Text className="text-3xl font-bold text-gray-900 tracking-tighter">Favorites</Text>
-                <Text className="text-gray-500 font-medium">Your collected moments</Text>
-              </View>
-            }
-            renderItem={({ item }) => (
-              <View className="w-[32%] mb-2">
-                <MediaCard item={item} onPress={(i: MediaItem) => handleMediaPress(i, favoriteFiles)} />
-              </View>
-            )}
-            ListEmptyComponent={
-              (!loading) ? (
-                <View className="p-20 items-center justify-center opacity-50">
-                  <Text className="text-gray-400 font-medium">No Favorites Yet</Text>
+          <View className="flex-1">
+            <Header title={t('header.favorites')} subtitle={t('header.favorites.sub')} />
+            <FlatList
+              data={favoriteFiles}
+              keyExtractor={item => item.id}
+              numColumns={3}
+              columnWrapperStyle={{ justifyContent: 'space-between' }}
+              contentContainerStyle={{ padding: 12, paddingBottom: 100 }}
+              refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+              renderItem={({ item }) => (
+                <View className="w-[32%] mb-2">
+                  <MediaCard item={item} onPress={(i: MediaItem) => handleMediaPress(i, favoriteFiles)} />
                 </View>
-              ) : null
-            }
-          />
+              )}
+              ListEmptyComponent={
+                (!loading) ? (
+                  <View className="p-20 items-center justify-center opacity-50">
+                    <Text className="text-gray-400 font-medium">No Favorites Yet</Text>
+                  </View>
+                ) : null
+              }
+            />
+          </View>
         )}
 
         {activeTab === 'folders' && (
-          <FlatList
-            data={folderFiles}
-            keyExtractor={item => item.id}
-            numColumns={3}
-            columnWrapperStyle={{ justifyContent: 'space-between' }}
-            contentContainerStyle={{ padding: 16, paddingBottom: 100 }}
-            ListHeaderComponent={
-              <View>
-                {/* Interactive BreadCrumb */}
-                {currentPath ? (
-                  <TouchableOpacity onPress={handleBack} className="mb-6 flex-row items-center bg-gray-100 self-start px-3 py-1.5 rounded-full active:bg-gray-200">
-                    <Text className="text-gray-600 font-medium text-xs">← Back</Text>
-                  </TouchableOpacity>
-                ) : (
-                  <View className="mb-6">
-                    <Text className="text-3xl font-bold text-gray-900 tracking-tighter">Folders</Text>
-                    <Text className="text-gray-500 font-medium">Browse your collection</Text>
-                  </View>
-                )}
+          <View className="flex-1">
+            <Header
+              title={currentPath ? (currentPath.split(/[/\\]/).pop() || 'Folders') : 'Folders'}
+              subtitle={currentPath ? 'Browse Directory' : 'Browse your collection'}
+              showBack={!!currentPath}
+              onBack={handleBack}
+            />
 
-                {folders.length > 0 && (
-                  <View className="mb-4">
-                    {!currentPath && <Text className="text-xs font-bold text-gray-400 mb-4 uppercase tracking-widest">Directories</Text>}
-                    <View className="flex-row flex-wrap justify-between">
-                      {folders.map(folder => (
-                        <View key={folder.path} className="w-[48%] mb-4">
-                          <FolderCard name={folder.name} onPress={() => handleFolderPress(folder)} />
-                        </View>
-                      ))}
+            <FlatList
+              data={folderFiles}
+              keyExtractor={item => item.id}
+              numColumns={3}
+              columnWrapperStyle={{ justifyContent: 'space-between' }}
+              contentContainerStyle={{ padding: 16, paddingBottom: 100 }}
+              refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+              ListHeaderComponent={
+                <View>
+                  {/* BreadCrumb removed, handled by Header */}
+
+                  {folders.length > 0 && (
+                    <View className="mb-4 pt-4">
+                      {!currentPath && <Text className="text-xs font-bold text-gray-400 mb-4 uppercase tracking-widest">Directories</Text>}
+                      <View className="flex-row flex-wrap justify-between">
+                        {folders.map(folder => (
+                          <View key={folder.path} className="w-[48%] mb-4">
+                            <FolderCard name={folder.name} onPress={() => handleFolderPress(folder)} />
+                          </View>
+                        ))}
+                      </View>
                     </View>
-                  </View>
-                )}
-                {folderFiles.length > 0 && (
-                  <Text className="text-xs font-bold text-gray-400 mb-3 uppercase tracking-widest mt-2">
-                    Media Files
-                  </Text>
-                )}
-              </View>
-            }
-            renderItem={({ item }) => (
-              <View className="w-[32%] mb-2">
-                <MediaCard item={item} onPress={(i: MediaItem) => handleMediaPress(i, folderFiles)} />
-              </View>
-            )}
-            ListEmptyComponent={
-              (!loading && folders.length === 0) ? (
-                <View className="p-20 items-center justify-center opacity-50">
-                  <Text className="text-gray-400 font-medium">Empty Folder</Text>
+                  )}
+                  {folderFiles.length > 0 && (
+                    <Text className="text-xs font-bold text-gray-400 mb-3 uppercase tracking-widest mt-2">
+                      Media Files
+                    </Text>
+                  )}
                 </View>
-              ) : null
-            }
-          />
+              }
+              renderItem={({ item }) => (
+                <View className="w-[32%] mb-2">
+                  <MediaCard item={item} onPress={(i: MediaItem) => handleMediaPress(i, folderFiles)} />
+                </View>
+              )}
+              ListEmptyComponent={
+                (!loading && folders.length === 0) ? (
+                  <View className="p-20 items-center justify-center opacity-50">
+                    <Text className="text-gray-400 font-medium">Empty Folder</Text>
+                  </View>
+                ) : null
+              }
+            />
+          </View>
         )}
 
         {/* Settings Tab */}
         {activeTab === 'settings' && (
-          <SettingsScreen />
+          <SettingsScreen onLogout={handleLogout} username={username || 'Guest'} />
         )}
 
       </Animated.View>
@@ -408,14 +435,15 @@ const MainScreen = () => {
   };
 
   return (
-    <View style={{ flex: 1, paddingTop: insets.top }} className="bg-white">
-      <StatusBar style="dark" />
-      <View className="flex-1 bg-white relative">
-        {loading && (
-          <View className="absolute top-0 left-0 right-0 z-50 items-center pt-4">
-            <View className="bg-white/90 px-4 py-2 rounded-full shadow-sm border border-gray-100 flex-row gap-2">
-              <ActivityIndicator size="small" color="#000" />
-              <Text className="text-xs font-medium text-gray-500">Updating...</Text>
+    <View style={{ flex: 1, paddingTop: insets.top, backgroundColor: isDark ? '#000000' : '#ffffff' }} className="bg-white dark:bg-black">
+      <StatusBar style={isDark ? "light" : "dark"} />
+      <View className="flex-1 bg-white dark:bg-black relative">
+        {loading && !refreshing && (
+          /* Non-intrusive loading - mostly for initial or transition, not refresh */
+          <View className="absolute top-0 left-0 right-0 z-50 items-center pt-2">
+            <View className="bg-white/90 dark:bg-gray-800/90 px-4 py-2 rounded-full shadow-sm border border-gray-100 dark:border-gray-700 flex-row gap-2">
+              <ActivityIndicator size="small" color={isDark ? "#fff" : "#000"} />
+              <Text className="text-xs font-medium text-gray-500 dark:text-gray-400">Updating...</Text>
             </View>
           </View>
         )}
@@ -429,10 +457,13 @@ const MainScreen = () => {
 
 export default function App() {
   return (
-    <SafeAreaProvider>
-      <PaperProvider theme={theme}>
-        <MainScreen />
-      </PaperProvider>
-    </SafeAreaProvider>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <SafeAreaProvider>
+        <ThemeProvider>
+          <MainScreen />
+        </ThemeProvider>
+      </SafeAreaProvider>
+    </GestureHandlerRootView>
   );
 }
+
