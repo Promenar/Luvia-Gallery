@@ -50,94 +50,48 @@ const VideoSlide = ({ item, isActive }: { item: MediaItem, isActive: boolean }) 
 };
 
 // Audio Component Wrapper
-const AudioSlide = ({ item, isActive }: { item: MediaItem, isActive: boolean }) => {
-    const [sound, setSound] = useState<Audio.Sound | null>(null);
-    const [isPlaying, setIsPlaying] = useState(false);
-    const [duration, setDuration] = useState(0);
-    const [position, setPosition] = useState(0);
+import { useAudio } from '../utils/AudioContext';
+import { ChevronDown } from 'lucide-react-native';
+
+const AudioSlide = ({ item, items, isActive }: { item: MediaItem, items: MediaItem[], isActive: boolean }) => {
+    const {
+        currentTrack,
+        isPlaying,
+        duration,
+        position,
+        playTrack,
+        togglePlayPause,
+        seekTo,
+        playlist,
+        minimizePlayer
+    } = useAudio();
+
+    // We need to trigger play if this slide is active but not playing this track
+    useEffect(() => {
+        if (isActive) {
+            // If context has a track but it's not this one, or context is empty
+            if (currentTrack?.id !== item.id) {
+                // Pass full playlist
+                playTrack(item, items);
+            }
+        }
+    }, [isActive, item.id]);
+
+    const isCurrent = currentTrack?.id === item.id;
+    const sliderValue = isCurrent ? position : 0;
+    const sliderDuration = isCurrent ? duration : 0;
+    const sliderPlaying = isCurrent ? isPlaying : false;
+
     const [isSeeking, setIsSeeking] = useState(false);
+    const [localSeek, setLocalSeek] = useState(0);
 
-    useEffect(() => {
-        // Configure audio mode for playback
-        Audio.setAudioModeAsync({
-            playsInSilentModeIOS: true,
-            staysActiveInBackground: true,
-            interruptionModeAndroid: InterruptionModeAndroid.DoNotMix,
-            interruptionModeIOS: InterruptionModeIOS.DoNotMix,
-            shouldDuckAndroid: true,
-        });
-
-        let currentSound: Audio.Sound | null = null;
-
-        const loadSound = async () => {
-            try {
-                if (sound) await sound.unloadAsync();
-
-                const { sound: newSound, status } = await Audio.Sound.createAsync(
-                    { uri: getFileUrl(item.id) },
-                    { shouldPlay: isActive, isLooping: true },
-                    onPlaybackStatusUpdate
-                );
-                currentSound = newSound;
-                setSound(newSound);
-                setIsPlaying(isActive);
-                if (status.isLoaded) {
-                    setDuration(status.durationMillis || 0);
-                }
-            } catch (e) {
-                console.error("Failed to load sound", e);
-            }
-        };
-
-        loadSound();
-        return () => {
-            if (currentSound) {
-                currentSound.unloadAsync();
-            }
-        };
-    }, [item.id]);
-
-    const onPlaybackStatusUpdate = (status: AVPlaybackStatus) => {
-        if (status.isLoaded) {
-            setDuration(status.durationMillis || 0);
-            if (!isSeeking) {
-                setPosition(status.positionMillis);
-            }
-            setIsPlaying(status.isPlaying);
-            if (status.didJustFinish && !status.isLooping) {
-                setIsPlaying(false);
-                setPosition(0);
-            }
-        }
+    const handleSeek = (val: number) => {
+        setIsSeeking(true);
+        setLocalSeek(val);
     };
 
-    useEffect(() => {
-        if (sound) {
-            if (isActive) {
-                sound.playAsync().catch(() => { });
-            } else {
-                sound.pauseAsync().catch(() => { });
-            }
-        }
-    }, [isActive, sound]);
-
-    const handlePlayPause = async () => {
-        if (!sound) return;
-        if (isPlaying) {
-            await sound.pauseAsync();
-        } else {
-            await sound.playAsync();
-        }
-    };
-
-    const handleSeek = (value: number) => {
-        setPosition(value);
-    };
-
-    const handleSeekComplete = async (value: number) => {
-        if (sound) {
-            await sound.setPositionAsync(value);
-        }
+    const handleSeekComplete = async (val: number) => {
+        await seekTo(val);
         setIsSeeking(false);
     };
 
@@ -167,8 +121,8 @@ const AudioSlide = ({ item, isActive }: { item: MediaItem, isActive: boolean }) 
                 <Slider
                     style={{ width: '100%', height: 40 }}
                     minimumValue={0}
-                    maximumValue={duration}
-                    value={position}
+                    maximumValue={sliderDuration || 1} // avoid 0 div
+                    value={isSeeking ? localSeek : sliderValue}
                     minimumTrackTintColor="#6366f1"
                     maximumTrackTintColor="#4b5563"
                     thumbTintColor="white"
@@ -177,19 +131,19 @@ const AudioSlide = ({ item, isActive }: { item: MediaItem, isActive: boolean }) 
                     onSlidingComplete={handleSeekComplete}
                 />
                 <View className="flex-row justify-between mt-[-5px]">
-                    <Text className="text-gray-400 text-xs">{formatTime(position)}</Text>
-                    <Text className="text-gray-400 text-xs">{formatTime(duration)}</Text>
+                    <Text className="text-gray-400 text-xs">{formatTime(isSeeking ? localSeek : sliderValue)}</Text>
+                    <Text className="text-gray-400 text-xs">{formatTime(sliderDuration)}</Text>
                 </View>
             </View>
 
             {/* Controls */}
             <View className="flex-row items-center gap-10">
                 <IconButton
-                    icon={isPlaying ? "pause" : "play"}
+                    icon={sliderPlaying ? "pause" : "play"}
                     iconColor="black"
                     containerColor="white"
                     size={40}
-                    onPress={handlePlayPause}
+                    onPress={togglePlayPause}
                     style={{ margin: 0 }}
                 />
             </View>
@@ -213,6 +167,7 @@ const ImageSlide = ({ item }: { item: MediaItem }) => {
 export const MediaViewer: React.FC<MediaViewerProps> = ({ items, initialIndex, onClose, onToggleFavorite }) => {
     const insets = useSafeAreaInsets();
     const { t } = useLanguage();
+    const { minimizePlayer } = useAudio();
     const [currentIndex, setCurrentIndex] = useState(initialIndex);
     const [showControls, setShowControls] = useState(true);
     const [showInfo, setShowInfo] = useState(false);
@@ -333,7 +288,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = ({ items, initialIndex, o
                                 {item.mediaType === 'video' ? (
                                     <VideoSlide item={item} isActive={index === currentIndex} />
                                 ) : item.mediaType === 'audio' ? (
-                                    <AudioSlide item={item} isActive={index === currentIndex} />
+                                    <AudioSlide item={item} items={items} isActive={index === currentIndex} />
                                 ) : (
                                     <ImageSlide item={item} />
                                 )}
@@ -360,6 +315,17 @@ export const MediaViewer: React.FC<MediaViewerProps> = ({ items, initialIndex, o
                                 />
 
                                 <View className="flex-row">
+                                    {currentItem.mediaType === 'audio' && (
+                                        <IconButton
+                                            icon="chevron-down"
+                                            iconColor="white"
+                                            size={28}
+                                            onPress={() => {
+                                                minimizePlayer();
+                                                onClose();
+                                            }}
+                                        />
+                                    )}
                                     <IconButton
                                         icon={isFavorite ? "heart" : "heart-outline"}
                                         iconColor={isFavorite ? "#ef4444" : "white"}

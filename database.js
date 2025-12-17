@@ -190,9 +190,11 @@ function queryFiles(options = {}) {
         offset = 0,
         limit = 500,
         folderPath = null,
-        mediaType = null,
+        mediaType = null, // Can be string or array
         sourceId = null,
-        userId = null // Add userId for favorites check
+        userId = null,
+        random = false,
+        excludeMediaType = null
     } = options;
 
     let query = 'SELECT f.*, fav.id as is_fav FROM files f';
@@ -218,8 +220,25 @@ function queryFiles(options = {}) {
     }
 
     if (mediaType) {
-        query += ' AND f.media_type = ?';
-        params.push(mediaType);
+        if (Array.isArray(mediaType)) {
+            const placeholders = mediaType.map(() => '?').join(',');
+            query += ` AND f.media_type IN (${placeholders})`;
+            params.push(...mediaType);
+        } else {
+            query += ' AND f.media_type = ?';
+            params.push(mediaType);
+        }
+    }
+
+    if (excludeMediaType) {
+        if (Array.isArray(excludeMediaType)) {
+            const placeholders = excludeMediaType.map(() => '?').join(',');
+            query += ` AND f.media_type NOT IN (${placeholders})`;
+            params.push(...excludeMediaType);
+        } else {
+            query += ' AND f.media_type != ?';
+            params.push(excludeMediaType);
+        }
     }
 
     if (sourceId) {
@@ -227,7 +246,12 @@ function queryFiles(options = {}) {
         params.push(sourceId);
     }
 
-    query += ' ORDER BY f.last_modified DESC LIMIT ? OFFSET ?';
+    if (random) {
+        query += ' ORDER BY RANDOM() LIMIT ? OFFSET ?';
+    } else {
+        query += ' ORDER BY f.last_modified DESC LIMIT ? OFFSET ?';
+    }
+
     params.push(limit, offset);
 
     const stmt = db.prepare(query);
@@ -246,7 +270,7 @@ function queryFiles(options = {}) {
             mediaType: row.media_type,
             lastModified: row.last_modified,
             sourceId: row.source_id,
-            isFavorite: !!row.is_fav // Convert to boolean
+            isFavorite: !!row.is_fav
         });
     }
     stmt.free();
