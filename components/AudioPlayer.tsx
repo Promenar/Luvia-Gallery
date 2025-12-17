@@ -2,6 +2,7 @@ import React, { useRef, useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { MediaItem } from '../types';
 import { Icons } from './ui/Icon';
+import { getAuthUrl } from '../utils/fileUtils';
 
 interface AudioPlayerProps {
     audio: MediaItem;
@@ -40,9 +41,10 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
     };
 
     // Load and play audio when audio prop changes
+    // Load and play audio when audio prop changes
     useEffect(() => {
         if (audioRef.current && audio) {
-            audioRef.current.src = audio.url || `/api/file/${audio.id}`;
+            audioRef.current.src = getAuthUrl(audio.url || `/api/file/${audio.id}`);
             audioRef.current.load();
             audioRef.current.play().then(() => {
                 setIsPlaying(true);
