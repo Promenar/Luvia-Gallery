@@ -11,7 +11,7 @@ import { Carousel } from './components/Carousel';
 import { BottomTabs, Tab } from './components/BottomTabs';
 import { SettingsScreen } from './components/SettingsScreen';
 import { LoginScreen } from './components/LoginScreen';
-import { fetchFolders, fetchFiles, initApi, logout, onLogout } from './utils/api';
+import { fetchFolders, fetchFiles, initApi, logout, onLogout, toggleFavorite } from './utils/api';
 import { MediaItem } from './types';
 import { MediaViewer } from './components/MediaViewer';
 import { ThemeProvider, useTheme } from './utils/ThemeContext';
@@ -183,8 +183,13 @@ const MainScreen = () => {
         mediaCount: f.mediaCount
       }));
 
+      // No longer forcing isFavorite=true manually, relying on server sending isFavorite=true
+      // But we can trust that if it's in this list, it IS a favorite.
+      // However, to be extra safe and for MediaViewer context:
+      const filesData = (filesRes.files || []).map((f: MediaItem) => ({ ...f, isFavorite: true }));
+
       setFavoriteFolders(foldersData);
-      setFavoriteFiles(filesRes.files || []);
+      setFavoriteFiles(filesData);
     } catch (e) {
       console.error('Load Favorites Error:', e);
       Alert.alert('Error', 'Failed to load favorites. Check console.');
@@ -217,7 +222,8 @@ const MainScreen = () => {
 
   const handleFolderPress = (folder: Folder) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    setHistory(prev => currentPath ? [...prev, currentPath] : [...prev, 'root']);
+    setActiveTab('folders');
+    setHistory(['root']);
     setCurrentPath(folder.path);
   };
 
@@ -288,6 +294,34 @@ const MainScreen = () => {
           setViewerContext(null);
           // Refresh favorites if needed when returning
           if (activeTab === 'favorites') loadFavoritesData();
+        }}
+        onToggleFavorite={async (id, isFavorite) => {
+          // 1. Optimistic Update Local State
+          const updateItem = (item: MediaItem) => item.id === id ? { ...item, isFavorite } : item;
+
+          // Update Context Items (Crucial for Viewer persistence)
+          if (viewerContext) {
+            setViewerContext(prev => prev ? { ...prev, items: prev.items.map(updateItem) } : null);
+          }
+
+          setRecentMedia(prev => prev.map(updateItem));
+          setLibraryFiles(prev => prev.map(updateItem));
+          setFavoriteFiles(prev => {
+            if (isFavorite) {
+              return prev.map(updateItem);
+            } else {
+              return prev.filter(i => i.id !== id);
+            }
+          });
+          setFolderFiles(prev => prev.map(updateItem));
+
+          // 2. Call Backend
+          await toggleFavorite(id, isFavorite);
+
+          // 3. Refresh Favorites List if needed (lazy sync)
+          if (activeTab === 'favorites' && !isFavorite) {
+            // Already filtered out above optimistically
+          }
         }}
       />
     );
@@ -360,7 +394,7 @@ const MainScreen = () => {
               data={favoriteFiles}
               keyExtractor={item => item.id}
               numColumns={3}
-              columnWrapperStyle={{ justifyContent: 'space-between' }}
+              columnWrapperStyle={{ gap: 6 }}
               contentContainerStyle={{ padding: 12, paddingBottom: 100 }}
               refreshControl={<RefreshControl refreshing={refreshing || loading} onRefresh={onRefresh} />}
               ListHeaderComponent={

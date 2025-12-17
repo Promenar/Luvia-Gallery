@@ -612,15 +612,17 @@ export default function App() {
 
             if (!data) throw new Error("Empty response data");
 
-            // Map isFavorite property - use override if provided, otherwise use state
+            // Map isFavorite property - Trust server provided isFavorite
+            // But if we have an explicit override (optimistic UI), we could check it. 
+            // Since we trust server logic (JOIN), we can use file.isFavorite.
+            // Only fall back to favIds list if server didn't provide it (legacy safety).
             const favIds = favoriteIdsOverride || serverFavoriteIds;
-            console.log('[DEBUG] Mapping isFavorite - using favoriteIds:', favIds);
-            console.log('[DEBUG] Received files count:', data.files.length);
+            console.log('[DEBUG] Files mapping checks complete');
+
             const filesWithFavorites = data.files.map((file: MediaItem) => ({
                 ...file,
-                isFavorite: favIds.files.includes(file.path)
+                isFavorite: file.isFavorite !== undefined ? file.isFavorite : (favIds.files.includes(file.path) || favIds.files.includes(file.id))
             }));
-            console.log('[DEBUG] Files with favorites mapped:', filesWithFavorites.filter(f => f.isFavorite).length, 'favorites');
 
             const newFiles = reset ? filesWithFavorites : [...(currentData[username]?.files || []), ...filesWithFavorites];
             console.log('[DEBUG] Total files to set:', newFiles.length);
@@ -1174,8 +1176,59 @@ export default function App() {
 
     const handleToggleFavorite = async (item: MediaItem | string, type: 'file' | 'folder') => {
         if (!currentUser) return;
-        const targetId = typeof item === 'string' ? item : (isServerMode ? item.path : item.id);
 
+        // 1. Resolve Target ID and Current Status
+        let targetId: string;
+        let currentStatus = false;
+
+        if (type === 'file') {
+            if (typeof item === 'string') {
+                // Fallback or error case, try to find in files? 
+                // Assuming it's an ID if passed as string for file type in new logic
+                targetId = item;
+                const found = files.find(f => f.id === targetId);
+                currentStatus = found ? !!found.isFavorite : false;
+            } else {
+                targetId = item.id;
+                currentStatus = !!item.isFavorite;
+            }
+        } else {
+            // Folders use path
+            targetId = typeof item === 'string' ? item : item.path;
+            currentStatus = serverFavoriteIds.folders.includes(targetId);
+        }
+
+        const newStatus = !currentStatus;
+
+        // 2. Optimistic Update
+        if (type === 'file') {
+            const updatedFiles = files.map(f => f.id === targetId ? { ...f, isFavorite: newStatus } : f);
+            setAllUserData({
+                ...allUserData,
+                [currentUser.username]: { ...allUserData[currentUser.username], files: updatedFiles }
+            });
+
+            // Update selected item if open
+            if (selectedItem && selectedItem.id === targetId) {
+                setSelectedItem(prev => prev ? { ...prev, isFavorite: newStatus } : null);
+            }
+
+            // Update ID list
+            if (newStatus) {
+                setServerFavoriteIds(prev => ({ ...prev, files: [...prev.files, targetId] }));
+            } else {
+                setServerFavoriteIds(prev => ({ ...prev, files: prev.files.filter(id => id !== targetId) }));
+            }
+        } else {
+            // Folder update logic
+            if (newStatus) {
+                setServerFavoriteIds(prev => ({ ...prev, folders: [...prev.folders, targetId] }));
+            } else {
+                setServerFavoriteIds(prev => ({ ...prev, folders: prev.folders.filter(id => id !== targetId) }));
+            }
+        }
+
+        // 3. API Call
         if (isServerMode) {
             try {
                 const res = await apiFetch('/api/favorites/toggle', {
@@ -1184,39 +1237,46 @@ export default function App() {
                     body: JSON.stringify({ type, id: targetId })
                 });
                 const data = await res.json();
-                if (data.success) {
-                    // Update local state to reflect change immediately if possible
-                    if (type === 'file') {
-                        const updatedFiles = files.map(f => f.path === targetId ? { ...f, isFavorite: data.isFavorite } : f);
-                        setAllUserData({
-                            ...allUserData,
-                            [currentUser.username]: { ...allUserData[currentUser.username], files: updatedFiles }
-                        });
-                        if (data.isFavorite) {
-                            setServerFavoriteIds(prev => ({ ...prev, files: [...prev.files, targetId] }));
-                        } else {
-                            setServerFavoriteIds(prev => ({ ...prev, files: prev.files.filter(id => id !== targetId) }));
-                        }
 
-                        // Critical: Update selectedItem if it is currently open in ImageViewer
-                        if (selectedItem && (selectedItem.path === targetId)) {
-                            setSelectedItem(prev => prev ? { ...prev, isFavorite: data.isFavorite } : null);
-                        }
-                    } else {
-                        // Update favorite folders list
-                        if (data.isFavorite) {
-                            setServerFavoriteIds(prev => ({ ...prev, folders: [...prev.folders, targetId] }));
-                        } else {
-                            setServerFavoriteIds(prev => ({ ...prev, folders: prev.folders.filter(id => id !== targetId) }));
-                        }
-                        if (viewMode === 'favorites') fetchServerFolders(null, true);
+                // 4. Revert on Failure (or correcting state if server disagrees, though unlikely with toggle)
+                if (!data.success) {
+                    throw new Error(data.error || 'Failed to toggle');
+                }
+            } catch (e: any) { // Explicitly type 'e' as 'any' or 'unknown' then check
+                console.error("Toggle Fav Error:", e);
+                // Revert state (Variable logic same as above but swapped status)
+                // For brevity, just alerting user or logging. A full revert would repeat the logic above with !newStatus.
+                // Given reliability, we accept slight risk of desync on error, or force refresh.
+                alert("Failed to sync favorite status: " + e.message);
+                // Revert optimistic UI update on error
+                if (type === 'file') {
+                    const updatedFiles = files.map(f => f.id === targetId ? { ...f, isFavorite: currentStatus } : f);
+                    setAllUserData({
+                        ...allUserData,
+                        [currentUser.username]: { ...allUserData[currentUser.username], files: updatedFiles }
+                    });
+                    if (selectedItem && selectedItem.id === targetId) {
+                        setSelectedItem(prev => prev ? { ...prev, isFavorite: currentStatus } : null);
+                    }
+                    if (currentStatus) { // If it was favorite, add back
+                        setServerFavoriteIds(prev => ({ ...prev, files: [...prev.files, targetId] }));
+                    } else { // If it was not favorite, remove
+                        setServerFavoriteIds(prev => ({ ...prev, files: prev.files.filter(id => id !== targetId) }));
+                    }
+                } else {
+                    if (currentStatus) { // If it was favorite, add back
+                        setServerFavoriteIds(prev => ({ ...prev, folders: [...prev.folders, targetId] }));
+                    } else { // If it was not favorite, remove
+                        setServerFavoriteIds(prev => ({ ...prev, folders: prev.folders.filter(id => id !== targetId) }));
                     }
                 }
-            } catch (e) { }
+            }
         } else {
-            // Client mode
+            // Local Mode logic (if any)
+            // For client mode, the optimistic update is the final update.
+            // No API call, so no revert needed.
             if (type === 'file') {
-                const updatedFiles = files.map(f => f.id === targetId ? { ...f, isFavorite: !f.isFavorite } : f);
+                const updatedFiles = files.map(f => f.id === targetId ? { ...f, isFavorite: newStatus } : f);
                 const updatedUserData = { ...allUserData, [currentUser.username]: { ...allUserData[currentUser.username], files: updatedFiles } };
                 setAllUserData(updatedUserData);
                 persistData(undefined, undefined, updatedUserData);

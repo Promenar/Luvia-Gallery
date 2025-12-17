@@ -33,6 +33,9 @@ async function initDatabase() {
 
     // Verify schema exists (for upgrades)
     ensureSchema();
+
+    // Migration
+    migrateFavorites();
 }
 
 /**
@@ -188,33 +191,43 @@ function queryFiles(options = {}) {
         limit = 500,
         folderPath = null,
         mediaType = null,
-        sourceId = null
+        sourceId = null,
+        userId = null // Add userId for favorites check
     } = options;
 
-    let query = 'SELECT * FROM files WHERE 1=1';
+    let query = 'SELECT f.*, fav.id as is_fav FROM files f';
+
+    if (userId) {
+        query += ' LEFT JOIN favorites fav ON f.id = fav.item_id AND fav.user_id = ?';
+    } else {
+        query += ' LEFT JOIN favorites fav ON 1=0'; // Dummy join if no user
+    }
+
+    query += ' WHERE 1=1';
     const params = [];
+    if (userId) params.push(userId);
 
     if (folderPath !== null) {
         if (options.recursive) {
-            query += ' AND (folder_path = ? OR folder_path LIKE ?)';
+            query += ' AND (f.folder_path = ? OR f.folder_path LIKE ?)';
             params.push(folderPath, folderPath + '/%');
         } else {
-            query += ' AND folder_path = ?';
+            query += ' AND f.folder_path = ?';
             params.push(folderPath);
         }
     }
 
     if (mediaType) {
-        query += ' AND media_type = ?';
+        query += ' AND f.media_type = ?';
         params.push(mediaType);
     }
 
     if (sourceId) {
-        query += ' AND source_id = ?';
+        query += ' AND f.source_id = ?';
         params.push(sourceId);
     }
 
-    query += ' ORDER BY last_modified DESC LIMIT ? OFFSET ?';
+    query += ' ORDER BY f.last_modified DESC LIMIT ? OFFSET ?';
     params.push(limit, offset);
 
     const stmt = db.prepare(query);
@@ -232,7 +245,8 @@ function queryFiles(options = {}) {
             type: row.type,
             mediaType: row.media_type,
             lastModified: row.last_modified,
-            sourceId: row.source_id
+            sourceId: row.source_id,
+            isFavorite: !!row.is_fav // Convert to boolean
         });
     }
     stmt.free();
@@ -370,8 +384,34 @@ module.exports = {
     },
     // ... other exports
     saveDatabase,
+    // [NEW] Migration: Convert legacy Path-based favorites to ID-based favorites
+    migrateFavorites: () => {
+        try {
+            console.log('[Migration] Checking for legacy path-based favorites...');
+            // 1. Try to resolve favorites where item_id matches a file path
+            // SQLite update with subquery
+            db.exec(`
+                UPDATE favorites 
+                SET item_id = (SELECT id FROM files WHERE path = favorites.item_id) 
+                WHERE item_type = 'file' 
+                AND item_id NOT IN (SELECT id FROM files) 
+                AND item_id IN (SELECT path FROM files);
+            `);
+
+            // 2. Clean up duplicates if migration created collisions (same user favoring same file via ID and Path previously)
+            // This is complex in pure SQL, relying on app logic or manual cleanup for now.
+            // Or strictly delete invalid ones:
+            // db.exec("DELETE FROM favorites WHERE item_type = 'file' AND item_id NOT IN (SELECT id FROM files)"); 
+            // ^ Risk: Offline files. Let's keep it safe: just migrate positive matches.
+
+            console.log('[Migration] Favorites migration complete.');
+            saveDatabase();
+        } catch (e) {
+            console.error('[Migration] Error migrating favorites:', e);
+        }
+    },
     toggleFavorite: (userId, itemId, itemType) => {
-        // Check if exists
+        // Strict ID check
         const check = db.prepare('SELECT id FROM favorites WHERE user_id = ? AND item_id = ?');
         check.bind([userId, itemId]);
         const exists = check.step();
@@ -391,13 +431,14 @@ module.exports = {
             return true;
         }
     },
+    // Simplified Query: Strict ID Join
     queryFavoriteFiles: (userId, options) => {
         const limit = options.limit || 100;
         const offset = options.offset || 0;
         const stmt = db.prepare(`
             SELECT f.* FROM files f
             JOIN favorites fav ON f.id = fav.item_id
-            WHERE fav.user_id = ?
+            WHERE fav.user_id = ? AND fav.item_type = 'file'
             ORDER BY fav.created_at DESC
             LIMIT ? OFFSET ?
         `);
@@ -414,19 +455,20 @@ module.exports = {
                 type: row.type,
                 mediaType: row.media_type,
                 lastModified: row.last_modified,
-                sourceId: row.source_id
+                sourceId: row.source_id,
+                isFavorite: true
             });
         }
         stmt.free();
         return results;
     },
     countFavoriteFiles: (userId) => {
-        const stmt = db.prepare('SELECT COUNT(*) as count FROM favorites WHERE user_id = ?');
+        const stmt = db.prepare('SELECT COUNT(*) as count FROM favorites WHERE user_id = ? AND item_type = "file"');
         stmt.bind([userId]);
         stmt.step();
-        const res = stmt.getAsObject();
+        const result = stmt.getAsObject();
         stmt.free();
-        return res.count || 0;
+        return result.count || 0;
     },
     getAllFilePaths: () => {
         const stmt = db.prepare('SELECT path FROM files');
@@ -515,6 +557,28 @@ function closeDatabase() {
 }
 
 /**
+ * Migration: Convert legacy Path-based favorites to ID-based favorites
+ */
+function migrateFavorites() {
+    try {
+        console.log('[Migration] Checking for legacy path-based favorites...');
+        // 1. Try to resolve favorites where item_id matches a file path
+        db.exec(`
+            UPDATE favorites 
+            SET item_id = (SELECT id FROM files WHERE path = favorites.item_id) 
+            WHERE item_type = 'file' 
+            AND item_id NOT IN (SELECT id FROM files) 
+            AND item_id IN (SELECT path FROM files);
+        `);
+
+        console.log('[Migration] Favorites migration complete.');
+        saveDatabase();
+    } catch (e) {
+        console.error('[Migration] Error migrating favorites:', e);
+    }
+}
+
+/**
  * Toggle favorite status
  */
 function toggleFavorite(userId, itemId, itemType) {
@@ -578,8 +642,9 @@ function queryFavoriteFiles(userId, options = {}) {
     const { offset = 0, limit = 500 } = options;
 
     const query = `
-        SELECT f.* FROM files f
-        INNER JOIN favorites fav ON (f.id = fav.item_id OR f.path = fav.item_id)
+        SELECT f.*
+        FROM favorites fav
+        JOIN files f ON (f.id = fav.item_id OR f.path = fav.item_id)
         WHERE fav.user_id = ? AND fav.item_type = 'file'
         ORDER BY f.last_modified DESC
         LIMIT ? OFFSET ?
@@ -612,10 +677,8 @@ function queryFavoriteFiles(userId, options = {}) {
  * Count favorite files for a user
  */
 function countFavoriteFiles(userId) {
-    const stmt = db.prepare(`
-        SELECT COUNT(*) as count FROM favorites
-        WHERE user_id = ? AND item_type = 'file'
-    `);
+    const query = `SELECT COUNT(*) as count FROM favorites fav JOIN files f ON (f.id = fav.item_id OR f.path = fav.item_id) WHERE fav.user_id = ? AND fav.item_type = 'file'`;
+    const stmt = db.prepare(query);
     stmt.bind([userId]);
     stmt.step();
     const result = stmt.getAsObject();
@@ -723,5 +786,6 @@ module.exports = {
     deleteFilesBatch,
     getAllFilesMtime,
     renameFile,      // NEW
-    clearThumbnails  // NEW
+    clearThumbnails, // NEW
+    migrateFavorites // NEW
 };

@@ -2,7 +2,7 @@ import React from 'react';
 import { View, Image, TouchableWithoutFeedback, Dimensions, Text } from 'react-native';
 import { MediaItem } from '../types';
 import { getThumbnailUrl } from '../utils/api';
-import { Play } from 'lucide-react-native';
+import { Play, Music } from 'lucide-react-native';
 
 interface MediaCardProps {
     item: MediaItem;
@@ -13,12 +13,20 @@ export const MediaCard: React.FC<MediaCardProps> = ({ item, onPress }) => {
     return (
         <TouchableWithoutFeedback onPress={() => onPress(item)}>
             <View className="rounded-lg overflow-hidden bg-gray-100 relative shadow-sm w-full aspect-square">
-                <Image
-                    source={{ uri: getThumbnailUrl(item.id) }}
-                    className="w-full h-full object-cover"
-                    resizeMode="cover"
-                // Fade in image?
-                />
+                {item.mediaType === 'audio' ? (
+                    <View className="w-full h-full bg-indigo-500 items-center justify-center">
+                        <Music size={24} color="white" />
+                        <View className="absolute bottom-2 left-2 right-2">
+                            <Text numberOfLines={1} className="text-white text-[10px] font-medium">{item.name}</Text>
+                        </View>
+                    </View>
+                ) : (
+                    <Image
+                        source={{ uri: getThumbnailUrl(item.id) }}
+                        className="w-full h-full object-cover"
+                        resizeMode="cover"
+                    />
+                )}
 
                 {item.mediaType === 'video' && (
                     <View className="absolute inset-0 items-center justify-center bg-black/10">
