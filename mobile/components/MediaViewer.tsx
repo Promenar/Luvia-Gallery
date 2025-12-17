@@ -3,7 +3,7 @@ import { View, Text, Modal, FlatList, Dimensions, StatusBar, TouchableOpacity, I
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { X } from 'lucide-react-native';
 import { MediaItem } from '../types';
-import { getFileUrl, toggleFavorite, API_URL } from '../utils/api';
+import { getFileUrl, toggleFavorite, fetchExif, API_URL } from '../utils/api';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import Animated, { FadeIn, FadeOut, SlideInDown, SlideOutDown } from 'react-native-reanimated';
 import { IconButton } from 'react-native-paper';
@@ -72,7 +72,18 @@ export const MediaViewer: React.FC<MediaViewerProps> = ({ items, initialIndex, o
 
     useEffect(() => {
         if (items[currentIndex]) {
-            setIsFavorite(items[currentIndex].isFavorite || false);
+            const item = items[currentIndex];
+            setIsFavorite(item.isFavorite || false);
+
+            // Fetch EXIF if it's an image
+            if (item.mediaType === 'image') {
+                setExif(null); // Reset first
+                fetchExif(item.id).then((data: any) => {
+                    if (data) setExif(data);
+                });
+            } else {
+                setExif(null);
+            }
         }
     }, [currentIndex, items]);
 
