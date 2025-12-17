@@ -579,7 +579,7 @@ function queryFavoriteFiles(userId, options = {}) {
 
     const query = `
         SELECT f.* FROM files f
-        INNER JOIN favorites fav ON f.id = fav.item_id
+        INNER JOIN favorites fav ON (f.id = fav.item_id OR f.path = fav.item_id)
         WHERE fav.user_id = ? AND fav.item_type = 'file'
         ORDER BY f.last_modified DESC
         LIMIT ? OFFSET ?
