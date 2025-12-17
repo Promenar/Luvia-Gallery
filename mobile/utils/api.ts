@@ -30,6 +30,8 @@ export const initApi = async () => {
 
 // Logout Callback Mechanism
 let logoutCallback: (() => void) | null = null;
+let isEmittingLogout = false;
+
 export const onLogout = (cb: () => void) => { logoutCallback = cb; };
 
 const authenticatedFetch = async (url: string, options: RequestInit = {}) => {
@@ -42,7 +44,13 @@ const authenticatedFetch = async (url: string, options: RequestInit = {}) => {
 
     if (res.status === 401 || res.status === 403) {
         // Token expired or invalid
-        if (logoutCallback) logoutCallback();
+        // Debounce/Throttle the logout callback to prevent spamming
+        if (logoutCallback && !isEmittingLogout) {
+            isEmittingLogout = true;
+            logoutCallback();
+            // Reset flag after a delay to allow future warnings if re-login happens
+            setTimeout(() => { isEmittingLogout = false; }, 5000);
+        }
         throw new Error('Session Expired');
     }
     return res;
@@ -71,11 +79,13 @@ export const login = async (username: string, password: string) => {
     }
 };
 
-export const logout = async () => {
+export const logout = async (isManual = false) => {
     authToken = null;
     await AsyncStorage.removeItem('lumina_token');
     await AsyncStorage.removeItem('lumina_username');
-    if (logoutCallback) logoutCallback();
+    if (logoutCallback && !isManual) {
+        logoutCallback();
+    }
 };
 
 // Use encodeURIComponent for IDs (paths)
@@ -89,11 +99,19 @@ export const getThumbnailUrl = (id: string) => {
     return authToken ? `${url}?token=${authToken}` : url;
 };
 
-export const fetchFolders = async (path?: string) => {
+export const fetchFolders = async (path?: string, favorite: boolean = false) => {
     try {
-        const url = path
-            ? `${API_URL}/api/library/folders?parentPath=${encodeURIComponent(path)}`
-            : `${API_URL}/api/library/folders?parentPath=root`;
+        let url = `${API_URL}/api/library/folders`;
+        const params = [];
+        if (favorite) {
+            params.push('favorites=true');
+        } else {
+            params.push(`parentPath=${encodeURIComponent(path || 'root')}`);
+        }
+
+        if (params.length > 0) {
+            url += `?${params.join('&')}`;
+        }
 
         // Use authenticatedFetch but headers must be explicit if no body?
         // fetch defaults are GET.
@@ -135,6 +153,18 @@ export const toggleFavorite = async (id: string, isFavorite: boolean) => {
         return await res.json();
     } catch (error) {
         console.error("Error toggling favorite:", error);
+        return null;
+    }
+};
+
+export const fetchExif = async (id: string) => {
+    try {
+        const url = `${API_URL}/api/file/${encodeURIComponent(id)}/exif`;
+        const res = await authenticatedFetch(url);
+        if (!res.ok) return null;
+        return await res.json();
+    } catch (error) {
+        console.error('Fetch EXIF error:', error);
         return null;
     }
 };

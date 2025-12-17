@@ -149,6 +149,17 @@ export default function App() {
     const [isSidebarOpen, setIsSidebarOpen] = useState(false);
     const [selectedItem, setSelectedItem] = useState<MediaItem | null>(null);
 
+    // --- REFS for Polling (Fixes Stale Closure) ---
+    // These refs ensure the polling loop always accesses the latest state without closure issues
+    const viewModeRef = useRef<ViewMode>('home');
+    const currentPathRef = useRef<string>('');
+    const currentUserRef = useRef<User | null>(null);
+
+    // Sync refs with state
+    useEffect(() => { viewModeRef.current = viewMode; }, [viewMode]);
+    useEffect(() => { currentPathRef.current = currentPath; }, [currentPath]);
+    useEffect(() => { currentUserRef.current = currentUser; }, [currentUser]);
+
     // --- Audio Player State ---
     const [currentAudio, setCurrentAudio] = useState<MediaItem | null>(null);
     const [isPlayerMinimized, setIsPlayerMinimized] = useState(true);
@@ -781,11 +792,16 @@ export default function App() {
                 scanTimeoutRef.current = setTimeout(poll, 1000);
             } else {
                 fetchSystemStatus();
-                if (currentUser) {
-                    // Refresh library if tasks just finished
-                    // This might trigger too often if both finish at slightly different times, but it's safe
-                    fetchServerFiles(currentUser.username, allUserData, 0, true, currentPath, viewMode === 'favorites');
-                    fetchServerFolders(currentPath);
+                const user = currentUserRef.current;
+                if (user) {
+                    const mode = viewModeRef.current;
+                    const path = currentPathRef.current;
+
+                    // Only refresh if we are in a relevant view
+                    fetchServerFiles(user.username, allUserData, 0, true, path, mode === 'favorites');
+                    if (mode === 'folders' || mode === 'favorites') {
+                        fetchServerFolders(path, mode === 'favorites');
+                    }
                 }
             }
         };
@@ -1468,13 +1484,20 @@ export default function App() {
         let result = [...files];
 
         // 1. Folder Filter
-        if (viewMode === 'folders' && currentPath) {
+        if (viewMode === 'folders') {
             if (!isServerMode) {
                 result = result.filter(f => f.folderPath === currentPath);
             } else {
-                // In server mode, 'files' is the content of the current folder/query. 
-                // However, to be safe against race conditions where 'files' might be 'all photos' temporarily:
+                // In server mode, 'files' should be the content of the current folder.
+                // But to safely handle state transitions or cache leaks:
                 result = result.filter(f => f.folderPath === currentPath);
+
+                // CRITICAL FIX: If currentPath is empty (root), we must ensure we only show files 
+                // that seemingly belong to root (if backend returns absolute paths, this filter might block everything if we don't normalize).
+                // But typically backend 'folderPath' matches requested 'currentPath'. 
+                // If backend returns absolute '/media/...' and currentPath is '', this filter blocks it (Correct behavior for ghost files).
+                // If backend returns relative paths, it works. 
+                // Given the issue, enforce strict equality.
             }
         }
 

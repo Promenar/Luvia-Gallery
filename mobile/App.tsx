@@ -86,8 +86,8 @@ const MainScreen = () => {
     // Register Auto-Logout Callback
     onLogout(() => {
       Alert.alert(
-        "Session Expired",
-        "Your login session has expired. Please login again."
+        t('msg.session_expired'),
+        t('msg.session_expired_desc')
       );
       handleLogout();
     });
@@ -117,7 +117,7 @@ const MainScreen = () => {
   };
 
   const handleLogout = async () => {
-    await logout();
+    await logout(true);
     setIsLoggedIn(false);
     // Reset states
     setActiveTab('home');
@@ -169,13 +169,33 @@ const MainScreen = () => {
     setLoading(true);
     try {
       console.log('Loading favorites...');
-      const filesRes = await fetchFiles(undefined, 0, 100, true);
-      console.log('Favorites response:', JSON.stringify(filesRes));
-      if (!filesRes || !filesRes.files) {
-        console.error('Favorites response missing files array');
-        Alert.alert('Debug', `Invalid Favorites Response: ${JSON.stringify(filesRes)}`);
-      }
-      setFavoriteFiles(filesRes.files || []);
+      // Fetch both files and folders for favorites
+      const [filesRes, foldersRes] = await Promise.all([
+        fetchFiles(undefined, 0, 100, true),
+        fetchFolders(undefined, true)
+      ]);
+
+      console.log('Favorites files response:', JSON.stringify(filesRes));
+      console.log('Favorites folders response:', JSON.stringify(foldersRes));
+
+      const folderItems: MediaItem[] = (foldersRes.folders || []).map((f: any) => ({
+        id: f.path,
+        name: f.name,
+        path: f.path,
+        folderPath: f.path.split('/').slice(0, -1).join('/'),
+        url: '',
+        type: 'application/x-directory',
+        mediaType: 'folder',
+        size: 0,
+        lastModified: f.lastModified || 0,
+        sourceId: 'system',
+        mediaCount: f.mediaCount,
+        coverMedia: f.coverMedia
+      }));
+
+      const fileItems = filesRes.files || [];
+      // Combine folders first, then files
+      setFavoriteFiles([...folderItems, ...fileItems]);
     } catch (e) {
       console.error('Load Favorites Error:', e);
       Alert.alert('Error', 'Failed to load favorites. Check console.');
@@ -199,7 +219,7 @@ const MainScreen = () => {
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     if (activeTab === 'home') loadHomeData();
     if (activeTab === 'library') loadLibraryData(0);
     if (activeTab === 'favorites') loadFavoritesData();
@@ -207,13 +227,13 @@ const MainScreen = () => {
   }, [activeTab, currentPath]);
 
   const handleFolderPress = (folder: Folder) => {
-    Haptics.selectionAsync();
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     setHistory(prev => currentPath ? [...prev, currentPath] : [...prev, 'root']);
     setCurrentPath(folder.path);
   };
 
   const handleBack = () => {
-    Haptics.selectionAsync();
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     if (history.length > 0) {
       const prev = history[history.length - 1];
       const newHistory = history.slice(0, -1);
@@ -225,7 +245,7 @@ const MainScreen = () => {
   };
 
   const handleMediaPress = (item: MediaItem, list: MediaItem[]) => {
-    Haptics.selectionAsync();
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     const index = list.findIndex(i => i.id === item.id);
     setViewerContext({ items: list, index: index !== -1 ? index : 0 });
   };
@@ -298,7 +318,7 @@ const MainScreen = () => {
             <ScrollView
               className="flex-1 bg-gray-50/50 dark:bg-black"
               contentContainerStyle={{ paddingBottom: 100 }}
-              refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+              refreshControl={<RefreshControl refreshing={refreshing || loading} onRefresh={onRefresh} />}
             >
               <View className="mb-6 pt-6">
                 <Carousel data={recentMedia} onPress={(i: MediaItem) => handleMediaPress(i, recentMedia)} />
@@ -306,9 +326,9 @@ const MainScreen = () => {
 
               <View className="px-6">
                 <Text className="text-xl font-bold text-gray-900 dark:text-white mb-4 tracking-tight">{t('section.just_added')}</Text>
-                <View className="flex-row flex-wrap justify-between">
+                <View className="flex-row flex-wrap gap-[1%]">
                   {recentMedia.slice(0, 6).map(item => (
-                    <View key={item.id} className="w-[32%] mb-1">
+                    <View key={item.id} className="w-[32.6%] mb-1">
                       <MediaCard item={item} onPress={(i: MediaItem) => handleMediaPress(i, recentMedia)} />
                     </View>
                   ))}
@@ -327,7 +347,7 @@ const MainScreen = () => {
               numColumns={3}
               columnWrapperStyle={{ justifyContent: 'space-between' }}
               contentContainerStyle={{ padding: 12, paddingBottom: 100 }}
-              refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+              refreshControl={<RefreshControl refreshing={refreshing || loading} onRefresh={onRefresh} />}
               onEndReached={() => {
                 if (hasMoreLibrary && !loadingMore && !loading) {
                   loadLibraryData(libraryOffset + 50, true);
@@ -353,16 +373,22 @@ const MainScreen = () => {
               numColumns={3}
               columnWrapperStyle={{ justifyContent: 'space-between' }}
               contentContainerStyle={{ padding: 12, paddingBottom: 100 }}
-              refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+              refreshControl={<RefreshControl refreshing={refreshing || loading} onRefresh={onRefresh} />}
               renderItem={({ item }) => (
                 <View className="w-[32%] mb-2">
-                  <MediaCard item={item} onPress={(i: MediaItem) => handleMediaPress(i, favoriteFiles)} />
+                  {item.mediaType === 'folder' ? (
+                    <View className="aspect-square">
+                      <FolderCard name={item.name} onPress={() => handleFolderPress({ ...item, mediaCount: item.mediaCount || 0, children: {} } as any)} />
+                    </View>
+                  ) : (
+                    <MediaCard item={item} onPress={(i: MediaItem) => handleMediaPress(i, favoriteFiles)} />
+                  )}
                 </View>
               )}
               ListEmptyComponent={
                 (!loading) ? (
                   <View className="p-20 items-center justify-center opacity-50">
-                    <Text className="text-gray-400 font-medium">No Favorites Yet</Text>
+                    <Text className="text-gray-400 font-medium">{t('empty.favorites')}</Text>
                   </View>
                 ) : null
               }
@@ -373,8 +399,8 @@ const MainScreen = () => {
         {activeTab === 'folders' && (
           <View className="flex-1">
             <Header
-              title={currentPath ? (currentPath.split(/[/\\]/).pop() || 'Folders') : 'Folders'}
-              subtitle={currentPath ? 'Browse Directory' : 'Browse your collection'}
+              title={currentPath ? (currentPath.split(/[/\\]/).pop() || t('header.folders')) : t('header.folders')}
+              subtitle={currentPath ? t('header.browse') : t('header.folders.sub')}
               showBack={!!currentPath}
               onBack={handleBack}
             />
@@ -385,14 +411,14 @@ const MainScreen = () => {
               numColumns={3}
               columnWrapperStyle={{ justifyContent: 'space-between' }}
               contentContainerStyle={{ padding: 16, paddingBottom: 100 }}
-              refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+              refreshControl={<RefreshControl refreshing={refreshing || loading} onRefresh={onRefresh} />}
               ListHeaderComponent={
                 <View>
                   {/* BreadCrumb removed, handled by Header */}
 
                   {folders.length > 0 && (
                     <View className="mb-4 pt-4">
-                      {!currentPath && <Text className="text-xs font-bold text-gray-400 mb-4 uppercase tracking-widest">Directories</Text>}
+                      {!currentPath && <Text className="text-xs font-bold text-gray-400 mb-4 uppercase tracking-widest">{t('folder.directories')}</Text>}
                       <View className="flex-row flex-wrap justify-between">
                         {folders.map(folder => (
                           <View key={folder.path} className="w-[48%] mb-4">
@@ -404,7 +430,7 @@ const MainScreen = () => {
                   )}
                   {folderFiles.length > 0 && (
                     <Text className="text-xs font-bold text-gray-400 mb-3 uppercase tracking-widest mt-2">
-                      Media Files
+                      {t('folder.media')}
                     </Text>
                   )}
                 </View>
@@ -417,7 +443,7 @@ const MainScreen = () => {
               ListEmptyComponent={
                 (!loading && folders.length === 0) ? (
                   <View className="p-20 items-center justify-center opacity-50">
-                    <Text className="text-gray-400 font-medium">Empty Folder</Text>
+                    <Text className="text-gray-400 font-medium">{t('empty.folder')}</Text>
                   </View>
                 ) : null
               }
@@ -438,15 +464,7 @@ const MainScreen = () => {
     <View style={{ flex: 1, paddingTop: insets.top, backgroundColor: isDark ? '#000000' : '#ffffff' }} className="bg-white dark:bg-black">
       <StatusBar style={isDark ? "light" : "dark"} />
       <View className="flex-1 bg-white dark:bg-black relative">
-        {loading && !refreshing && (
-          /* Non-intrusive loading - mostly for initial or transition, not refresh */
-          <View className="absolute top-0 left-0 right-0 z-50 items-center pt-2">
-            <View className="bg-white/90 dark:bg-gray-800/90 px-4 py-2 rounded-full shadow-sm border border-gray-100 dark:border-gray-700 flex-row gap-2">
-              <ActivityIndicator size="small" color={isDark ? "#fff" : "#000"} />
-              <Text className="text-xs font-medium text-gray-500 dark:text-gray-400">Updating...</Text>
-            </View>
-          </View>
-        )}
+        {/* Mobile Unified Loading: Handled by RefreshControl now. */}
         {renderContent()}
       </View>
 
