@@ -13,11 +13,15 @@ import { SettingsScreen } from './components/SettingsScreen';
 import { LoginScreen } from './components/LoginScreen';
 import { fetchFolders, fetchFiles, initApi, logout, onLogout, toggleFavorite } from './utils/api';
 import { MediaItem } from './types';
+import { CarouselView } from './components/CarouselView';
+import { ConfigProvider } from './utils/ConfigContext';
 import { MediaViewer } from './components/MediaViewer';
 import { ThemeProvider, useTheme } from './utils/ThemeContext';
 import { Header } from './components/Header';
 import * as Haptics from 'expo-haptics';
 import { useLanguage, initLanguage } from './utils/i18n';
+import { AudioProvider, useAudio } from './utils/AudioContext';
+import { MiniPlayer } from './components/MiniPlayer';
 
 // Enable LayoutAnimation on Android
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
@@ -33,10 +37,28 @@ interface Folder {
 
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
+// Helper for grid alignment
+const formatGridData = (data: MediaItem[], numColumns: number) => {
+  if (!data) return [];
+  const totalRows = Math.floor(data.length / numColumns);
+  let totalLastRow = data.length - (totalRows * numColumns);
+
+  if (totalLastRow === 0) return data;
+
+  const newData = [...data]; // Clone array
+  while (totalLastRow !== numColumns && totalLastRow !== 0) {
+    // @ts-ignore
+    newData.push({ id: `blank-${totalLastRow}-${Date.now()}`, empty: true });
+    totalLastRow++;
+  }
+  return newData;
+};
+
 const MainScreen = () => {
   const insets = useSafeAreaInsets();
   const { mode, isDark, paperTheme } = useTheme();
   const { t } = useLanguage();
+  const { isMinimized, maximizePlayer, currentTrack, playlist, currentIndex } = useAudio();
 
   // Auth State
   const [checkingAuth, setCheckingAuth] = useState(true);
@@ -132,7 +154,7 @@ const MainScreen = () => {
   const loadHomeData = async () => {
     setLoading(true);
     try {
-      const filesRes = await fetchFiles(undefined, 0, 5);
+      const filesRes = await fetchFiles({ limit: 5, excludeMediaType: 'audio' });
       setRecentMedia(filesRes.files || []);
     } catch (e) { handleApiError(e); } finally { setLoading(false); setRefreshing(false); }
   };
@@ -143,7 +165,7 @@ const MainScreen = () => {
 
     try {
       const limit = 50;
-      const filesRes = await fetchFiles(undefined, offset, limit);
+      const filesRes = await fetchFiles({ offset, limit, excludeMediaType: 'audio' });
       const newFiles = filesRes.files || [];
 
       if (newFiles.length < limit) setHasMoreLibrary(false);
@@ -173,7 +195,7 @@ const MainScreen = () => {
       console.log('Loading favorites...');
       // Fetch both files and folders for favorites
       const [filesRes, foldersRes] = await Promise.all([
-        fetchFiles(undefined, 0, 100, true),
+        fetchFiles({ favorite: true, limit: 100 }),
         fetchFolders(undefined, true)
       ]);
 
@@ -204,7 +226,7 @@ const MainScreen = () => {
       const queryPath = path === 'root' ? undefined : (path || undefined);
       const [foldersRes, filesRes] = await Promise.all([
         fetchFolders(queryPath),
-        queryPath ? fetchFiles(queryPath) : Promise.resolve({ files: [] })
+        queryPath ? fetchFiles({ folderPath: queryPath }) : Promise.resolve({ files: [] })
       ]);
       setFolders(foldersRes.folders || []);
       setFolderFiles(filesRes.files || []);
@@ -222,8 +244,16 @@ const MainScreen = () => {
 
   const handleFolderPress = (folder: Folder) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+
+    if (activeTab === 'folders') {
+      // Drilling down: Append current path to history
+      setHistory(prev => [...prev, currentPath || 'root']);
+    } else {
+      // Jumping from another tab: Reset history to ensure Back goes to Root
+      setHistory(['root']);
+    }
+
     setActiveTab('folders');
-    setHistory(['root']);
     setCurrentPath(folder.path);
   };
 
@@ -285,54 +315,12 @@ const MainScreen = () => {
     );
   }
 
-  if (viewerContext) {
-    return (
-      <MediaViewer
-        items={viewerContext.items}
-        initialIndex={viewerContext.index}
-        onClose={() => {
-          setViewerContext(null);
-          // Refresh favorites if needed when returning
-          if (activeTab === 'favorites') loadFavoritesData();
-        }}
-        onToggleFavorite={async (id, isFavorite) => {
-          // 1. Optimistic Update Local State
-          const updateItem = (item: MediaItem) => item.id === id ? { ...item, isFavorite } : item;
-
-          // Update Context Items (Crucial for Viewer persistence)
-          if (viewerContext) {
-            setViewerContext(prev => prev ? { ...prev, items: prev.items.map(updateItem) } : null);
-          }
-
-          setRecentMedia(prev => prev.map(updateItem));
-          setLibraryFiles(prev => prev.map(updateItem));
-          setFavoriteFiles(prev => {
-            if (isFavorite) {
-              return prev.map(updateItem);
-            } else {
-              return prev.filter(i => i.id !== id);
-            }
-          });
-          setFolderFiles(prev => prev.map(updateItem));
-
-          // 2. Call Backend
-          await toggleFavorite(id, isFavorite);
-
-          // 3. Refresh Favorites List if needed (lazy sync)
-          if (activeTab === 'favorites' && !isFavorite) {
-            // Already filtered out above optimistically
-          }
-        }}
-      />
-    );
-  }
-
   const renderContent = () => {
     return (
       <Animated.View
         key={activeTab}
-        entering={FadeIn.duration(300)}
-        exiting={FadeOut.duration(200)}
+        entering={FadeIn.duration(100)}
+        exiting={FadeOut.duration(100)}
         className="flex-1"
       >
         {activeTab === 'home' && (
@@ -343,154 +331,195 @@ const MainScreen = () => {
               contentContainerStyle={{ paddingBottom: 100 }}
               refreshControl={<RefreshControl refreshing={refreshing || loading} onRefresh={onRefresh} />}
             >
-              <View className="mb-6 pt-6">
-                <Carousel data={recentMedia} onPress={(i: MediaItem) => handleMediaPress(i, recentMedia)} />
+              <View className="mb-8 pt-0">
+                {/* Hero Carousel - Full Width Implementation */}
+                <View>
+                  <CarouselView isActive={activeTab === 'home'} />
+                </View>
               </View>
 
-              <View className="px-6">
-                <Text className="text-xl font-bold text-gray-900 dark:text-white mb-4 tracking-tight">{t('section.just_added')}</Text>
-                <View className="flex-row flex-wrap gap-[1%]">
-                  {recentMedia.slice(0, 6).map(item => (
-                    <View key={item.id} className="w-[32.6%] mb-1">
-                      <MediaCard item={item} onPress={(i: MediaItem) => handleMediaPress(i, recentMedia)} />
+              <View className="pl-4 mb-4">
+                <Text className="text-xl font-bold text-gray-900 dark:text-white mb-3 tracking-tight">{t('section.just_added')}</Text>
+
+                {/* Horizontal List for Recent Media */}
+                <FlatList
+                  data={recentMedia}
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  keyExtractor={(item) => item.id}
+                  contentContainerStyle={{ paddingRight: 16, gap: 12 }}
+                  renderItem={({ item }) => (
+                    <View style={{ width: 140, height: 180 }}>
+                      <MediaCard
+                        item={item}
+                        onPress={() => handleMediaPress(item, recentMedia)}
+                      />
                     </View>
-                  ))}
-                </View>
+                  )}
+                />
               </View>
             </ScrollView>
           </View>
-        )}
+        )
+        }
 
-        {activeTab === 'library' && (
-          <View className="flex-1">
-            <Header title={t('header.library')} subtitle={t('header.library.sub')} />
-            <FlatList
-              data={libraryFiles}
-              keyExtractor={item => item.id}
-              numColumns={3}
-              columnWrapperStyle={{ justifyContent: 'space-between' }}
-              contentContainerStyle={{ padding: 12, paddingBottom: 100 }}
-              refreshControl={<RefreshControl refreshing={refreshing || loading} onRefresh={onRefresh} />}
-              onEndReached={() => {
-                if (hasMoreLibrary && !loadingMore && !loading) {
-                  loadLibraryData(libraryOffset + 50, true);
-                }
-              }}
-              onEndReachedThreshold={0.5}
-              ListFooterComponent={loadingMore ? <ActivityIndicator className="py-4" color={isDark ? "#fff" : "#000"} /> : null}
-              renderItem={({ item }) => (
-                <View className="w-[32%] mb-2">
-                  <MediaCard item={item} onPress={(i: MediaItem) => handleMediaPress(i, libraryFiles)} />
-                </View>
-              )}
-            />
-          </View>
-        )}
-
-        {activeTab === 'favorites' && (
-          <View className="flex-1">
-            <Header title={t('header.favorites')} subtitle={t('header.favorites.sub')} />
-            <FlatList
-              data={favoriteFiles}
-              keyExtractor={item => item.id}
-              numColumns={3}
-              columnWrapperStyle={{ gap: 6 }}
-              contentContainerStyle={{ padding: 12, paddingBottom: 100 }}
-              refreshControl={<RefreshControl refreshing={refreshing || loading} onRefresh={onRefresh} />}
-              ListHeaderComponent={
-                favoriteFolders.length > 0 ? (
-                  <View className="mb-4">
-                    <Text className="text-xs font-bold text-gray-400 mb-4 uppercase tracking-widest">{t('folder.directories')}</Text>
-                    <View className="flex-row flex-wrap justify-between">
-                      {favoriteFolders.map(folder => (
-                        <View key={folder.path} className="w-[48%] mb-4">
-                          <FolderCard name={folder.name} onPress={() => handleFolderPress(folder)} />
-                        </View>
-                      ))}
+        {
+          activeTab === 'library' && (
+            <View className="flex-1">
+              <Header title={t('header.library')} subtitle={t('header.library.sub')} />
+              <FlatList
+                data={formatGridData(libraryFiles, 3)}
+                keyExtractor={item => item.id}
+                numColumns={3}
+                columnWrapperStyle={{ justifyContent: 'space-between' }}
+                contentContainerStyle={{ padding: 12, paddingBottom: 100 }}
+                refreshControl={<RefreshControl refreshing={refreshing || loading} onRefresh={onRefresh} />}
+                onEndReached={() => {
+                  if (hasMoreLibrary && !loadingMore && !loading) {
+                    loadLibraryData(libraryOffset + 50, true);
+                  }
+                }}
+                onEndReachedThreshold={0.5}
+                ListFooterComponent={loadingMore ? <ActivityIndicator className="py-4" color={isDark ? "#fff" : "#000"} /> : null}
+                renderItem={({ item }) => {
+                  // @ts-ignore
+                  if (item.empty) return <View className="w-[32%] mb-2 bg-transparent" />;
+                  return (
+                    <View className="w-[32%] mb-2">
+                      <MediaCard item={item} onPress={(i: MediaItem) => handleMediaPress(i, libraryFiles)} />
                     </View>
-                    {favoriteFiles.length > 0 && (
-                      <Text className="text-xs font-bold text-gray-400 mb-3 uppercase tracking-widest mt-2">{t('folder.media')}</Text>
-                    )}
-                  </View>
-                ) : null
-              }
-              renderItem={({ item }) => (
-                <View className="w-[32%] mb-2">
-                  <MediaCard item={item} onPress={(i: MediaItem) => handleMediaPress(i, favoriteFiles)} />
-                </View>
-              )}
-              ListEmptyComponent={
-                (!loading && favoriteFiles.length === 0 && favoriteFolders.length === 0) ? (
-                  <View className="p-20 items-center justify-center opacity-50">
-                    <Text className="text-gray-400 font-medium">{t('empty.favorites')}</Text>
-                  </View>
-                ) : null
-              }
-            />
-          </View>
-        )}
+                  );
+                }}
+              />
+            </View>
+          )
+        }
 
-        {activeTab === 'folders' && (
-          <View className="flex-1">
-            <Header
-              title={currentPath ? (currentPath.split(/[/\\]/).pop() || t('header.folders')) : t('header.folders')}
-              subtitle={currentPath ? t('header.browse') : t('header.folders.sub')}
-              showBack={!!currentPath}
-              onBack={handleBack}
-            />
-
-            <FlatList
-              data={folderFiles}
-              keyExtractor={item => item.id}
-              numColumns={3}
-              columnWrapperStyle={{ justifyContent: 'space-between' }}
-              contentContainerStyle={{ padding: 16, paddingBottom: 100 }}
-              refreshControl={<RefreshControl refreshing={refreshing || loading} onRefresh={onRefresh} />}
-              ListHeaderComponent={
-                <View>
-                  {/* BreadCrumb removed, handled by Header */}
-
-                  {folders.length > 0 && (
-                    <View className="mb-4 pt-4">
-                      {!currentPath && <Text className="text-xs font-bold text-gray-400 mb-4 uppercase tracking-widest">{t('folder.directories')}</Text>}
+        {
+          activeTab === 'favorites' && (
+            <View className="flex-1">
+              <Header title={t('header.favorites')} subtitle={t('header.favorites.sub')} />
+              <FlatList
+                data={formatGridData(favoriteFiles, 3)}
+                keyExtractor={item => item.id}
+                numColumns={3}
+                columnWrapperStyle={{ justifyContent: 'space-between' }}
+                contentContainerStyle={{ padding: 12, paddingBottom: 100 }}
+                refreshControl={<RefreshControl refreshing={refreshing || loading} onRefresh={onRefresh} />}
+                ListHeaderComponent={
+                  favoriteFolders.length > 0 ? (
+                    <View className="mb-4">
+                      <Text className="text-xs font-bold text-gray-400 mb-4 uppercase tracking-widest">{t('folder.directories')}</Text>
                       <View className="flex-row flex-wrap justify-between">
-                        {folders.map(folder => (
+                        {favoriteFolders.map(folder => (
                           <View key={folder.path} className="w-[48%] mb-4">
                             <FolderCard name={folder.name} onPress={() => handleFolderPress(folder)} />
                           </View>
                         ))}
                       </View>
+                      {favoriteFiles.length > 0 && (
+                        <Text className="text-xs font-bold text-gray-400 mb-3 uppercase tracking-widest mt-2">{t('folder.media')}</Text>
+                      )}
                     </View>
-                  )}
-                  {folderFiles.length > 0 && (
-                    <Text className="text-xs font-bold text-gray-400 mb-3 uppercase tracking-widest mt-2">
-                      {t('folder.media')}
-                    </Text>
-                  )}
-                </View>
-              }
-              renderItem={({ item }) => (
-                <View className="w-[32%] mb-2">
-                  <MediaCard item={item} onPress={(i: MediaItem) => handleMediaPress(i, folderFiles)} />
-                </View>
-              )}
-              ListEmptyComponent={
-                (!loading && folders.length === 0) ? (
-                  <View className="p-20 items-center justify-center opacity-50">
-                    <Text className="text-gray-400 font-medium">{t('empty.folder')}</Text>
-                  </View>
-                ) : null
-              }
-            />
-          </View>
-        )}
+                  ) : null
+                }
+                renderItem={({ item }) => {
+                  // @ts-ignore
+                  if (item.empty) return <View className="w-[32%] mb-2 bg-transparent" />;
+                  return (
+                    <View className="w-[32%] mb-2">
+                      <MediaCard item={item} onPress={(i: MediaItem) => handleMediaPress(i, favoriteFiles)} />
+                    </View>
+                  );
+                }}
+                ListEmptyComponent={
+                  (!loading && favoriteFiles.length === 0 && favoriteFolders.length === 0) ? (
+                    <View className="p-20 items-center justify-center opacity-50">
+                      <Text className="text-gray-400 font-medium">{t('empty.favorites')}</Text>
+                    </View>
+                  ) : null
+                }
+              />
+            </View>
+          )
+        }
+
+        {
+          activeTab === 'folders' && (
+            <View className="flex-1">
+              <Header
+                title={currentPath ? (currentPath.split(/[/\\]/).pop() || t('header.folders')) : t('header.folders')}
+                subtitle={currentPath ? t('header.browse') : t('header.folders.sub')}
+                showBack={!!currentPath}
+                onBack={handleBack}
+              />
+
+              <Animated.View
+                key={currentPath || 'root'}
+                entering={FadeIn.duration(100)}
+                exiting={FadeOut.duration(100)}
+                style={{ flex: 1 }}
+              >
+                <FlatList
+                  data={formatGridData(folderFiles, 3)}
+                  keyExtractor={item => item.id}
+                  numColumns={3}
+                  columnWrapperStyle={{ justifyContent: 'space-between' }}
+                  contentContainerStyle={{ padding: 12, paddingBottom: 100 }}
+                  refreshControl={<RefreshControl refreshing={refreshing || loading} onRefresh={onRefresh} />}
+                  ListHeaderComponent={
+                    <View>
+                      {/* BreadCrumb removed, handled by Header */}
+
+                      {folders.length > 0 && (
+                        <View className="mb-4">
+                          {!currentPath && <Text className="text-xs font-bold text-gray-400 mb-4 uppercase tracking-widest">{t('folder.directories')}</Text>}
+                          <View className="flex-row flex-wrap justify-between">
+                            {folders.map(folder => (
+                              <View key={folder.path} className="w-[48%] mb-4">
+                                <FolderCard name={folder.name} onPress={() => handleFolderPress(folder)} />
+                              </View>
+                            ))}
+                          </View>
+                        </View>
+                      )}
+                      {folderFiles.length > 0 && (
+                        <Text className="text-xs font-bold text-gray-400 mb-3 uppercase tracking-widest mt-2">
+                          {t('folder.media')}
+                        </Text>
+                      )}
+                    </View>
+                  }
+                  renderItem={({ item }) => {
+                    // @ts-ignore
+                    if (item.empty) return <View className="w-[32%] mb-2 bg-transparent" />;
+                    return (
+                      <View className="w-[32%] mb-2">
+                        <MediaCard item={item} onPress={(i: MediaItem) => handleMediaPress(i, folderFiles)} />
+                      </View>
+                    );
+                  }}
+                  ListEmptyComponent={
+                    (!loading && folders.length === 0) ? (
+                      <View className="p-20 items-center justify-center opacity-50">
+                        <Text className="text-gray-400 font-medium">{t('empty.folder')}</Text>
+                      </View>
+                    ) : null
+                  }
+                />
+              </Animated.View>
+            </View>
+          )
+        }
 
         {/* Settings Tab */}
-        {activeTab === 'settings' && (
-          <SettingsScreen onLogout={handleLogout} username={username || 'Guest'} />
-        )}
+        {
+          activeTab === 'settings' && (
+            <SettingsScreen onLogout={handleLogout} username={username || 'Guest'} />
+          )
+        }
 
-      </Animated.View>
+      </Animated.View >
     );
   };
 
@@ -500,6 +529,59 @@ const MainScreen = () => {
       <View className="flex-1 bg-white dark:bg-black relative">
         {/* Mobile Unified Loading: Handled by RefreshControl now. */}
         {renderContent()}
+
+        {/* MediaViewer Overlay */}
+        {viewerContext && (
+          <Animated.View
+            style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 1000 }}
+            entering={FadeIn.duration(100)}
+            exiting={FadeOut.duration(100)}
+          >
+            <MediaViewer
+              items={viewerContext.items}
+              initialIndex={viewerContext.index}
+              onClose={() => {
+                setViewerContext(null);
+              }}
+              onToggleFavorite={async (id, isFavorite) => {
+                // 1. Optimistic Update Local State
+                const updateItem = (item: MediaItem) => item.id === id ? { ...item, isFavorite } : item;
+
+                // Update Context Items (Crucial for Viewer persistence)
+                if (viewerContext) {
+                  setViewerContext(prev => prev ? { ...prev, items: prev.items.map(updateItem) } : null);
+                }
+
+                setRecentMedia(prev => prev.map(updateItem));
+                setLibraryFiles(prev => prev.map(updateItem));
+                setFavoriteFiles(prev => {
+                  if (isFavorite) {
+                    return prev.map(updateItem);
+                  } else {
+                    return prev.filter(i => i.id !== id);
+                  }
+                });
+                setFolderFiles(prev => prev.map(updateItem));
+
+                // 2. Call Backend
+                await toggleFavorite(id, isFavorite);
+
+                // 3. Refresh Favorites List if needed (lazy sync)
+                if (activeTab === 'favorites' && !isFavorite) {
+                  // Already filtered out above optimistically
+                }
+              }}
+            />
+          </Animated.View>
+        )}
+        {activeTab !== 'settings' && !viewerContext && (
+          <MiniPlayer onMaximize={() => {
+            if (currentTrack && playlist.length > 0) {
+              setViewerContext({ items: playlist, index: currentIndex !== -1 ? currentIndex : 0 });
+              maximizePlayer(); // sets isMinimized=false
+            }
+          }} />
+        )}
       </View>
 
       <BottomTabs activeTab={activeTab} onTabChange={setActiveTab} />
@@ -512,7 +594,11 @@ export default function App() {
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
         <ThemeProvider>
-          <MainScreen />
+          <ConfigProvider>
+            <AudioProvider>
+              <MainScreen />
+            </AudioProvider>
+          </ConfigProvider>
         </ThemeProvider>
       </SafeAreaProvider>
     </GestureHandlerRootView>
