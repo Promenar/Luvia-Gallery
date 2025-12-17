@@ -4,6 +4,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { API_URL, setBaseUrl } from '../utils/api';
 import { ArrowLeft, Save, Trash2, Activity, Server, Database, User, Moon, Globe, HardDrive } from 'lucide-react-native';
+import * as Haptics from 'expo-haptics';
 import { Image } from 'react-native';
 import { Header } from './Header';
 import { useLanguage } from '../utils/i18n';
@@ -58,6 +59,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBack, onLogout
         const cleanUrl = url.trim().replace(/\/$/, '');
         setBaseUrl(cleanUrl);
         await AsyncStorage.setItem('lumina_api_url', cleanUrl);
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         Alert.alert('Saved', 'Server URL has been updated. Please restart the app for full effect.');
         if (onBack) onBack();
     };
@@ -110,20 +112,23 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBack, onLogout
                 {/* User Account */}
                 <View className="mb-8">
                     <View className="flex-row items-center mb-4 gap-2">
-                        <Activity color="#4b5563" size={20} />
-                        <Text className="text-lg font-bold text-gray-800">{t('section.user')}</Text>
+                        <User color="#4b5563" size={20} />
+                        <Text className="text-lg font-bold text-gray-800 dark:text-gray-100">{t('section.user')}</Text>
                     </View>
-                    <View className="bg-gray-50 p-4 rounded-xl border border-gray-100">
+                    <View className="bg-gray-50 dark:bg-zinc-900 p-4 rounded-xl border border-gray-100 dark:border-zinc-800">
                         <View className="flex-row items-center justify-between mb-4">
-                            <Text className="text-gray-500 font-medium">Username</Text>
-                            <Text className="text-gray-900 font-bold text-lg">{username || 'User'}</Text>
+                            <Text className="text-gray-500 dark:text-gray-400 font-medium">{t('login.username')}</Text>
+                            <Text className="text-gray-900 dark:text-white font-bold text-lg">{username || t('guest')}</Text>
                         </View>
 
                         <TouchableOpacity
-                            onPress={onLogout}
+                            onPress={() => {
+                                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+                                onLogout && onLogout();
+                            }}
                             className="bg-red-500 flex-row items-center justify-center py-3 rounded-lg active:opacity-80"
                         >
-                            <Text className="text-white font-bold">Logout</Text>
+                            <Text className="text-white font-bold">{t('label.logout')}</Text>
                         </TouchableOpacity>
                     </View>
                 </View>
@@ -131,17 +136,20 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBack, onLogout
                 {/* Appearance */}
                 <View className="mb-8">
                     <View className="flex-row items-center mb-4 gap-2">
-                        <Activity color="#4b5563" size={20} />
-                        <Text className="text-lg font-bold text-gray-800">{t('settings.appearance')}</Text>
+                        <Moon color="#4b5563" size={20} />
+                        <Text className="text-lg font-bold text-gray-800 dark:text-gray-100">{t('settings.appearance')}</Text>
                     </View>
-                    <View className="bg-gray-50 p-4 rounded-xl border border-gray-100 flex-row justify-between items-center">
-                        <Text className="text-gray-800 font-medium">{t('settings.dark_mode')}</Text>
+                    <View className="bg-gray-50 dark:bg-zinc-900 p-4 rounded-xl border border-gray-100 dark:border-zinc-800 flex-row justify-between items-center">
+                        <Text className="text-gray-800 dark:text-gray-100 font-medium">{t('settings.dark_mode')}</Text>
                         <TouchableOpacity
-                            onPress={() => setMode(mode === 'dark' ? 'light' : 'dark')}
-                            className={`px-4 py-2 rounded-full ${mode === 'dark' ? 'bg-black' : 'bg-gray-200'}`}
+                            onPress={() => {
+                                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                                setMode(mode === 'dark' ? 'light' : 'dark');
+                            }}
+                            className={`px-4 py-2 rounded-full ${mode === 'dark' ? 'bg-black border border-white/20' : 'bg-gray-200'}`}
                         >
                             <Text className={`${mode === 'dark' ? 'text-white' : 'text-gray-800'} font-bold capitalize`}>
-                                {mode}
+                                {mode === 'dark' ? t('status_on') : t('status_off')}
                             </Text>
                         </TouchableOpacity>
                     </View>
@@ -150,13 +158,16 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBack, onLogout
                 {/* Language */}
                 <View className="mb-8">
                     <View className="flex-row items-center mb-4 gap-2">
-                        <Activity color="#4b5563" size={20} />
-                        <Text className="text-lg font-bold text-gray-800">{t('settings.language')}</Text>
+                        <Globe color="#4b5563" size={20} />
+                        <Text className="text-lg font-bold text-gray-800 dark:text-gray-100">{t('settings.language')}</Text>
                     </View>
-                    <View className="bg-gray-50 p-4 rounded-xl border border-gray-100 flex-row justify-between items-center">
-                        <Text className="text-gray-800 font-medium">{language === 'zh' ? '简体中文' : 'English'}</Text>
+                    <View className="bg-gray-50 dark:bg-zinc-900 p-4 rounded-xl border border-gray-100 dark:border-zinc-800 flex-row justify-between items-center">
+                        <Text className="text-gray-800 dark:text-gray-100 font-medium">{language === 'zh' ? '简体中文' : 'English'}</Text>
                         <TouchableOpacity
-                            onPress={() => setLanguage(language === 'zh' ? 'en' : 'zh')}
+                            onPress={() => {
+                                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                                setLanguage(language === 'zh' ? 'en' : 'zh');
+                            }}
                             className="px-4 py-2 bg-black rounded-full"
                         >
                             <Text className="text-white font-bold">{t('action.switch')}</Text>
@@ -168,25 +179,26 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBack, onLogout
                 <View className="mb-8">
                     <View className="flex-row items-center mb-4 gap-2">
                         <Server color="#4b5563" size={20} />
-                        <Text className="text-lg font-bold text-gray-800">{t('settings.server')}</Text>
+                        <Text className="text-lg font-bold text-gray-800 dark:text-gray-100">{t('settings.server')}</Text>
                     </View>
 
-                    <View className="bg-gray-50 p-4 rounded-xl border border-gray-100">
-                        <Text className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Backend URL</Text>
+                    <View className="bg-gray-50 dark:bg-zinc-900 p-4 rounded-xl border border-gray-100 dark:border-zinc-800">
+                        <Text className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">{t('settings.backend_url')}</Text>
                         <TextInput
-                            className="bg-white border border-gray-200 rounded-lg p-3 text-gray-800 mb-4"
+                            className="bg-white dark:bg-zinc-800 border border-gray-200 dark:border-zinc-700 rounded-lg p-3 text-gray-800 dark:text-white mb-4"
                             value={url}
                             onChangeText={setUrl}
                             placeholder="http://192.168.1.100:3001"
+                            placeholderTextColor="#9ca3af"
                             autoCapitalize="none"
                             autoCorrect={false}
                         />
                         <TouchableOpacity
                             onPress={handleSave}
-                            className="bg-black flex-row items-center justify-center py-3 rounded-lg active:opacity-80 disabled:opacity-50"
+                            className="bg-black dark:bg-white flex-row items-center justify-center py-3 rounded-lg active:opacity-80 disabled:opacity-50"
                         >
-                            <Save color="white" size={18} className="mr-2" />
-                            <Text className="text-white font-bold">Save Configuration</Text>
+                            <Save color={useTheme().mode === 'dark' ? 'black' : 'white'} size={18} className="mr-2" />
+                            <Text className="text-white dark:text-black font-bold">{t('action.save')}</Text>
                         </TouchableOpacity>
                     </View>
                 </View>
@@ -194,38 +206,38 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBack, onLogout
                 {/* System Monitoring */}
                 <View className="mb-8">
                     <View className="flex-row items-center mb-4 gap-2">
-                        <Activity color="#4b5563" size={20} />
-                        <Text className="text-lg font-bold text-gray-800">System Monitor</Text>
+                        <HardDrive color="#4b5563" size={20} />
+                        <Text className="text-lg font-bold text-gray-800 dark:text-gray-100">{t('section.system')}</Text>
                     </View>
 
-                    <View className="bg-gray-50 p-4 rounded-xl border border-gray-100">
+                    <View className="bg-gray-50 dark:bg-zinc-900 p-4 rounded-xl border border-gray-100 dark:border-zinc-800">
                         {loadingStats ? (
-                            <ActivityIndicator color="#000" />
+                            <ActivityIndicator color={mode === 'dark' ? "#fff" : "#000"} />
                         ) : stats ? (
                             <View className="gap-4">
-                                <View className="flex-row justify-between border-b border-gray-200 pb-2">
-                                    <Text className="text-gray-500">Total Media</Text>
-                                    <Text className="font-bold text-gray-900">{stats.mediaStats?.totalFiles || 0}</Text>
+                                <View className="flex-row justify-between border-b border-gray-200 dark:border-zinc-800 pb-2">
+                                    <Text className="text-gray-500 dark:text-gray-400">{t('stats.total_media')}</Text>
+                                    <Text className="font-bold text-gray-900 dark:text-white">{stats.mediaStats?.totalFiles || 0}</Text>
                                 </View>
-                                <View className="flex-row justify-between border-b border-gray-200 pb-2">
-                                    <Text className="text-gray-500">Cache Size</Text>
-                                    <Text className="font-bold text-gray-900">{formatBytes(stats.storage)}</Text>
+                                <View className="flex-row justify-between border-b border-gray-200 dark:border-zinc-800 pb-2">
+                                    <Text className="text-gray-500 dark:text-gray-400">{t('stats.cache_size')}</Text>
+                                    <Text className="font-bold text-gray-900 dark:text-white">{formatBytes(stats.storage)}</Text>
                                 </View>
-                                <View className="flex-row justify-between border-b border-gray-200 pb-2">
-                                    <Text className="text-gray-500">Cache Items</Text>
-                                    <Text className="font-bold text-gray-900">{stats.cacheCount}</Text>
+                                <View className="flex-row justify-between border-b border-gray-200 dark:border-zinc-800 pb-2">
+                                    <Text className="text-gray-500 dark:text-gray-400">{t('stats.cache_items')}</Text>
+                                    <Text className="font-bold text-gray-900 dark:text-white">{stats.cacheCount}</Text>
                                 </View>
                                 <View className="flex-row justify-between">
-                                    <Text className="text-gray-500">Scan Mode</Text>
-                                    <Text className="font-bold text-gray-900 capitalize">{stats.mode}</Text>
+                                    <Text className="text-gray-500 dark:text-gray-400">{t('stats.scan_mode')}</Text>
+                                    <Text className="font-bold text-gray-900 dark:text-white capitalize">{stats.mode}</Text>
                                 </View>
                             </View>
                         ) : (
-                            <Text className="text-gray-400 text-center italic">Failed to load stats. Check connection.</Text>
+                            <Text className="text-gray-400 text-center italic">{t('msg.load_error')}</Text>
                         )}
                         {/* Reload Stats Button */}
-                        <TouchableOpacity onPress={loadStats} className="mt-4 self-center px-4 py-2 bg-gray-200 rounded-full">
-                            <Text className="text-xs font-bold text-gray-600">Refresh Stats</Text>
+                        <TouchableOpacity onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); loadStats(); }} className="mt-4 self-center px-4 py-2 bg-gray-200 dark:bg-zinc-800 rounded-full">
+                            <Text className="text-xs font-bold text-gray-600 dark:text-gray-300">{t('action.refresh')}</Text>
                         </TouchableOpacity>
                     </View>
                 </View>
@@ -234,25 +246,28 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBack, onLogout
                 <View className="mb-10">
                     <View className="flex-row items-center mb-4 gap-2">
                         <Database color="#4b5563" size={20} />
-                        <Text className="text-lg font-bold text-gray-800">Cache Management</Text>
+                        <Text className="text-lg font-bold text-gray-800 dark:text-gray-100">{t('section.cache')}</Text>
                     </View>
-                    <View className="bg-gray-50 p-4 rounded-xl border border-gray-100">
-                        <Text className="text-sm text-gray-600 mb-4 leading-relaxed">
-                            Clear the local application cache. This removes stored thumbnails and temporary data to free up space. server cache is managed automatically.
+                    <View className="bg-gray-50 dark:bg-zinc-900 p-4 rounded-xl border border-gray-100 dark:border-zinc-800">
+                        <Text className="text-sm text-gray-600 dark:text-gray-400 mb-4 leading-relaxed">
+                            {t('msg.cache_desc')}
                         </Text>
                         <TouchableOpacity
-                            onPress={handleClearAppCache}
-                            className="bg-white border border-red-200 flex-row items-center justify-center py-3 rounded-lg active:bg-red-50"
+                            onPress={() => {
+                                Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+                                handleClearAppCache();
+                            }}
+                            className="bg-white dark:bg-zinc-800 border border-red-200 dark:border-red-900 flex-row items-center justify-center py-3 rounded-lg active:bg-red-50 dark:active:bg-red-900/10"
                         >
                             <Trash2 color="#ef4444" size={18} className="mr-2" />
-                            <Text className="text-red-500 font-bold">Clear Local Cache</Text>
+                            <Text className="text-red-500 font-bold">{t('label.clear_cache')}</Text>
                         </TouchableOpacity>
                     </View>
                 </View>
 
                 {/* Version Info */}
                 <View className="mb-10 items-center">
-                    <Text className="text-gray-400 text-xs">Lumina Gallery Mobile v1.0.0</Text>
+                    <Text className="text-gray-400 text-xs">Lumina Gallery 移动版 v1.0.0</Text>
                 </View>
 
             </ScrollView>

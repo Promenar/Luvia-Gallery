@@ -7,7 +7,7 @@ const os = require('os');
 const jwt = require('jsonwebtoken'); // Added for Auth
 // const chokidar = require('chokidar'); // REMOVED: Realtime watcher deprecated for performance
 const database = require('./database');
-const ExifParser = require('exif-parser');
+const exifr = require('exifr');
 
 const app = express();
 const port = 3001;
@@ -968,20 +968,10 @@ app.get('/api/scan/results', (req, res) => {
     let files, total;
 
     if (favoritesOnly) {
-        // Query favorites from JSON
-        const favData = getFavorites();
-        const favPaths = new Set(favData.files);
-
-        // Inefficient but functional: Filter all files
-        // Ideally database.queryFiles should support id lookup
-        const allFiles = database.queryFiles({ limit: 999999, recursive: true });
-        files = allFiles.filter(f => favPaths.has(f.path));
-
-        console.log(`[API] Found ${files.length} favorite files`);
-        total = files.length;
-
-        // Apply pagination in memory
-        files = files.slice(offset, offset + limit);
+        // Query favorites from DB
+        const userId = 'admin'; // Match the hardcoded ID in toggleFavorite
+        files = database.queryFavoriteFiles(userId, { offset, limit });
+        total = database.countFavoriteFiles(userId);
     } else {
         // Security Check: Restrict files based on libraryPaths
         let libraryPaths = [];
@@ -1935,36 +1925,7 @@ app.post('/api/favorites/toggle', (req, res) => {
 });
 
 // EXIF API
-const exifParser = require('exif-parser');
-app.get('/api/file/:id/exif', (req, res) => {
-    try {
-        // Decode ID to path
-        const fileId = req.params.id;
-        const filePath = Buffer.from(fileId, 'base64').toString('utf8');
-
-        if (!fs.existsSync(filePath)) {
-            return res.status(404).json({ error: 'File not found' });
-        }
-
-        // Read first 64kb is usually enough for EXIF
-        const buffer = Buffer.alloc(65536);
-        const fd = fs.openSync(filePath, 'r');
-        fs.readSync(fd, buffer, 0, 65536, 0);
-        fs.closeSync(fd);
-
-        try {
-            const parser = exifParser.create(buffer);
-            const result = parser.parse();
-            res.json({ success: true, tags: result.tags });
-        } catch (parseErr) {
-            console.log('EXIF parse error (might not be JPEG):', parseErr.message);
-            res.json({ success: false, error: 'No EXIF data' });
-        }
-    } catch (e) {
-        console.error('EXIF endpoint error:', e);
-        res.status(500).json({ error: e.message });
-    }
-});
+// EXIF API (Duplicate removed, see below)
 
 app.post('/api/cache/clear', (req, res) => {
     try {
@@ -2040,58 +2001,24 @@ app.post('/api/cache/prune', (req, res) => {
 });
 
 // EXIF Endpoint
+// EXIF Endpoint (Improved with exifr)
 app.get('/api/file/:id/exif', async (req, res) => {
     try {
         const filePath = Buffer.from(req.params.id, 'base64').toString('utf8');
         if (!fs.existsSync(filePath)) return res.json({});
 
-        // Read first 64KB for performance
-        const buffer = Buffer.alloc(65536);
-        const fd = fs.openSync(filePath, 'r');
-        fs.readSync(fd, buffer, 0, 65536, 0);
-        fs.closeSync(fd);
-
-        const parser = ExifParser.create(buffer);
-        const result = parser.parse();
-        res.json(result.tags);
+        // Use exifr to parse the file (handles paths directly and is more robust)
+        const tags = await exifr.parse(filePath);
+        res.json(tags || {});
     } catch (e) {
+        console.error('EXIF parse error:', e.message);
         res.json({});
     }
 });
 
 // Favorites Logic
-const FAVORITES_FILE = path.join(DATA_DIR, 'favorites.json');
-const getFavorites = () => {
-    try {
-        if (fs.existsSync(FAVORITES_FILE)) return JSON.parse(fs.readFileSync(FAVORITES_FILE, 'utf8'));
-    } catch (e) { }
-    return { files: [], folders: [] };
-}
-const saveFavorites = (data) => fs.writeFileSync(FAVORITES_FILE, JSON.stringify(data));
+// Favorites Logic (Legacy JSON) - REMOVED to use Database
 
-app.get('/api/favorites/ids', (req, res) => {
-    res.json(getFavorites());
-});
-
-app.post('/api/favorites/toggle', (req, res) => {
-    const { id, type } = req.body;
-    const data = getFavorites();
-    const list = type === 'files' ? data.files : data.folders; // type is 'file' or 'folder' in App? App sends 'file'. Web?
-    // Wait, App sends "type: 'file'". My logic above used 'files'.
-    // Adjusted:
-    const targetList = (type === 'folder') ? data.folders : data.files;
-
-    const index = targetList.indexOf(id);
-    let isFavorite = false;
-    if (index > -1) {
-        targetList.splice(index, 1);
-    } else {
-        targetList.push(id);
-        isFavorite = true;
-    }
-    saveFavorites(data);
-    res.json({ success: true, isFavorite });
-});
 
 // Catch-all route to serve index.html for client-side routing
 app.get('*', (req, res) => {
