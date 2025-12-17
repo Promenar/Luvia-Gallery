@@ -71,20 +71,26 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
     }, [playbackRate, item]);
 
     // EXIF Parsing Logic
+    // EXIF Parsing Logic (Server-Side)
     useEffect(() => {
         if (showInfo && item && item.mediaType === 'image') {
             const fetchExif = async () => {
                 setIsExifLoading(true);
                 try {
-                    const input = item.file || item.url;
-                    const output = await exifr.parse(input, {
-                        pick: ['Make', 'Model', 'ExposureTime', 'FNumber', 'ISO', 'FocalLength', 'LensModel', 'DateTimeOriginal', 'ExifImageWidth', 'ExifImageHeight'],
-                        tiff: true,
-                        exif: true,
-                    });
-                    setExifData(output);
+                    // Use Server-Side API instead of client-side parsing (avoids Auth/CORS issues)
+                    const token = localStorage.getItem('lumina_token');
+                    const headers: any = {};
+                    if (token) headers['Authorization'] = `Bearer ${token}`;
+
+                    const res = await fetch(`/api/file/${item.id}/exif`, { headers });
+                    if (res.ok) {
+                        const data = await res.json();
+                        setExifData(data);
+                    } else {
+                        setExifData(null);
+                    }
                 } catch (e) {
-                    console.warn("Failed to parse EXIF", e);
+                    console.warn("Failed to fetch EXIF", e);
                     setExifData(null);
                 } finally {
                     setIsExifLoading(false);
