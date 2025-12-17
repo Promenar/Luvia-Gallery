@@ -56,6 +56,7 @@ const MainScreen = () => {
 
   // Favorites
   const [favoriteFiles, setFavoriteFiles] = useState<MediaItem[]>([]);
+  const [favoriteFolders, setFavoriteFolders] = useState<Folder[]>([]);
 
   // Navigation State (Folders Tab)
   const [currentPath, setCurrentPath] = useState<string | null>(null);
@@ -125,6 +126,7 @@ const MainScreen = () => {
     setFolders([]);
     setLibraryFiles([]);
     setFavoriteFiles([]);
+    setFavoriteFolders([]);
   };
 
   const loadHomeData = async () => {
@@ -175,27 +177,14 @@ const MainScreen = () => {
         fetchFolders(undefined, true)
       ]);
 
-      console.log('Favorites files response:', JSON.stringify(filesRes));
-      console.log('Favorites folders response:', JSON.stringify(foldersRes));
-
-      const folderItems: MediaItem[] = (foldersRes.folders || []).map((f: any) => ({
-        id: f.path,
+      const foldersData: Folder[] = (foldersRes.folders || []).map((f: any) => ({
         name: f.name,
         path: f.path,
-        folderPath: f.path.split('/').slice(0, -1).join('/'),
-        url: '',
-        type: 'application/x-directory',
-        mediaType: 'folder',
-        size: 0,
-        lastModified: f.lastModified || 0,
-        sourceId: 'system',
-        mediaCount: f.mediaCount,
-        coverMedia: f.coverMedia
+        mediaCount: f.mediaCount
       }));
 
-      const fileItems = filesRes.files || [];
-      // Combine folders first, then files
-      setFavoriteFiles([...folderItems, ...fileItems]);
+      setFavoriteFolders(foldersData);
+      setFavoriteFiles(filesRes.files || []);
     } catch (e) {
       console.error('Load Favorites Error:', e);
       Alert.alert('Error', 'Failed to load favorites. Check console.');
@@ -374,19 +363,30 @@ const MainScreen = () => {
               columnWrapperStyle={{ justifyContent: 'space-between' }}
               contentContainerStyle={{ padding: 12, paddingBottom: 100 }}
               refreshControl={<RefreshControl refreshing={refreshing || loading} onRefresh={onRefresh} />}
+              ListHeaderComponent={
+                favoriteFolders.length > 0 ? (
+                  <View className="mb-4">
+                    <Text className="text-xs font-bold text-gray-400 mb-4 uppercase tracking-widest">{t('folder.directories')}</Text>
+                    <View className="flex-row flex-wrap justify-between">
+                      {favoriteFolders.map(folder => (
+                        <View key={folder.path} className="w-[48%] mb-4">
+                          <FolderCard name={folder.name} onPress={() => handleFolderPress(folder)} />
+                        </View>
+                      ))}
+                    </View>
+                    {favoriteFiles.length > 0 && (
+                      <Text className="text-xs font-bold text-gray-400 mb-3 uppercase tracking-widest mt-2">{t('folder.media')}</Text>
+                    )}
+                  </View>
+                ) : null
+              }
               renderItem={({ item }) => (
                 <View className="w-[32%] mb-2">
-                  {item.mediaType === 'folder' ? (
-                    <View className="aspect-square">
-                      <FolderCard name={item.name} onPress={() => handleFolderPress({ ...item, mediaCount: item.mediaCount || 0, children: {} } as any)} />
-                    </View>
-                  ) : (
-                    <MediaCard item={item} onPress={(i: MediaItem) => handleMediaPress(i, favoriteFiles)} />
-                  )}
+                  <MediaCard item={item} onPress={(i: MediaItem) => handleMediaPress(i, favoriteFiles)} />
                 </View>
               )}
               ListEmptyComponent={
-                (!loading) ? (
+                (!loading && favoriteFiles.length === 0 && favoriteFolders.length === 0) ? (
                   <View className="p-20 items-center justify-center opacity-50">
                     <Text className="text-gray-400 font-medium">{t('empty.favorites')}</Text>
                   </View>

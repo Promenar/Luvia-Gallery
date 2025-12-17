@@ -1,14 +1,15 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { View, Text, Modal, FlatList, Dimensions, StatusBar, TouchableOpacity, Image, Platform } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { X } from 'lucide-react-native';
+import { X, Music } from 'lucide-react-native';
 import { MediaItem } from '../types';
-import { getFileUrl, toggleFavorite, fetchExif, API_URL } from '../utils/api';
+import { getFileUrl, toggleFavorite, fetchExif } from '../utils/api';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import Animated, { FadeIn, FadeOut, SlideInDown, SlideOutDown } from 'react-native-reanimated';
 import { IconButton } from 'react-native-paper';
 import { useLanguage } from '../utils/i18n';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import { Audio } from 'expo-av';
 
 interface MediaViewerProps {
     items: MediaItem[];
@@ -41,6 +42,58 @@ const VideoSlide = ({ item, isActive }: { item: MediaItem, isActive: boolean }) 
                 contentFit="contain"
                 nativeControls={true}
             />
+        </View>
+    );
+};
+
+// Audio Component Wrapper
+const AudioSlide = ({ item, isActive }: { item: MediaItem, isActive: boolean }) => {
+    const [sound, setSound] = useState<Audio.Sound | null>(null);
+    const [isPlaying, setIsPlaying] = useState(false);
+
+    useEffect(() => {
+        let currentSound: Audio.Sound | null = null;
+        const loadSound = async () => {
+            try {
+                // Ensure we clean up any previous sound before creating a new one
+                if (sound) await sound.unloadAsync();
+
+                const { sound: newSound } = await Audio.Sound.createAsync(
+                    { uri: getFileUrl(item.id) },
+                    { shouldPlay: isActive, isLooping: true }
+                );
+                currentSound = newSound;
+                setSound(newSound);
+                setIsPlaying(isActive);
+            } catch (e) {
+                console.error("Failed to load sound", e);
+            }
+        };
+        loadSound();
+        return () => {
+            if (currentSound) currentSound.unloadAsync();
+        };
+    }, [item.id]);
+
+    useEffect(() => {
+        if (sound) {
+            if (isActive) {
+                sound.playAsync();
+                setIsPlaying(true);
+            } else {
+                sound.pauseAsync();
+                setIsPlaying(false);
+            }
+        }
+    }, [isActive, sound]);
+
+    return (
+        <View className="w-full h-full justify-center items-center bg-black">
+            <View className="w-40 h-40 bg-gray-800 rounded-full items-center justify-center mb-10">
+                <Music size={80} color="white" />
+            </View>
+            <Text className="text-white text-xl font-bold mb-2">{item.name}</Text>
+            <Text className="text-gray-400">{isPlaying ? "Playing..." : "Paused"}</Text>
         </View>
     );
 };
@@ -136,9 +189,6 @@ export const MediaViewer: React.FC<MediaViewerProps> = ({ items, initialIndex, o
             if (e.velocityY < -500) {
                 // Swipe Up
                 if (!showInfo) {
-                    // We need to run this on JS thread 
-                    // (runOnJS is automatic for state updates in newer Reanimated, but good to be safe if complex)
-                    // setState works fine here.
                     setShowInfo(true);
                 }
             } else if (e.velocityY > 500) {
@@ -158,8 +208,6 @@ export const MediaViewer: React.FC<MediaViewerProps> = ({ items, initialIndex, o
         <Modal visible={true} animationType="fade" transparent={false} onRequestClose={onClose}>
             <GestureDetector gesture={pan}>
                 <View className="flex-1 bg-black">
-                    {/* Immersive Status Bar - Hidden when controls hidden */}
-                    {/* We actually want translucent always, just hide content */}
                     <StatusBar
                         hidden={!showControls}
                         barStyle="light-content"
@@ -182,10 +230,12 @@ export const MediaViewer: React.FC<MediaViewerProps> = ({ items, initialIndex, o
                                 activeOpacity={1}
                                 onPress={toggleControls}
                                 style={{ width, height }}
-                                disabled={item.mediaType === 'video'}
+                                disabled={item.mediaType === 'video' || item.mediaType === 'audio'}
                             >
                                 {item.mediaType === 'video' ? (
                                     <VideoSlide item={item} isActive={index === currentIndex} />
+                                ) : item.mediaType === 'audio' ? (
+                                    <AudioSlide item={item} isActive={index === currentIndex} />
                                 ) : (
                                     <ImageSlide item={item} />
                                 )}
@@ -193,17 +243,18 @@ export const MediaViewer: React.FC<MediaViewerProps> = ({ items, initialIndex, o
                         )}
                     />
 
-                    {/* Top Bar Controls - TIGHT TO TOP */}
+                    {/* Top Bar Controls */}
                     {showControls && (
                         <Animated.View
                             entering={FadeIn.duration(200)}
                             exiting={FadeOut.duration(200)}
-                            className="absolute top-0 left-0 right-0 z-50 bg-black/60 pb-2"
+                            className="absolute top-0 left-0 right-0 z-50 bg-black/60"
                             style={{
                                 paddingTop: insets.top,
+                                paddingBottom: 8 // Reduced padding to tighten it up
                             }}
                         >
-                            <View className="flex-row items-center justify-between px-4 pb-2">
+                            <View className="flex-row items-center justify-between px-4">
                                 <IconButton
                                     icon="arrow-left"
                                     iconColor="white"
@@ -232,7 +283,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = ({ items, initialIndex, o
                     {/* Info Overlay */}
                     {showInfo && (
                         <Animated.View
-                            entering={SlideInDown.springify().damping(15)}
+                            entering={SlideInDown.springify().damping(30).mass(0.8)}
                             exiting={SlideOutDown.duration(200)}
                             className="absolute bottom-0 left-0 right-0 bg-black/90 p-6 rounded-t-3xl border-t border-white/10 z-30"
                             style={{ paddingBottom: insets.bottom + 20 }}
