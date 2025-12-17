@@ -9,12 +9,15 @@ import Animated, { FadeIn, FadeOut, SlideInDown, SlideOutDown } from 'react-nati
 import { IconButton } from 'react-native-paper';
 import { useLanguage } from '../utils/i18n';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
-import { Audio } from 'expo-av';
+import { Audio, AVPlaybackStatus, InterruptionModeAndroid, InterruptionModeIOS } from 'expo-av';
+import Slider from '@react-native-community/slider';
+import { Play, Pause, SkipBack, SkipForward } from 'lucide-react-native';
 
 interface MediaViewerProps {
     items: MediaItem[];
     initialIndex: number;
     onClose: () => void;
+    onToggleFavorite: (id: string, isFavorite: boolean) => void;
 }
 
 const { width, height } = Dimensions.get('window');
@@ -50,50 +53,146 @@ const VideoSlide = ({ item, isActive }: { item: MediaItem, isActive: boolean }) 
 const AudioSlide = ({ item, isActive }: { item: MediaItem, isActive: boolean }) => {
     const [sound, setSound] = useState<Audio.Sound | null>(null);
     const [isPlaying, setIsPlaying] = useState(false);
+    const [duration, setDuration] = useState(0);
+    const [position, setPosition] = useState(0);
+    const [isSeeking, setIsSeeking] = useState(false);
 
     useEffect(() => {
+        // Configure audio mode for playback
+        Audio.setAudioModeAsync({
+            playsInSilentModeIOS: true,
+            staysActiveInBackground: true,
+            interruptionModeAndroid: InterruptionModeAndroid.DoNotMix,
+            interruptionModeIOS: InterruptionModeIOS.DoNotMix,
+            shouldDuckAndroid: true,
+        });
+
         let currentSound: Audio.Sound | null = null;
+
         const loadSound = async () => {
             try {
-                // Ensure we clean up any previous sound before creating a new one
                 if (sound) await sound.unloadAsync();
 
-                const { sound: newSound } = await Audio.Sound.createAsync(
+                const { sound: newSound, status } = await Audio.Sound.createAsync(
                     { uri: getFileUrl(item.id) },
-                    { shouldPlay: isActive, isLooping: true }
+                    { shouldPlay: isActive, isLooping: true },
+                    onPlaybackStatusUpdate
                 );
                 currentSound = newSound;
                 setSound(newSound);
                 setIsPlaying(isActive);
+                if (status.isLoaded) {
+                    setDuration(status.durationMillis || 0);
+                }
             } catch (e) {
                 console.error("Failed to load sound", e);
             }
         };
+
         loadSound();
         return () => {
-            if (currentSound) currentSound.unloadAsync();
+            if (currentSound) {
+                currentSound.unloadAsync();
+            }
         };
     }, [item.id]);
+
+    const onPlaybackStatusUpdate = (status: AVPlaybackStatus) => {
+        if (status.isLoaded) {
+            setDuration(status.durationMillis || 0);
+            if (!isSeeking) {
+                setPosition(status.positionMillis);
+            }
+            setIsPlaying(status.isPlaying);
+            if (status.didJustFinish && !status.isLooping) {
+                setIsPlaying(false);
+                setPosition(0);
+            }
+        }
+    };
 
     useEffect(() => {
         if (sound) {
             if (isActive) {
-                sound.playAsync();
-                setIsPlaying(true);
+                sound.playAsync().catch(() => { });
             } else {
-                sound.pauseAsync();
-                setIsPlaying(false);
+                sound.pauseAsync().catch(() => { });
             }
         }
     }, [isActive, sound]);
 
+    const handlePlayPause = async () => {
+        if (!sound) return;
+        if (isPlaying) {
+            await sound.pauseAsync();
+        } else {
+            await sound.playAsync();
+        }
+    };
+
+    const handleSeek = (value: number) => {
+        setPosition(value);
+    };
+
+    const handleSeekComplete = async (value: number) => {
+        if (sound) {
+            await sound.setPositionAsync(value);
+        }
+        setIsSeeking(false);
+    };
+
+    const formatTime = (millis: number) => {
+        if (!millis) return "0:00";
+        const totalSeconds = Math.floor(millis / 1000);
+        const minutes = Math.floor(totalSeconds / 60);
+        const seconds = totalSeconds % 60;
+        return `${minutes}:${seconds < 10 ? '0' : ''}${seconds}`;
+    };
+
     return (
-        <View className="w-full h-full justify-center items-center bg-black">
-            <View className="w-40 h-40 bg-gray-800 rounded-full items-center justify-center mb-10">
-                <Music size={80} color="white" />
+        <View className="w-full h-full justify-center items-center bg-black/90">
+            {/* Album Art / Icon */}
+            <View className="w-64 h-64 bg-indigo-600 rounded-2xl items-center justify-center mb-12 shadow-2xl elevation-10 border border-white/10">
+                <Music size={100} color="white" />
             </View>
-            <Text className="text-white text-xl font-bold mb-2">{item.name}</Text>
-            <Text className="text-gray-400">{isPlaying ? "Playing..." : "Paused"}</Text>
+
+            {/* Title */}
+            <View className="mb-8 items-center px-8">
+                <Text className="text-white text-2xl font-bold text-center mb-2">{item.name}</Text>
+                <Text className="text-gray-400 text-sm">Audio Playback</Text>
+            </View>
+
+            {/* Progress Bar */}
+            <View className="w-full px-8 mb-4">
+                <Slider
+                    style={{ width: '100%', height: 40 }}
+                    minimumValue={0}
+                    maximumValue={duration}
+                    value={position}
+                    minimumTrackTintColor="#6366f1"
+                    maximumTrackTintColor="#4b5563"
+                    thumbTintColor="white"
+                    onSlidingStart={() => setIsSeeking(true)}
+                    onValueChange={handleSeek}
+                    onSlidingComplete={handleSeekComplete}
+                />
+                <View className="flex-row justify-between mt-[-5px]">
+                    <Text className="text-gray-400 text-xs">{formatTime(position)}</Text>
+                    <Text className="text-gray-400 text-xs">{formatTime(duration)}</Text>
+                </View>
+            </View>
+
+            {/* Controls */}
+            <View className="flex-row items-center gap-10">
+                <IconButton
+                    icon={isPlaying ? "pause" : "play"}
+                    iconColor="black"
+                    containerColor="white"
+                    size={40}
+                    onPress={handlePlayPause}
+                    style={{ margin: 0 }}
+                />
+            </View>
         </View>
     );
 };
@@ -111,7 +210,7 @@ const ImageSlide = ({ item }: { item: MediaItem }) => {
     );
 };
 
-export const MediaViewer: React.FC<MediaViewerProps> = ({ items, initialIndex, onClose }) => {
+export const MediaViewer: React.FC<MediaViewerProps> = ({ items, initialIndex, onClose, onToggleFavorite }) => {
     const insets = useSafeAreaInsets();
     const { t } = useLanguage();
     const [currentIndex, setCurrentIndex] = useState(initialIndex);
@@ -156,8 +255,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = ({ items, initialIndex, o
     const handleFavorite = async () => {
         const newStatus = !isFavorite;
         setIsFavorite(newStatus);
-        currentItem.isFavorite = newStatus;
-        await toggleFavorite(currentItem.id, newStatus);
+        onToggleFavorite(currentItem.id, newStatus);
     };
 
     const handleScroll = useCallback((event: any) => {
@@ -205,7 +303,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = ({ items, initialIndex, o
     if (!currentItem) return null;
 
     return (
-        <Modal visible={true} animationType="fade" transparent={false} onRequestClose={onClose}>
+        <Modal visible={true} animationType="fade" transparent={true} statusBarTranslucent={true} onRequestClose={onClose}>
             <GestureDetector gesture={pan}>
                 <View className="flex-1 bg-black">
                     <StatusBar
@@ -251,10 +349,9 @@ export const MediaViewer: React.FC<MediaViewerProps> = ({ items, initialIndex, o
                             className="absolute top-0 left-0 right-0 z-50 bg-black/60"
                             style={{
                                 paddingTop: insets.top,
-                                paddingBottom: 8 // Reduced padding to tighten it up
                             }}
                         >
-                            <View className="flex-row items-center justify-between px-4">
+                            <View className="flex-row items-center justify-between px-4 py-2">
                                 <IconButton
                                     icon="arrow-left"
                                     iconColor="white"
