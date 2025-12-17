@@ -9,6 +9,9 @@ import { Image } from 'react-native';
 import { Header } from './Header';
 import { useLanguage } from '../utils/i18n';
 import { useTheme } from '../utils/ThemeContext';
+import { useConfig } from '../utils/ConfigContext';
+import { ItemPicker } from './ItemPicker';
+import { Layout, Images, PlayCircle } from 'lucide-react-native';
 
 interface SettingsScreenProps {
     onBack?: () => void;
@@ -32,9 +35,11 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBack, onLogout
     const insets = useSafeAreaInsets();
     const { t, language, setLanguage } = useLanguage();
     const { mode, setMode } = useTheme();
+    const { carouselConfig, setCarouselConfig } = useConfig();
     const [url, setUrl] = useState(API_URL);
     const [stats, setStats] = useState<SystemStatus | null>(null);
     const [loadingStats, setLoadingStats] = useState(false);
+    const [isPickerOpen, setIsPickerOpen] = useState<{ visible: boolean, mode: 'folder' | 'file' }>({ visible: false, mode: 'folder' });
 
     useEffect(() => {
         loadStats();
@@ -129,6 +134,63 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBack, onLogout
                             className="bg-red-500 flex-row items-center justify-center py-3 rounded-lg active:opacity-80"
                         >
                             <Text className="text-white font-bold">{t('label.logout')}</Text>
+                        </TouchableOpacity>
+                    </View>
+                </View>
+
+                {/* Carousel Configuration */}
+                <View className="mb-8">
+                    <View className="flex-row items-center mb-4 gap-2">
+                        <Layout color="#4b5563" size={20} />
+                        <Text className="text-lg font-bold text-gray-800 dark:text-gray-100">{'Home Carousel'}</Text>
+                    </View>
+                    <View className="bg-gray-50 dark:bg-zinc-900 p-4 rounded-xl border border-gray-100 dark:border-zinc-800">
+                        {/* Option: Random Library */}
+                        <TouchableOpacity
+                            onPress={() => setCarouselConfig({ sourceType: 'all', sourceValue: null, sourceName: t('settings.carousel.random') })}
+                            className={`flex-row items-center p-3 rounded-lg mb-2 ${carouselConfig.sourceType === 'all' ? 'bg-indigo-100 dark:bg-indigo-900/30 border border-indigo-200 dark:border-indigo-800' : ''}`}
+                        >
+                            <View className={`w-4 h-4 rounded-full border mr-3 items-center justify-center ${carouselConfig.sourceType === 'all' ? 'border-indigo-600 bg-indigo-600' : 'border-gray-400'}`}>
+                                {carouselConfig.sourceType === 'all' && <View className="w-2 h-2 rounded-full bg-white" />}
+                            </View>
+                            <View>
+                                <Text className="font-bold text-gray-900 dark:text-white">{t('settings.carousel.random')}</Text>
+                                <Text className="text-xs text-gray-500">{t('settings.carousel.source')}</Text>
+                            </View>
+                        </TouchableOpacity>
+
+                        {/* Option: Specific Folder */}
+                        <TouchableOpacity
+                            onPress={() => setIsPickerOpen({ visible: true, mode: 'folder' })}
+                            className={`flex-row items-center p-3 rounded-lg mb-2 ${carouselConfig.sourceType === 'folder' ? 'bg-indigo-100 dark:bg-indigo-900/30 border border-indigo-200 dark:border-indigo-800' : ''}`}
+                        >
+                            <View className={`w-4 h-4 rounded-full border mr-3 items-center justify-center ${carouselConfig.sourceType === 'folder' ? 'border-indigo-600 bg-indigo-600' : 'border-gray-400'}`}>
+                                {carouselConfig.sourceType === 'folder' && <View className="w-2 h-2 rounded-full bg-white" />}
+                            </View>
+                            <View className="flex-1">
+                                <Text className="font-bold text-gray-900 dark:text-white">{t('settings.carousel.folder')}</Text>
+                                <Text className="text-xs text-gray-500" numberOfLines={1}>
+                                    {carouselConfig.sourceType === 'folder' ? `${carouselConfig.sourceName}` : t('settings.carousel.select_folder')}
+                                </Text>
+                            </View>
+                            {carouselConfig.sourceType === 'folder' && <Images size={16} color="#4f46e5" />}
+                        </TouchableOpacity>
+
+                        {/* Option: Specific File */}
+                        <TouchableOpacity
+                            onPress={() => setIsPickerOpen({ visible: true, mode: 'file' })}
+                            className={`flex-row items-center p-3 rounded-lg ${carouselConfig.sourceType === 'file' ? 'bg-indigo-100 dark:bg-indigo-900/30 border border-indigo-200 dark:border-indigo-800' : ''}`}
+                        >
+                            <View className={`w-4 h-4 rounded-full border mr-3 items-center justify-center ${carouselConfig.sourceType === 'file' ? 'border-indigo-600 bg-indigo-600' : 'border-gray-400'}`}>
+                                {carouselConfig.sourceType === 'file' && <View className="w-2 h-2 rounded-full bg-white" />}
+                            </View>
+                            <View className="flex-1">
+                                <Text className="font-bold text-gray-900 dark:text-white">{t('settings.carousel.file')}</Text>
+                                <Text className="text-xs text-gray-500" numberOfLines={1}>
+                                    {carouselConfig.sourceType === 'file' ? `${carouselConfig.sourceName}` : t('settings.carousel.select_file')}
+                                </Text>
+                            </View>
+                            {carouselConfig.sourceType === 'file' && <PlayCircle size={16} color="#4f46e5" />}
                         </TouchableOpacity>
                     </View>
                 </View>
@@ -271,6 +333,20 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBack, onLogout
                 </View>
 
             </ScrollView>
+
+            <ItemPicker
+                visible={isPickerOpen.visible}
+                mode={isPickerOpen.mode}
+                onClose={() => setIsPickerOpen({ ...isPickerOpen, visible: false })}
+                onSelect={async (value, name) => {
+                    await setCarouselConfig({
+                        sourceType: isPickerOpen.mode,
+                        sourceValue: value,
+                        sourceName: name
+                    });
+                    setIsPickerOpen({ ...isPickerOpen, visible: false });
+                }}
+            />
         </View>
     );
 };

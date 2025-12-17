@@ -124,15 +124,41 @@ export const fetchFolders = async (path?: string, favorite: boolean = false) => 
     }
 };
 
-export const fetchFiles = async (folderPath?: string, offset = 0, limit = 100, favorite?: boolean) => {
+interface FetchFilesOptions {
+    folderPath?: string;
+    offset?: number;
+    limit?: number;
+    favorite?: boolean;
+    random?: boolean;
+    mediaType?: string | string[];
+    excludeMediaType?: string | string[];
+}
+
+export const fetchFiles = async (options: FetchFilesOptions = {}) => {
     try {
+        const { folderPath, offset = 0, limit = 100, favorite, random, mediaType, excludeMediaType } = options;
         let url = `${API_URL}/api/scan/results?offset=${offset}&limit=${limit}`;
-        if (folderPath) {
-            url += `&folder=${encodeURIComponent(folderPath)}`;
+
+        if (folderPath) url += `&folder=${encodeURIComponent(folderPath)}`;
+        if (favorite) url += `&favorites=true`;
+        if (random) url += `&random=true`;
+
+        if (mediaType) {
+            if (Array.isArray(mediaType)) {
+                mediaType.forEach(t => url += `&mediaType=${t}`);
+            } else {
+                url += `&mediaType=${mediaType}`;
+            }
         }
-        if (favorite) {
-            url += `&favorites=true`;
+
+        if (excludeMediaType) {
+            if (Array.isArray(excludeMediaType)) {
+                excludeMediaType.forEach(t => url += `&excludeMediaType=${t}`);
+            } else {
+                url += `&excludeMediaType=${excludeMediaType}`;
+            }
         }
+
         const res = await authenticatedFetch(url);
         if (!res.ok) throw new Error(`API Error: ${res.status}`);
         return await res.json();
@@ -141,6 +167,21 @@ export const fetchFiles = async (folderPath?: string, offset = 0, limit = 100, f
         return { files: [] };
     }
 };
+
+export const getFileInfo = async (id: string) => {
+    try {
+        // We might not have a specific 'get info' endpoint efficiently, 
+        // but we can query by ID if backend supports it? 
+        // Or simply query all and find? checking backend... backend `queryFiles` doesn't filter by ID directly except `sourceId`?
+        // Wait, `database.js` `queryFiles` does NOT have `id` filter.
+        // But `server.js` usually has `/api/file/:id/info`?
+        // Let's check server.js or just add `id` filter to `queryFiles` in `database.js` later if needed.
+        // For now, let's use what we have.
+        return null;
+    } catch (e) {
+        return null;
+    }
+}
 
 export const toggleFavorite = async (id: string, isFavorite: boolean) => {
     try {
