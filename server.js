@@ -1014,7 +1014,7 @@ app.get('/api/scan/results', (req, res) => {
             if (folderPath) {
                 queryOptions.folderPath = path.resolve(folderPath);
             }
-            files = database.queryFiles(queryOptions);
+            files = database.queryFiles({ ...queryOptions, userId: 'admin' });
             total = database.countFiles(folderPath ? { folderPath: path.resolve(folderPath) } : {});
         }
     }
@@ -1031,7 +1031,8 @@ app.get('/api/scan/results', (req, res) => {
         type: f.type,
         lastModified: f.lastModified,
         mediaType: f.mediaType,
-        sourceId: f.sourceId
+        sourceId: f.sourceId,
+        isFavorite: f.isFavorite // Pass through
     }));
 
     res.json({
@@ -1040,6 +1041,19 @@ app.get('/api/scan/results', (req, res) => {
         hasMore: offset + limit < total,
         sources: [{ id: 'local', name: 'Local Storage', count: total }]
     });
+});
+
+app.post('/api/favorites/toggle', (req, res) => {
+    const { id, type } = req.body;
+    const userId = 'admin';
+    try {
+        // Strict ID toggle. Frontend must send Base64 ID.
+        const newStatus = database.toggleFavorite(userId, id, type || 'file');
+        res.json({ success: true, isFavorite: newStatus });
+    } catch (e) {
+        console.error("Toggle Fav Error:", e);
+        res.status(500).json({ error: e.message });
+    }
 });
 
 const { exec } = require('child_process');
