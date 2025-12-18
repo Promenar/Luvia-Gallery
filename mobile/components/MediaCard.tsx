@@ -34,7 +34,7 @@ export const MediaCard: React.FC<MediaCardProps> = ({ item, onPress, onLongPress
                         }}
                         style={{ width: '100%', height: '100%' }}
                         contentFit="cover"
-                        transition={200}
+                        transition={100}
                     />
                 )}
 
