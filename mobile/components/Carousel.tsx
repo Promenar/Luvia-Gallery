@@ -1,5 +1,4 @@
-import React from 'react';
-import { View, Text, FlatList, Image, Dimensions, TouchableOpacity } from 'react-native';
+import { View, Text, FlatList, Image, useWindowDimensions, TouchableOpacity } from 'react-native';
 import { MediaItem } from '../types';
 import { getThumbnailUrl } from '../utils/api';
 import { Play } from 'lucide-react-native';
@@ -9,11 +8,11 @@ interface CarouselProps {
     onPress: (item: MediaItem) => void;
 }
 
-const { width } = Dimensions.get('window');
-const ITEM_WIDTH = width * 0.8;
-const SPACING = 10;
-
 export const Carousel: React.FC<CarouselProps> = ({ data, onPress }) => {
+    const { width } = useWindowDimensions();
+    const ITEM_WIDTH = width * 0.8;
+    const SPACING = 10;
+
     if (!data.length) return null;
 
     return (
