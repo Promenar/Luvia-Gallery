@@ -36,8 +36,8 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
 
         setLoading(true);
         try {
-            // Update base URL just in case
-            setBaseUrl(serverUrl.trim());
+            // Update base URL and persist it immediately so it's not lost on restart
+            await setBaseUrl(serverUrl, true);
 
             await login(username, password);
             onLoginSuccess();

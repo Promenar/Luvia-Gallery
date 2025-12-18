@@ -1,11 +1,12 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, TouchableOpacity, FlatList, Modal, ActivityIndicator } from 'react-native';
+import { View, Text, TouchableOpacity, FlatList, Modal, ActivityIndicator, BackHandler } from 'react-native';
 import { MediaItem } from '../types';
 import { fetchFolders, fetchFiles } from '../utils/api';
 import { FolderCard } from './FolderCard';
 import { MediaCard } from './MediaCard';
 import { ArrowLeft, X } from 'lucide-react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useLanguage } from '../utils/i18n';
 
 /* 
   Reusable Item Picker for Settings
@@ -22,6 +23,7 @@ interface ItemPickerProps {
 
 export const ItemPicker: React.FC<ItemPickerProps> = ({ visible, mode, onSelect, onClose }) => {
     const insets = useSafeAreaInsets();
+    const { t } = useLanguage();
     const [items, setItems] = useState<any[]>([]);
     const [loading, setLoading] = useState(false);
     const [currentPath, setCurrentPath] = useState<string>('');
@@ -31,6 +33,24 @@ export const ItemPicker: React.FC<ItemPickerProps> = ({ visible, mode, onSelect,
             loadItems(currentPath);
         }
     }, [visible, currentPath, mode]);
+
+    // Handle Android hardware back button
+    useEffect(() => {
+        const handleBackPress = () => {
+            if (visible) {
+                if (currentPath !== '') {
+                    handleBack();
+                } else {
+                    onClose();
+                }
+                return true;
+            }
+            return false;
+        };
+
+        const subscription = BackHandler.addEventListener('hardwareBackPress', handleBackPress);
+        return () => subscription.remove();
+    }, [visible, currentPath]);
 
     const loadItems = async (path: string) => {
         setLoading(true);
@@ -74,20 +94,25 @@ export const ItemPicker: React.FC<ItemPickerProps> = ({ visible, mode, onSelect,
 
     const handleBack = () => {
         if (currentPath === '') return;
-        const parts = currentPath.split('/');
+        const parts = currentPath.split(/[/\\]/); // Support both slashes
         parts.pop();
         setCurrentPath(parts.join('/'));
     }
 
     return (
-        <Modal visible={visible} animationType="slide" presentationStyle="pageSheet">
+        <Modal
+            visible={visible}
+            animationType="slide"
+            presentationStyle="pageSheet"
+            onRequestClose={onClose} // Mandatory for Android Modal
+        >
             <View style={{ flex: 1, backgroundColor: '#fff' }}>
                 <View className="px-4 py-4 border-b border-gray-100 flex-row items-center justify-between">
                     <TouchableOpacity onPress={onClose} className="p-2 bg-gray-100 rounded-full">
                         <X size={20} color="#000" />
                     </TouchableOpacity>
                     <Text className="font-bold text-lg">
-                        {mode === 'folder' ? 'Choose Folder' : 'Choose File'}
+                        {mode === 'folder' ? t('picker.title.folder') : t('picker.title.file')}
                     </Text>
                     <View style={{ width: 40 }} />
                 </View>
@@ -95,8 +120,8 @@ export const ItemPicker: React.FC<ItemPickerProps> = ({ visible, mode, onSelect,
                 {mode === 'folder' && (
                     <View className="px-4 py-3 bg-gray-50 flex-row items-center justify-between border-b border-gray-200">
                         <View className="flex-1 mr-2">
-                            <Text numberOfLines={1} className="text-gray-500 text-xs uppercase mb-1">Current</Text>
-                            <Text numberOfLines={1} className="font-bold">{currentPath || 'Root'}</Text>
+                            <Text numberOfLines={1} className="text-gray-500 text-xs uppercase mb-1">{t('picker.current')}</Text>
+                            <Text numberOfLines={1} className="font-bold">{currentPath || t('picker.root')}</Text>
                         </View>
 
                         <View className="flex-row gap-2">
@@ -107,12 +132,12 @@ export const ItemPicker: React.FC<ItemPickerProps> = ({ visible, mode, onSelect,
                             )}
                             <TouchableOpacity
                                 onPress={() => {
-                                    onSelect(currentPath, currentPath || 'Root');
+                                    onSelect(currentPath, currentPath || t('picker.root'));
                                     onClose();
                                 }}
                                 className="bg-black px-4 py-2 rounded-lg"
                             >
-                                <Text className="text-white font-bold text-xs">Select This</Text>
+                                <Text className="text-white font-bold text-xs">{t('picker.select_this')}</Text>
                             </TouchableOpacity>
                         </View>
                     </View>
@@ -129,17 +154,17 @@ export const ItemPicker: React.FC<ItemPickerProps> = ({ visible, mode, onSelect,
                         keyExtractor={(item) => item.id || item.path}
                         numColumns={mode === 'file' ? 3 : 2}
                         contentContainerStyle={{ padding: 12, gap: 12 }}
-                        columnWrapperStyle={mode !== 'folder' && mode !== 'file' ? undefined : { gap: 12 }}
+                        columnWrapperStyle={{ gap: 12 }}
                         renderItem={({ item }) => (
                             mode === 'folder' ? (
-                                <View style={{ flex: 1 }}>
+                                <View style={{ flex: 0.5, maxWidth: '50%' }}>
                                     <FolderCard
                                         name={item.name}
                                         onPress={() => handlePress(item)}
                                     />
                                 </View>
                             ) : (
-                                <View className="flex-1 aspect-square">
+                                <View className="flex-1 aspect-square" style={{ maxWidth: '32%' }}>
                                     <MediaCard
                                         item={item}
                                         onPress={() => handlePress(item)}

@@ -1,18 +1,23 @@
 import React from 'react';
-import { View, Image, TouchableWithoutFeedback, Dimensions, Text } from 'react-native';
+import { View, Image, Pressable, Dimensions, Text } from 'react-native';
 import { MediaItem } from '../types';
 import { getThumbnailUrl } from '../utils/api';
-import { Play, Music } from 'lucide-react-native';
+import { Play, Music, Heart } from 'lucide-react-native';
 
 interface MediaCardProps {
     item: MediaItem;
     onPress: (item: MediaItem) => void;
+    onLongPress?: (item: MediaItem) => void;
 }
 
-export const MediaCard: React.FC<MediaCardProps> = ({ item, onPress }) => {
+export const MediaCard: React.FC<MediaCardProps> = ({ item, onPress, onLongPress }) => {
     return (
-        <TouchableWithoutFeedback onPress={() => onPress(item)}>
-            <View className="rounded-lg overflow-hidden bg-gray-100 relative shadow-sm w-full aspect-square">
+        <Pressable
+            onPress={() => onPress(item)}
+            onLongPress={() => onLongPress?.(item)}
+            className="w-full"
+        >
+            <View className="rounded-lg overflow-hidden bg-transparent relative border border-gray-100/50 w-full aspect-square">
                 {item.mediaType === 'audio' ? (
                     <View className="w-full h-full bg-indigo-500 items-center justify-center">
                         <Music size={24} color="white" />
@@ -41,7 +46,14 @@ export const MediaCard: React.FC<MediaCardProps> = ({ item, onPress }) => {
                         </View>
                     </View>
                 )}
+
+                {/* Favorite Badge */}
+                {item.isFavorite && (
+                    <View className="absolute top-1 left-1 bg-white/20 backdrop-blur-md p-1 rounded-full shadow-sm">
+                        <Heart size={12} color="#ef4444" fill="#ef4444" />
+                    </View>
+                )}
             </View>
-        </TouchableWithoutFeedback>
+        </Pressable>
     );
 };
