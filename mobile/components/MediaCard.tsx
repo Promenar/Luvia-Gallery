@@ -9,16 +9,20 @@ interface MediaCardProps {
     item: MediaItem;
     onPress: (item: MediaItem) => void;
     onLongPress?: (item: MediaItem) => void;
+    aspectRatio?: number;
 }
 
-export const MediaCard: React.FC<MediaCardProps> = ({ item, onPress, onLongPress }) => {
+export const MediaCard: React.FC<MediaCardProps> = ({ item, onPress, onLongPress, aspectRatio = 1 }) => {
     return (
         <Pressable
             onPress={() => onPress(item)}
             onLongPress={() => onLongPress?.(item)}
             className="w-full"
         >
-            <View className="rounded-lg overflow-hidden bg-transparent relative border border-gray-100/50 w-full aspect-square">
+            <View
+                className="rounded-lg overflow-hidden bg-transparent relative border border-gray-100/50 w-full"
+                style={{ aspectRatio }}
+            >
                 {item.mediaType === 'audio' ? (
                     <View className="w-full h-full bg-indigo-500 items-center justify-center">
                         <Music size={24} color="white" />
