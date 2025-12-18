@@ -13,6 +13,8 @@ interface CarouselConfig {
 interface ConfigContextType {
     carouselConfig: CarouselConfig;
     setCarouselConfig: (config: CarouselConfig) => Promise<void>;
+    biometricsEnabled: boolean;
+    setBiometricsEnabled: (enabled: boolean) => Promise<void>;
     resetConfig: () => Promise<void>;
 }
 
@@ -32,6 +34,7 @@ const DEFAULT_CONFIG: CarouselConfig = {
 
 export const ConfigProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     const [carouselConfig, setConfigState] = useState<CarouselConfig>(DEFAULT_CONFIG);
+    const [biometricsEnabled, setBiometricsEnabledState] = useState(false);
 
     useEffect(() => {
         loadConfig();
@@ -39,9 +42,14 @@ export const ConfigProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     const loadConfig = async () => {
         try {
-            const saved = await AsyncStorage.getItem('carousel_config');
-            if (saved) {
-                setConfigState(JSON.parse(saved));
+            const savedCarousel = await AsyncStorage.getItem('carousel_config');
+            if (savedCarousel) {
+                setConfigState(JSON.parse(savedCarousel));
+            }
+
+            const savedBiometrics = await AsyncStorage.getItem('biometrics_enabled');
+            if (savedBiometrics) {
+                setBiometricsEnabledState(JSON.parse(savedBiometrics));
             }
         } catch (e) {
             console.error("Failed to load config", e);
@@ -53,12 +61,24 @@ export const ConfigProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         await AsyncStorage.setItem('carousel_config', JSON.stringify(newConfig));
     };
 
+    const setBiometricsEnabled = async (enabled: boolean) => {
+        setBiometricsEnabledState(enabled);
+        await AsyncStorage.setItem('biometrics_enabled', JSON.stringify(enabled));
+    };
+
     const resetConfig = async () => {
         await setCarouselConfig(DEFAULT_CONFIG);
+        await setBiometricsEnabled(false);
     };
 
     return (
-        <ConfigContext.Provider value={{ carouselConfig, setCarouselConfig, resetConfig }}>
+        <ConfigContext.Provider value={{
+            carouselConfig,
+            setCarouselConfig,
+            biometricsEnabled,
+            setBiometricsEnabled,
+            resetConfig
+        }}>
             {children}
         </ConfigContext.Provider>
     );

@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "mobile",
-    "slug": "mobile",
+    "name": "Lumina Gallery",
+    "slug": "lumina-gallery",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -26,7 +26,8 @@
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "package": "com.promenar.lumina"
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -34,7 +35,15 @@
     "plugins": [
       "expo-video",
       "expo-asset",
-      "expo-font"
-    ]
+      "expo-font",
+      "expo-audio",
+      "expo-secure-store",
+      "expo-sqlite"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "244eadbc-1aa5-49f5-a042-e707bc75e13a"
+      }
+    }
   }
 }
