@@ -225,6 +225,20 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBack, onLogout
                             </View>
                         </TouchableOpacity>
 
+                        {/* Option: Favorites */}
+                        <TouchableOpacity
+                            onPress={() => setCarouselConfig({ sourceType: 'favorites', sourceValue: null, sourceName: t('header.favorites') })}
+                            className={`flex-row items-center p-3 rounded-lg mb-2 ${carouselConfig.sourceType === 'favorites' ? 'bg-indigo-100 dark:bg-indigo-900/30 border border-indigo-200 dark:border-indigo-800' : ''}`}
+                        >
+                            <View className={`w-4 h-4 rounded-full border mr-3 items-center justify-center ${carouselConfig.sourceType === 'favorites' ? 'border-indigo-600 bg-indigo-600' : 'border-gray-400'}`}>
+                                {carouselConfig.sourceType === 'favorites' && <View className="w-2 h-2 rounded-full bg-white" />}
+                            </View>
+                            <View>
+                                <Text className="font-bold text-gray-900 dark:text-white">{t('header.favorites')}</Text>
+                                <Text className="text-xs text-gray-500">{t('settings.carousel.source')}</Text>
+                            </View>
+                        </TouchableOpacity>
+
                         {/* Option: Specific Folder */}
                         <TouchableOpacity
                             onPress={() => setIsPickerOpen({ visible: true, mode: 'folder' })}

@@ -466,7 +466,6 @@ app.use((req, res, next) => {
     const whitelist = [
         '/api/auth',
         '/api/config',  // Needed for setup/login
-        '/api/thumb',   // Allow thumbnails (low-res) to be public for UI performance
         '/api/video/stream', // Allow streaming if separate? (Check paths later)
         '/api/system/status' // Allow status for now? No, protect it to force auth.
     ];
@@ -607,6 +606,10 @@ app.get('/api/library/folders', (req, res) => {
         }
     }
 
+    const userId = 'admin';
+    const favoriteIds = database.getFavoriteIds(userId);
+    const favoriteFolders = new Set(favoriteIds.folders || []);
+
     const folders = subs.map(f => {
         let coverMedia = null;
         try {
@@ -634,7 +637,8 @@ app.get('/api/library/folders', (req, res) => {
             name: path.basename(f),
             path: f,
             mediaCount: 0, // Stub
-            coverMedia: coverMedia
+            coverMedia: coverMedia,
+            isFavorite: favoriteFolders.has(f)
         };
     });
     res.json({ folders });
@@ -956,6 +960,10 @@ app.get('/api/scan/results', (req, res) => {
     const offset = parseInt(req.query.offset) || 0;
     const limit = parseInt(req.query.limit) || 100;
     const favoritesOnly = req.query.favorites === 'true';
+    const random = req.query.random === 'true';
+    const recursive = req.query.recursive === 'true';
+    const mediaType = req.query.mediaType;
+    const excludeMediaType = req.query.excludeMediaType;
     let folderPath = req.query.folder;
 
     // Handle root path mapping for folder filter
@@ -1010,12 +1018,12 @@ app.get('/api/scan/results', (req, res) => {
             total = 0;
         } else {
             // Query database normally
-            const queryOptions = { offset, limit };
+            const queryOptions = { offset, limit, random, recursive, mediaType, excludeMediaType };
             if (folderPath) {
                 queryOptions.folderPath = path.resolve(folderPath);
             }
             files = database.queryFiles({ ...queryOptions, userId: 'admin' });
-            total = database.countFiles(folderPath ? { folderPath: path.resolve(folderPath) } : {});
+            total = database.countFiles(folderPath ? { folderPath: path.resolve(folderPath), recursive } : {});
         }
     }
 
