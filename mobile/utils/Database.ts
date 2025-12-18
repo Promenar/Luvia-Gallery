@@ -1,31 +1,40 @@
 import * as SQLite from 'expo-sqlite';
 import { MediaItem } from '../types';
 
-let db: SQLite.SQLiteDatabase | null = null;
+let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
 
-export const initDatabase = async () => {
-    if (db) return db;
+export const initDatabase = async (): Promise<SQLite.SQLiteDatabase> => {
+    if (dbPromise) return dbPromise;
 
-    db = await SQLite.openDatabaseAsync('lumina_cache.db');
+    dbPromise = (async () => {
+        try {
+            const _db = await SQLite.openDatabaseAsync('lumina_cache.db');
 
-    // Create Table
-    await db.execAsync(`
-        CREATE TABLE IF NOT EXISTS media_items (
-            id TEXT PRIMARY KEY,
-            name TEXT,
-            path TEXT,
-            mediaType TEXT,
-            size INTEGER,
-            lastModified INTEGER,
-            isFavorite INTEGER,
-            parentPath TEXT,
-            thumbnailUrl TEXT
-        );
-        CREATE INDEX IF NOT EXISTS idx_parent ON media_items(parentPath);
-        CREATE INDEX IF NOT EXISTS idx_favorite ON media_items(isFavorite);
-    `);
+            // Create Table
+            await _db.execAsync(`
+                CREATE TABLE IF NOT EXISTS media_items (
+                    id TEXT PRIMARY KEY,
+                    name TEXT,
+                    path TEXT,
+                    mediaType TEXT,
+                    size INTEGER,
+                    lastModified INTEGER,
+                    isFavorite INTEGER,
+                    parentPath TEXT,
+                    thumbnailUrl TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_parent ON media_items(parentPath);
+                CREATE INDEX IF NOT EXISTS idx_favorite ON media_items(isFavorite);
+            `);
 
-    return db;
+            return _db;
+        } catch (error) {
+            dbPromise = null; // 重试机制：如果失败了，允许下次重新初始化
+            throw error;
+        }
+    })();
+
+    return dbPromise;
 };
 
 export const saveMediaItems = async (items: MediaItem[], parentPath: string | null) => {
@@ -38,15 +47,15 @@ export const saveMediaItems = async (items: MediaItem[], parentPath: string | nu
                 `INSERT OR REPLACE INTO media_items (id, name, path, mediaType, size, lastModified, isFavorite, parentPath, thumbnailUrl) 
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                 [
-                    item.id,
-                    item.name,
-                    item.path,
-                    item.mediaType,
-                    item.size,
-                    item.lastModified,
+                    item.id ?? '',
+                    item.name ?? '',
+                    item.path ?? '',
+                    item.mediaType ?? 'image',
+                    item.size ?? 0,
+                    item.lastModified ?? Date.now(),
                     item.isFavorite ? 1 : 0,
                     parentPath || 'root',
-                    item.thumbnailUrl || ''
+                    item.thumbnailUrl ?? ''
                 ]
             );
         }
@@ -60,7 +69,10 @@ export const getCachedFiles = async (options: {
     offset?: number
 }) => {
     const database = await initDatabase();
-    const { folderPath, favorite, limit = 50, offset = 0 } = options;
+    const folderPath = options.folderPath ?? null;
+    const favorite = options.favorite ?? false;
+    const limit = Number.isInteger(options.limit) ? options.limit! : 50;
+    const offset = Number.isInteger(options.offset) ? options.offset! : 0;
 
     let query = `SELECT * FROM media_items WHERE 1=1`;
     const params: any[] = [];
@@ -89,18 +101,20 @@ export const updateFavoriteStatus = async (id: string, isFavorite: boolean) => {
     const database = await initDatabase();
     await database.runAsync(
         `UPDATE media_items SET isFavorite = ? WHERE id = ?`,
-        [isFavorite ? 1 : 0, id]
+        [isFavorite ? 1 : 0, id ?? '']
     );
 };
 
 export const deleteFileFromCache = async (id: string) => {
     const database = await initDatabase();
+    if (!id) return;
     const result = await database.runAsync(`DELETE FROM media_items WHERE id = ?`, [id]);
     console.log(`[Cache] Deleted file ${id}. Changes:`, result.changes);
 };
 
 export const deleteFolderFromCache = async (folderPath: string) => {
     const database = await initDatabase();
+    if (!folderPath) return;
     // Delete the folder itself from logic (though usually folderFiles is what we care about)
     // and all files inside it
     await database.runAsync(`DELETE FROM media_items WHERE parentPath = ? OR parentPath LIKE ?`, [folderPath, `${folderPath}/%`]);
