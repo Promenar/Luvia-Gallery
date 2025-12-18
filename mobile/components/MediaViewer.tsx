@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, Modal, FlatList, Dimensions, StatusBar, TouchableOpacity, Image, Platform, Pressable } from 'react-native';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { View, Text, Modal, FlatList, Dimensions, StatusBar, TouchableOpacity, Image, Platform, Pressable, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { X, Music } from 'lucide-react-native';
 import { MediaItem } from '../types';
@@ -10,9 +10,10 @@ import { IconButton } from 'react-native-paper';
 import { useLanguage } from '../utils/i18n';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Slider from '@react-native-community/slider';
-import { Play, Pause, SkipBack, SkipForward } from 'lucide-react-native';
+import { Play, Pause, SkipBack, SkipForward, RotateCw } from 'lucide-react-native';
 import { BlurView } from 'expo-blur';
 import { useAudio } from '../utils/AudioContext';
+import * as ScreenOrientation from 'expo-screen-orientation';
 
 interface MediaViewerProps {
     items: MediaItem[];
@@ -21,10 +22,24 @@ interface MediaViewerProps {
     onToggleFavorite: (id: string, isFavorite: boolean) => void;
 }
 
-const { width, height } = Dimensions.get('window');
+
 
 // Video Component Wrapper
-const VideoSlide = ({ item, isActive, player, showControls, onToggleControls }: { item: MediaItem, isActive: boolean, player: any, showControls: boolean, onToggleControls: () => void }) => {
+const VideoSlide = ({
+    item,
+    isActive,
+    player,
+    showControls,
+    onToggleControls,
+    onToggleOrientation
+}: {
+    item: MediaItem,
+    isActive: boolean,
+    player: any,
+    showControls: boolean,
+    onToggleControls: () => void,
+    onToggleOrientation: () => void
+}) => {
     const thumbUrl = getThumbnailUrl(item.id);
 
     const [isPlaying, setIsPlaying] = useState(true);
@@ -95,37 +110,37 @@ const VideoSlide = ({ item, isActive, player, showControls, onToggleControls }: 
                 <Animated.View
                     entering={FadeIn.duration(200)}
                     exiting={FadeOut.duration(200)}
-                    className="absolute inset-0 z-40 justify-center items-center"
+                    className="absolute bottom-10 left-0 right-0 px-6 z-40"
                     pointerEvents="box-none"
+                    style={{ paddingBottom: 20 }}
                 >
-                    <TouchableOpacity
-                        onPress={handleTogglePlay}
-                        className="w-20 h-20 bg-black/40 rounded-full items-center justify-center border border-white/10"
-                    >
-                        {isPlaying ? <Pause color="white" size={40} fill="white" /> : <Play color="white" size={40} fill="white" />}
-                    </TouchableOpacity>
+                    <View className="bg-black/60 p-4 rounded-3xl border border-white/10 flex-row items-center gap-3">
+                        <TouchableOpacity onPress={handleTogglePlay} className="p-1">
+                            {isPlaying ? <Pause color="white" size={24} fill="white" /> : <Play color="white" size={24} fill="white" />}
+                        </TouchableOpacity>
 
-                    <View className="absolute bottom-10 left-0 right-0 px-6" style={{ paddingBottom: 20 }}>
-                        <View className="bg-black/60 p-4 rounded-2xl border border-white/10 blur-xl">
-                            <Slider
-                                style={{ width: '100%', height: 30 }}
-                                minimumValue={0}
-                                maximumValue={duration || 1}
-                                value={currentTime}
-                                minimumTrackTintColor="#6366f1"
-                                maximumTrackTintColor="#374151"
-                                thumbTintColor="white"
-                                onSlidingComplete={(val) => {
-                                    if (player) {
-                                        player.currentTime = val / 1000;
-                                    }
-                                }}
-                            />
-                            <View className="flex-row justify-between pt-1">
-                                <Text className="text-white/60 text-xs font-medium">{formatTime(currentTime)}</Text>
-                                <Text className="text-white/60 text-xs font-medium">{formatTime(duration)}</Text>
-                            </View>
-                        </View>
+                        <Text className="text-white/60 text-[10px] font-medium w-10 text-center">{formatTime(currentTime)}</Text>
+
+                        <Slider
+                            style={{ flex: 1, height: 30 }}
+                            minimumValue={0}
+                            maximumValue={duration || 1}
+                            value={currentTime}
+                            minimumTrackTintColor="#6366f1"
+                            maximumTrackTintColor="#374151"
+                            thumbTintColor="white"
+                            onSlidingComplete={(val) => {
+                                if (player) {
+                                    player.currentTime = val / 1000;
+                                }
+                            }}
+                        />
+
+                        <Text className="text-white/60 text-[10px] font-medium w-10 text-center">{formatTime(duration)}</Text>
+
+                        <TouchableOpacity onPress={onToggleOrientation} className="p-1">
+                            <RotateCw color="white" size={20} />
+                        </TouchableOpacity>
                     </View>
                 </Animated.View>
             )}
@@ -304,6 +319,7 @@ const ImageSlide = ({ item }: { item: MediaItem }) => {
 };
 
 export const MediaViewer: React.FC<MediaViewerProps> = ({ items, initialIndex, onClose, onToggleFavorite }) => {
+    const { width, height } = useWindowDimensions();
     const insets = useSafeAreaInsets();
     const { t } = useLanguage();
     const { minimizePlayer } = useAudio();
@@ -313,6 +329,37 @@ export const MediaViewer: React.FC<MediaViewerProps> = ({ items, initialIndex, o
     const [exif, setExif] = useState<any>(null);
     const [networkSpeed, setNetworkSpeed] = useState<string>('--');
     const [bitrate, setBitrate] = useState<string>('--');
+    const flatListRef = useRef<FlatList>(null);
+
+    // Sync scroll on width change (orientation change)
+    useEffect(() => {
+        if (flatListRef.current && items.length > 0) {
+            flatListRef.current.scrollToIndex({
+                index: currentIndex,
+                animated: false
+            });
+        }
+    }, [width]);
+
+    // Orientation Logic
+    useEffect(() => {
+        // Unlock orientation on mount to allow auto-rotate (if system setting allows)
+        ScreenOrientation.unlockAsync().catch(e => console.error(e));
+
+        return () => {
+            // Re-lock to portrait on close
+            ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP).catch(e => console.error(e));
+        };
+    }, []);
+
+    const toggleOrientation = async () => {
+        const orientation = await ScreenOrientation.getOrientationAsync();
+        if (orientation === ScreenOrientation.Orientation.PORTRAIT_UP || orientation === ScreenOrientation.Orientation.PORTRAIT_DOWN) {
+            await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE_LEFT);
+        } else {
+            await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
+        }
+    };
 
     // Single Player Architecture
     const player = useVideoPlayer('', p => {
@@ -324,6 +371,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = ({ items, initialIndex, o
     const [isFavorite, setIsFavorite] = useState(currentItem.isFavorite || false);
 
     useEffect(() => {
+        let timer: NodeJS.Timeout;
         if (items[currentIndex]) {
             const item = items[currentIndex];
             setIsFavorite(item.isFavorite || false);
@@ -331,19 +379,23 @@ export const MediaViewer: React.FC<MediaViewerProps> = ({ items, initialIndex, o
             if (item.mediaType === 'video') {
                 // Calculate Static Bitrate
                 const updateBitrate = () => {
-                    if (item.size && player.duration) {
-                        const kbps = Math.round((item.size * 8) / (player.duration * 1024));
-                        setBitrate(`${kbps} kbps`);
-                    } else if (item.size) {
-                        setBitrate('Calculating...');
+                    try {
+                        if (item.size && player && player.duration) {
+                            const kbps = Math.round((item.size * 8) / (player.duration * 1024));
+                            setBitrate(`${kbps} kbps`);
+                        } else if (item.size) {
+                            setBitrate('Calculating...');
+                        }
+                    } catch (e) {
+                        console.log('Update bitrate error (safe to ignore during transition):', e);
                     }
                 };
 
                 player.replaceAsync(getFileUrl(item.id)).then(() => {
                     player.play();
                     // Update again once loaded
-                    setTimeout(updateBitrate, 1000);
-                });
+                    timer = setTimeout(updateBitrate, 1000);
+                }).catch(e => console.error('Video load error:', e));
                 updateBitrate();
             } else {
                 player.pause();
@@ -359,6 +411,9 @@ export const MediaViewer: React.FC<MediaViewerProps> = ({ items, initialIndex, o
                 setExif(null);
             }
         }
+        return () => {
+            if (timer) clearTimeout(timer);
+        };
     }, [currentIndex, items, player]);
 
     // Speed Detection Logic
@@ -457,6 +512,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = ({ items, initialIndex, o
                     />
 
                     <FlatList
+                        ref={flatListRef}
                         data={items}
                         keyExtractor={item => item.id}
                         horizontal
@@ -479,6 +535,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = ({ items, initialIndex, o
                                         player={player}
                                         showControls={showControls}
                                         onToggleControls={toggleControls}
+                                        onToggleOrientation={toggleOrientation}
                                     />
                                 ) : item.mediaType === 'audio' ? (
                                     <AudioSlide

@@ -1,7 +1,8 @@
 import React from 'react';
-import { View, Image, Pressable, Dimensions, Text } from 'react-native';
+import { View, Pressable, Dimensions, Text } from 'react-native';
+import { Image } from 'expo-image';
 import { MediaItem } from '../types';
-import { getThumbnailUrl } from '../utils/api';
+import { getThumbnailUrl, getToken } from '../utils/api';
 import { Play, Music, Heart } from 'lucide-react-native';
 
 interface MediaCardProps {
@@ -27,9 +28,13 @@ export const MediaCard: React.FC<MediaCardProps> = ({ item, onPress, onLongPress
                     </View>
                 ) : (
                     <Image
-                        source={{ uri: getThumbnailUrl(item.id) }}
-                        className="w-full h-full object-cover"
-                        resizeMode="cover"
+                        source={{
+                            uri: getThumbnailUrl(item.id),
+                            headers: { Authorization: `Bearer ${getToken()}` }
+                        }}
+                        style={{ width: '100%', height: '100%' }}
+                        contentFit="cover"
+                        transition={200}
                     />
                 )}
 

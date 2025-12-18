@@ -2,7 +2,7 @@ import React, { createContext, useContext, useEffect, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { MediaItem } from '../types';
 
-export type CarouselSourceType = 'all' | 'folder' | 'file';
+export type CarouselSourceType = 'all' | 'folder' | 'file' | 'favorites';
 
 interface CarouselConfig {
     sourceType: CarouselSourceType;

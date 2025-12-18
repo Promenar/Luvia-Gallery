@@ -17,8 +17,7 @@ export const BottomTabs = ({ activeTab, onTabChange }: BottomTabsProps) => {
     const insets = useSafeAreaInsets();
     const { t } = useLanguage();
 
-    const { mode } = useTheme();
-    const isDark = mode === 'dark';
+    const { isDark } = useTheme();
 
     const getIcon = (tab: Tab, color: string) => {
         switch (tab) {

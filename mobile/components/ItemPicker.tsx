@@ -7,6 +7,7 @@ import { MediaCard } from './MediaCard';
 import { ArrowLeft, X } from 'lucide-react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLanguage } from '../utils/i18n';
+import { useTheme } from '../utils/ThemeContext';
 
 /* 
   Reusable Item Picker for Settings
@@ -24,6 +25,7 @@ interface ItemPickerProps {
 export const ItemPicker: React.FC<ItemPickerProps> = ({ visible, mode, onSelect, onClose }) => {
     const insets = useSafeAreaInsets();
     const { t } = useLanguage();
+    const { isDark } = useTheme();
     const [items, setItems] = useState<any[]>([]);
     const [loading, setLoading] = useState(false);
     const [currentPath, setCurrentPath] = useState<string>('');
@@ -106,28 +108,28 @@ export const ItemPicker: React.FC<ItemPickerProps> = ({ visible, mode, onSelect,
             presentationStyle="pageSheet"
             onRequestClose={onClose} // Mandatory for Android Modal
         >
-            <View style={{ flex: 1, backgroundColor: '#fff' }}>
-                <View className="px-4 py-4 border-b border-gray-100 flex-row items-center justify-between">
-                    <TouchableOpacity onPress={onClose} className="p-2 bg-gray-100 rounded-full">
-                        <X size={20} color="#000" />
+            <View className="flex-1 bg-white dark:bg-black">
+                <View className="px-4 py-4 border-b border-gray-100 dark:border-white/10 flex-row items-center justify-between">
+                    <TouchableOpacity onPress={onClose} className="p-2 bg-gray-100 dark:bg-zinc-800 rounded-full">
+                        <X size={20} color={isDark ? "white" : "black"} />
                     </TouchableOpacity>
-                    <Text className="font-bold text-lg">
+                    <Text className="font-bold text-lg text-black dark:text-white">
                         {mode === 'folder' ? t('picker.title.folder') : t('picker.title.file')}
                     </Text>
                     <View style={{ width: 40 }} />
                 </View>
 
                 {mode === 'folder' && (
-                    <View className="px-4 py-3 bg-gray-50 flex-row items-center justify-between border-b border-gray-200">
+                    <View className="px-4 py-3 bg-gray-50 dark:bg-zinc-900 flex-row items-center justify-between border-b border-gray-200 dark:border-white/10">
                         <View className="flex-1 mr-2">
-                            <Text numberOfLines={1} className="text-gray-500 text-xs uppercase mb-1">{t('picker.current')}</Text>
-                            <Text numberOfLines={1} className="font-bold">{currentPath || t('picker.root')}</Text>
+                            <Text numberOfLines={1} className="text-gray-500 dark:text-gray-400 text-xs uppercase mb-1">{t('picker.current')}</Text>
+                            <Text numberOfLines={1} className="font-bold text-black dark:text-white">{currentPath || t('picker.root')}</Text>
                         </View>
 
                         <View className="flex-row gap-2">
                             {currentPath !== '' && (
-                                <TouchableOpacity onPress={handleBack} className="bg-gray-200 px-3 py-2 rounded-lg">
-                                    <ArrowLeft size={16} color="black" />
+                                <TouchableOpacity onPress={handleBack} className="bg-gray-200 dark:bg-zinc-800 px-3 py-2 rounded-lg">
+                                    <ArrowLeft size={16} color={isDark ? "white" : "black"} />
                                 </TouchableOpacity>
                             )}
                             <TouchableOpacity
@@ -135,9 +137,9 @@ export const ItemPicker: React.FC<ItemPickerProps> = ({ visible, mode, onSelect,
                                     onSelect(currentPath, currentPath || t('picker.root'));
                                     onClose();
                                 }}
-                                className="bg-black px-4 py-2 rounded-lg"
+                                className="bg-black dark:bg-white px-4 py-2 rounded-lg"
                             >
-                                <Text className="text-white font-bold text-xs">{t('picker.select_this')}</Text>
+                                <Text className="text-white dark:text-black font-bold text-xs">{t('picker.select_this')}</Text>
                             </TouchableOpacity>
                         </View>
                     </View>
@@ -145,7 +147,7 @@ export const ItemPicker: React.FC<ItemPickerProps> = ({ visible, mode, onSelect,
 
                 {loading ? (
                     <View className="flex-1 justify-center items-center">
-                        <ActivityIndicator size="large" color="black" />
+                        <ActivityIndicator size="large" color={isDark ? "white" : "black"} />
                     </View>
                 ) : (
                     <FlatList
@@ -160,6 +162,7 @@ export const ItemPicker: React.FC<ItemPickerProps> = ({ visible, mode, onSelect,
                                 <View style={{ flex: 0.5, maxWidth: '50%' }}>
                                     <FolderCard
                                         name={item.name}
+                                        path={item.path}
                                         onPress={() => handlePress(item)}
                                     />
                                 </View>

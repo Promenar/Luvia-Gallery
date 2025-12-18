@@ -489,7 +489,7 @@ const MainScreen = () => {
                               path={folder.path}
                               isFavorite={folder.isFavorite}
                               onPress={() => handleFolderPress(folder)}
-                              onLongPress={() => handleManagePress({ type: 'folder', name: folder.name, path: folder.path })}
+                              onLongPress={() => handleManagePress({ type: 'folder', name: folder.name, path: folder.path, isFavorite: folder.isFavorite })}
                             />
                           </View>
                         ))}
@@ -562,7 +562,7 @@ const MainScreen = () => {
                                   path={folder.path}
                                   isFavorite={folder.isFavorite}
                                   onPress={() => handleFolderPress(folder)}
-                                  onLongPress={() => handleManagePress({ type: 'folder', name: folder.name, path: folder.path })}
+                                  onLongPress={() => handleManagePress({ type: 'folder', name: folder.name, path: folder.path, isFavorite: folder.isFavorite })}
                                 />
                               </View>
                             ))}

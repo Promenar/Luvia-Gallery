@@ -1,7 +1,8 @@
 import React, { useEffect, useState, useRef, useCallback, memo } from 'react';
-import { View, Dimensions, FlatList, Image, ViewToken, Text, NativeScrollEvent, NativeSyntheticEvent } from 'react-native';
+import { View, Dimensions, FlatList, ViewToken, Text, NativeScrollEvent, NativeSyntheticEvent } from 'react-native';
+import { Image } from 'expo-image';
 import { useConfig } from '../utils/ConfigContext';
-import { fetchFiles, getFileUrl, getThumbnailUrl } from '../utils/api';
+import { fetchFiles, getFileUrl, getThumbnailUrl, getToken } from '../utils/api';
 import { MediaItem } from '../types';
 import { useVideoPlayer, VideoView, VideoPlayer } from 'expo-video';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -65,10 +66,14 @@ const CarouselItem = memo(({
                 className="bg-gray-200 dark:bg-zinc-800 rounded-3xl overflow-hidden"
             >
                 <Image
-                    source={{ uri: getThumbnailUrl(item.id) }}
+                    source={{
+                        uri: getThumbnailUrl(item.id),
+                        headers: { Authorization: `Bearer ${getToken()}` }
+                    }}
                     style={{ width: '100%', height: '100%' }}
-                    resizeMode="cover"
+                    contentFit="cover"
                     blurRadius={10}
+                    transition={1000}
                 />
             </View>
 
@@ -86,9 +91,13 @@ const CarouselItem = memo(({
                     />
                 ) : (
                     <Image
-                        source={{ uri: getThumbnailUrl(item.id) }}
+                        source={{
+                            uri: getThumbnailUrl(item.id),
+                            headers: { Authorization: `Bearer ${getToken()}` }
+                        }}
                         style={{ width: '100%', height: '100%' }}
-                        resizeMode="cover"
+                        contentFit="cover"
+                        transition={500}
                     />
                 )}
             </Animated.View>
@@ -143,14 +152,43 @@ export const CarouselView: React.FC<CarouselViewProps> = ({ isActive }) => {
             if (carouselConfig.sourceType === 'all') {
                 res = await fetchFiles(commonOptions);
             } else if (carouselConfig.sourceType === 'folder' && carouselConfig.sourceValue) {
-                res = await fetchFiles({ ...commonOptions, folderPath: carouselConfig.sourceValue });
+                res = await fetchFiles({ ...commonOptions, folderPath: carouselConfig.sourceValue, recursive: true });
+            } else if (carouselConfig.sourceType === 'favorites') {
+                res = await fetchFiles({ ...commonOptions, favorite: true });
             } else if (carouselConfig.sourceType === 'file' && carouselConfig.sourceValue) {
-                res = await fetchFiles({ ...commonOptions, limit: 10 });
+                // Logic: Fetch files from the parent folder of the selected file
+                // Path manipulation (assuming standard slashes from picker)
+                const filePath = carouselConfig.sourceValue;
+                // Simple dirname implementation
+                const lastSlash = filePath.lastIndexOf('/');
+                const parentFolder = lastSlash > -1 ? filePath.substring(0, lastSlash) : 'root';
+
+                // Fetch files from that folder (no recursion, just context)
+                res = await fetchFiles({ ...commonOptions, folderPath: parentFolder, limit: 100, random: false });
             } else {
                 res = await fetchFiles(commonOptions);
             }
 
-            const filteredFiles = (res.files || []).filter((f: MediaItem) => f.mediaType !== 'audio');
+            let filteredFiles = (res.files || []).filter((f: MediaItem) => f.mediaType !== 'audio');
+
+            // If a specific file is selected, filter to ONLY that file
+            if (carouselConfig.sourceType === 'file' && carouselConfig.sourceValue) {
+                // Determine target ID (we have it directly)
+                const targetID = carouselConfig.sourceValue;
+
+                const targetFile = filteredFiles.find((f: MediaItem) => f.id === targetID);
+
+                if (!targetFile) {
+                    console.warn('[Carousel] Target ID not found in results:', {
+                        targetID,
+                        // availableIDs: filteredFiles.map(f => f.id) // Reduced logging to avoid bloat
+                    });
+                } else {
+                    console.log('[Carousel] Found target file by ID:', targetFile.name);
+                }
+
+                filteredFiles = targetFile ? [targetFile] : [];
+            }
 
             if (filteredFiles.length > 1) {
                 const lastItem = filteredFiles[filteredFiles.length - 1];
@@ -194,7 +232,7 @@ export const CarouselView: React.FC<CarouselViewProps> = ({ isActive }) => {
     };
 
     const scrollToNext = () => {
-        if (displayItems.length === 0) return;
+        if (displayItems.length <= 1) return;
 
         // 步骤1：开始淡出当前项
         setFadeOutIndex(activeIndex);
@@ -202,6 +240,10 @@ export const CarouselView: React.FC<CarouselViewProps> = ({ isActive }) => {
         // 步骤2：延迟等待淡出完成后执行滚动
         setTimeout(() => {
             const nextIndex = activeIndex + 1;
+            if (nextIndex >= displayItems.length) {
+                setFadeOutIndex(null);
+                return;
+            }
             if (flatListRef.current) {
                 flatListRef.current.scrollToIndex({ index: nextIndex, animated: true });
                 setFadeOutIndex(null);

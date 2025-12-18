@@ -7,7 +7,7 @@ import { useLanguage } from '../utils/i18n';
 interface ActionMenuProps {
     visible: boolean;
     onClose: () => void;
-    item: MediaItem | { type: 'folder', name: string, path: string } | null;
+    item: MediaItem | { type: 'folder', name: string, path: string, isFavorite?: boolean } | null;
     onToggleFavorite: () => void;
     onDelete: () => void;
 }
@@ -18,17 +18,17 @@ export const ActionMenu: React.FC<ActionMenuProps> = ({ visible, onClose, item, 
 
     const isFolder = 'type' in item && item.type === 'folder';
     const name = isFolder ? (item as any).name : (item as MediaItem).name;
-    const isFavorite = isFolder ? false : (item as MediaItem).isFavorite;
+    const isFavorite = isFolder ? (item as any).isFavorite : (item as MediaItem).isFavorite;
 
     return (
         <Modal
             visible={visible}
             transparent
-            animationType="fade"
+            animationType="slide"
             onRequestClose={onClose}
         >
             <Pressable
-                className="flex-1 bg-black/40 items-center justify-end pb-12"
+                className="flex-1 items-center justify-end pb-12"
                 onPress={onClose}
             >
                 <View className="bg-white dark:bg-zinc-900 w-[90%] rounded-3xl overflow-hidden shadow-2xl border border-gray-100 dark:border-zinc-800">
