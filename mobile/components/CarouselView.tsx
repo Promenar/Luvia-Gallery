@@ -1,5 +1,5 @@
-import React, { useEffect, useState, useRef, useCallback, memo } from 'react';
-import { View, Dimensions, FlatList, ViewToken, Text, NativeScrollEvent, NativeSyntheticEvent } from 'react-native';
+import React, { useEffect, useState, useRef, useCallback, memo, useMemo } from 'react';
+import { View, useWindowDimensions, FlatList, ViewToken, Text, NativeScrollEvent, NativeSyntheticEvent } from 'react-native';
 import { Image } from 'expo-image';
 import { useConfig } from '../utils/ConfigContext';
 import { fetchFiles, getFileUrl, getThumbnailUrl, getToken } from '../utils/api';
@@ -8,10 +8,6 @@ import { useVideoPlayer, VideoView, VideoPlayer } from 'expo-video';
 import { LinearGradient } from 'expo-linear-gradient';
 import Animated, { useSharedValue, useAnimatedStyle, withTiming, useDerivedValue } from 'react-native-reanimated';
 
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
-const ITEM_WIDTH = SCREEN_WIDTH;
-const VISUAL_WIDTH = SCREEN_WIDTH - 32;
-const ITEM_HEIGHT = VISUAL_WIDTH * 1.45;
 const TRANSITION_DURATION = 800; // 渐变时长
 const ROTATION_INTERVAL = 7000;  // 轮播间隔（延长至7秒）
 
@@ -25,44 +21,62 @@ const CarouselItem = memo(({
     index,
     activeIndex,
     fadeOutIndex,
-    player,
-    isActive
+    isActive,
+    itemWidth,
+    visualWidth,
+    itemHeight,
+    numVisibleItems,
+    isVisible,
 }: {
     item: MediaItem,
     index: number,
     activeIndex: number,
     fadeOutIndex: number | null,
-    player: VideoPlayer,
-    isActive: boolean
+    isActive: boolean,
+    itemWidth: number,
+    visualWidth: number,
+    itemHeight: number,
+    numVisibleItems: number,
+    isVisible: boolean,
 }) => {
     const isFocused = index === activeIndex;
     const isExiting = index === fadeOutIndex;
+
+    const player = useVideoPlayer(isVisible && isActive ? getFileUrl(item.id) : '', (p) => {
+        p.loop = true;
+        p.muted = true;
+        if (isVisible && isActive) p.play();
+    });
+
+    useEffect(() => {
+        if (isVisible && isActive && item.mediaType === 'video') {
+            player.play();
+        } else {
+            player.pause();
+        }
+    }, [isVisible, isActive, player, item.mediaType]);
+
+    // 动画透明度：多列模式下始终可见，单列模式下保留渐变效果
+    const targetOpacity = (numVisibleItems > 1) ? 1 : (isFocused && !isExiting ? 1 : 0);
 
     // 动画透明度
     const opacity = useSharedValue(0);
 
     useEffect(() => {
-        if (isFocused && !isExiting) {
-            // 入场：平滑淡入
-            opacity.value = withTiming(1, { duration: TRANSITION_DURATION });
-        } else if (isExiting) {
-            // 出场：平滑淡出
-            opacity.value = withTiming(0, { duration: 500 });
-        } else {
-            // 非焦点项：保持透明度较低
-            opacity.value = withTiming(0, { duration: 300 });
-        }
-    }, [isFocused, isExiting]);
+        opacity.value = withTiming(targetOpacity, {
+            duration: isExiting ? 500 : (numVisibleItems > 1 ? 0 : TRANSITION_DURATION)
+        });
+    }, [targetOpacity, isExiting, numVisibleItems]);
 
     const animatedStyle = useAnimatedStyle(() => ({
         opacity: opacity.value
     }));
 
     return (
-        <View style={{ width: ITEM_WIDTH, height: ITEM_HEIGHT, alignItems: 'center', justifyContent: 'center' }}>
+        <View style={{ width: itemWidth, height: itemHeight, alignItems: 'center', justifyContent: 'center' }}>
             {/* 底层占位（防止全黑） */}
             <View
-                style={{ width: VISUAL_WIDTH, height: ITEM_HEIGHT, position: 'absolute', opacity: 0.15 }}
+                style={{ width: visualWidth, height: itemHeight, position: 'absolute', opacity: 0.15 }}
                 className="bg-gray-200 dark:bg-zinc-800 rounded-3xl overflow-hidden"
             >
                 <Image
@@ -79,10 +93,10 @@ const CarouselItem = memo(({
 
             {/* 内容层（带动画） */}
             <Animated.View
-                style={[{ width: VISUAL_WIDTH, height: ITEM_HEIGHT }, animatedStyle]}
+                style={[{ width: visualWidth, height: itemHeight }, animatedStyle]}
                 className="bg-black rounded-3xl overflow-hidden shadow-xl elevation-5"
             >
-                {item.mediaType === 'video' && isFocused && isActive ? (
+                {item.mediaType === 'video' && isVisible && isActive ? (
                     <VideoView
                         player={player}
                         style={{ width: '100%', height: '100%' }}
@@ -106,19 +120,32 @@ const CarouselItem = memo(({
 });
 
 export const CarouselView: React.FC<CarouselViewProps> = ({ isActive }) => {
+    const { width: windowWidth } = useWindowDimensions();
     const { carouselConfig } = useConfig();
     const [items, setItems] = useState<MediaItem[]>([]);
     const [displayItems, setDisplayItems] = useState<MediaItem[]>([]);
+    const [visibleIndices, setVisibleIndices] = useState<number[]>([]);
     const flatListRef = useRef<FlatList>(null);
     const [activeIndex, setActiveIndex] = useState(0);
     const [fadeOutIndex, setFadeOutIndex] = useState<number | null>(null);
     const isInitialScrollDone = useRef(false);
 
-    const player = useVideoPlayer('', (player) => {
-        player.loop = false;
-        player.muted = true;
-    });
+    // 计算动态尺寸
+    const { itemWidth, visualWidth, itemHeight, numVisibleItems } = useMemo(() => {
+        const numVisible = windowWidth > 900 ? 3 : (windowWidth > 600 ? 2 : 1);
+        const width = windowWidth / numVisible;
+        const vWidth = width - (numVisible > 1 ? 16 : 32); // 多列时间距小一点
+        // 高度计算：增加多列模式下的高度，确保比例协调。单列维持较高比例。
+        const vHeight = numVisible > 1 ? Math.min(vWidth * 1.3, 500) : vWidth * 1.45;
+        return {
+            itemWidth: width,
+            visualWidth: vWidth,
+            itemHeight: vHeight,
+            numVisibleItems: numVisible
+        };
+    }, [windowWidth]);
 
+    // 移除共享 Player，改为 CarouselItem 内部管理
     const timerRef = useRef<NodeJS.Timeout | null>(null);
 
     useEffect(() => {
@@ -128,21 +155,10 @@ export const CarouselView: React.FC<CarouselViewProps> = ({ isActive }) => {
     useEffect(() => {
         if (!isActive) {
             stopTimer();
-            player.pause();
         } else {
             resetTimerForCurrentItem();
-            player.play();
         }
-    }, [isActive, player]);
-
-    useEffect(() => {
-        const currentItem = displayItems[activeIndex];
-        if (currentItem?.mediaType === 'video' && isActive) {
-            player.replaceAsync(getFileUrl(currentItem.id)).then(() => {
-                player.play();
-            });
-        }
-    }, [activeIndex, displayItems, isActive, player]);
+    }, [isActive]);
 
     const loadData = async () => {
         try {
@@ -253,18 +269,22 @@ export const CarouselView: React.FC<CarouselViewProps> = ({ isActive }) => {
 
     const handleMomentumScrollEnd = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
         const offsetX = event.nativeEvent.contentOffset.x;
-        const index = Math.round(offsetX / ITEM_WIDTH);
+        // 使用更稳健的索引计算，避免亚像素误差
+        const index = Math.round(offsetX / itemWidth);
 
         if (displayItems.length <= 1) {
             setActiveIndex(index);
             return;
         }
 
-        if (index === 0) {
+        // 无缝循环逻辑
+        if (index <= 0) {
+            // 滚动到开头（克隆的最后一项）-> 立即跳向真实的最后一项
             const realLastIndex = displayItems.length - 2;
             flatListRef.current?.scrollToIndex({ index: realLastIndex, animated: false });
             setActiveIndex(realLastIndex);
-        } else if (index === displayItems.length - 1) {
+        } else if (index >= displayItems.length - 1) {
+            // 滚动到结尾（克隆的第一项）-> 立即跳向真实的第一项
             flatListRef.current?.scrollToIndex({ index: 1, animated: false });
             setActiveIndex(1);
         } else {
@@ -273,9 +293,16 @@ export const CarouselView: React.FC<CarouselViewProps> = ({ isActive }) => {
     };
 
     const onViewableItemsChanged = useRef(({ viewableItems }: { viewableItems: ViewToken[] }) => {
-        if (viewableItems.length > 0 && viewableItems[0].index !== null) {
-            const newIndex = viewableItems[0].index;
-            setActiveIndex(newIndex);
+        if (viewableItems.length > 0) {
+            const indices = viewableItems
+                .filter(v => v.index !== null)
+                .map(v => v.index as number);
+            setVisibleIndices(indices);
+
+            // 仍然保留第一个作为 activeIndex 用于自动滚动参考
+            if (viewableItems[0].index !== null) {
+                setActiveIndex(viewableItems[0].index);
+            }
         }
     }).current;
 
@@ -290,8 +317,12 @@ export const CarouselView: React.FC<CarouselViewProps> = ({ isActive }) => {
                 index={index}
                 activeIndex={activeIndex}
                 fadeOutIndex={fadeOutIndex}
-                player={player}
                 isActive={isActive}
+                itemWidth={itemWidth}
+                visualWidth={visualWidth}
+                itemHeight={itemHeight}
+                numVisibleItems={numVisibleItems}
+                isVisible={visibleIndices.includes(index)}
             />
         );
     };
@@ -299,25 +330,30 @@ export const CarouselView: React.FC<CarouselViewProps> = ({ isActive }) => {
     if (displayItems.length === 0) return null;
 
     return (
-        <View style={{ height: ITEM_HEIGHT }}>
+        <View style={{ height: itemHeight }}>
             <FlatList
                 ref={flatListRef}
+                key={`carousel-${numVisibleItems}`} // 布局改变时重建列表
                 data={displayItems}
                 renderItem={renderItem}
                 keyExtractor={(item, index) => `${item.id}-${index}`}
                 horizontal
-                pagingEnabled
+                pagingEnabled={false} // 禁用原生分页，统一使用间隔捕捉
+                snapToInterval={itemWidth}
+                snapToAlignment="start"
+                decelerationRate="fast"
+                disableIntervalMomentum={true} // 增强分页感
                 showsHorizontalScrollIndicator={false}
                 onViewableItemsChanged={onViewableItemsChanged}
                 onMomentumScrollEnd={handleMomentumScrollEnd}
                 viewabilityConfig={{ itemVisiblePercentThreshold: 50 }}
-                initialNumToRender={1}
-                maxToRenderPerBatch={1}
+                initialNumToRender={numVisibleItems + 2}
+                maxToRenderPerBatch={numVisibleItems}
                 windowSize={3}
                 removeClippedSubviews={false}
                 getItemLayout={(_, index) => ({
-                    length: ITEM_WIDTH,
-                    offset: ITEM_WIDTH * index,
+                    length: itemWidth,
+                    offset: itemWidth * index,
                     index,
                 })}
             />
