@@ -1,5 +1,5 @@
 import React, { useRef, useState, useEffect } from 'react';
-import { View, StyleSheet, TouchableOpacity, Text, Dimensions, ActivityIndicator } from 'react-native';
+import { View, StyleSheet, TouchableOpacity, Text, useWindowDimensions, ActivityIndicator } from 'react-native';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import { getFileUrl } from '../utils/api';
 import { MediaItem } from '../types';
@@ -10,9 +10,8 @@ interface VideoPlayerProps {
     onClose: () => void;
 }
 
-const { width, height } = Dimensions.get('window');
-
 export const VideoPlayer: React.FC<VideoPlayerProps> = ({ item, onClose }) => {
+    const { width, height } = useWindowDimensions();
     const videoSource = getFileUrl(item.id);
 
     const player = useVideoPlayer(videoSource, player => {
