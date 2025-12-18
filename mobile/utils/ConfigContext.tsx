@@ -16,6 +16,8 @@ interface ConfigContextType {
     biometricsEnabled: boolean;
     setBiometricsEnabled: (enabled: boolean) => Promise<void>;
     resetConfig: () => Promise<void>;
+    galleryLayout: 'grid' | 'masonry';
+    setGalleryLayout: (layout: 'grid' | 'masonry') => Promise<void>;
 }
 
 const ConfigContext = createContext<ConfigContextType | null>(null);
@@ -35,6 +37,7 @@ const DEFAULT_CONFIG: CarouselConfig = {
 export const ConfigProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     const [carouselConfig, setConfigState] = useState<CarouselConfig>(DEFAULT_CONFIG);
     const [biometricsEnabled, setBiometricsEnabledState] = useState(false);
+    const [galleryLayout, setGalleryLayoutState] = useState<'grid' | 'masonry'>('grid');
 
     useEffect(() => {
         loadConfig();
@@ -50,6 +53,11 @@ export const ConfigProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             const savedBiometrics = await AsyncStorage.getItem('biometrics_enabled');
             if (savedBiometrics) {
                 setBiometricsEnabledState(JSON.parse(savedBiometrics));
+            }
+
+            const savedLayout = await AsyncStorage.getItem('gallery_layout');
+            if (savedLayout) {
+                setGalleryLayoutState(JSON.parse(savedLayout) as 'grid' | 'masonry');
             }
         } catch (e) {
             console.error("Failed to load config", e);
@@ -69,6 +77,12 @@ export const ConfigProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const resetConfig = async () => {
         await setCarouselConfig(DEFAULT_CONFIG);
         await setBiometricsEnabled(false);
+        await setGalleryLayout('grid');
+    };
+
+    const setGalleryLayout = async (layout: 'grid' | 'masonry') => {
+        setGalleryLayoutState(layout);
+        await AsyncStorage.setItem('gallery_layout', JSON.stringify(layout));
     };
 
     return (
@@ -77,7 +91,9 @@ export const ConfigProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             setCarouselConfig,
             biometricsEnabled,
             setBiometricsEnabled,
-            resetConfig
+            resetConfig,
+            galleryLayout,
+            setGalleryLayout
         }}>
             {children}
         </ConfigContext.Provider>

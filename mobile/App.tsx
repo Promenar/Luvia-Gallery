@@ -25,6 +25,9 @@ import { useLanguage, initLanguage } from './utils/i18n';
 import { AudioProvider, useAudio } from './utils/AudioContext';
 import { MiniPlayer } from './components/MiniPlayer';
 import { deleteFileFromCache, deleteFolderFromCache, getCachedFiles } from './utils/Database';
+import { useConfig } from './utils/ConfigContext';
+import { LayoutGrid, LayoutList } from 'lucide-react-native';
+import { MasonryGallery } from './components/MasonryGallery';
 
 
 // Enable LayoutAnimation removed as it is now a no-op / handled by Reanimated
@@ -62,6 +65,7 @@ const MainScreen = () => {
   const { mode, isDark, paperTheme } = useTheme();
   const { t } = useLanguage();
   const { isMinimized, maximizePlayer, currentTrack, playlist, currentIndex } = useAudio();
+  const { galleryLayout, setGalleryLayout } = useConfig();
 
   // Auth State
   const [checkingAuth, setCheckingAuth] = useState(true);
@@ -117,7 +121,7 @@ const MainScreen = () => {
       folderColumns: fCols,
       cardWidth: (windowWidth - padding - (cols - 1) * gap) / cols,
       folderCardWidth: (windowWidth - padding - (fCols - 1) * gap) / fCols,
-      recentWidth: windowWidth > 600 ? 180 : 150
+      recentWidth: windowWidth > 600 ? 140 : 110
     };
   }, [windowWidth]);
 
@@ -432,6 +436,22 @@ const MainScreen = () => {
     onRefresh(); // Simple sync
   };
 
+  const LayoutToggle = () => (
+    <TouchableOpacity
+      onPress={() => {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+        setGalleryLayout(galleryLayout === 'grid' ? 'masonry' : 'grid');
+      }}
+      className="p-2 bg-gray-100 dark:bg-zinc-800 rounded-full"
+    >
+      {galleryLayout === 'grid' ? (
+        <LayoutList size={20} color={isDark ? "#fff" : "#374151"} />
+      ) : (
+        <LayoutGrid size={20} color={isDark ? "#fff" : "#374151"} />
+      )}
+    </TouchableOpacity>
+  );
+
 
   // Back Button Handling
   useEffect(() => {
@@ -488,7 +508,7 @@ const MainScreen = () => {
               contentContainerStyle={{ paddingBottom: 100 }}
               refreshControl={<RefreshControl refreshing={refreshing || loading} onRefresh={onRefresh} />}
             >
-              <View className="mb-6 pt-0">
+              <View className="mb-6 pt-4">
                 {/* Hero Carousel - Full Width Implementation */}
                 <View>
                   <CarouselView isActive={activeTab === 'home'} />
@@ -509,13 +529,13 @@ const MainScreen = () => {
                     if (typeof item === 'number') {
                       return (
                         <View
-                          style={{ width: recentWidth, height: recentWidth * 1.4 }}
+                          style={{ width: recentWidth, height: recentWidth }}
                           className="bg-gray-200 dark:bg-zinc-800 rounded-2xl animate-pulse"
                         />
                       );
                     }
                     return (
-                      <View style={{ width: recentWidth, height: recentWidth * 1.4 }}>
+                      <View style={{ width: recentWidth, height: recentWidth }}>
                         <MediaCard
                           item={item}
                           onPress={() => handleMediaPress(item, recentMedia)}
@@ -528,13 +548,16 @@ const MainScreen = () => {
               </View>
             </ScrollView>
           </View>
-        )
-        }
+        )}
 
-        {
-          activeTab === 'library' && (
-            <View className="flex-1">
-              <Header title={t('header.library')} subtitle={t('header.library.sub')} />
+        {activeTab === 'library' && (
+          <View className="flex-1">
+            <Header
+              title={t('header.library')}
+              subtitle={t('header.library.sub')}
+              rightAction={<LayoutToggle />}
+            />
+            {galleryLayout === 'grid' ? (
               <FlatList
                 key={`lib-${numColumns}`}
                 data={formatGridData(libraryFiles, numColumns)}
@@ -564,14 +587,32 @@ const MainScreen = () => {
                   );
                 }}
               />
-            </View>
-          )
-        }
+            ) : (
+              <MasonryGallery
+                data={libraryFiles}
+                onPress={handleMediaPress}
+                onLongPress={handleManagePress}
+                onRefresh={onRefresh}
+                refreshing={refreshing || loading}
+                onEndReached={() => {
+                  if (hasMoreLibrary && !loadingMore && !loading) {
+                    loadLibraryData(libraryOffset + 100, true);
+                  }
+                }}
+                loadingMore={loadingMore}
+              />
+            )}
+          </View>
+        )}
 
-        {
-          activeTab === 'favorites' && (
-            <View className="flex-1">
-              <Header title={t('header.favorites')} subtitle={t('header.favorites.sub')} />
+        {activeTab === 'favorites' && (
+          <View className="flex-1">
+            <Header
+              title={t('header.favorites')}
+              subtitle={t('header.favorites.sub')}
+              rightAction={<LayoutToggle />}
+            />
+            {galleryLayout === 'grid' ? (
               <FlatList
                 key={`fav-${numColumns}`}
                 data={formatGridData(favoriteFiles, numColumns)}
@@ -631,26 +672,71 @@ const MainScreen = () => {
                   ) : null
                 }
               />
-            </View>
-          )
-        }
-
-        {
-          activeTab === 'folders' && (
-            <View className="flex-1">
-              <Header
-                title={currentPath ? (currentPath.split(/[/\\]/).pop() || t('header.folders')) : t('header.folders')}
-                subtitle={currentPath ? t('header.browse') : t('header.folders.sub')}
-                showBack={!!currentPath}
-                onBack={handleBack}
+            ) : (
+              <MasonryGallery
+                data={favoriteFiles}
+                onPress={handleMediaPress}
+                onLongPress={handleManagePress}
+                onRefresh={onRefresh}
+                refreshing={refreshing || loading}
+                onEndReached={() => {
+                  if (hasMoreFavorites && !loadingMore && !loading) {
+                    loadFavoritesData(favoriteOffset + 50, true);
+                  }
+                }}
+                loadingMore={loadingMore}
+                ListHeaderComponent={
+                  favoriteFolders.length > 0 ? (
+                    <View className="mb-4">
+                      <Text className="text-xs font-bold text-gray-400 mb-4 uppercase tracking-widest">{t('folder.directories')}</Text>
+                      <View className="flex-row flex-wrap" style={{ gap: 8 }}>
+                        {favoriteFolders.map(folder => (
+                          <View key={folder.path} style={{ width: folderCardWidth }} className="mb-4">
+                            <FolderCard
+                              name={folder.name}
+                              path={folder.path}
+                              isFavorite={folder.isFavorite}
+                              onPress={() => handleFolderPress(folder)}
+                              onLongPress={() => handleManagePress({ type: 'folder', name: folder.name, path: folder.path, isFavorite: folder.isFavorite })}
+                            />
+                          </View>
+                        ))}
+                      </View>
+                      {favoriteFiles.length > 0 && (
+                        <Text className="text-xs font-bold text-gray-400 mb-3 uppercase tracking-widest mt-2">{t('folder.media')}</Text>
+                      )}
+                    </View>
+                  ) : null
+                }
+                ListEmptyComponent={
+                  (!loading && favoriteFiles.length === 0 && favoriteFolders.length === 0) ? (
+                    <View className="p-20 items-center justify-center opacity-50">
+                      <Text className="text-gray-400 font-medium">{t('empty.favorites')}</Text>
+                    </View>
+                  ) : null
+                }
               />
+            )}
+          </View>
+        )}
 
-              <Animated.View
-                entering={FadeIn.duration(150)}
-                style={{ flex: 1 }}
-              >
+        {activeTab === 'folders' && (
+          <View className="flex-1">
+            <Header
+              title={currentPath ? (currentPath.split(/[/\\]/).pop() || t('header.folders')) : t('header.folders')}
+              subtitle={currentPath ? t('header.browse') : t('header.folders.sub')}
+              showBack={!!currentPath}
+              onBack={handleBack}
+              rightAction={<LayoutToggle />}
+            />
+
+            <Animated.View
+              entering={FadeIn.duration(150)}
+              style={{ flex: 1 }}
+            >
+              {galleryLayout === 'grid' ? (
                 <FlatList
-                  key={`folders-${currentPath}-${numColumns}`}
+                  key={`folders-grid-${currentPath}-${numColumns}`}
                   data={formatGridData(folderFiles, numColumns)}
                   keyExtractor={item => item.id}
                   numColumns={numColumns}
@@ -666,8 +752,6 @@ const MainScreen = () => {
                   ListFooterComponent={loadingMore ? <ActivityIndicator className="py-4" color={isDark ? "#fff" : "#000"} /> : null}
                   ListHeaderComponent={
                     <View>
-                      {/* BreadCrumb removed, handled by Header */}
-
                       {folders.length > 0 && (
                         <View className="mb-4">
                           {!currentPath && <Text className="text-xs font-bold text-gray-400 mb-4 uppercase tracking-widest">{t('folder.directories')}</Text>}
@@ -714,19 +798,64 @@ const MainScreen = () => {
                     ) : null
                   }
                 />
-              </Animated.View>
-            </View>
-          )
-        }
+              ) : (
+                <MasonryGallery
+                  data={folderFiles}
+                  onPress={handleMediaPress}
+                  onLongPress={handleManagePress}
+                  onRefresh={onRefresh}
+                  refreshing={refreshing || loading}
+                  onEndReached={() => {
+                    if (hasMoreFolderFiles && !loadingMore && !loading) {
+                      loadFolderData(currentPath, folderOffset + 50, true);
+                    }
+                  }}
+                  loadingMore={loadingMore}
+                  ListHeaderComponent={
+                    <View>
+                      {folders.length > 0 && (
+                        <View className="mb-4">
+                          {!currentPath && <Text className="text-xs font-bold text-gray-400 mb-4 uppercase tracking-widest">{t('folder.directories')}</Text>}
+                          <View className="flex-row flex-wrap" style={{ gap: 8 }}>
+                            {folders.map(folder => (
+                              <View key={folder.path} style={{ width: folderCardWidth }} className="mb-4">
+                                <FolderCard
+                                  name={folder.name}
+                                  path={folder.path}
+                                  isFavorite={folder.isFavorite}
+                                  onPress={() => handleFolderPress(folder)}
+                                  onLongPress={() => handleManagePress({ type: 'folder', name: folder.name, path: folder.path, isFavorite: folder.isFavorite })}
+                                />
+                              </View>
+                            ))}
+                          </View>
+                        </View>
+                      )}
+                      {folderFiles.length > 0 && (
+                        <Text className="text-xs font-bold text-gray-400 mb-3 uppercase tracking-widest mt-2">
+                          {t('folder.media')}
+                        </Text>
+                      )}
+                    </View>
+                  }
+                  ListEmptyComponent={
+                    (!loading && folders.length === 0) ? (
+                      <View className="p-20 items-center justify-center opacity-50">
+                        <Text className="text-gray-400 font-medium">{t('empty.folder')}</Text>
+                      </View>
+                    ) : null
+                  }
+                />
+              )}
+            </Animated.View>
+          </View>
+        )}
 
         {/* Settings Tab */}
-        {
-          activeTab === 'settings' && (
-            <SettingsScreen onLogout={handleLogout} username={username || 'Guest'} />
-          )
-        }
-
-      </Animated.View >
+        {activeTab === 'settings' && (
+          <SettingsScreen onLogout={handleLogout} username={username || 'Guest'} />
+        )}
+      </Animated.View>
     );
   };
 

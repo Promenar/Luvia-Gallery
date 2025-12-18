@@ -158,29 +158,45 @@ export const ItemPicker: React.FC<ItemPickerProps> = ({ visible, mode, onSelect,
                 ) : (
                     <FlatList
                         key={`picker-${mode}-${numColumns}`} // 布局改变时重建列表
-                        data={items}
+                        data={(() => {
+                            // 补齐占位项以防止最后一项拉伸
+                            const list = [...items];
+                            const remainder = list.length % numColumns;
+                            if (remainder !== 0) {
+                                for (let i = 0; i < numColumns - remainder; i++) {
+                                    list.push({ id: `placeholder-${i}`, isPlaceholder: true });
+                                }
+                            }
+                            return list;
+                        })()}
                         keyExtractor={(item) => item.id || item.path}
                         numColumns={numColumns}
                         contentContainerStyle={{ padding: 12, gap: 12 }}
                         columnWrapperStyle={{ gap: 12 }}
-                        renderItem={({ item }) => (
-                            mode === 'folder' ? (
+                        renderItem={({ item }) => {
+                            if (item.isPlaceholder) {
+                                return <View style={{ flex: 1 }} />;
+                            }
+
+                            return (
                                 <View style={{ flex: 1 }}>
-                                    <FolderCard
-                                        name={item.name}
-                                        path={item.path}
-                                        onPress={() => handlePress(item)}
-                                    />
+                                    {mode === 'folder' ? (
+                                        <FolderCard
+                                            name={item.name}
+                                            path={item.path}
+                                            onPress={() => handlePress(item)}
+                                        />
+                                    ) : (
+                                        <View className="aspect-square">
+                                            <MediaCard
+                                                item={item}
+                                                onPress={() => handlePress(item)}
+                                            />
+                                        </View>
+                                    )}
                                 </View>
-                            ) : (
-                                <View className="flex-1 aspect-square">
-                                    <MediaCard
-                                        item={item}
-                                        onPress={() => handlePress(item)}
-                                    />
-                                </View>
-                            )
-                        )}
+                            );
+                        }}
                     />
                 )}
             </View>
