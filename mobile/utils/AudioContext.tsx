@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
-import { Audio, InterruptionModeAndroid, InterruptionModeIOS, AVPlaybackStatus } from 'expo-av';
+import { useAudioPlayer, setAudioModeAsync } from 'expo-audio';
 import { MediaItem } from '../types';
 import { getFileUrl } from './api';
 
@@ -11,6 +11,8 @@ interface AudioContextType {
     playlist: MediaItem[];
     currentIndex: number;
     playTrack: (item: MediaItem, list: MediaItem[]) => Promise<void>;
+    playNext: () => Promise<void>;
+    playPrevious: () => Promise<void>;
     togglePlayPause: () => Promise<void>;
     seekTo: (millis: number) => Promise<void>;
     closePlayer: () => Promise<void>;
@@ -28,105 +30,90 @@ export const useAudio = () => {
 };
 
 export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-    const soundRef = useRef<Audio.Sound | null>(null);
     const [currentTrack, setCurrentTrack] = useState<MediaItem | null>(null);
-    const [isPlaying, setIsPlaying] = useState(false);
-    const [position, setPosition] = useState(0);
-    const [duration, setDuration] = useState(0);
     const [playlist, setPlaylist] = useState<MediaItem[]>([]);
     const [currentIndex, setCurrentIndex] = useState(-1);
     const [isMinimized, setIsMinimized] = useState(false);
 
-    // Initialize Audio Mode
-    useEffect(() => {
-        Audio.setAudioModeAsync({
-            playsInSilentModeIOS: true,
-            staysActiveInBackground: true,
-            interruptionModeAndroid: InterruptionModeAndroid.DoNotMix,
-            interruptionModeIOS: InterruptionModeIOS.DoNotMix,
-            shouldDuckAndroid: true,
-        }).catch(e => console.error("Audio Mode Error:", e));
+    // Reactive states for UI sync
+    const [isPlaying, setIsPlaying] = useState(false);
+    const [position, setPosition] = useState(0);
+    const [duration, setDuration] = useState(0);
 
-        return () => {
-            if (soundRef.current) {
-                soundRef.current.unloadAsync();
-            }
-        }
+    // useAudioPlayer from expo-audio
+    const player = useAudioPlayer('');
+
+    // Configure Audio Mode globally
+    useEffect(() => {
+        setAudioModeAsync({
+            playsInSilentMode: true,
+        }).catch((e: Error) => console.error("Audio Mode Error:", e));
     }, []);
 
-    const onPlaybackStatusUpdate = (status: AVPlaybackStatus) => {
-        if (status.isLoaded) {
-            setDuration(status.durationMillis || 0);
-            setPosition(status.positionMillis);
-            setIsPlaying(status.isPlaying);
-
-            if (status.didJustFinish && !status.isLooping) {
-                setIsPlaying(false);
-                setPosition(0);
-                // Auto-next could go here if we wanted
+    // Status synchronization loop
+    useEffect(() => {
+        const interval = setInterval(() => {
+            if (player) {
+                // Sync properties to reactive state
+                setIsPlaying(player.playing);
+                setPosition(player.currentTime * 1000);
+                setDuration(player.duration * 1000);
             }
-        }
-    };
+        }, 250); // Consistent with VideoSlide refresh rate
+        return () => clearInterval(interval);
+    }, [player]);
 
     const playTrack = async (item: MediaItem, list: MediaItem[]) => {
         try {
-            // If same track, just toggle or ensure playing
-            if (currentTrack?.id === item.id && soundRef.current) {
-                // Already loaded, just play
-                await soundRef.current.playAsync();
-                setIsPlaying(true);
+            console.log("AudioContext: Playing track", item.name, getFileUrl(item.id));
+            if (currentTrack?.id === item.id) {
+                player.play();
                 return;
-            }
-
-            // Unload play previous
-            if (soundRef.current) {
-                await soundRef.current.unloadAsync();
             }
 
             setCurrentTrack(item);
             setPlaylist(list);
             setCurrentIndex(list.findIndex(i => i.id === item.id));
 
-            const { sound, status } = await Audio.Sound.createAsync(
-                { uri: getFileUrl(item.id) },
-                { shouldPlay: true },
-                onPlaybackStatusUpdate
-            );
-
-            soundRef.current = sound;
-            setIsPlaying(true);
-            setIsMinimized(false); // Make sure we show full player initially or let UI decide
+            // Important: Replace and play
+            player.replace(getFileUrl(item.id));
+            player.play();
+            setIsMinimized(false);
         } catch (error) {
             console.error("Play Track Error:", error);
         }
     };
 
+    const playNext = async () => {
+        if (playlist.length === 0 || currentIndex === -1) return;
+        const nextIndex = (currentIndex + 1) % playlist.length;
+        await playTrack(playlist[nextIndex], playlist);
+    };
+
+    const playPrevious = async () => {
+        if (playlist.length === 0 || currentIndex === -1) return;
+        const prevIndex = (currentIndex - 1 + playlist.length) % playlist.length;
+        await playTrack(playlist[prevIndex], playlist);
+    };
+
     const togglePlayPause = async () => {
-        if (!soundRef.current) return;
-        if (isPlaying) {
-            await soundRef.current.pauseAsync();
+        if (player.playing) {
+            player.pause();
         } else {
-            await soundRef.current.playAsync();
+            player.play();
         }
     };
 
     const seekTo = async (millis: number) => {
-        if (soundRef.current) {
-            await soundRef.current.setPositionAsync(millis);
-            setPosition(millis);
-        }
+        player.seekTo(millis / 1000);
+        // Optimistic update for UI smoothness
+        setPosition(millis);
     };
 
     const closePlayer = async () => {
-        if (soundRef.current) {
-            await soundRef.current.stopAsync();
-            await soundRef.current.unloadAsync();
-            soundRef.current = null;
-        }
+        player.pause();
+        player.replace('');
         setCurrentTrack(null);
-        setIsPlaying(false);
-        setPosition(0);
-        setDuration(0);
         setIsMinimized(false);
     };
 
@@ -142,6 +129,8 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             playlist,
             currentIndex,
             playTrack,
+            playNext,
+            playPrevious,
             togglePlayPause,
             seekTo,
             closePlayer,

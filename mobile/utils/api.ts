@@ -1,12 +1,19 @@
 import { MediaItem } from '../types';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as SecureStore from 'expo-secure-store';
+import { getCachedFiles, saveMediaItems, updateFavoriteStatus, clearStaticCache } from './Database';
+export { clearStaticCache };
 
 // Default Remote Backend URL
 export let API_URL = '';
 let authToken: string | null = null;
 
-export const setBaseUrl = (url: string) => {
-    API_URL = url.replace(/\/$/, ''); // Remove trailing slash
+export const setBaseUrl = async (url: string, persist: boolean = true) => {
+    const cleanUrl = url.trim().replace(/\/$/, '');
+    API_URL = cleanUrl;
+    if (persist && cleanUrl) {
+        await AsyncStorage.setItem('lumina_api_url', cleanUrl);
+    }
 };
 
 export const setToken = (token: string | null) => {
@@ -17,7 +24,7 @@ export const setToken = (token: string | null) => {
 export const initApi = async () => {
     try {
         const storedUrl = await AsyncStorage.getItem('lumina_api_url');
-        const storedToken = await AsyncStorage.getItem('lumina_token');
+        const storedToken = await SecureStore.getItemAsync('lumina_token');
         const storedUsername = await AsyncStorage.getItem('lumina_username');
         if (storedUrl) API_URL = storedUrl;
         if (storedToken) authToken = storedToken;
@@ -68,7 +75,7 @@ export const login = async (username: string, password: string) => {
             const data = await res.json();
             if (data.token) {
                 authToken = data.token;
-                await AsyncStorage.setItem('lumina_token', data.token);
+                await SecureStore.setItemAsync('lumina_token', data.token);
                 await AsyncStorage.setItem('lumina_username', username);
                 return data;
             }
@@ -81,7 +88,7 @@ export const login = async (username: string, password: string) => {
 
 export const logout = async (isManual = false) => {
     authToken = null;
-    await AsyncStorage.removeItem('lumina_token');
+    await SecureStore.deleteItemAsync('lumina_token');
     await AsyncStorage.removeItem('lumina_username');
     if (logoutCallback && !isManual) {
         logoutCallback();
@@ -132,11 +139,23 @@ interface FetchFilesOptions {
     random?: boolean;
     mediaType?: string | string[];
     excludeMediaType?: string | string[];
+    refresh?: boolean; // New flag to force network
 }
 
 export const fetchFiles = async (options: FetchFilesOptions = {}) => {
     try {
-        const { folderPath, offset = 0, limit = 100, favorite, random, mediaType, excludeMediaType } = options;
+        const { folderPath, offset = 0, limit = 100, favorite, random, mediaType, excludeMediaType, refresh = false } = options;
+
+        // 1. Try Cache First (if not random and not forcing refresh)
+        if (!random && !refresh) {
+            const cached = await getCachedFiles({ folderPath, favorite, limit, offset });
+            // Only return from cache if it fills a whole page (to ensure infinite scroll works correctly)
+            if (cached.length === limit) {
+                return { files: cached, fromCache: true };
+            }
+        }
+
+        // 2. Fetch from Network
         let url = `${API_URL}/api/scan/results?offset=${offset}&limit=${limit}`;
 
         if (folderPath) url += `&folder=${encodeURIComponent(folderPath)}`;
@@ -161,7 +180,19 @@ export const fetchFiles = async (options: FetchFilesOptions = {}) => {
 
         const res = await authenticatedFetch(url);
         if (!res.ok) throw new Error(`API Error: ${res.status}`);
-        return await res.json();
+        const data = await res.json();
+
+        // 3. Save to Cache (if not random)
+        if (!random && data.files && data.files.length > 0) {
+            // Await to ensure DB is consistent before UI allows interaction (blocking delete race condition)
+            try {
+                await saveMediaItems(data.files, folderPath || 'root');
+            } catch (e) {
+                console.error("Cache save error", e);
+            }
+        }
+
+        return data;
     } catch (error) {
         console.error(error);
         return { files: [] };
@@ -183,19 +214,46 @@ export const getFileInfo = async (id: string) => {
     }
 }
 
-export const toggleFavorite = async (id: string, isFavorite: boolean) => {
+export const toggleFavorite = async (id: string, isFavorite: boolean, type: 'file' | 'folder' = 'file') => {
     try {
+        // Sync to local SQLite cache first (Optimistic) - Only for files currently
+        if (type === 'file') {
+            updateFavoriteStatus(id, isFavorite).catch(e => console.error("Local sync favorite error", e));
+        }
+
         const url = `${API_URL}/api/favorites/toggle`;
         const res = await authenticatedFetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ id, type: 'file' })
+            body: JSON.stringify({ id, type })
         });
         return await res.json();
     } catch (error) {
         console.error("Error toggling favorite:", error);
         return null;
     }
+};
+
+export const deleteFile = async (filePath: string) => {
+    const url = `${API_URL}/api/file/delete`;
+    const res = await authenticatedFetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filePath })
+    });
+    if (!res.ok) throw new Error('Failed to delete file');
+    return await res.json();
+};
+
+export const deleteFolder = async (path: string) => {
+    const url = `${API_URL}/api/folder/delete`;
+    const res = await authenticatedFetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path })
+    });
+    if (!res.ok) throw new Error('Failed to delete folder');
+    return await res.json();
 };
 
 export const fetchExif = async (id: string) => {

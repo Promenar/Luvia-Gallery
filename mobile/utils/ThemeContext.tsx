@@ -28,8 +28,12 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     useEffect(() => {
         AsyncStorage.getItem('app_theme').then(stored => {
             if (stored) {
-                setModeState(stored as ThemeMode);
-                setColorScheme(stored as ThemeMode);
+                const mode = stored as ThemeMode;
+                setModeState(mode);
+                setColorScheme(mode);
+            } else {
+                // Default to system
+                setColorScheme('system');
             }
         });
     }, []);
