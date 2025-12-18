@@ -3,7 +3,7 @@ import { View, Text, Modal, FlatList, Dimensions, StatusBar, TouchableOpacity, I
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { X, Music } from 'lucide-react-native';
 import { MediaItem } from '../types';
-import { getFileUrl, toggleFavorite, fetchExif } from '../utils/api';
+import { getFileUrl, toggleFavorite, fetchExif, getThumbnailUrl } from '../utils/api';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import Animated, { FadeIn, FadeOut, SlideInDown, SlideOutDown } from 'react-native-reanimated';
 import { IconButton } from 'react-native-paper';
@@ -24,11 +24,8 @@ interface MediaViewerProps {
 const { width, height } = Dimensions.get('window');
 
 // Video Component Wrapper
-const VideoSlide = ({ item, isActive, showControls, onToggleControls }: { item: MediaItem, isActive: boolean, showControls: boolean, onToggleControls: () => void }) => {
-    const url = getFileUrl(item.id);
-    const player = useVideoPlayer(url, player => {
-        player.loop = true;
-    });
+const VideoSlide = ({ item, isActive, player, showControls, onToggleControls }: { item: MediaItem, isActive: boolean, player: any, showControls: boolean, onToggleControls: () => void }) => {
+    const thumbUrl = getThumbnailUrl(item.id);
 
     const [isPlaying, setIsPlaying] = useState(true);
     const [currentTime, setCurrentTime] = useState(0);
@@ -74,13 +71,23 @@ const VideoSlide = ({ item, isActive, showControls, onToggleControls }: { item: 
 
     return (
         <View className="w-full h-full justify-center items-center bg-black">
+            {/* Placeholder remains while loading or inactive */}
+            <Image
+                source={{ uri: thumbUrl }}
+                className="absolute inset-0 w-full h-full opacity-50"
+                resizeMode="contain"
+                blurRadius={Platform.OS === 'ios' ? 0 : 10}
+            />
+
             <Pressable onPress={onToggleControls} className="w-full h-full">
-                <VideoView
-                    player={player}
-                    style={{ width: '100%', height: '100%' }}
-                    contentFit="contain"
-                    nativeControls={false}
-                />
+                {isActive && (
+                    <VideoView
+                        player={player}
+                        style={{ width: '100%', height: '100%' }}
+                        contentFit="contain"
+                        nativeControls={false}
+                    />
+                )}
             </Pressable>
 
             {/* Custom Video Controls Overlay */}
@@ -109,7 +116,9 @@ const VideoSlide = ({ item, isActive, showControls, onToggleControls }: { item: 
                                 maximumTrackTintColor="#374151"
                                 thumbTintColor="white"
                                 onSlidingComplete={(val) => {
-                                    player.currentTime = val / 1000;
+                                    if (player) {
+                                        player.currentTime = val / 1000;
+                                    }
                                 }}
                             />
                             <View className="flex-row justify-between pt-1">
@@ -272,12 +281,23 @@ const AudioSlide = ({ item, items, isActive, showControls, onToggleControls }: {
 
 // Image Component Wrapper
 const ImageSlide = ({ item }: { item: MediaItem }) => {
+    const [loaded, setLoaded] = useState(false);
     return (
         <View className="w-full h-full justify-center items-center bg-black">
+            {/* Low-res placeholder */}
+            {!loaded && (
+                <Image
+                    source={{ uri: getThumbnailUrl(item.id) }}
+                    className="absolute inset-0 w-full h-full opacity-50"
+                    resizeMode="contain"
+                    blurRadius={5}
+                />
+            )}
             <Image
                 source={{ uri: getFileUrl(item.id) }}
                 className="w-full h-full"
                 resizeMode="contain"
+                onLoad={() => setLoaded(true)}
             />
         </View>
     );
@@ -291,6 +311,14 @@ export const MediaViewer: React.FC<MediaViewerProps> = ({ items, initialIndex, o
     const [showControls, setShowControls] = useState(true);
     const [showInfo, setShowInfo] = useState(false);
     const [exif, setExif] = useState<any>(null);
+    const [networkSpeed, setNetworkSpeed] = useState<string>('--');
+    const [bitrate, setBitrate] = useState<string>('--');
+
+    // Single Player Architecture
+    const player = useVideoPlayer('', p => {
+        p.loop = true;
+        p.muted = false;
+    });
 
     const currentItem = items[currentIndex];
     const [isFavorite, setIsFavorite] = useState(currentItem.isFavorite || false);
@@ -299,6 +327,28 @@ export const MediaViewer: React.FC<MediaViewerProps> = ({ items, initialIndex, o
         if (items[currentIndex]) {
             const item = items[currentIndex];
             setIsFavorite(item.isFavorite || false);
+
+            if (item.mediaType === 'video') {
+                // Calculate Static Bitrate
+                const updateBitrate = () => {
+                    if (item.size && player.duration) {
+                        const kbps = Math.round((item.size * 8) / (player.duration * 1024));
+                        setBitrate(`${kbps} kbps`);
+                    } else if (item.size) {
+                        setBitrate('Calculating...');
+                    }
+                };
+
+                player.replaceAsync(getFileUrl(item.id)).then(() => {
+                    player.play();
+                    // Update again once loaded
+                    setTimeout(updateBitrate, 1000);
+                });
+                updateBitrate();
+            } else {
+                player.pause();
+                setBitrate('--');
+            }
 
             if (item.mediaType === 'image') {
                 setExif(null);
@@ -309,7 +359,38 @@ export const MediaViewer: React.FC<MediaViewerProps> = ({ items, initialIndex, o
                 setExif(null);
             }
         }
-    }, [currentIndex, items]);
+    }, [currentIndex, items, player]);
+
+    // Speed Detection Logic
+    useEffect(() => {
+        let isCancelled = false;
+        const measureSpeed = async () => {
+            try {
+                const startTime = Date.now();
+                // Fetch a small chunk (cached or head) to probe
+                const response = await fetch(getFileUrl(items[currentIndex].id), {
+                    headers: { 'Range': 'bytes=0-102400' } // 100KB probe
+                });
+                await response.blob();
+                const endTime = Date.now();
+                const duration = Math.max(endTime - startTime, 1);
+                const bps = (100 * 1024 * 8) / (duration / 1000); // bits per second
+                const mbps = (bps / 1000000).toFixed(2);
+                if (!isCancelled) setNetworkSpeed(`${mbps} Mbps`);
+            } catch (e) {
+                if (!isCancelled) setNetworkSpeed('Error');
+            }
+        };
+
+        if (showInfo) {
+            measureSpeed();
+            const interval = setInterval(measureSpeed, 5000);
+            return () => {
+                isCancelled = true;
+                clearInterval(interval);
+            };
+        }
+    }, [showInfo, currentIndex]);
 
     useEffect(() => {
         if (showControls && !showInfo) {
@@ -395,6 +476,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = ({ items, initialIndex, o
                                     <VideoSlide
                                         item={item}
                                         isActive={index === currentIndex}
+                                        player={player}
                                         showControls={showControls}
                                         onToggleControls={toggleControls}
                                     />
@@ -491,6 +573,17 @@ export const MediaViewer: React.FC<MediaViewerProps> = ({ items, initialIndex, o
                                 <View>
                                     <Text className="text-gray-400 text-xs uppercase tracking-wider">{t('label.path')}</Text>
                                     <Text className="text-gray-300 text-xs">{currentItem.path}</Text>
+                                </View>
+
+                                <View className="flex-row justify-between pt-2 border-t border-white/10 mt-2">
+                                    <View>
+                                        <Text className="text-gray-400 text-xs uppercase tracking-wider">{t('label.network_speed')}</Text>
+                                        <Text className="text-white text-sm">{networkSpeed}</Text>
+                                    </View>
+                                    <View>
+                                        <Text className="text-gray-400 text-xs uppercase tracking-wider">{t('label.video_bitrate')}</Text>
+                                        <Text className="text-white text-sm">{bitrate}</Text>
+                                    </View>
                                 </View>
 
                                 {exif && (
