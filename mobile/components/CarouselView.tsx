@@ -87,7 +87,6 @@ const CarouselItem = memo(({
                     style={{ width: '100%', height: '100%' }}
                     contentFit="cover"
                     blurRadius={10}
-                    transition={1000}
                 />
             </View>
 

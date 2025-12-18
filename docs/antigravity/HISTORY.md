@@ -8,6 +8,9 @@
 ### 核心架构与稳定性
 - **统一数据加载流**：`App.tsx` 中的数据加载已从分散的 `useEffect` 合并为统一的副作用管理（依据 `activeTab` 和 `currentPath`）。彻底解决了子文件夹进入不加载和切换标签不刷新的顽疾。
 - **SQLite 并发初始化防护**：`Database.ts` 引入 Promise 单例模式确保 `initDatabase` 在高并发启动时仅执行一次，根治了 Android 端的 `prepareAsync` 崩溃。
+- **SQLite 并发写入队列**：在 `Database.ts` 中引入全局 Promise 写入队列，强制分批存储任务顺序执行，彻底解决了“无法在事务中开启事务”的并发冲突。
+- **Glide (expo-image) 稳定性加固**：移除了轮播图背景的高风险原生 `transition`，并配合 `Reanimated` 透明度动画，实现了“视觉无损”的崩溃方案，根治了原生层的 `IllegalStateException`。
+- **导航零闪烁优化**：稳定了 `App.tsx` 中的组件挂载结构，实现了平滑的文件夹切换体验。
 - **首页性能优化**：实现“缓存优先”加载策略。先秒开本地缓存内容，再静默替换线上最新数据，解决首页闪白问题。
 
 ---

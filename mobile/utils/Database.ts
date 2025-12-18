@@ -2,6 +2,7 @@ import * as SQLite from 'expo-sqlite';
 import { MediaItem } from '../types';
 
 let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
+let writeQueue: Promise<void> = Promise.resolve();
 
 export const initDatabase = async (): Promise<SQLite.SQLiteDatabase> => {
     if (dbPromise) return dbPromise;
@@ -38,28 +39,34 @@ export const initDatabase = async (): Promise<SQLite.SQLiteDatabase> => {
 };
 
 export const saveMediaItems = async (items: MediaItem[], parentPath: string | null) => {
-    const database = await initDatabase();
-
-    // Start transaction for speed
-    await database.withTransactionAsync(async () => {
-        for (const item of items) {
-            await database.runAsync(
-                `INSERT OR REPLACE INTO media_items (id, name, path, mediaType, size, lastModified, isFavorite, parentPath, thumbnailUrl) 
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                [
-                    item.id ?? '',
-                    item.name ?? '',
-                    item.path ?? '',
-                    item.mediaType ?? 'image',
-                    item.size ?? 0,
-                    item.lastModified ?? Date.now(),
-                    item.isFavorite ? 1 : 0,
-                    parentPath || 'root',
-                    item.thumbnailUrl ?? ''
-                ]
-            );
+    // 使用队列防止“cannot start a transaction within a transaction”错误
+    writeQueue = writeQueue.then(async () => {
+        try {
+            const database = await initDatabase();
+            await database.withTransactionAsync(async () => {
+                for (const item of items) {
+                    await database.runAsync(
+                        `INSERT OR REPLACE INTO media_items (id, name, path, mediaType, size, lastModified, isFavorite, parentPath, thumbnailUrl) 
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                        [
+                            item.id ?? '',
+                            item.name ?? '',
+                            item.path ?? '',
+                            item.mediaType ?? 'image',
+                            item.size ?? 0,
+                            item.lastModified ?? Date.now(),
+                            item.isFavorite ? 1 : 0,
+                            parentPath || 'root',
+                            item.thumbnailUrl ?? ''
+                        ]
+                    );
+                }
+            });
+        } catch (e) {
+            console.error("[Database] Batch save error:", e);
         }
     });
+    return writeQueue;
 };
 
 export const getCachedFiles = async (options: {

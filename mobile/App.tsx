@@ -646,7 +646,6 @@ const MainScreen = () => {
               />
 
               <Animated.View
-                key={currentPath || 'root'}
                 entering={FadeIn.duration(150)}
                 style={{ flex: 1 }}
               >
