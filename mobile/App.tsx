@@ -24,7 +24,7 @@ import * as Haptics from 'expo-haptics';
 import { useLanguage, initLanguage } from './utils/i18n';
 import { AudioProvider, useAudio } from './utils/AudioContext';
 import { MiniPlayer } from './components/MiniPlayer';
-import { deleteFileFromCache, deleteFolderFromCache } from './utils/Database';
+import { deleteFileFromCache, deleteFolderFromCache, getCachedFiles } from './utils/Database';
 
 
 // Enable LayoutAnimation removed as it is now a no-op / handled by Reanimated
@@ -82,10 +82,14 @@ const MainScreen = () => {
   // Favorites
   const [favoriteFiles, setFavoriteFiles] = useState<MediaItem[]>([]);
   const [favoriteFolders, setFavoriteFolders] = useState<Folder[]>([]);
+  const [favoriteOffset, setFavoriteOffset] = useState(0);
+  const [hasMoreFavorites, setHasMoreFavorites] = useState(true);
 
   // Navigation State (Folders Tab)
   const [currentPath, setCurrentPath] = useState<string | null>(null);
   const [folderFiles, setFolderFiles] = useState<MediaItem[]>([]);
+  const [folderOffset, setFolderOffset] = useState(0);
+  const [hasMoreFolderFiles, setHasMoreFolderFiles] = useState(true);
   const [history, setHistory] = useState<string[]>([]);
 
   const [loading, setLoading] = useState(false);
@@ -101,16 +105,18 @@ const MainScreen = () => {
 
   // 计算动态布局参数
   const { numColumns, folderColumns, cardWidth, folderCardWidth, recentWidth } = React.useMemo(() => {
+    const padding = 24;
+    const gap = 8;
     // 媒体项目：目标宽度 ~110px
-    const cols = Math.max(3, Math.floor((windowWidth - 24) / 110));
+    const cols = Math.max(3, Math.floor((windowWidth - padding + gap) / (110 + gap)));
     // 文件夹项目：目标宽度 ~160px
-    const fCols = Math.max(2, Math.floor((windowWidth - 24) / 160));
+    const fCols = Math.max(2, Math.floor((windowWidth - padding + gap) / (160 + gap)));
 
     return {
       numColumns: cols,
       folderColumns: fCols,
-      cardWidth: `${Math.floor(100 / cols) - 1}%`,
-      folderCardWidth: `${Math.floor(100 / fCols) - 1}%`,
+      cardWidth: (windowWidth - padding - (cols - 1) * gap) / cols,
+      folderCardWidth: (windowWidth - padding - (fCols - 1) * gap) / fCols,
       recentWidth: windowWidth > 600 ? 180 : 150
     };
   }, [windowWidth]);
@@ -140,20 +146,21 @@ const MainScreen = () => {
   }, []);
 
   // Load Data when tab changes
+  // Unified Data Loading Effect
   useEffect(() => {
     if (!isLoggedIn) return;
 
-    if (activeTab === 'library' && libraryFiles.length === 0) loadLibraryData(0);
-    if (activeTab === 'folders' && folders.length === 0 && !currentPath) loadFolderData(null);
-    if (activeTab === 'favorites') loadFavoritesData();
-  }, [activeTab, isLoggedIn]);
-
-  // Load Folder Data when path changes
-  useEffect(() => {
-    if (isLoggedIn && activeTab === 'folders') {
-      loadFolderData(currentPath);
+    if (activeTab === 'home') {
+      if (recentMedia.length === 0) loadHomeData();
+    } else if (activeTab === 'library') {
+      if (libraryFiles.length === 0) loadLibraryData(0);
+    } else if (activeTab === 'folders') {
+      // For folders, we load on every path change or tab focus to ensure fresh view
+      loadFolderData(currentPath, 0);
+    } else if (activeTab === 'favorites') {
+      if (favoriteFiles.length === 0) loadFavoritesData(0);
     }
-  }, [currentPath, isLoggedIn]);
+  }, [activeTab, currentPath, isLoggedIn]);
 
   const handleApiError = (e: any) => {
     console.error(e);
@@ -175,11 +182,28 @@ const MainScreen = () => {
   };
 
   const loadHomeData = async (refresh = false) => {
+    // 1. 尝试立即获取本地缓存以快速显示
+    try {
+      if (!refresh) {
+        const cached = await getCachedFiles({ limit: 10 });
+        if (cached.length > 0) {
+          setRecentMedia(cached);
+        }
+      }
+    } catch (e) {
+      console.warn('Cache load ignored for home', e);
+    }
+
     setLoading(true);
     try {
-      const filesRes = await fetchFiles({ limit: 5, excludeMediaType: 'audio', refresh });
+      const filesRes = await fetchFiles({ limit: 10, excludeMediaType: 'audio', refresh });
       setRecentMedia(filesRes.files || []);
-    } catch (e) { handleApiError(e); } finally { setLoading(false); setRefreshing(false); }
+    } catch (e) {
+      handleApiError(e);
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
   };
 
   const loadLibraryData = async (offset: number, append = false, refresh = false) => {
@@ -187,7 +211,7 @@ const MainScreen = () => {
     else setLoadingMore(true);
 
     try {
-      const limit = 50;
+      const limit = 100; // Increased limit for smoother scrolling
       const filesRes = await fetchFiles({ offset, limit, excludeMediaType: 'audio', refresh });
       const newFiles = filesRes.files || [];
 
@@ -212,53 +236,103 @@ const MainScreen = () => {
     }
   };
 
-  const loadFavoritesData = async (refresh = false) => {
-    setLoading(true);
+  const loadFavoritesData = async (offset: number, append = false, refresh = false) => {
+    if (offset === 0 && !append) setLoading(true);
+    else setLoadingMore(true);
+
     try {
-      console.log('Loading favorites...');
-      // Fetch both files and folders for favorites
-      const [filesRes, foldersRes] = await Promise.all([
-        fetchFiles({ favorite: true, limit: 100, refresh }),
-        fetchFolders(undefined, true)
-      ]);
+      const limit = 50;
+      console.log('Loading favorites...', { offset, append });
 
-      const foldersData: Folder[] = (foldersRes.folders || []).map((f: any) => ({
-        name: f.name,
-        path: f.path,
-        mediaCount: f.mediaCount,
-        isFavorite: true
-      }));
+      const promises: any[] = [
+        fetchFiles({ favorite: true, offset, limit, refresh })
+      ];
 
-      // No longer forcing isFavorite=true manually, relying on server sending isFavorite=true
-      // But we can trust that if it's in this list, it IS a favorite.
-      // However, to be extra safe and for MediaViewer context:
-      const filesData = (filesRes.files || []).map((f: MediaItem) => ({ ...f, isFavorite: true }));
+      // Only fetch folders on first page
+      if (offset === 0) {
+        promises.push(fetchFolders(undefined, true));
+      } else {
+        promises.push(Promise.resolve(null));
+      }
 
-      setFavoriteFolders(foldersData);
-      setFavoriteFiles(filesData);
+      const [filesRes, foldersRes] = await Promise.all(promises);
+
+      if (foldersRes) {
+        const foldersData: Folder[] = (foldersRes.folders || []).map((f: any) => ({
+          name: f.name,
+          path: f.path,
+          mediaCount: f.mediaCount,
+          isFavorite: true
+        }));
+        setFavoriteFolders(foldersData);
+      }
+
+      const newFiles = (filesRes.files || []).map((f: MediaItem) => ({ ...f, isFavorite: true }));
+
+      if (newFiles.length < limit) setHasMoreFavorites(false);
+      else setHasMoreFavorites(true);
+
+      if (append) {
+        setFavoriteFiles(prev => {
+          const existingIds = new Set(prev.map(p => p.id));
+          const uniqueNew = newFiles.filter((i: MediaItem) => !existingIds.has(i.id));
+          return [...prev, ...uniqueNew];
+        });
+      } else {
+        setFavoriteFiles(newFiles);
+      }
+      setFavoriteOffset(offset);
     } catch (e) {
       console.error('Load Favorites Error:', e);
-      Alert.alert('Error', 'Failed to load favorites. Check console.');
       handleApiError(e);
-    } finally { setLoading(false); setRefreshing(false); }
+    } finally { setLoading(false); setLoadingMore(false); setRefreshing(false); }
   };
 
-  const loadFolderData = async (path: string | null, refresh = false) => {
-    setLoading(true);
+  const loadFolderData = async (path: string | null, offset: number, append = false, refresh = false) => {
+    if (offset === 0 && !append) setLoading(true);
+    else setLoadingMore(true);
+
     try {
+      const limit = 50;
       const queryPath = path === 'root' ? undefined : (path || undefined);
-      const [foldersRes, filesRes] = await Promise.all([
-        fetchFolders(queryPath),
-        queryPath ? fetchFiles({ folderPath: queryPath, refresh }) : Promise.resolve({ files: [] })
-      ]);
-      setFolders((foldersRes.folders || []).map((f: any) => ({
-        name: f.name,
-        path: f.path,
-        mediaCount: f.mediaCount,
-        isFavorite: f.isFavorite
-      })));
-      setFolderFiles(filesRes.files || []);
-    } catch (e) { handleApiError(e); } finally { setLoading(false); setRefreshing(false); }
+
+      const promises: any[] = [
+        queryPath ? fetchFiles({ folderPath: queryPath, offset, limit, refresh }) : Promise.resolve({ files: [] })
+      ];
+
+      // Only fetch subfolders on first page
+      if (offset === 0) {
+        promises.push(fetchFolders(queryPath));
+      } else {
+        promises.push(Promise.resolve(null));
+      }
+
+      const [filesRes, foldersRes] = await Promise.all(promises);
+
+      if (foldersRes) {
+        setFolders((foldersRes.folders || []).map((f: any) => ({
+          name: f.name,
+          path: f.path,
+          mediaCount: f.mediaCount,
+          isFavorite: f.isFavorite
+        })));
+      }
+
+      const newFiles = filesRes.files || [];
+      if (newFiles.length < limit) setHasMoreFolderFiles(false);
+      else setHasMoreFolderFiles(true);
+
+      if (append) {
+        setFolderFiles(prev => {
+          const existingIds = new Set(prev.map(p => p.id));
+          const uniqueNew = newFiles.filter((i: MediaItem) => !existingIds.has(i.id));
+          return [...prev, ...uniqueNew];
+        });
+      } else {
+        setFolderFiles(newFiles);
+      }
+      setFolderOffset(offset);
+    } catch (e) { handleApiError(e); } finally { setLoading(false); setLoadingMore(false); setRefreshing(false); }
   };
 
   const onRefresh = useCallback(() => {
@@ -266,8 +340,8 @@ const MainScreen = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     if (activeTab === 'home') loadHomeData(true);
     if (activeTab === 'library') loadLibraryData(0, false, true);
-    if (activeTab === 'favorites') loadFavoritesData(true);
-    if (activeTab === 'folders') loadFolderData(currentPath, true);
+    if (activeTab === 'favorites') loadFavoritesData(0, false, true);
+    if (activeTab === 'folders') loadFolderData(currentPath, 0, false, true);
   }, [activeTab, currentPath]);
 
   const handleFolderPress = (folder: Folder) => {
@@ -364,7 +438,7 @@ const MainScreen = () => {
     const onBackPress = () => {
       if (viewerContext) {
         setViewerContext(null);
-        if (activeTab === 'favorites') loadFavoritesData();
+        if (activeTab === 'favorites') loadFavoritesData(0);
         return true;
       }
       if (activeTab === 'folders' && currentPath) {
@@ -426,20 +500,30 @@ const MainScreen = () => {
 
                 {/* Horizontal List for Recent Media */}
                 <FlatList
-                  data={recentMedia}
+                  data={recentMedia.length > 0 ? recentMedia : [1, 2, 3, 4] as any}
                   horizontal
                   showsHorizontalScrollIndicator={false}
-                  keyExtractor={(item) => item.id}
+                  keyExtractor={(item) => typeof item === 'number' ? `skeleton-${item}` : item.id}
                   contentContainerStyle={{ paddingRight: 16, gap: 12 }}
-                  renderItem={({ item }) => (
-                    <View style={{ width: recentWidth, height: recentWidth * 1.4 }}>
-                      <MediaCard
-                        item={item}
-                        onPress={() => handleMediaPress(item, recentMedia)}
-                        onLongPress={handleManagePress}
-                      />
-                    </View>
-                  )}
+                  renderItem={({ item }) => {
+                    if (typeof item === 'number') {
+                      return (
+                        <View
+                          style={{ width: recentWidth, height: recentWidth * 1.4 }}
+                          className="bg-gray-200 dark:bg-zinc-800 rounded-2xl animate-pulse"
+                        />
+                      );
+                    }
+                    return (
+                      <View style={{ width: recentWidth, height: recentWidth * 1.4 }}>
+                        <MediaCard
+                          item={item}
+                          onPress={() => handleMediaPress(item, recentMedia)}
+                          onLongPress={handleManagePress}
+                        />
+                      </View>
+                    );
+                  }}
                 />
               </View>
             </ScrollView>
@@ -461,16 +545,16 @@ const MainScreen = () => {
                 refreshControl={<RefreshControl refreshing={refreshing || loading} onRefresh={onRefresh} />}
                 onEndReached={() => {
                   if (hasMoreLibrary && !loadingMore && !loading) {
-                    loadLibraryData(libraryOffset + 50, true);
+                    loadLibraryData(libraryOffset + 100, true);
                   }
                 }}
                 onEndReachedThreshold={0.5}
                 ListFooterComponent={loadingMore ? <ActivityIndicator className="py-4" color={isDark ? "#fff" : "#000"} /> : null}
                 renderItem={({ item }) => {
                   // @ts-ignore
-                  if (item.empty) return <View style={{ width: cardWidth as DimensionValue }} className="mb-2 bg-transparent" />;
+                  if (item.empty) return <View style={{ width: cardWidth }} className="mb-2 bg-transparent" />;
                   return (
-                    <View style={{ width: cardWidth as DimensionValue }} className="mb-2">
+                    <View style={{ width: cardWidth }} className="mb-2">
                       <MediaCard
                         item={item}
                         onPress={(i: MediaItem) => handleMediaPress(i, libraryFiles)}
@@ -496,13 +580,20 @@ const MainScreen = () => {
                 columnWrapperStyle={{ gap: 8 }}
                 contentContainerStyle={{ padding: 12, paddingBottom: 100 }}
                 refreshControl={<RefreshControl refreshing={refreshing || loading} onRefresh={onRefresh} />}
+                onEndReached={() => {
+                  if (hasMoreFavorites && !loadingMore && !loading) {
+                    loadFavoritesData(favoriteOffset + 50, true);
+                  }
+                }}
+                onEndReachedThreshold={0.5}
+                ListFooterComponent={loadingMore ? <ActivityIndicator className="py-4" color={isDark ? "#fff" : "#000"} /> : null}
                 ListHeaderComponent={
                   favoriteFolders.length > 0 ? (
                     <View className="mb-4">
                       <Text className="text-xs font-bold text-gray-400 mb-4 uppercase tracking-widest">{t('folder.directories')}</Text>
-                      <View className="flex-row flex-wrap gap-[2%]">
+                      <View className="flex-row flex-wrap" style={{ gap: 8 }}>
                         {favoriteFolders.map(folder => (
-                          <View key={folder.path} style={{ width: folderCardWidth as DimensionValue }} className="mb-4">
+                          <View key={folder.path} style={{ width: folderCardWidth }} className="mb-4">
                             <FolderCard
                               name={folder.name}
                               path={folder.path}
@@ -521,9 +612,9 @@ const MainScreen = () => {
                 }
                 renderItem={({ item }) => {
                   // @ts-ignore
-                  if (item.empty) return <View style={{ width: cardWidth as DimensionValue }} className="mb-2 bg-transparent" />;
+                  if (item.empty) return <View style={{ width: cardWidth }} className="mb-2 bg-transparent" />;
                   return (
-                    <View style={{ width: cardWidth as DimensionValue }} className="mb-2">
+                    <View style={{ width: cardWidth }} className="mb-2">
                       <MediaCard
                         item={item}
                         onPress={(i: MediaItem) => handleMediaPress(i, favoriteFiles)}
@@ -567,6 +658,13 @@ const MainScreen = () => {
                   columnWrapperStyle={{ gap: 8 }}
                   contentContainerStyle={{ padding: 12, paddingBottom: 100 }}
                   refreshControl={<RefreshControl refreshing={refreshing || loading} onRefresh={onRefresh} />}
+                  onEndReached={() => {
+                    if (hasMoreFolderFiles && !loadingMore && !loading) {
+                      loadFolderData(currentPath, folderOffset + 50, true);
+                    }
+                  }}
+                  onEndReachedThreshold={0.5}
+                  ListFooterComponent={loadingMore ? <ActivityIndicator className="py-4" color={isDark ? "#fff" : "#000"} /> : null}
                   ListHeaderComponent={
                     <View>
                       {/* BreadCrumb removed, handled by Header */}
@@ -574,9 +672,9 @@ const MainScreen = () => {
                       {folders.length > 0 && (
                         <View className="mb-4">
                           {!currentPath && <Text className="text-xs font-bold text-gray-400 mb-4 uppercase tracking-widest">{t('folder.directories')}</Text>}
-                          <View className="flex-row flex-wrap gap-[2%]">
+                          <View className="flex-row flex-wrap" style={{ gap: 8 }}>
                             {folders.map(folder => (
-                              <View key={folder.path} style={{ width: folderCardWidth as DimensionValue }} className="mb-4">
+                              <View key={folder.path} style={{ width: folderCardWidth }} className="mb-4">
                                 <FolderCard
                                   name={folder.name}
                                   path={folder.path}
@@ -598,9 +696,9 @@ const MainScreen = () => {
                   }
                   renderItem={({ item }) => {
                     // @ts-ignore
-                    if (item.empty) return <View style={{ width: cardWidth as DimensionValue }} className="mb-2 bg-transparent" />;
+                    if (item.empty) return <View style={{ width: cardWidth }} className="mb-2 bg-transparent" />;
                     return (
-                      <View style={{ width: cardWidth as DimensionValue }} className="mb-2">
+                      <View style={{ width: cardWidth }} className="mb-2">
                         <MediaCard
                           item={item}
                           onPress={(i: MediaItem) => handleMediaPress(i, folderFiles)}
