@@ -13,7 +13,16 @@ export const Carousel: React.FC<CarouselProps> = ({ data, onPress }) => {
     const ITEM_WIDTH = width * 0.8;
     const SPACING = 10;
 
-    if (!data.length) return null;
+    if (!data.length) {
+        return (
+            <View style={{ paddingHorizontal: SPACING, paddingVertical: 10 }}>
+                <View
+                    style={{ width: ITEM_WIDTH, marginLeft: SPACING }}
+                    className="h-48 rounded-2xl bg-gray-200 dark:bg-zinc-800 animate-pulse"
+                />
+            </View>
+        );
+    }
 
     return (
         <View>

@@ -111,7 +111,7 @@ const CarouselItem = memo(({
                         }}
                         style={{ width: '100%', height: '100%' }}
                         contentFit="cover"
-                        transition={500}
+                        cachePolicy="memory-disk"
                     />
                 )}
             </Animated.View>
@@ -327,7 +327,16 @@ export const CarouselView: React.FC<CarouselViewProps> = ({ isActive }) => {
         );
     };
 
-    if (displayItems.length === 0) return null;
+    if (displayItems.length === 0) {
+        return (
+            <View style={{ height: itemHeight, paddingHorizontal: 16 }}>
+                <View
+                    style={{ width: visualWidth, height: itemHeight }}
+                    className="bg-gray-200 dark:bg-zinc-800 rounded-3xl animate-pulse"
+                />
+            </View>
+        );
+    }
 
     return (
         <View style={{ height: itemHeight }}>
