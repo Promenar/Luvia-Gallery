@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, TouchableOpacity, FlatList, Modal, ActivityIndicator, BackHandler } from 'react-native';
+import { View, Text, TouchableOpacity, FlatList, Modal, ActivityIndicator, BackHandler, useWindowDimensions } from 'react-native';
 import { MediaItem } from '../types';
 import { fetchFolders, fetchFiles } from '../utils/api';
 import { FolderCard } from './FolderCard';
@@ -24,11 +24,17 @@ interface ItemPickerProps {
 
 export const ItemPicker: React.FC<ItemPickerProps> = ({ visible, mode, onSelect, onClose }) => {
     const insets = useSafeAreaInsets();
+    const { width } = useWindowDimensions();
     const { t } = useLanguage();
     const { isDark } = useTheme();
     const [items, setItems] = useState<any[]>([]);
     const [loading, setLoading] = useState(false);
     const [currentPath, setCurrentPath] = useState<string>('');
+
+    // 计算动态列数
+    const numColumns = mode === 'file'
+        ? Math.max(3, Math.floor(width / 110))
+        : Math.max(2, Math.floor(width / 160));
 
     useEffect(() => {
         if (visible) {
@@ -151,15 +157,15 @@ export const ItemPicker: React.FC<ItemPickerProps> = ({ visible, mode, onSelect,
                     </View>
                 ) : (
                     <FlatList
-                        key={mode} // Force re-render when mode changes
+                        key={`picker-${mode}-${numColumns}`} // 布局改变时重建列表
                         data={items}
                         keyExtractor={(item) => item.id || item.path}
-                        numColumns={mode === 'file' ? 3 : 2}
+                        numColumns={numColumns}
                         contentContainerStyle={{ padding: 12, gap: 12 }}
                         columnWrapperStyle={{ gap: 12 }}
                         renderItem={({ item }) => (
                             mode === 'folder' ? (
-                                <View style={{ flex: 0.5, maxWidth: '50%' }}>
+                                <View style={{ flex: 1 }}>
                                     <FolderCard
                                         name={item.name}
                                         path={item.path}
@@ -167,7 +173,7 @@ export const ItemPicker: React.FC<ItemPickerProps> = ({ visible, mode, onSelect,
                                     />
                                 </View>
                             ) : (
-                                <View className="flex-1 aspect-square" style={{ maxWidth: '32%' }}>
+                                <View className="flex-1 aspect-square">
                                     <MediaCard
                                         item={item}
                                         onPress={() => handlePress(item)}
