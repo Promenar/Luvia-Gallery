@@ -20,6 +20,8 @@ export const setToken = (token: string | null) => {
     authToken = token;
 };
 
+export const getToken = () => authToken;
+
 // Initialize URL & Token from storage (call this early in App.tsx)
 export const initApi = async () => {
     try {
@@ -102,8 +104,7 @@ export const getFileUrl = (id: string) => {
     return authToken ? `${url}?token=${authToken}` : url;
 };
 export const getThumbnailUrl = (id: string) => {
-    const url = `${API_URL}/api/thumb/${encodeURIComponent(id)}`;
-    return authToken ? `${url}?token=${authToken}` : url;
+    return `${API_URL}/api/thumb/${encodeURIComponent(id)}`;
 };
 
 export const fetchFolders = async (path?: string, favorite: boolean = false) => {
@@ -140,6 +141,7 @@ interface FetchFilesOptions {
     mediaType?: string | string[];
     excludeMediaType?: string | string[];
     refresh?: boolean; // New flag to force network
+    recursive?: boolean;
 }
 
 export const fetchFiles = async (options: FetchFilesOptions = {}) => {
@@ -161,6 +163,7 @@ export const fetchFiles = async (options: FetchFilesOptions = {}) => {
         if (folderPath) url += `&folder=${encodeURIComponent(folderPath)}`;
         if (favorite) url += `&favorites=true`;
         if (random) url += `&random=true`;
+        if (options.recursive) url += `&recursive=true`;
 
         if (mediaType) {
             if (Array.isArray(mediaType)) {

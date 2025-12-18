@@ -282,14 +282,19 @@ function queryFiles(options = {}) {
  * Count total files
  */
 function countFiles(options = {}) {
-    const { folderPath = null, mediaType = null } = options;
+    const { folderPath = null, mediaType = null, recursive = false } = options;
 
     let query = 'SELECT COUNT(*) as count FROM files WHERE 1=1';
     const params = [];
 
     if (folderPath !== null) {
-        query += ' AND folder_path = ?';
-        params.push(folderPath);
+        if (recursive) {
+            query += ' AND (folder_path = ? OR folder_path LIKE ?)';
+            params.push(folderPath, folderPath + '/%');
+        } else {
+            query += ' AND folder_path = ?';
+            params.push(folderPath);
+        }
     }
 
     if (mediaType) {
