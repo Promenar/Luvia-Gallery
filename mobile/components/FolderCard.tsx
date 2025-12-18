@@ -1,26 +1,35 @@
 import React from 'react';
-import { View, Text, TouchableOpacity, Dimensions } from 'react-native';
-import { Folder } from 'lucide-react-native';
+import { View, Text, Pressable, Dimensions } from 'react-native';
+import { Folder, Heart } from 'lucide-react-native';
 
 interface FolderCardProps {
     name: string;
+    path: string;
+    isFavorite?: boolean;
     onPress: () => void;
+    onLongPress?: () => void;
 }
 
-export const FolderCard: React.FC<FolderCardProps> = ({ name, onPress }) => {
+export const FolderCard: React.FC<FolderCardProps> = ({ name, path, isFavorite, onPress, onLongPress }) => {
     return (
-        <TouchableOpacity
+        <Pressable
             onPress={onPress}
-            activeOpacity={0.7}
+            onLongPress={onLongPress}
             className="w-full"
         >
-            <View className="bg-gray-50 dark:bg-zinc-900 p-4 rounded-2xl border border-gray-100/80 dark:border-zinc-800 shadow-sm aspect-[4/3] justify-between relative overflow-hidden group">
-                {/* Decorative background circle */}
-                <View className="absolute -right-4 -top-4 w-20 h-20 bg-blue-50/50 dark:bg-blue-900/20 rounded-full blur-xl" />
+            <View className="bg-white dark:bg-zinc-900 p-4 rounded-2xl border border-gray-100 dark:border-zinc-800 aspect-[4/3] justify-between relative overflow-hidden">
+                {/* Simplified decorative highlight instead of blur-xl */}
+                <View className="absolute -right-4 -top-4 w-24 h-24 bg-blue-100/30 dark:bg-blue-900/10 rounded-full" />
 
-                <View className="bg-white dark:bg-zinc-800 w-12 h-12 rounded-xl items-center justify-center shadow-sm border border-gray-50 dark:border-zinc-700">
+                <View className="bg-blue-50/50 dark:bg-zinc-800 w-12 h-12 rounded-xl items-center justify-center">
                     <Folder size={24} color="#3b82f6" fill="#bfdbfe" />
                 </View>
+
+                {isFavorite && (
+                    <View className="absolute top-3 right-3 bg-white/50 dark:bg-black/20 p-1.5 rounded-full">
+                        <Heart size={14} color="#ef4444" fill="#ef4444" />
+                    </View>
+                )}
 
                 <View>
                     <Text className="font-semibold text-gray-900 dark:text-gray-100 text-base leading-tight" numberOfLines={2}>
@@ -29,6 +38,6 @@ export const FolderCard: React.FC<FolderCardProps> = ({ name, onPress }) => {
                     <Text className="text-gray-400 dark:text-gray-500 text-xs mt-1">Folder</Text>
                 </View>
             </View>
-        </TouchableOpacity>
+        </Pressable>
     );
 };

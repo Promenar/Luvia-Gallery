@@ -1,6 +1,7 @@
 import React from 'react';
 import { View, Text, TouchableOpacity } from 'react-native';
 import { ArrowLeft } from 'lucide-react-native';
+import Animated, { FadeIn, FadeOut, LinearTransition } from 'react-native-reanimated';
 
 interface HeaderProps {
     title: string;
@@ -15,11 +16,20 @@ export const Header: React.FC<HeaderProps> = ({ title, subtitle, showBack, onBac
         <View className="px-6 pt-6 pb-4 bg-white dark:bg-black border-b border-gray-100 dark:border-gray-800 flex-row items-center justify-between">
             <View className="flex-row items-center flex-1">
                 {showBack && (
-                    <TouchableOpacity onPress={onBack} className="mr-4 p-1">
-                        <ArrowLeft color="#9ca3af" size={24} />
-                    </TouchableOpacity>
+                    <Animated.View
+                        entering={FadeIn.duration(150)}
+                        exiting={FadeOut.duration(150)}
+                        layout={LinearTransition.springify().damping(35).stiffness(350)}
+                    >
+                        <TouchableOpacity onPress={onBack} className="mr-4 p-1">
+                            <ArrowLeft color="#9ca3af" size={24} />
+                        </TouchableOpacity>
+                    </Animated.View>
                 )}
-                <View className="flex-1">
+                <Animated.View
+                    className="flex-1"
+                    layout={LinearTransition.springify().damping(35).stiffness(350)}
+                >
                     <Text className="text-3xl font-bold text-gray-900 dark:text-white tracking-tighter" numberOfLines={1}>
                         {title}
                     </Text>
@@ -28,7 +38,7 @@ export const Header: React.FC<HeaderProps> = ({ title, subtitle, showBack, onBac
                             {subtitle}
                         </Text>
                     )}
-                </View>
+                </Animated.View>
             </View>
             {rightAction && (
                 <View className="ml-4">
