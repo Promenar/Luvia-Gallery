@@ -1,7 +1,7 @@
 import "./global.css";
 import React, { useState, useEffect, useCallback } from 'react';
 import { StatusBar } from 'expo-status-bar';
-import { View, FlatList, ActivityIndicator, BackHandler, Text, TouchableOpacity, ScrollView, Platform, LayoutAnimation, UIManager, RefreshControl, Alert } from 'react-native';
+import { View, FlatList, ActivityIndicator, BackHandler, Text, TouchableOpacity, ScrollView, Platform, LayoutAnimation, UIManager, RefreshControl, Alert, useWindowDimensions, DimensionValue } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
 import { PaperProvider } from 'react-native-paper';
@@ -58,6 +58,7 @@ const formatGridData = (data: MediaItem[], numColumns: number) => {
 
 const MainScreen = () => {
   const insets = useSafeAreaInsets();
+  const { width: windowWidth } = useWindowDimensions();
   const { mode, isDark, paperTheme } = useTheme();
   const { t } = useLanguage();
   const { isMinimized, maximizePlayer, currentTrack, playlist, currentIndex } = useAudio();
@@ -97,6 +98,22 @@ const MainScreen = () => {
   // Management State
   const [managedItem, setManagedItem] = useState<MediaItem | { type: 'folder', name: string, path: string } | null>(null);
   const [isMenuVisible, setIsMenuVisible] = useState(false);
+
+  // 计算动态布局参数
+  const { numColumns, folderColumns, cardWidth, folderCardWidth, recentWidth } = React.useMemo(() => {
+    // 媒体项目：目标宽度 ~110px
+    const cols = Math.max(3, Math.floor((windowWidth - 24) / 110));
+    // 文件夹项目：目标宽度 ~160px
+    const fCols = Math.max(2, Math.floor((windowWidth - 24) / 160));
+
+    return {
+      numColumns: cols,
+      folderColumns: fCols,
+      cardWidth: `${Math.floor(100 / cols) - 1}%`,
+      folderCardWidth: `${Math.floor(100 / fCols) - 1}%`,
+      recentWidth: windowWidth > 600 ? 180 : 150
+    };
+  }, [windowWidth]);
 
   // Initial Load
   useEffect(() => {
@@ -415,7 +432,7 @@ const MainScreen = () => {
                   keyExtractor={(item) => item.id}
                   contentContainerStyle={{ paddingRight: 16, gap: 12 }}
                   renderItem={({ item }) => (
-                    <View style={{ width: 150, height: 210 }}>
+                    <View style={{ width: recentWidth, height: recentWidth * 1.4 }}>
                       <MediaCard
                         item={item}
                         onPress={() => handleMediaPress(item, recentMedia)}
@@ -435,10 +452,11 @@ const MainScreen = () => {
             <View className="flex-1">
               <Header title={t('header.library')} subtitle={t('header.library.sub')} />
               <FlatList
-                data={formatGridData(libraryFiles, 3)}
+                key={`lib-${numColumns}`}
+                data={formatGridData(libraryFiles, numColumns)}
                 keyExtractor={item => item.id}
-                numColumns={3}
-                columnWrapperStyle={{ justifyContent: 'space-between' }}
+                numColumns={numColumns}
+                columnWrapperStyle={{ gap: 8 }}
                 contentContainerStyle={{ padding: 12, paddingBottom: 100 }}
                 refreshControl={<RefreshControl refreshing={refreshing || loading} onRefresh={onRefresh} />}
                 onEndReached={() => {
@@ -450,9 +468,9 @@ const MainScreen = () => {
                 ListFooterComponent={loadingMore ? <ActivityIndicator className="py-4" color={isDark ? "#fff" : "#000"} /> : null}
                 renderItem={({ item }) => {
                   // @ts-ignore
-                  if (item.empty) return <View className="w-[32%] mb-2 bg-transparent" />;
+                  if (item.empty) return <View style={{ width: cardWidth as DimensionValue }} className="mb-2 bg-transparent" />;
                   return (
-                    <View className="w-[32%] mb-2">
+                    <View style={{ width: cardWidth as DimensionValue }} className="mb-2">
                       <MediaCard
                         item={item}
                         onPress={(i: MediaItem) => handleMediaPress(i, libraryFiles)}
@@ -471,19 +489,20 @@ const MainScreen = () => {
             <View className="flex-1">
               <Header title={t('header.favorites')} subtitle={t('header.favorites.sub')} />
               <FlatList
-                data={formatGridData(favoriteFiles, 3)}
+                key={`fav-${numColumns}`}
+                data={formatGridData(favoriteFiles, numColumns)}
                 keyExtractor={item => item.id}
-                numColumns={3}
-                columnWrapperStyle={{ justifyContent: 'space-between' }}
+                numColumns={numColumns}
+                columnWrapperStyle={{ gap: 8 }}
                 contentContainerStyle={{ padding: 12, paddingBottom: 100 }}
                 refreshControl={<RefreshControl refreshing={refreshing || loading} onRefresh={onRefresh} />}
                 ListHeaderComponent={
                   favoriteFolders.length > 0 ? (
                     <View className="mb-4">
                       <Text className="text-xs font-bold text-gray-400 mb-4 uppercase tracking-widest">{t('folder.directories')}</Text>
-                      <View className="flex-row flex-wrap justify-between">
+                      <View className="flex-row flex-wrap gap-[2%]">
                         {favoriteFolders.map(folder => (
-                          <View key={folder.path} className="w-[48%] mb-4">
+                          <View key={folder.path} style={{ width: folderCardWidth as DimensionValue }} className="mb-4">
                             <FolderCard
                               name={folder.name}
                               path={folder.path}
@@ -502,9 +521,9 @@ const MainScreen = () => {
                 }
                 renderItem={({ item }) => {
                   // @ts-ignore
-                  if (item.empty) return <View className="w-[32%] mb-2 bg-transparent" />;
+                  if (item.empty) return <View style={{ width: cardWidth as DimensionValue }} className="mb-2 bg-transparent" />;
                   return (
-                    <View className="w-[32%] mb-2">
+                    <View style={{ width: cardWidth as DimensionValue }} className="mb-2">
                       <MediaCard
                         item={item}
                         onPress={(i: MediaItem) => handleMediaPress(i, favoriteFiles)}
@@ -541,10 +560,11 @@ const MainScreen = () => {
                 style={{ flex: 1 }}
               >
                 <FlatList
-                  data={formatGridData(folderFiles, 3)}
+                  key={`folders-${currentPath}-${numColumns}`}
+                  data={formatGridData(folderFiles, numColumns)}
                   keyExtractor={item => item.id}
-                  numColumns={3}
-                  columnWrapperStyle={{ justifyContent: 'space-between' }}
+                  numColumns={numColumns}
+                  columnWrapperStyle={{ gap: 8 }}
                   contentContainerStyle={{ padding: 12, paddingBottom: 100 }}
                   refreshControl={<RefreshControl refreshing={refreshing || loading} onRefresh={onRefresh} />}
                   ListHeaderComponent={
@@ -554,9 +574,9 @@ const MainScreen = () => {
                       {folders.length > 0 && (
                         <View className="mb-4">
                           {!currentPath && <Text className="text-xs font-bold text-gray-400 mb-4 uppercase tracking-widest">{t('folder.directories')}</Text>}
-                          <View className="flex-row flex-wrap justify-between">
+                          <View className="flex-row flex-wrap gap-[2%]">
                             {folders.map(folder => (
-                              <View key={folder.path} className="w-[48%] mb-4">
+                              <View key={folder.path} style={{ width: folderCardWidth as DimensionValue }} className="mb-4">
                                 <FolderCard
                                   name={folder.name}
                                   path={folder.path}
@@ -578,9 +598,9 @@ const MainScreen = () => {
                   }
                   renderItem={({ item }) => {
                     // @ts-ignore
-                    if (item.empty) return <View className="w-[32%] mb-2 bg-transparent" />;
+                    if (item.empty) return <View style={{ width: cardWidth as DimensionValue }} className="mb-2 bg-transparent" />;
                     return (
-                      <View className="w-[32%] mb-2">
+                      <View style={{ width: cardWidth as DimensionValue }} className="mb-2">
                         <MediaCard
                           item={item}
                           onPress={(i: MediaItem) => handleMediaPress(i, folderFiles)}
