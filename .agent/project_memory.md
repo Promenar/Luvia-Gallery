@@ -6,6 +6,12 @@
 - **SQLite Concurrency**: `initDatabase` uses a singleton Promise pattern to prevent race conditions during early-stage multi-component initialization.
 - **Grid Layout**: Precision pixel-based calculations for standard 8px gaps.
     - **Standard sizes**: Media items ~110px, Folder items ~160px. Use `useWindowDimensions` for responsiveness.
+- **Elite UI & Interaction Standards** (Updated 2025-12-19):
+    - **Haptic Lock**: High-frequency updates (e.g., download progress) MUST use a `useRef` based lock to filtering vibrations. Only crucial state changes trigger haptics.
+    - **Portal First**: All global overlays (Toasts, Dialogs) MUST use `Portal` to bypass z-index stacking context completely.
+    - **Theme Namespace**: The global theme hook is strictly renamed to `useAppTheme` to avoid conflict with `react-native-paper`'s `useTheme`.
+    - **Zero-Blank Strategy**: Critical implementations like Home Carousel MUST implement a cache-first strategy (load Database -> Display -> Background Fetch -> Update).
+    - **Anti-Jitter**: Dynamic text (percentages) in notifications must be wrapped in fixed-width containers to preserve layout stability.
 
 ## Anti-Patterns to Avoid
 - **Implicit Undefined in SQL**: Never pass `undefined` to `expo-sqlite` Native calls; sanitize with `?? null`.
@@ -14,6 +20,7 @@
     - Fix `VirtualGallery` zero-height bugs by using `absolute inset-0` on container wrappers.
 - **Image Ghosting & Blur**: Never use `blur-xl` or high GPU-cost blurs in recurring list items (especially `FolderCard`); this causes "gray ghosting" during transitions.
 - **Authenticated Media**: Direct `<img>` or `<Image>` tags will fail if `?token=<jwt>` is not appended to the URL query parameters.
+- **Animation Overload**: Avoid bouncy/spring animations for system-level dialogs; prefer subtle Fade+Scale for a premium, non-distracting feel.
 
 ## Development Workflows
 - **Performance**: Heavy UI components (VirtualGallery, ImageViewer) must be loaded using `React.lazy`.
