@@ -18,7 +18,7 @@ import { CarouselView } from './components/CarouselView';
 import { ConfigProvider } from './utils/ConfigContext';
 import { BiometricGate } from './components/BiometricGate';
 import { MediaViewer } from './components/MediaViewer';
-import { ThemeProvider, useTheme } from './utils/ThemeContext';
+import { ThemeProvider, useAppTheme } from './utils/ThemeContext';
 import { Header } from './components/Header';
 import * as Haptics from 'expo-haptics';
 import { useLanguage, initLanguage } from './utils/i18n';
@@ -28,6 +28,7 @@ import { deleteFileFromCache, deleteFolderFromCache, getCachedFiles } from './ut
 import { useConfig } from './utils/ConfigContext';
 import { LayoutGrid, LayoutList } from 'lucide-react-native';
 import { MasonryGallery } from './components/MasonryGallery';
+import { ToastProvider, useToast } from './utils/ToastContext';
 
 
 // Enable LayoutAnimation removed as it is now a no-op / handled by Reanimated
@@ -62,10 +63,11 @@ const formatGridData = (data: MediaItem[], numColumns: number) => {
 const MainScreen = () => {
   const insets = useSafeAreaInsets();
   const { width: windowWidth } = useWindowDimensions();
-  const { mode, isDark, paperTheme } = useTheme();
+  const { mode, isDark, paperTheme } = useAppTheme();
   const { t } = useLanguage();
   const { isMinimized, maximizePlayer, currentTrack, playlist, currentIndex } = useAudio();
   const { galleryLayout, setGalleryLayout } = useConfig();
+  const { showToast } = useToast();
 
   // Auth State
   const [checkingAuth, setCheckingAuth] = useState(true);
@@ -141,10 +143,7 @@ const MainScreen = () => {
 
     // Register Auto-Logout Callback
     onLogout(() => {
-      Alert.alert(
-        t('msg.session_expired'),
-        t('msg.session_expired_desc')
-      );
+      showToast(t('msg.session_expired'), 'info');
       handleLogout();
     });
   }, []);
@@ -415,9 +414,10 @@ const MainScreen = () => {
 
               setIsMenuVisible(false);
               Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+              showToast(t('common.success'), 'success');
               onRefresh(); // Refresh UI
             } catch (e: any) {
-              Alert.alert('Error', e.message || 'Failed to delete');
+              showToast(e.message || 'Failed to delete', 'error');
             }
           }
         }
@@ -493,7 +493,7 @@ const MainScreen = () => {
     );
   }
 
-  const renderContent = () => {
+  const renderContent = (isParentActive: boolean) => {
     return (
       <Animated.View
         key={activeTab}
@@ -511,7 +511,7 @@ const MainScreen = () => {
               <View className="mb-6 pt-4">
                 {/* Hero Carousel - Full Width Implementation */}
                 <View>
-                  <CarouselView isActive={activeTab === 'home'} />
+                  <CarouselView isActive={activeTab === 'home' && isParentActive} />
                 </View>
               </View>
 
@@ -754,7 +754,7 @@ const MainScreen = () => {
                     <View>
                       {folders.length > 0 && (
                         <View className="mb-4">
-                          {!currentPath && <Text className="text-xs font-bold text-gray-400 mb-4 uppercase tracking-widest">{t('folder.directories')}</Text>}
+                          {/* Removed root-only Directories label to prevent layout jump */}
                           <View className="flex-row flex-wrap" style={{ gap: 8 }}>
                             {folders.map(folder => (
                               <View key={folder.path} style={{ width: folderCardWidth }} className="mb-4">
@@ -815,7 +815,7 @@ const MainScreen = () => {
                     <View>
                       {folders.length > 0 && (
                         <View className="mb-4">
-                          {!currentPath && <Text className="text-xs font-bold text-gray-400 mb-4 uppercase tracking-widest">{t('folder.directories')}</Text>}
+                          {/* Removed root-only Directories label to prevent layout jump */}
                           <View className="flex-row flex-wrap" style={{ gap: 8 }}>
                             {folders.map(folder => (
                               <View key={folder.path} style={{ width: folderCardWidth }} className="mb-4">
@@ -860,56 +860,12 @@ const MainScreen = () => {
   };
 
   return (
-    <View style={{ flex: 1, paddingTop: insets.top, backgroundColor: isDark ? '#000000' : '#ffffff' }} className="bg-white dark:bg-black">
+    <View style={{ flex: 1, backgroundColor: isDark ? '#000000' : '#ffffff' }} className="bg-white dark:bg-black">
       <StatusBar style={isDark ? "light" : "dark"} />
       <View className="flex-1 bg-white dark:bg-black relative">
         {/* Mobile Unified Loading: Handled by RefreshControl now. */}
-        {renderContent()}
+        {renderContent(!viewerContext)}
 
-        {/* MediaViewer Overlay */}
-        {viewerContext && (
-          <Animated.View
-            style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 1000 }}
-            entering={FadeIn.duration(100)}
-            exiting={FadeOut.duration(100)}
-          >
-            <MediaViewer
-              items={viewerContext.items}
-              initialIndex={viewerContext.index}
-              onClose={() => {
-                setViewerContext(null);
-              }}
-              onToggleFavorite={async (id, isFavorite) => {
-                // 1. Optimistic Update Local State
-                const updateItem = (item: MediaItem) => item.id === id ? { ...item, isFavorite } : item;
-
-                // Update Context Items (Crucial for Viewer persistence)
-                if (viewerContext) {
-                  setViewerContext(prev => prev ? { ...prev, items: prev.items.map(updateItem) } : null);
-                }
-
-                setRecentMedia(prev => prev.map(updateItem));
-                setLibraryFiles(prev => prev.map(updateItem));
-                setFavoriteFiles(prev => {
-                  if (isFavorite) {
-                    return prev.map(updateItem);
-                  } else {
-                    return prev.filter(i => i.id !== id);
-                  }
-                });
-                setFolderFiles(prev => prev.map(updateItem));
-
-                // 2. Call Backend
-                await toggleFavorite(id, isFavorite);
-
-                // 3. Refresh Favorites List if needed (lazy sync)
-                if (activeTab === 'favorites' && !isFavorite) {
-                  // Already filtered out above optimistically
-                }
-              }}
-            />
-          </Animated.View>
-        )}
         {activeTab !== 'settings' && !viewerContext && (
           <MiniPlayer onMaximize={() => {
             if (currentTrack && playlist.length > 0) {
@@ -920,7 +876,17 @@ const MainScreen = () => {
         )}
       </View>
 
-      <BottomTabs activeTab={activeTab} onTabChange={setActiveTab} />
+      <BottomTabs
+        activeTab={activeTab}
+        onTabChange={(tab) => {
+          if (tab === 'folders' && activeTab === 'folders' && currentPath) {
+            setCurrentPath(null);
+            setHistory([]);
+          } else {
+            setActiveTab(tab);
+          }
+        }}
+      />
 
       <ActionMenu
         visible={isMenuVisible}
@@ -929,6 +895,47 @@ const MainScreen = () => {
         onToggleFavorite={handleToggleFavoriteFromMenu}
         onDelete={handleDelete}
       />
+
+      {/* MediaViewer Overlay - Final Dominance */}
+      {viewerContext && (
+        <Animated.View
+          style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            zIndex: 5000,
+            elevation: 20,
+            backgroundColor: 'black'
+          }}
+          entering={FadeIn.duration(150)}
+          exiting={FadeOut.duration(150)}
+        >
+          <MediaViewer
+            items={viewerContext.items}
+            initialIndex={viewerContext.index}
+            onClose={() => setViewerContext(null)}
+            onToggleFavorite={async (id, isFavorite) => {
+              const updateItem = (item: MediaItem) => item.id === id ? { ...item, isFavorite } : item;
+              if (viewerContext) {
+                setViewerContext(prev => prev ? { ...prev, items: prev.items.map(updateItem) } : null);
+              }
+              setRecentMedia(prev => prev.map(updateItem));
+              setLibraryFiles(prev => prev.map(updateItem));
+              setFavoriteFiles(prev => {
+                if (isFavorite) {
+                  return prev.map(updateItem);
+                } else {
+                  return prev.filter(i => i.id !== id);
+                }
+              });
+              setFolderFiles(prev => prev.map(updateItem));
+              await toggleFavorite(id, isFavorite);
+            }}
+          />
+        </Animated.View>
+      )}
     </View>
   );
 }
@@ -938,16 +945,28 @@ export default function App() {
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
         <ThemeProvider>
-          <ConfigProvider>
-            <AudioProvider>
-              <BiometricGate>
-                <MainScreen />
-              </BiometricGate>
-            </AudioProvider>
-          </ConfigProvider>
+          <AppProviders />
         </ThemeProvider>
       </SafeAreaProvider>
     </GestureHandlerRootView>
   );
 }
+
+const AppProviders = () => {
+  const { paperTheme } = useAppTheme();
+
+  return (
+    <PaperProvider theme={paperTheme}>
+      <ToastProvider>
+        <ConfigProvider>
+          <AudioProvider>
+            <BiometricGate>
+              <MainScreen />
+            </BiometricGate>
+          </AudioProvider>
+        </ConfigProvider>
+      </ToastProvider>
+    </PaperProvider>
+  );
+};
 

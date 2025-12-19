@@ -2,6 +2,7 @@ import React from 'react';
 import { View, Text, TouchableOpacity } from 'react-native';
 import { ArrowLeft } from 'lucide-react-native';
 import Animated, { FadeIn, FadeOut, LinearTransition } from 'react-native-reanimated';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 interface HeaderProps {
     title: string;
@@ -12,8 +13,13 @@ interface HeaderProps {
 }
 
 export const Header: React.FC<HeaderProps> = ({ title, subtitle, showBack, onBack, rightAction }) => {
+    const insets = useSafeAreaInsets();
+
     return (
-        <View className="px-6 pt-6 pb-4 bg-white dark:bg-black border-b border-gray-100 dark:border-gray-800 flex-row items-center justify-between">
+        <View
+            style={{ paddingTop: insets.top + 6 }}
+            className="px-6 pb-4 bg-white dark:bg-black border-b border-gray-100 dark:border-gray-800 flex-row items-center justify-between"
+        >
             <View className="flex-row items-center flex-1">
                 {showBack && (
                     <Animated.View

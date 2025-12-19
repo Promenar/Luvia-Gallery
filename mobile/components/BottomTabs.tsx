@@ -2,7 +2,7 @@ import React from 'react';
 import { View, TouchableOpacity, Text } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Home, Image as ImageIcon, Folder, Heart, Settings } from 'lucide-react-native';
-import { useTheme } from '../utils/ThemeContext';
+import { useAppTheme } from '../utils/ThemeContext';
 import { useLanguage } from '../utils/i18n';
 import * as Haptics from 'expo-haptics';
 
@@ -17,7 +17,7 @@ export const BottomTabs = ({ activeTab, onTabChange }: BottomTabsProps) => {
     const insets = useSafeAreaInsets();
     const { t } = useLanguage();
 
-    const { isDark } = useTheme();
+    const { isDark } = useAppTheme();
 
     const getIcon = (tab: Tab, color: string) => {
         switch (tab) {

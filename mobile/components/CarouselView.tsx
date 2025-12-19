@@ -3,6 +3,7 @@ import { View, useWindowDimensions, FlatList, ViewToken, Text, NativeScrollEvent
 import { Image } from 'expo-image';
 import { useConfig } from '../utils/ConfigContext';
 import { fetchFiles, getFileUrl, getThumbnailUrl, getToken } from '../utils/api';
+import { getCachedFiles, saveMediaItems } from '../utils/Database';
 import { MediaItem } from '../types';
 import { useVideoPlayer, VideoView, VideoPlayer } from 'expo-video';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -165,10 +166,32 @@ export const CarouselView: React.FC<CarouselViewProps> = ({ isActive }) => {
             const commonOptions = { limit: 30, random: true, excludeMediaType: 'audio' };
 
             if (carouselConfig.sourceType === 'all') {
+                // 1. 先尝试加载本地缓存以快速显示
+                const cached = await getCachedFiles({ limit: 10 });
+                if (cached.length > 0) {
+                    const filteredCached = cached.filter((f: MediaItem) => f.mediaType !== 'audio');
+                    processData(filteredCached);
+                }
                 res = await fetchFiles(commonOptions);
+                // 2. 成功获取线上数据后保存至缓存
+                if (res.files && res.files.length > 0) {
+                    await saveMediaItems(res.files, 'root');
+                }
             } else if (carouselConfig.sourceType === 'folder' && carouselConfig.sourceValue) {
+                // 针对特定文件夹，也尝试读取缓存
+                const cached = await getCachedFiles({ folderPath: carouselConfig.sourceValue, limit: 10 });
+                if (cached.length > 0) {
+                    processData(cached);
+                }
                 res = await fetchFiles({ ...commonOptions, folderPath: carouselConfig.sourceValue, recursive: true });
+                if (res.files && res.files.length > 0) {
+                    await saveMediaItems(res.files, carouselConfig.sourceValue);
+                }
             } else if (carouselConfig.sourceType === 'favorites') {
+                const cached = await getCachedFiles({ favorite: true, limit: 10 });
+                if (cached.length > 0) {
+                    processData(cached);
+                }
                 res = await fetchFiles({ ...commonOptions, favorite: true });
             } else if (carouselConfig.sourceType === 'file' && carouselConfig.sourceValue) {
                 // Logic: Fetch files from the parent folder of the selected file
@@ -184,42 +207,36 @@ export const CarouselView: React.FC<CarouselViewProps> = ({ isActive }) => {
                 res = await fetchFiles(commonOptions);
             }
 
-            let filteredFiles = (res.files || []).filter((f: MediaItem) => f.mediaType !== 'audio');
+            const filteredFiles = (res.files || []).filter((f: MediaItem) => f.mediaType !== 'audio');
 
-            // If a specific file is selected, filter to ONLY that file
+            // If a specific file is selected, handle it (context logic previously there)
             if (carouselConfig.sourceType === 'file' && carouselConfig.sourceValue) {
-                // Determine target ID (we have it directly)
                 const targetID = carouselConfig.sourceValue;
-
                 const targetFile = filteredFiles.find((f: MediaItem) => f.id === targetID);
-
-                if (!targetFile) {
-                    console.warn('[Carousel] Target ID not found in results:', {
-                        targetID,
-                        // availableIDs: filteredFiles.map(f => f.id) // Reduced logging to avoid bloat
-                    });
-                } else {
-                    console.log('[Carousel] Found target file by ID:', targetFile.name);
-                }
-
-                filteredFiles = targetFile ? [targetFile] : [];
-            }
-
-            if (filteredFiles.length > 1) {
-                const lastItem = filteredFiles[filteredFiles.length - 1];
-                const firstItem = filteredFiles[0];
-                const extended = [lastItem, ...filteredFiles, firstItem];
-                setItems(filteredFiles);
-                setDisplayItems(extended);
-                setActiveIndex(1);
-                isInitialScrollDone.current = false;
+                processData(targetFile ? [targetFile] : []);
             } else {
-                setItems(filteredFiles);
-                setDisplayItems(filteredFiles);
-                setActiveIndex(0);
+                processData(filteredFiles);
             }
         } catch (e) {
             console.error(e);
+        }
+    };
+
+    const processData = (data: MediaItem[]) => {
+        if (!data || data.length === 0) return;
+
+        if (data.length > 1) {
+            const lastItem = data[data.length - 1];
+            const firstItem = data[0];
+            const extended = [lastItem, ...data, firstItem];
+            setItems(data);
+            setDisplayItems(extended);
+            // Only set activeIndex if not currently interacting or already set
+            setActiveIndex(prev => (prev === 0 ? 1 : prev));
+        } else {
+            setItems(data);
+            setDisplayItems(data);
+            setActiveIndex(0);
         }
     };
 

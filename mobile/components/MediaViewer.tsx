@@ -5,15 +5,29 @@ import { X, Music } from 'lucide-react-native';
 import { MediaItem } from '../types';
 import { getFileUrl, toggleFavorite, fetchExif, getThumbnailUrl } from '../utils/api';
 import { useVideoPlayer, VideoView } from 'expo-video';
-import Animated, { FadeIn, FadeOut, SlideInDown, SlideOutDown } from 'react-native-reanimated';
+import Animated, {
+    FadeIn,
+    FadeOut,
+    SlideInDown,
+    SlideOutDown,
+    useSharedValue,
+    useAnimatedStyle,
+    withSpring,
+    withTiming,
+    runOnJS
+} from 'react-native-reanimated';
 import { IconButton } from 'react-native-paper';
 import { useLanguage } from '../utils/i18n';
-import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
 import Slider from '@react-native-community/slider';
 import { Play, Pause, SkipBack, SkipForward, RotateCw } from 'lucide-react-native';
 import { BlurView } from 'expo-blur';
 import { useAudio } from '../utils/AudioContext';
 import * as ScreenOrientation from 'expo-screen-orientation';
+import { createDownloadResumable, cacheDirectory, deleteAsync } from 'expo-file-system/legacy';
+import * as MediaLibrary from 'expo-media-library';
+import * as Sharing from 'expo-sharing';
+import { useToast } from '../utils/ToastContext';
 
 interface MediaViewerProps {
     items: MediaItem[];
@@ -294,27 +308,136 @@ const AudioSlide = ({ item, items, isActive, showControls, onToggleControls }: {
     );
 };
 
-// Image Component Wrapper
-const ImageSlide = ({ item }: { item: MediaItem }) => {
+// Image Component Wrapper with Zoom Gestures
+const ImageSlide = ({
+    item,
+    onZoomChange,
+    onToggleControls,
+    width,
+    height
+}: {
+    item: MediaItem,
+    onZoomChange: (isZoomed: boolean) => void,
+    onToggleControls: () => void,
+    width: number,
+    height: number
+}) => {
     const [loaded, setLoaded] = useState(false);
+
+    // Animated values
+    const scale = useSharedValue(1);
+    const savedScale = useSharedValue(1);
+    const focalX = useSharedValue(0);
+    const focalY = useSharedValue(0);
+    const translateX = useSharedValue(0);
+    const translateY = useSharedValue(0);
+    const lastTranslateX = useSharedValue(0);
+    const lastTranslateY = useSharedValue(0);
+
+    const animatedStyle = useAnimatedStyle(() => ({
+        transform: [
+            { translateX: translateX.value },
+            { translateY: translateY.value },
+            { scale: scale.value },
+        ],
+    }));
+
+    // Simplified zoom state sync
+    const lastZoomed = useRef(false);
+    const syncZoomState = (zoomed: boolean) => {
+        if (lastZoomed.current !== zoomed) {
+            lastZoomed.current = zoomed;
+            onZoomChange(zoomed);
+        }
+    };
+
+    // Pinch Gesture
+    const pinchGesture = Gesture.Pinch()
+        .onStart(() => {
+            savedScale.value = scale.value;
+        })
+        .onUpdate((e) => {
+            scale.value = Math.max(1, Math.min(savedScale.value * e.scale, 5));
+            runOnJS(syncZoomState)(scale.value > 1.05);
+        })
+        .onEnd(() => {
+            if (scale.value < 1.1) {
+                scale.value = withSpring(1);
+                translateX.value = withSpring(0);
+                translateY.value = withSpring(0);
+                runOnJS(syncZoomState)(false);
+            }
+            savedScale.value = scale.value;
+        });
+
+    // Double Tap Gesture
+    const doubleTapGesture = Gesture.Tap()
+        .numberOfTaps(2)
+        .onEnd((e) => {
+            if (scale.value > 1.1) {
+                scale.value = withSpring(1);
+                translateX.value = withSpring(0);
+                translateY.value = withSpring(0);
+                runOnJS(syncZoomState)(false);
+            } else {
+                scale.value = withSpring(3);
+                // Center the zoomed area roughly
+                translateX.value = withSpring((width / 2 - e.x) * 2);
+                translateY.value = withSpring((height / 2 - e.y) * 2);
+                runOnJS(syncZoomState)(true);
+            }
+        });
+
+    // Single Tap Gesture (for toggling controls)
+    const singleTapGesture = Gesture.Tap()
+        .numberOfTaps(1)
+        .maxDeltaX(10) // Fail if finger moves too much (swipe)
+        .onEnd(() => {
+            runOnJS(onToggleControls)();
+        });
+
+    // Pan Gesture (only when zoomed)
+    const panGesture = Gesture.Pan()
+        .enabled(true) // Always enabled to allow checks
+        .onStart(() => {
+            lastTranslateX.value = translateX.value;
+            lastTranslateY.value = translateY.value;
+        })
+        .onUpdate((e) => {
+            if (scale.value > 1.05) {
+                translateX.value = lastTranslateX.value + e.translationX;
+                translateY.value = lastTranslateY.value + e.translationY;
+            }
+        })
+        .activeOffsetX([-20, 20]) // Start pan only after small movement
+        .averageTouches(true);
+
+    const composed = Gesture.Simultaneous(
+        pinchGesture,
+        panGesture,
+        Gesture.Exclusive(doubleTapGesture, singleTapGesture)
+    );
+
     return (
-        <View className="w-full h-full justify-center items-center bg-black">
-            {/* Low-res placeholder */}
-            {!loaded && (
-                <Image
-                    source={{ uri: getThumbnailUrl(item.id) }}
-                    className="absolute inset-0 w-full h-full opacity-50"
+        <GestureDetector gesture={composed}>
+            <View style={{ width, height }} className="justify-center items-center bg-black overflow-hidden">
+                {/* Low-res placeholder */}
+                {!loaded && (
+                    <Image
+                        source={{ uri: getThumbnailUrl(item.id) }}
+                        className="absolute inset-0 w-full h-full opacity-50"
+                        resizeMode="contain"
+                        blurRadius={5}
+                    />
+                )}
+                <Animated.Image
+                    source={{ uri: getFileUrl(item.id) }}
+                    style={[{ width, height }, animatedStyle]}
                     resizeMode="contain"
-                    blurRadius={5}
+                    onLoad={() => setLoaded(true)}
                 />
-            )}
-            <Image
-                source={{ uri: getFileUrl(item.id) }}
-                className="w-full h-full"
-                resizeMode="contain"
-                onLoad={() => setLoaded(true)}
-            />
-        </View>
+            </View>
+        </GestureDetector>
     );
 };
 
@@ -329,6 +452,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = ({ items, initialIndex, o
     const [exif, setExif] = useState<any>(null);
     const [networkSpeed, setNetworkSpeed] = useState<string>('--');
     const [bitrate, setBitrate] = useState<string>('--');
+    const [isZoomed, setIsZoomed] = useState(false);
     const flatListRef = useRef<FlatList>(null);
 
     // Sync scroll on width change (orientation change)
@@ -393,6 +517,10 @@ export const MediaViewer: React.FC<MediaViewerProps> = ({ items, initialIndex, o
 
                 player.replaceAsync(getFileUrl(item.id)).then(() => {
                     player.play();
+                    // Double check play state after a short delay
+                    setTimeout(() => {
+                        if (!player.playing) player.play();
+                    }, 100);
                     // Update again once loaded
                     timer = setTimeout(updateBitrate, 1000);
                 }).catch(e => console.error('Video load error:', e));
@@ -402,7 +530,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = ({ items, initialIndex, o
                 setBitrate('--');
             }
 
-            if (item.mediaType === 'image') {
+            if (item.mediaType === 'image' || item.mediaType === 'video') {
                 setExif(null);
                 fetchExif(item.id).then((data: any) => {
                     if (data) setExif(data);
@@ -459,6 +587,97 @@ export const MediaViewer: React.FC<MediaViewerProps> = ({ items, initialIndex, o
         if (showInfo) setShowInfo(false);
     };
 
+    const { showToast, hideToast } = useToast();
+    const [isDownloading, setIsDownloading] = useState(false);
+    const downloadResumableRef = useRef<any>(null);
+
+    const handleDownload = async () => {
+        if (isDownloading) return;
+
+        try {
+            // 1. Request Permission with extreme caution
+            try {
+                const { status } = await MediaLibrary.requestPermissionsAsync(true);
+                if (status !== 'granted') {
+                    // If denied but not crashed, we still try sharing as a fallback later 
+                    // or we can prompt here. For now, let's proceed to see if we can at least download.
+                    console.log('Permission not granted, will attempt sharing fallback if save fails');
+                }
+            } catch (permError) {
+                console.warn('Permission request crashed:', permError);
+                // If the request itself crashes (like the user is seeing), we just continue
+                // and let the save logic handle the fallback to Sharing.
+            }
+
+            setIsDownloading(true);
+
+            // 2. Prepare Download
+            const fileUrl = getFileUrl(currentItem.id);
+            const fileName = currentItem.name;
+            const fileUri = `${cacheDirectory}${fileName}`;
+
+            // 3. Download with Progress Support & Cancellation
+            downloadResumableRef.current = createDownloadResumable(
+                fileUrl,
+                fileUri,
+                {},
+                (downloadProgress) => {
+                    const progress = downloadProgress.totalBytesWritten / downloadProgress.totalBytesExpectedToWrite;
+                    showToast(t('common.downloading') || 'Downloading...', 'progress', progress * 100, async () => {
+                        if (downloadResumableRef.current) {
+                            try {
+                                await downloadResumableRef.current.cancelAsync();
+                            } catch (cancelErr) {
+                                console.log('Cancel ignored:', cancelErr);
+                            }
+                            setIsDownloading(false);
+                            hideToast();
+                        }
+                    });
+                }
+            );
+
+            const downloadRes = await downloadResumableRef.current.downloadAsync();
+
+            if (!downloadRes || downloadRes.status !== 200) {
+                throw new Error('Download failed');
+            }
+
+            // 4. Save to Media Library
+            try {
+                await MediaLibrary.createAssetAsync(downloadRes.uri);
+                hideToast(); // Remove progress toast
+                showToast(t('common.download_success') || 'Media saved to gallery', 'success');
+            } catch (saveError: any) {
+                console.warn('MediaLibrary save failed, falling back to sharing:', saveError);
+                hideToast();
+                const isSharingAvailable = await Sharing.isAvailableAsync();
+                if (isSharingAvailable) {
+                    await Sharing.shareAsync(downloadRes.uri);
+                } else {
+                    throw saveError;
+                }
+            }
+            // 5. Cleanup
+            await deleteAsync(downloadRes.uri, { idempotent: true });
+        } catch (e: any) {
+            // Silence if user cancelled - also catch generic "Download failed" from our throw
+            const errorMsg = e.message?.toLowerCase() || '';
+            const isCancelled = errorMsg.includes('cancel') || errorMsg.includes('cancelled') || errorMsg.includes('download failed');
+
+            if (!isCancelled) {
+                console.error('Download error:', e);
+                showToast(t('common.download_failed') || 'Failed to download media', 'error');
+            } else {
+                // If cancelled, reset state silently and ensure no residual toast
+                setIsDownloading(false);
+                hideToast();
+            }
+        } finally {
+            setIsDownloading(false);
+        }
+    };
+
     const handleFavorite = async () => {
         const newStatus = !isFavorite;
         setIsFavorite(newStatus);
@@ -487,7 +706,8 @@ export const MediaViewer: React.FC<MediaViewerProps> = ({ items, initialIndex, o
     };
 
     const pan = Gesture.Pan()
-        .activeOffsetY([-20, -20])
+        .activeOffsetY(30)
+        .failOffsetX([-50, 50])
         .onEnd((e) => {
             if (e.velocityY < -500) {
                 if (!showInfo) setShowInfo(true);
@@ -501,174 +721,210 @@ export const MediaViewer: React.FC<MediaViewerProps> = ({ items, initialIndex, o
     if (!currentItem) return null;
 
     return (
-        <Modal visible={true} animationType="fade" transparent={true} statusBarTranslucent={true} onRequestClose={onClose}>
-            <GestureDetector gesture={pan}>
-                <View className="flex-1 bg-black">
-                    <StatusBar
-                        hidden={!showControls}
-                        barStyle="light-content"
-                        backgroundColor="transparent"
-                        translucent={true}
-                    />
+        <Animated.View
+            entering={FadeIn.duration(300)}
+            exiting={FadeOut.duration(300)}
+            style={{
+                position: 'absolute',
+                top: 0, left: 0, right: 0, bottom: 0,
+                backgroundColor: 'black',
+                elevation: 20, // Android Physical Stacking
+            }}
+        >
+            <GestureHandlerRootView style={{ flex: 1 }}>
+                <GestureDetector gesture={pan}>
+                    <View className="flex-1 bg-black">
+                        <StatusBar
+                            barStyle="light-content"
+                            backgroundColor="transparent"
+                            translucent={true}
+                        />
 
-                    <FlatList
-                        ref={flatListRef}
-                        data={items}
-                        keyExtractor={item => item.id}
-                        horizontal
-                        pagingEnabled
-                        initialScrollIndex={initialIndex}
-                        getItemLayout={(_, index) => ({ length: width, offset: width * index, index })}
-                        showsHorizontalScrollIndicator={false}
-                        onMomentumScrollEnd={handleScroll}
-                        renderItem={({ item, index }) => (
-                            <TouchableOpacity
-                                activeOpacity={1}
-                                onPress={toggleControls}
-                                style={{ width, height }}
-                                disabled={item.mediaType === 'video' || item.mediaType === 'audio'}
-                            >
-                                {item.mediaType === 'video' ? (
-                                    <VideoSlide
-                                        item={item}
-                                        isActive={index === currentIndex}
-                                        player={player}
-                                        showControls={showControls}
-                                        onToggleControls={toggleControls}
-                                        onToggleOrientation={toggleOrientation}
-                                    />
-                                ) : item.mediaType === 'audio' ? (
-                                    <AudioSlide
-                                        item={item}
-                                        items={items}
-                                        isActive={index === currentIndex}
-                                        showControls={showControls}
-                                        onToggleControls={toggleControls}
-                                    />
-                                ) : (
-                                    <ImageSlide item={item} />
-                                )}
-                            </TouchableOpacity>
-                        )}
-                    />
-
-                    {showControls && (
-                        <Animated.View
-                            entering={FadeIn.duration(200)}
-                            exiting={FadeOut.duration(200)}
-                            className="absolute top-0 left-0 right-0 z-50 bg-black/60"
-                            style={{
-                                paddingTop: insets.top,
-                            }}
-                        >
-                            <View className="flex-row items-center justify-between px-4 py-2">
-                                <IconButton
-                                    icon="arrow-left"
-                                    iconColor="white"
-                                    size={28}
-                                    onPress={onClose}
-                                />
-
-                                <View className="flex-row">
-                                    {currentItem.mediaType === 'audio' && (
-                                        <IconButton
-                                            icon="chevron-down"
-                                            iconColor="white"
-                                            size={28}
-                                            onPress={() => {
-                                                minimizePlayer();
-                                                onClose();
-                                            }}
+                        <FlatList
+                            ref={flatListRef}
+                            data={items}
+                            keyExtractor={item => item.id}
+                            horizontal
+                            pagingEnabled
+                            scrollEnabled={!isZoomed}
+                            initialScrollIndex={initialIndex}
+                            getItemLayout={(_, index) => ({ length: width, offset: width * index, index })}
+                            showsHorizontalScrollIndicator={false}
+                            onMomentumScrollEnd={handleScroll}
+                            renderItem={({ item, index }) => (
+                                <View style={{ width, height }}>
+                                    {item.mediaType === 'video' ? (
+                                        <VideoSlide
+                                            item={item}
+                                            isActive={index === currentIndex}
+                                            player={player}
+                                            showControls={showControls}
+                                            onToggleControls={toggleControls}
+                                            onToggleOrientation={toggleOrientation}
+                                        />
+                                    ) : item.mediaType === 'audio' ? (
+                                        <AudioSlide
+                                            item={item}
+                                            items={items}
+                                            isActive={index === currentIndex}
+                                            showControls={showControls}
+                                            onToggleControls={toggleControls}
+                                        />
+                                    ) : (
+                                        <ImageSlide
+                                            item={item}
+                                            width={width}
+                                            height={height}
+                                            onZoomChange={setIsZoomed}
+                                            onToggleControls={toggleControls}
                                         />
                                     )}
+                                </View>
+                            )}
+                        />
+
+                        {showControls && (
+                            <Animated.View
+                                entering={FadeIn.duration(200)}
+                                exiting={FadeOut.duration(200)}
+                                className="absolute top-0 left-0 right-0 z-[100] bg-black/40"
+                                pointerEvents="box-none"
+                                style={{
+                                    paddingTop: insets.top,
+                                }}
+                            >
+                                <View className="flex-row items-center justify-between px-4 py-3" pointerEvents="box-none">
                                     <IconButton
-                                        icon={isFavorite ? "heart" : "heart-outline"}
-                                        iconColor={isFavorite ? "#ef4444" : "white"}
-                                        size={28}
-                                        onPress={handleFavorite}
-                                    />
-                                    <IconButton
-                                        icon="information-outline"
+                                        icon="arrow-left"
                                         iconColor="white"
                                         size={28}
-                                        onPress={() => setShowInfo(!showInfo)}
+                                        onPress={onClose}
+                                        style={{ backgroundColor: 'rgba(0,0,0,0.1)' }}
                                     />
-                                </View>
-                            </View>
-                        </Animated.View>
-                    )}
 
-                    {showInfo && (
-                        <Animated.View
-                            entering={SlideInDown.springify().damping(35).stiffness(350).mass(0.8)}
-                            exiting={SlideOutDown.duration(200)}
-                            className="absolute bottom-0 left-0 right-0 bg-black/90 p-6 rounded-t-3xl border-t border-white/10 z-30"
-                            style={{ paddingBottom: insets.bottom + 20 }}
-                        >
-                            <View className="flex-row justify-between items-center mb-4">
-                                <Text className="text-white text-lg font-bold">{t('section.details')}</Text>
-                                <TouchableOpacity onPress={() => setShowInfo(false)}>
-                                    <X color="gray" size={20} />
-                                </TouchableOpacity>
-                            </View>
-
-                            <View className="gap-3">
-                                <View>
-                                    <Text className="text-gray-400 text-xs uppercase tracking-wider">{t('label.file_name')}</Text>
-                                    <Text className="text-white text-sm font-medium">{currentItem.name}</Text>
-                                </View>
-                                <View className="flex-row justify-between">
-                                    <View>
-                                        <Text className="text-gray-400 text-xs uppercase tracking-wider">{t('label.date_modified')}</Text>
-                                        <Text className="text-white text-sm">{formatDate(currentItem.lastModified)}</Text>
-                                    </View>
-                                    <View>
-                                        <Text className="text-gray-400 text-xs uppercase tracking-wider">{t('label.size')}</Text>
-                                        <Text className="text-white text-sm">{formatSize(currentItem.size)}</Text>
-                                    </View>
-                                </View>
-                                <View>
-                                    <Text className="text-gray-400 text-xs uppercase tracking-wider">{t('label.path')}</Text>
-                                    <Text className="text-gray-300 text-xs">{currentItem.path}</Text>
-                                </View>
-
-                                <View className="flex-row justify-between pt-2 border-t border-white/10 mt-2">
-                                    <View>
-                                        <Text className="text-gray-400 text-xs uppercase tracking-wider">{t('label.network_speed')}</Text>
-                                        <Text className="text-white text-sm">{networkSpeed}</Text>
-                                    </View>
-                                    <View>
-                                        <Text className="text-gray-400 text-xs uppercase tracking-wider">{t('label.video_bitrate')}</Text>
-                                        <Text className="text-white text-sm">{bitrate}</Text>
+                                    <View className="flex-row gap-x-1" pointerEvents="box-none">
+                                        {currentItem.mediaType === 'audio' && (
+                                            <IconButton
+                                                icon="close-circle-outline"
+                                                iconColor="white"
+                                                size={28}
+                                                onPress={() => {
+                                                    minimizePlayer();
+                                                    onClose();
+                                                }}
+                                                style={{ backgroundColor: 'rgba(0,0,0,0.1)' }}
+                                            />
+                                        )}
+                                        <IconButton
+                                            icon={isFavorite ? "heart" : "heart-outline"}
+                                            iconColor={isFavorite ? "#ef4444" : "white"}
+                                            size={28}
+                                            onPress={handleFavorite}
+                                            style={{ backgroundColor: 'rgba(0,0,0,0.1)' }}
+                                        />
+                                        <IconButton
+                                            icon={isDownloading ? "sync" : "download-outline"}
+                                            iconColor="white"
+                                            size={28}
+                                            onPress={handleDownload}
+                                            disabled={isDownloading}
+                                            style={{ backgroundColor: 'rgba(0,0,0,0.1)' }}
+                                        />
+                                        <IconButton
+                                            icon="information-outline"
+                                            iconColor="white"
+                                            size={28}
+                                            onPress={() => setShowInfo(!showInfo)}
+                                            style={{ backgroundColor: 'rgba(0,0,0,0.1)' }}
+                                        />
                                     </View>
                                 </View>
+                            </Animated.View>
+                        )}
 
-                                {exif && (
-                                    <View className="flex-row justify-between pt-2 border-t border-white/10 mt-2">
-                                        <View>
-                                            <Text className="text-gray-400 text-xs uppercase tracking-wider">Camera</Text>
-                                            <Text className="text-white text-sm">{exif.Model || '--'}</Text>
+                        {showInfo && (
+                            <Animated.View
+                                key="info-panel"
+                                entering={SlideInDown.springify().damping(35).stiffness(350).mass(0.8)}
+                                exiting={SlideOutDown.duration(200)}
+                                className="absolute bottom-0 left-0 right-0 bg-black/90 p-6 rounded-t-3xl border-t border-white/10 z-30"
+                                style={{ paddingBottom: insets.bottom + 20, minHeight: 320 }}
+                            >
+                                <View className="flex-row justify-between items-center mb-4">
+                                    <Text className="text-white text-lg font-bold">{t('section.details')}</Text>
+                                    <TouchableOpacity onPress={() => setShowInfo(false)}>
+                                        <X color="gray" size={20} />
+                                    </TouchableOpacity>
+                                </View>
+
+                                <View className="gap-3">
+                                    <View className="h-10">
+                                        <Text className="text-gray-400 text-xs uppercase tracking-wider">{t('label.file_name')}</Text>
+                                        <Text className="text-white text-sm font-medium" numberOfLines={1}>{currentItem.name}</Text>
+                                    </View>
+                                    <View className="flex-row justify-between h-10">
+                                        <View className="flex-1">
+                                            <Text className="text-gray-400 text-xs uppercase tracking-wider">{t('label.date_modified')}</Text>
+                                            <Text className="text-white text-sm" numberOfLines={1}>{formatDate(currentItem.lastModified)}</Text>
                                         </View>
-                                        <View>
-                                            <Text className="text-gray-400 text-xs uppercase tracking-wider">ISO</Text>
-                                            <Text className="text-white text-sm">{exif.ISO || '--'}</Text>
-                                        </View>
-                                        <View>
-                                            <Text className="text-gray-400 text-xs uppercase tracking-wider">Aperture</Text>
-                                            <Text className="text-white text-sm">f/{exif.FNumber || '--'}</Text>
+                                        <View className="flex-1 items-end">
+                                            <Text className="text-gray-400 text-xs uppercase tracking-wider">{t('label.size')}</Text>
+                                            <Text className="text-white text-sm" numberOfLines={1}>{formatSize(currentItem.size)}</Text>
                                         </View>
                                     </View>
-                                )}
-                                {!exif && (
-                                    <View className="pt-2 border-t border-white/10 mt-2">
-                                        <Text className="text-gray-500 text-xs italic">No EXIF data available</Text>
+                                    <View className="h-10">
+                                        <Text className="text-gray-400 text-xs uppercase tracking-wider">{t('label.resolution')}</Text>
+                                        <Text className="text-white text-sm" numberOfLines={1}>
+                                            {(currentItem.mediaType === 'image' || currentItem.mediaType === 'video') && exif ?
+                                                `${exif.ExifImageWidth || exif.width || '--'} × ${exif.ExifImageHeight || exif.height || '--'}` :
+                                                currentItem.mediaType === 'video' && !exif ?
+                                                    "Detecting..." :
+                                                    "--"
+                                            }
+                                        </Text>
                                     </View>
-                                )}
-                            </View>
-                        </Animated.View>
-                    )}
-                </View>
-            </GestureDetector>
-        </Modal>
+                                    <View>
+                                        <Text className="text-gray-400 text-xs uppercase tracking-wider">{t('label.path')}</Text>
+                                        <Text className="text-gray-300 text-xs">{currentItem.path}</Text>
+                                    </View>
+
+                                    <View className="flex-row justify-between pt-2 border-t border-white/10 mt-2 h-12">
+                                        <View className="flex-1">
+                                            <Text className="text-gray-400 text-xs uppercase tracking-wider">{t('label.network_speed')}</Text>
+                                            <Text className="text-white text-sm" numberOfLines={1}>{networkSpeed}</Text>
+                                        </View>
+                                        <View className="flex-1 items-end">
+                                            <Text className="text-gray-400 text-xs uppercase tracking-wider">{t('label.video_bitrate')}</Text>
+                                            <Text className="text-white text-sm" numberOfLines={1}>{bitrate}</Text>
+                                        </View>
+                                    </View>
+
+                                    {exif ? (
+                                        <View className="flex-row justify-between pt-2 border-t border-white/10 mt-2 h-12">
+                                            <View className="flex-1">
+                                                <Text className="text-gray-400 text-xs uppercase tracking-wider">{t('label.camera')}</Text>
+                                                <Text className="text-white text-sm" numberOfLines={1}>{exif.Model || '--'}</Text>
+                                            </View>
+                                            <View className="flex-1 items-center">
+                                                <Text className="text-gray-400 text-xs uppercase tracking-wider">{t('label.iso')}</Text>
+                                                <Text className="text-white text-sm" numberOfLines={1}>{exif.ISO || '--'}</Text>
+                                            </View>
+                                            <View className="flex-1 items-end">
+                                                <Text className="text-gray-400 text-xs uppercase tracking-wider">{t('label.aperture')}</Text>
+                                                <Text className="text-white text-sm" numberOfLines={1}>f/{exif.FNumber || '--'}</Text>
+                                            </View>
+                                        </View>
+                                    ) : (
+                                        <View className="pt-2 border-t border-white/10 mt-2 h-12 justify-center">
+                                            <Text className="text-gray-500 text-xs italic">{t('label.no_exif')}</Text>
+                                        </View>
+                                    )}
+                                </View>
+                            </Animated.View>
+                        )}
+                    </View>
+                </GestureDetector>
+            </GestureHandlerRootView>
+        </Animated.View>
     );
 };

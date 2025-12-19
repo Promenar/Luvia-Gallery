@@ -19,7 +19,8 @@ const ThemeContext = createContext<ThemeContextType>({
     paperTheme: MD3LightTheme,
 });
 
-export const useTheme = () => useContext(ThemeContext);
+export const useAppTheme = () => useContext(ThemeContext);
+export const useTheme = useAppTheme; // Alias for compatibility
 
 export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     const { colorScheme, setColorScheme } = useColorScheme();
