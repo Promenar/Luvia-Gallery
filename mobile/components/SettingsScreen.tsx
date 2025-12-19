@@ -3,15 +3,20 @@ import { View, Text, TextInput, TouchableOpacity, ScrollView, Alert, ActivityInd
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { API_URL, setBaseUrl } from '../utils/api';
+import { useToast } from '../utils/ToastContext';
 import { ArrowLeft, Save, Trash2, Activity, Server, Database, User, Moon, Globe, HardDrive, Lock } from 'lucide-react-native';
 import * as Haptics from 'expo-haptics';
 import { Image } from 'react-native';
 import { Header } from './Header';
 import { useLanguage } from '../utils/i18n';
-import { useTheme } from '../utils/ThemeContext';
+import { useAppTheme } from '../utils/ThemeContext';
 import { useConfig } from '../utils/ConfigContext';
+
 import { ItemPicker } from './ItemPicker';
 import { Layout, Images, PlayCircle } from 'lucide-react-native';
+import { Portal } from 'react-native-paper';
+import { BlurView } from 'expo-blur';
+import Animated, { FadeIn, FadeOut, ZoomIn, ZoomOut } from 'react-native-reanimated';
 
 interface SettingsScreenProps {
     onBack?: () => void;
@@ -32,14 +37,16 @@ interface SystemStatus {
 }
 
 export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBack, onLogout, username }) => {
+    const { showToast } = useToast();
     const insets = useSafeAreaInsets();
     const { t, language, setLanguage } = useLanguage();
-    const { mode, setMode } = useTheme();
+    const { mode, setMode, isDark } = useAppTheme();
     const { carouselConfig, setCarouselConfig, biometricsEnabled, setBiometricsEnabled } = useConfig();
     const [url, setUrl] = useState(API_URL);
     const [stats, setStats] = useState<SystemStatus | null>(null);
     const [loadingStats, setLoadingStats] = useState(false);
     const [isPickerOpen, setIsPickerOpen] = useState<{ visible: boolean, mode: 'folder' | 'file' }>({ visible: false, mode: 'folder' });
+    const [showCacheDialog, setShowCacheDialog] = useState(false);
 
     useEffect(() => {
         loadStats();
@@ -63,38 +70,31 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBack, onLogout
     const handleSave = async () => {
         await setBaseUrl(url, true);
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-        Alert.alert('Saved', 'Server URL has been updated. Please restart the app for full effect.');
+        showToast(t('common.success') || 'Saved', 'success');
         if (onBack) onBack();
     };
 
     const handleClearAppCache = async () => {
-        Alert.alert(
-            "Clear App Cache",
-            "This will remove local data and thumbnails. You will need to reload data from the server. Continue?",
-            [
-                { text: "Cancel", style: "cancel" },
-                {
-                    text: "Clear",
-                    style: "destructive",
-                    onPress: async () => {
-                        try {
-                            // Clear stored cache keys
-                            await AsyncStorage.removeItem('lumina_cache_home');
-                            // Clear SQLite Cache
-                            const { clearStaticCache } = await import('../utils/api');
-                            await clearStaticCache();
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+        setShowCacheDialog(true);
+    };
 
-                            // We don't remove URL, just data
-                            Alert.alert("Success", t('msg.cache_cleared') || "Local cache cleared.");
-                            // Attempt to reload stats
-                            loadStats();
-                        } catch (e) {
-                            Alert.alert("Error", "Failed to clear cache.");
-                        }
-                    }
-                }
-            ]
-        );
+    const confirmClearCache = async () => {
+        try {
+            setShowCacheDialog(false);
+            // Clear stored cache keys
+            await AsyncStorage.removeItem('lumina_cache_home');
+            // Clear SQLite Cache
+            const { clearStaticCache } = await import('../utils/api');
+            await clearStaticCache();
+
+            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+            showToast(t('msg.cache_cleared') || "Local cache cleared.", 'success');
+            // Attempt to reload stats
+            loadStats();
+        } catch (e) {
+            showToast("Failed to clear cache.", 'error');
+        }
     };
 
     const formatBytes = (bytes: number) => {
@@ -354,10 +354,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBack, onLogout
                             {t('msg.cache_desc')}
                         </Text>
                         <TouchableOpacity
-                            onPress={() => {
-                                Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-                                handleClearAppCache();
-                            }}
+                            onPress={handleClearAppCache}
                             className="bg-white dark:bg-zinc-800 border border-red-200 dark:border-red-900 flex-row items-center justify-center py-3 rounded-lg active:bg-red-50 dark:active:bg-red-900/10"
                         >
                             <Trash2 color="#ef4444" size={18} className="mr-2" />
@@ -388,7 +385,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBack, onLogout
                             onPress={handleSave}
                             className="bg-black dark:bg-white flex-row items-center justify-center py-3 rounded-lg active:opacity-80 disabled:opacity-50"
                         >
-                            <Save color={useTheme().mode === 'dark' ? 'black' : 'white'} size={18} className="mr-2" />
+                            <Save color={useAppTheme().mode === 'dark' ? 'black' : 'white'} size={18} className="mr-2" />
                             <Text className="text-white dark:text-black font-bold">{t('action.save')}</Text>
                         </TouchableOpacity>
                     </View>
@@ -438,6 +435,70 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBack, onLogout
                     setIsPickerOpen({ ...isPickerOpen, visible: false });
                 }}
             />
+
+            {/* Premium Cache Dialog */}
+            {showCacheDialog && (
+                <Portal>
+                    <View className="absolute inset-0 items-center justify-center z-50">
+                        {/* Backdrop */}
+                        <Animated.View
+                            entering={FadeIn.duration(150)}
+                            exiting={FadeOut.duration(150)}
+                            className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+                        >
+                            <TouchableOpacity
+                                style={{ flex: 1 }}
+                                activeOpacity={1}
+                                onPress={() => setShowCacheDialog(false)}
+                            />
+                        </Animated.View>
+
+                        {/* Dialog Content - High-end "Cold" Animation: No bounce, just swift fade & subtle scale */}
+                        <Animated.View
+                            entering={FadeIn.duration(200).withInitialValues({ transform: [{ scale: 0.95 }] })}
+                            exiting={FadeOut.duration(150)}
+                            className="w-[85%] max-w-sm overflow-hidden rounded-3xl"
+                            style={{
+                                elevation: 20,
+                                shadowColor: '#000',
+                                shadowOpacity: 0.3,
+                                shadowRadius: 20,
+                                shadowOffset: { width: 0, height: 10 }
+                            }}
+                        >
+                            <BlurView intensity={100} tint={isDark ? 'dark' : 'light'} className="p-6 items-center">
+                                <View className="w-12 h-12 rounded-full bg-red-100 dark:bg-red-900/30 items-center justify-center mb-4">
+                                    <Trash2 size={24} color="#ef4444" />
+                                </View>
+
+                                <Text className="text-xl font-bold text-gray-900 dark:text-white mb-2 text-center">
+                                    {t('label.clear_cache')}
+                                </Text>
+
+                                <Text className="text-gray-600 dark:text-gray-300 text-center mb-6 leading-5">
+                                    {t('msg.cache_confirm')}
+                                </Text>
+
+                                <View className="flex-row gap-3 w-full">
+                                    <TouchableOpacity
+                                        onPress={() => setShowCacheDialog(false)}
+                                        className="flex-1 py-3 bg-gray-100 dark:bg-zinc-800 rounded-xl items-center active:bg-gray-200 dark:active:bg-zinc-700"
+                                    >
+                                        <Text className="font-bold text-gray-700 dark:text-gray-300">{t('dialog.cancel')}</Text>
+                                    </TouchableOpacity>
+
+                                    <TouchableOpacity
+                                        onPress={confirmClearCache}
+                                        className="flex-1 py-3 bg-red-500 rounded-xl items-center active:bg-red-600"
+                                    >
+                                        <Text className="font-bold text-white">{t('dialog.confirm')}</Text>
+                                    </TouchableOpacity>
+                                </View>
+                            </BlurView>
+                        </Animated.View>
+                    </View>
+                </Portal>
+            )}
         </View>
     );
 };

@@ -4,19 +4,20 @@ import Animated, { FadeInUp, Layout } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { login, setBaseUrl, API_URL } from '../utils/api';
 import { LogIn, Server, Moon, Sun, Globe } from 'lucide-react-native';
-import { useTheme } from '../utils/ThemeContext';
+import { useAppTheme } from '../utils/ThemeContext';
 import { useLanguage } from '../utils/i18n';
+import { useToast } from '../utils/ToastContext';
 
 interface LoginScreenProps {
     onLoginSuccess: () => void;
 }
 
 export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
+    const { showToast } = useToast();
     const insets = useSafeAreaInsets();
     const scrollViewRef = useRef<ScrollView>(null);
-    const { mode, setMode } = useTheme();
+    const { mode, setMode, isDark } = useAppTheme();
     const { language, setLanguage, t } = useLanguage();
-    const isDark = mode === 'dark';
 
     const [username, setUsername] = useState('');
     const [password, setPassword] = useState('');
@@ -30,7 +31,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
 
     const handleLogin = async () => {
         if (!username || !password) {
-            Alert.alert('Error', t('login.error_missing'));
+            showToast(t('login.error_missing'), 'error');
             return;
         }
 
@@ -42,7 +43,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
             await login(username, password);
             onLoginSuccess();
         } catch (e: any) {
-            Alert.alert('Login Failed', e.message || t('login.error_failed'));
+            showToast(e.message || t('login.error_failed'), 'error');
         } finally {
             setLoading(false);
         }

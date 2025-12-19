@@ -18,6 +18,7 @@ interface ConfigContextType {
     resetConfig: () => Promise<void>;
     galleryLayout: 'grid' | 'masonry';
     setGalleryLayout: (layout: 'grid' | 'masonry') => Promise<void>;
+    isConfigLoaded: boolean;
 }
 
 const ConfigContext = createContext<ConfigContextType | null>(null);
@@ -38,6 +39,7 @@ export const ConfigProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const [carouselConfig, setConfigState] = useState<CarouselConfig>(DEFAULT_CONFIG);
     const [biometricsEnabled, setBiometricsEnabledState] = useState(false);
     const [galleryLayout, setGalleryLayoutState] = useState<'grid' | 'masonry'>('grid');
+    const [isConfigLoaded, setIsConfigLoaded] = useState(false);
 
     useEffect(() => {
         loadConfig();
@@ -61,6 +63,8 @@ export const ConfigProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             }
         } catch (e) {
             console.error("Failed to load config", e);
+        } finally {
+            setIsConfigLoaded(true);
         }
     };
 
@@ -93,7 +97,8 @@ export const ConfigProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             setBiometricsEnabled,
             resetConfig,
             galleryLayout,
-            setGalleryLayout
+            setGalleryLayout,
+            isConfigLoaded
         }}>
             {children}
         </ConfigContext.Provider>

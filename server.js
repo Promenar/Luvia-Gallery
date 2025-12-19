@@ -2022,16 +2022,40 @@ app.post('/api/cache/prune', (req, res) => {
     }
 });
 
-// EXIF Endpoint
-// EXIF Endpoint (Improved with exifr)
+// EXIF Endpoint (Improved with exifr and video support)
 app.get('/api/file/:id/exif', async (req, res) => {
     try {
         const filePath = Buffer.from(req.params.id, 'base64').toString('utf8');
         if (!fs.existsSync(filePath)) return res.json({});
 
-        // Use exifr to parse the file (handles paths directly and is more robust)
-        const tags = await exifr.parse(filePath);
-        res.json(tags || {});
+        const ext = path.extname(filePath).toLowerCase();
+        const videoExts = ['.mp4', '.webm', '.mov'];
+
+        if (videoExts.includes(ext)) {
+            // Get video metadata via ffmpeg
+            exec(`ffmpeg -i "${filePath}"`, { timeout: 5000 }, (err, stdout, stderr) => {
+                const output = stderr || stdout || '';
+                const durationMatch = output.match(/Duration: (\d{2}):(\d{2}):(\d{2}\.\d+)/);
+                const resolutionMatch = output.match(/, (\d{2,5})x(\d{2,5})/);
+
+                const meta = {};
+                if (durationMatch) {
+                    const h = parseFloat(durationMatch[1]);
+                    const m = parseFloat(durationMatch[2]);
+                    const s = parseFloat(durationMatch[3]);
+                    meta.duration = (h * 3600) + (m * 60) + s;
+                }
+                if (resolutionMatch) {
+                    meta.width = parseInt(resolutionMatch[1]);
+                    meta.height = parseInt(resolutionMatch[2]);
+                }
+                res.json(meta);
+            });
+        } else {
+            // Use exifr to parse the image
+            const tags = await exifr.parse(filePath);
+            res.json(tags || {});
+        }
     } catch (e) {
         console.error('EXIF parse error:', e.message);
         res.json({});
