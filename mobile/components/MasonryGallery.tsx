@@ -2,7 +2,7 @@ import React from 'react';
 import { View, ScrollView, RefreshControl, ActivityIndicator, Text } from 'react-native';
 import { MediaItem } from '../types';
 import { MediaCard } from './MediaCard';
-import { useTheme } from '../utils/ThemeContext';
+import { useAppTheme } from '../utils/ThemeContext';
 
 interface MasonryGalleryProps {
     data: MediaItem[];
@@ -29,7 +29,7 @@ export const MasonryGallery: React.FC<MasonryGalleryProps> = ({
     ListEmptyComponent,
     onEndReachedThreshold = 0.5
 }) => {
-    const { isDark } = useTheme();
+    const { isDark } = useAppTheme();
     const isFetching = React.useRef(false);
 
     // Reset fetching state when loadingMore changes to false
