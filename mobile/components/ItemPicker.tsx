@@ -7,7 +7,7 @@ import { MediaCard } from './MediaCard';
 import { ArrowLeft, X } from 'lucide-react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLanguage } from '../utils/i18n';
-import { useTheme } from '../utils/ThemeContext';
+import { useAppTheme } from '../utils/ThemeContext';
 
 /* 
   Reusable Item Picker for Settings
@@ -26,7 +26,7 @@ export const ItemPicker: React.FC<ItemPickerProps> = ({ visible, mode, onSelect,
     const insets = useSafeAreaInsets();
     const { width } = useWindowDimensions();
     const { t } = useLanguage();
-    const { isDark } = useTheme();
+    const { isDark } = useAppTheme();
     const [items, setItems] = useState<any[]>([]);
     const [loading, setLoading] = useState(false);
     const [currentPath, setCurrentPath] = useState<string>('');
