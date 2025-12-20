@@ -230,15 +230,28 @@ function getUserLibraryPaths(user) {
             // Non-admin sees explicit allowedPaths. If none, they see NOTHING.
             return currentUser?.allowedPaths || [];
         } catch (e) {
-            console.error("Error reading config for library paths:", e);
-            return [];
         }
     }
     // Only fallback for Admin if no config
     return isAdmin ? [MEDIA_ROOT] : [];
 }
-// addWatcherLog function removed.
-// rebuildFolderStats function removed.
+
+// Check if user has access to a specific file/path
+function checkFileAccess(user, filePath) {
+    if (!user) return false;
+    if (user.isAdmin || user.role === 'admin') return true;
+
+    // For non-admins, check allowedPaths
+    const allowedPaths = user.allowedPaths || [];
+    if (allowedPaths.length === 0) return false;
+
+    const normalizedFile = path.resolve(filePath).replace(/\\/g, '/').toLowerCase();
+    return allowedPaths.some(p => {
+        const normalizedAllowed = path.resolve(p).replace(/\\/g, '/').toLowerCase();
+        return normalizedFile.startsWith(normalizedAllowed);
+    });
+}
+
 // Helper to recursively count cached files
 function countCachedFiles(dir = CACHE_DIR) {
     let count = 0;
@@ -472,7 +485,7 @@ app.get('/api/config', (req, res) => {
                 const config = JSON.parse(fileContent);
 
                 // Scenario 1: Admin User (Full Config)
-                if (req.user && req.user.role === 'admin') {
+                if (req.user && (req.user.isAdmin || req.user.role === 'admin')) {
                     if (config.users) {
                         config.users = config.users.map(u => {
                             const { password, ...safeUser } = u;
@@ -489,6 +502,7 @@ app.get('/api/config', (req, res) => {
                     if (currentUser) {
                         const { password, ...safeUser } = currentUser;
                         return res.json({
+                            configured: true,
                             libraryPaths: safeUser.libraryPaths || [],
                             homeSettings: safeUser.homeSettings || {},
                             role: 'user',
@@ -541,21 +555,13 @@ app.post('/api/config', adminOnly, (req, res) => {
         normalizedBody.users = normalizedBody.users.map(newUser => {
             const existingUser = currentConfig.users.find(u => u.username === newUser.username);
             if (existingUser) {
-                // GUARD: Protect Admin Password specifically
-                if (existingUser.username === 'admin' && !newUser.password) {
-                    newUser.password = existingUser.password;
-                }
-
-                // Determine if we should keep existing password
-                // If frontend sent a password (e.g. during change), use it.
-                // If frontend sent empty/undefined, keep existing.
-                // Note: Frontend likely strictly sends NO password field or empty string unless changing it.
+                // Merge: Preserve password and critical flags if missing in update
                 return {
+                    ...existingUser,
                     ...newUser,
-                    password: newUser.password || existingUser.password,
-                    // Ensure other critical internal fields if any are preserved
-                    isAdmin: newUser.isAdmin !== undefined ? newUser.isAdmin : existingUser.isAdmin,
-                    allowedPaths: newUser.allowedPaths !== undefined ? newUser.allowedPaths : existingUser.allowedPaths
+                    password: newUser.password || existingUser.password, // Critical preservation
+                    isAdmin: newUser.isAdmin !== undefined ? !!newUser.isAdmin : !!existingUser.isAdmin,
+                    allowedPaths: newUser.allowedPaths !== undefined ? newUser.allowedPaths : (existingUser.allowedPaths || [])
                 };
             }
             return newUser;
@@ -1050,7 +1056,7 @@ app.get('/api/scan/status', (req, res) => {
 
     try {
         // Return sanitized status for non-admins to prevent crash but hide internal details
-        if (!req.user || req.user.role !== 'admin') {
+        if (!req.user || (req.user.role !== 'admin' && !req.user.isAdmin)) {
             return res.json({
                 status: 'idle',
                 count: 0,
@@ -1084,11 +1090,8 @@ app.get('/api/scan/status', (req, res) => {
 });
 
 app.post('/api/scan/start', adminOnly, (req, res) => {
-    if (scanState.status === 'scanning' || scanState.status === 'paused') {
-        return res.json({ success: true, message: 'Already running' });
-    }
-
-    // Reset control flags
+    // Set status synchronously to prevent UI from seeing 'idle' in the next poll
+    scanState.status = 'scanning';
     scanState.shouldPause = false;
     scanState.shouldStop = false;
     scanState.count = 0;
@@ -1853,17 +1856,8 @@ app.get('/api/thumb/:id', async (req, res) => {
     // [Security] Verify access before serving from cache
     try {
         const filePath = Buffer.from(req.params.id, 'base64').toString('utf8');
-        const userLibraryPaths = req.user ? getUserLibraryPaths(req.user) : [];
-        const isAdmin = req.user && req.user.role === 'admin';
-
-        if (!isAdmin) {
-            const resolvedFile = path.resolve(filePath);
-            const isAllowed = userLibraryPaths.some(lp => {
-                const resolvedIp = path.resolve(lp);
-                return resolvedFile.startsWith(resolvedIp);
-            });
-
-            if (!isAllowed) return res.status(403).send('Access Denied');
+        if (!checkFileAccess(req.user, filePath)) {
+            return res.status(403).send('Access Denied');
         }
     } catch (e) { return res.status(400).send('Invalid ID'); }
 
@@ -1907,23 +1901,9 @@ app.get('/api/file/:id', (req, res) => {
         }
 
         // [Security] User Access Check
-        // Re-declare checkFileAccess if function scope issue, or rely on closure if placed correctly.
-        // Since we are inside app.get, we need access to the helper.
-        // It's better to verify user access here
-        const userLibraryPaths = req.user ? getUserLibraryPaths(req.user) : [];
-        const isAdmin = req.user && req.user.role === 'admin';
-
-        if (!isAdmin) {
-            const resolvedFile = path.resolve(filePath);
-            const isAllowed = userLibraryPaths.some(lp => {
-                const resolvedIp = path.resolve(lp);
-                return resolvedFile.startsWith(resolvedIp);
-            });
-
-            if (!isAllowed) {
-                console.log(`[Security] Blocked access to file: ${filePath} for user ${req.user.username}`);
-                return res.status(403).send('Access Denied');
-            }
+        if (!checkFileAccess(req.user, filePath)) {
+            console.log(`[Security] Blocked access to file: ${filePath} for user ${req.user?.username}`);
+            return res.status(403).send('Access Denied');
         }
 
         const stat = fs.statSync(filePath);
@@ -2353,7 +2333,7 @@ app.post('/api/users/:targetUser', authenticateToken, (req, res) => {
     console.log(`[DEBUG] Update user ${targetUser}:`, { newUsername, allowedPaths, newIsAdmin, reqUser: req.user });
 
     const isSelf = req.user.username === targetUser;
-    const isAdmin = req.user.role === 'admin';
+    const isAdmin = req.user.isAdmin || req.user.role === 'admin';
 
     if (!isAdmin && !isSelf) {
         console.log('[DEBUG] Permission denied');

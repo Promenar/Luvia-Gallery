@@ -261,16 +261,38 @@ export default function App() {
         localStorage.setItem(THEME_STORAGE_KEY, newTheme);
     };
 
-    // --- Auth Helper ---
-    // Defined at component level to be used everywhere
-    const authFetch = async (url: string, options: RequestInit = {}) => {
-        const token = localStorage.getItem('lumina_token');
-        const headers = { ...options.headers } as Record<string, string>;
-        if (token) {
-            headers['Authorization'] = `Bearer ${token}`;
-        }
-        return fetch(url, { ...options, headers });
+    const handleLogout = () => {
+        localStorage.removeItem('lumina_token');
+        localStorage.removeItem(AUTH_USER_KEY);
+        setCurrentUser(null);
+        setAuthStep('login');
+        // Optionally clear other user-specific state
+        setAllUserData({});
+        setServerFavoriteIds({ files: [], folders: [] });
     };
+
+    // --- Secure Fetch Helper (Consolidated) ---
+    const apiFetch = async (url: string, options: RequestInit = {}) => {
+        const token = localStorage.getItem('lumina_token');
+        const headers: any = { ...options.headers };
+        if (token) headers['Authorization'] = `Bearer ${token}`;
+
+        const res = await fetch(url, { ...options, headers });
+
+        // Handle 401 specifically for auth invalidation
+        if (res.status === 401) {
+            localStorage.removeItem('lumina_token'); // Clear bad token immediately
+            // If we were on /api/config, it might just be the public check during init
+            // But if we are already in 'app' mode, it means our session expired
+            if (authStep === 'app') {
+                handleLogout();
+            }
+        }
+        return res;
+    };
+
+    // authFetch is now just an alias for consistency during migration
+    const authFetch = apiFetch;
 
     const [threadCount, setThreadCount] = useState<number>(2);
 
@@ -314,7 +336,7 @@ export default function App() {
             // Only Admins can sync global config
             if (currentUser && currentUser.isAdmin) {
                 try {
-                    await authFetch('/api/config', {
+                    await apiFetch('/api/config', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(config)
@@ -347,14 +369,19 @@ export default function App() {
             // Actually /api/config is protected for full data, public for basics.
             // If we have a token, use it to get full data (users with allowedPaths).
             // If we have a token, use it to get full data (users with allowedPaths).
-            let res = await authFetch('/api/config');
+            let res = await apiFetch('/api/config');
 
-            // Fix: If token is invalid (401), authFetch flushes it. Retry immediately to get public config.
-            if (res.status === 401) {
-                res = await authFetch('/api/config');
-            }
+            // Fix: If token is invalid (401), apiFetch flushes it. Retry immediately to get public config.
+            if (res.ok || res.status === 401) {
+                serverMode = true; // Any response from /api means server mode
+                setIsServerMode(true);
 
-            if (res.ok) {
+                if (res.status === 401) {
+                    // If 401, we just set authStep to login if we can't get public info
+                    // But actually we should try to get public config by retrying WITHOUT token
+                    res = await fetch('/api/config'); // Raw fetch without token header
+                }
+
                 const text = await res.text();
                 let config = null;
                 try {
@@ -362,14 +389,15 @@ export default function App() {
                 } catch (e) { }
 
                 if (config && config.configured !== false) {
-                    serverMode = true;
-                    setIsServerMode(true);
-
                     if (config.users) {
                         loadedUsers = config.users;
                         config.users.forEach((u: User) => {
                             loadedData[u.username] = { sources: [], files: [], favoriteFolderPaths: [] };
                         });
+                    } else if (config.username) {
+                        // Scenario 2: Regular user login (sanitized info)
+                        loadedUsers = [{ username: config.username, isAdmin: config.role === 'admin' } as User];
+                        loadedData[config.username] = { sources: [], files: [], favoriteFolderPaths: [] };
                     }
                     if (config.title) loadedTitle = config.title;
                     if (config.homeSubtitle) loadedSubtitle = config.homeSubtitle;
@@ -377,15 +405,17 @@ export default function App() {
                     if (config.libraryPaths) setLibraryPaths(config.libraryPaths);
                     if (config.threadCount) loadedThreadCount = config.threadCount;
                     setThreadCount(loadedThreadCount);
-                } else if (!config || config.configured === false) {
+                } else if (config && config.configured === false) {
                     setAuthStep('setup');
                     return;
                 }
             }
-        } catch (e) { }
+        } catch (e) {
+            console.error("Init config error:", e);
+        }
 
         // Fallback or Local
-        if (!serverMode || loadedUsers.length === 0) {
+        if (!serverMode) {
             const storedUsers = localStorage.getItem(USERS_STORAGE_KEY);
             const storedTitle = localStorage.getItem(APP_TITLE_KEY);
             const storedSubtitle = localStorage.getItem(APP_SUBTITLE_KEY);
@@ -452,8 +482,8 @@ export default function App() {
                     setTimeout(async () => {
                         try {
                             const [scanRes, thumbRes] = await Promise.all([
-                                authFetch('/api/scan/status'),
-                                authFetch('/api/thumb-gen/status')
+                                apiFetch('/api/scan/status'),
+                                apiFetch('/api/thumb-gen/status')
                             ]);
 
                             let foundActive = false;
@@ -530,22 +560,6 @@ export default function App() {
         return () => window.removeEventListener('popstate', onPopState);
     }, [viewMode, currentPath, isServerMode, currentUser, allUserData]);
 
-
-
-    // --- Secure Fetch Helper ---
-    const apiFetch = async (url: string, options: RequestInit = {}) => {
-        const token = localStorage.getItem('lumina_token');
-        const headers: any = { ...options.headers };
-        if (token) headers['Authorization'] = `Bearer ${token}`;
-
-        const res = await fetch(url, { ...options, headers });
-        if (res.status === 401 || res.status === 403) {
-            setAuthStep('login');
-            localStorage.removeItem('lumina_token');
-            setCurrentUser(null);
-        }
-        return res;
-    };
 
     // --- Server Logic: Scan & Poll ---
 
@@ -1508,7 +1522,6 @@ export default function App() {
         downloadAnchorNode.setAttribute("href", dataStr);
         downloadAnchorNode.setAttribute("download", CONFIG_FILE_NAME);
         document.body.appendChild(downloadAnchorNode);
-        downloadAnchorNode.click();
         downloadAnchorNode.remove();
     };
 
@@ -1688,27 +1701,70 @@ export default function App() {
                         </div>
                     )}
 
-                    <form onSubmit={(e) => {
+                    <form onSubmit={async (e) => {
                         e.preventDefault();
                         if (authStep === 'setup') {
                             if (setupForm.password !== setupForm.confirmPassword) {
                                 setAuthError(t('passwords_not_match'));
                                 return;
                             }
-                            const newUser = {
+
+                            const adminUser = {
                                 username: setupForm.username,
                                 password: setupForm.password,
-                                isAdmin: true,
-                                avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${setupForm.username}`
+                                isAdmin: true
                             };
-                            const newUsers = [newUser];
-                            const newData = { [newUser.username]: { sources: [], files: [], favoriteFolderPaths: [] } };
-                            persistData(newUsers, undefined, newData);
-                            setUsers(newUsers);
-                            setAllUserData(newData);
-                            setCurrentUser(newUser);
-                            setAuthStep('app');
-                            localStorage.setItem(AUTH_USER_KEY, newUser.username);
+
+                            if (isServerMode) {
+                                try {
+                                    // Force initial config sync
+                                    const res = await fetch('/api/config', {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({
+                                            users: [adminUser],
+                                            title: appTitle || 'Lumina Gallery'
+                                        })
+                                    });
+
+                                    if (!res.ok) throw new Error(await res.text());
+
+                                    // After success, we need to LOGIN to get the token
+                                    const loginRes = await fetch('/api/auth/login', {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({
+                                            username: adminUser.username,
+                                            password: adminUser.password
+                                        })
+                                    });
+
+                                    if (loginRes.ok) {
+                                        const data = await loginRes.json();
+                                        localStorage.setItem('lumina_token', data.token);
+                                        setCurrentUser(data.user);
+                                        localStorage.setItem(AUTH_USER_KEY, data.user.username);
+                                        setAuthStep('app');
+                                        // Trigger init
+                                        initApp();
+                                    } else {
+                                        setAuthStep('login');
+                                    }
+                                } catch (err: any) {
+                                    setAuthError("Setup failed: " + err.message);
+                                }
+                            } else {
+                                // Local mode
+                                const newUser: User = { ...adminUser, avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${adminUser.username}` };
+                                const newUsers = [newUser];
+                                const newData = { [newUser.username]: { sources: [], files: [], favoriteFolderPaths: [] } };
+                                persistData(newUsers, undefined, newData);
+                                setUsers(newUsers);
+                                setAllUserData(newData);
+                                setCurrentUser(newUser);
+                                setAuthStep('app');
+                                localStorage.setItem(AUTH_USER_KEY, newUser.username);
+                            }
                         } else {
                             if (isServerMode) {
                                 fetch('/api/auth/login', {
