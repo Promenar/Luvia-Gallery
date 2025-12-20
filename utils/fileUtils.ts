@@ -130,6 +130,7 @@ export const getAuthUrl = (url: string): string => {
   if (url.startsWith('blob:') || url.startsWith('data:')) return url;
   const token = localStorage.getItem('lumina_token');
   if (!token) return url;
+  if (url.includes('token=')) return url; // Prevent double token
   const separator = url.includes('?') ? '&' : '?';
   return `${url}${separator}token=${token}`;
 };

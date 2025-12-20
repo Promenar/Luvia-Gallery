@@ -51,17 +51,21 @@ const authenticatedFetch = async (url: string, options: RequestInit = {}) => {
 
     const res = await fetch(url, { ...options, headers });
 
-    if (res.status === 401 || res.status === 403) {
-        // Token expired or invalid
-        // Debounce/Throttle the logout callback to prevent spamming
+    if (res.status === 401) {
+        // Token expired or invalid - FORCE LOGOUT
         if (logoutCallback && !isEmittingLogout) {
             isEmittingLogout = true;
             logoutCallback();
-            // Reset flag after a delay to allow future warnings if re-login happens
             setTimeout(() => { isEmittingLogout = false; }, 5000);
         }
         throw new Error('Session Expired');
     }
+
+    if (res.status === 403) {
+        // Forbidden - DON'T LOGOUT, just report permission error
+        throw new Error('Permission Denied');
+    }
+
     return res;
 };
 
@@ -79,6 +83,9 @@ export const login = async (username: string, password: string) => {
                 authToken = data.token;
                 await SecureStore.setItemAsync('lumina_token', data.token);
                 await AsyncStorage.setItem('lumina_username', username);
+                if (data.user) {
+                    await AsyncStorage.setItem('lumina_is_admin', data.user.isAdmin ? 'true' : 'false');
+                }
                 return data;
             }
         }
@@ -92,6 +99,7 @@ export const logout = async (isManual = false) => {
     authToken = null;
     await SecureStore.deleteItemAsync('lumina_token');
     await AsyncStorage.removeItem('lumina_username');
+    await AsyncStorage.removeItem('lumina_is_admin');
     if (logoutCallback && !isManual) {
         logoutCallback();
     }
