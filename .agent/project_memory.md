@@ -14,6 +14,7 @@
     - **Anti-Jitter**: Dynamic text (percentages) in notifications must be wrapped in fixed-width containers to preserve layout stability.
 
 ## Anti-Patterns to Avoid
+- **Raw DB Access**: Never access `database.db` directly in `server.js`. It is private. Always use or create public helper methods (e.g., `getStats()`) in `database.js`.
 - **Implicit Undefined in SQL**: Never pass `undefined` to `expo-sqlite` Native calls; sanitize with `?? null`.
 - **Layout Collapsing**:
     - Avoid `return null` in major UI sections (Carousel/Grid) during loading; always provide skeleton/placeholder view.
