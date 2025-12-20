@@ -194,7 +194,8 @@ function queryFiles(options = {}) {
         sourceId = null,
         userId = null,
         random = false,
-        excludeMediaType = null
+        excludeMediaType = null,
+        allowedPaths = null // [NEW] Array of root paths the user is allowed to access
     } = options;
 
     let query = 'SELECT f.*, fav.id as is_fav FROM files f';
@@ -246,6 +247,18 @@ function queryFiles(options = {}) {
         params.push(sourceId);
     }
 
+    if (allowedPaths !== null) {
+        if (allowedPaths.length > 0) {
+            // Build OR clauses for each allowed root path (using standard SQL quotes for string building)
+            const clauses = allowedPaths.map(() => '(f.path = ? OR f.path LIKE ? || "/%" OR f.folder_path = ? OR f.folder_path LIKE ? || "/%")').join(' OR ');
+            query += ` AND (${clauses})`;
+            allowedPaths.forEach(p => params.push(p, p, p, p));
+        } else {
+            // Explicitly allowed paths is empty -> Deny all
+            query += ' AND 1=0';
+        }
+    }
+
     if (random) {
         query += ' ORDER BY RANDOM() LIMIT ? OFFSET ?';
     } else {
@@ -282,7 +295,7 @@ function queryFiles(options = {}) {
  * Count total files
  */
 function countFiles(options = {}) {
-    const { folderPath = null, mediaType = null, recursive = false } = options;
+    const { folderPath = null, mediaType = null, recursive = false, allowedPaths = null } = options;
 
     let query = 'SELECT COUNT(*) as count FROM files WHERE 1=1';
     const params = [];
@@ -300,6 +313,16 @@ function countFiles(options = {}) {
     if (mediaType) {
         query += ' AND media_type = ?';
         params.push(mediaType);
+    }
+
+    if (allowedPaths !== null) {
+        if (allowedPaths.length > 0) {
+            const clauses = allowedPaths.map(() => '(path = ? OR path LIKE ? || "/%" OR folder_path = ? OR folder_path LIKE ? || "/%")').join(' OR ');
+            query += ` AND (${clauses})`;
+            allowedPaths.forEach(p => params.push(p, p, p, p));
+        } else {
+            query += ' AND 1=0';
+        }
     }
 
     const stmt = db.prepare(query);
@@ -387,129 +410,6 @@ function getAllFilesMtime() {
     return mtimeMap;
 }
 
-module.exports = {
-    initDatabase,
-    insertFilesBatch,
-    queryFiles,
-    countFiles,
-    deleteFile,
-    deleteFilesBatch, // Export this
-    getAllFilesMtime, // Export this
-    getFavoriteIds: (userId) => {
-        // ... (existing helper logic or simple query if needed)
-        // Since getFavoriteIds was called in server.js but not defined in snippet, 
-        // I verify if it exists below or if I need to add it.
-        // Looking at snippet, it was not visible. I will stick to what I see.
-        // Wait, server.js calls database.getFavoriteIds. It must be there but outside 1-300 range?
-        // Let's check the bottom of the file.
-        const stmt = db.prepare('SELECT item_id FROM favorites WHERE user_id = ?');
-        stmt.bind([userId]);
-        const ids = [];
-        while (stmt.step()) {
-            ids.push(stmt.getAsObject().item_id);
-        }
-        stmt.free();
-        return ids;
-    },
-    // ... other exports
-    saveDatabase,
-    // [NEW] Migration: Convert legacy Path-based favorites to ID-based favorites
-    migrateFavorites: () => {
-        try {
-            console.log('[Migration] Checking for legacy path-based favorites...');
-            // 1. Try to resolve favorites where item_id matches a file path
-            // SQLite update with subquery
-            db.exec(`
-                UPDATE favorites 
-                SET item_id = (SELECT id FROM files WHERE path = favorites.item_id) 
-                WHERE item_type = 'file' 
-                AND item_id NOT IN (SELECT id FROM files) 
-                AND item_id IN (SELECT path FROM files);
-            `);
-
-            // 2. Clean up duplicates if migration created collisions (same user favoring same file via ID and Path previously)
-            // This is complex in pure SQL, relying on app logic or manual cleanup for now.
-            // Or strictly delete invalid ones:
-            // db.exec("DELETE FROM favorites WHERE item_type = 'file' AND item_id NOT IN (SELECT id FROM files)"); 
-            // ^ Risk: Offline files. Let's keep it safe: just migrate positive matches.
-
-            console.log('[Migration] Favorites migration complete.');
-            saveDatabase();
-        } catch (e) {
-            console.error('[Migration] Error migrating favorites:', e);
-        }
-    },
-    toggleFavorite: (userId, itemId, itemType) => {
-        // Strict ID check
-        const check = db.prepare('SELECT id FROM favorites WHERE user_id = ? AND item_id = ?');
-        check.bind([userId, itemId]);
-        const exists = check.step();
-        check.free();
-
-        if (exists) {
-            const del = db.prepare('DELETE FROM favorites WHERE user_id = ? AND item_id = ?');
-            del.run([userId, itemId]);
-            del.free();
-            saveDatabase();
-            return false;
-        } else {
-            const ins = db.prepare('INSERT INTO favorites (user_id, item_id, item_type) VALUES (?, ?, ?)');
-            ins.run([userId, itemId, itemType]);
-            ins.free();
-            saveDatabase();
-            return true;
-        }
-    },
-    // Simplified Query: Strict ID Join
-    queryFavoriteFiles: (userId, options) => {
-        const limit = options.limit || 100;
-        const offset = options.offset || 0;
-        const stmt = db.prepare(`
-            SELECT f.* FROM files f
-            JOIN favorites fav ON f.id = fav.item_id
-            WHERE fav.user_id = ? AND fav.item_type = 'file'
-            ORDER BY fav.created_at DESC
-            LIMIT ? OFFSET ?
-        `);
-        stmt.bind([userId, limit, offset]);
-        const results = [];
-        while (stmt.step()) {
-            const row = stmt.getAsObject();
-            results.push({
-                id: row.id,
-                path: row.path,
-                name: row.name,
-                folderPath: row.folder_path,
-                size: row.size,
-                type: row.type,
-                mediaType: row.media_type,
-                lastModified: row.last_modified,
-                sourceId: row.source_id,
-                isFavorite: true
-            });
-        }
-        stmt.free();
-        return results;
-    },
-    countFavoriteFiles: (userId) => {
-        const stmt = db.prepare('SELECT COUNT(*) as count FROM favorites WHERE user_id = ? AND item_type = "file"');
-        stmt.bind([userId]);
-        stmt.step();
-        const result = stmt.getAsObject();
-        stmt.free();
-        return result.count || 0;
-    },
-    getAllFilePaths: () => {
-        const stmt = db.prepare('SELECT path FROM files');
-        const paths = [];
-        while (stmt.step()) {
-            paths.push(stmt.getAsObject().path);
-        }
-        stmt.free();
-        return paths;
-    }
-};
-
 
 /**
  * Delete files by folder path
@@ -559,11 +459,12 @@ function clearAllFiles() {
 /**
  * Get database statistics
  */
-function getStats() {
-    const totalFiles = countFiles();
-    const totalImages = countFiles({ mediaType: 'image' });
-    const totalVideos = countFiles({ mediaType: 'video' });
-    const totalAudio = countFiles({ mediaType: 'audio' });
+function getStats(options = {}) {
+    const { allowedPaths = null } = options;
+    const totalFiles = countFiles({ allowedPaths });
+    const totalImages = countFiles({ mediaType: 'image', allowedPaths });
+    const totalVideos = countFiles({ mediaType: 'video', allowedPaths });
+    const totalAudio = countFiles({ mediaType: 'audio', allowedPaths });
 
     return {
         totalFiles,
@@ -716,23 +617,6 @@ function countFavoriteFiles(userId) {
     return result.count || 0;
 }
 
-
-/**
- * Get all file paths (for sync)
- */
-/**
- * Get all file paths (for sync)
- */
-function getAllFilePaths() {
-    const stmt = db.prepare('SELECT path FROM files');
-    const paths = [];
-    while (stmt.step()) {
-        paths.push(stmt.getAsObject().path);
-    }
-    stmt.free();
-    return paths;
-}
-
 /**
  * Rename file and update ID/references
  */
@@ -792,6 +676,19 @@ function renameFile(oldPath, newPath, newName) {
  */
 function clearThumbnails() {
     db.run('DELETE FROM thumbnails');
+}
+
+/**
+ * Get all file paths (for sync)
+ */
+function getAllFilePaths() {
+    const stmt = db.prepare('SELECT path FROM files');
+    const paths = [];
+    while (stmt.step()) {
+        paths.push(stmt.getAsObject().path);
+    }
+    stmt.free();
+    return paths;
 }
 
 module.exports = {
