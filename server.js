@@ -123,7 +123,9 @@ function authenticateToken(req, res, next) {
 
     // Fallback: Check query parameter (for img/video src)
     if (!token && req.query.token) {
-        token = req.query.token;
+        // Fix: backend might receive multiple token params if frontend appends duplicates
+        const qToken = req.query.token;
+        token = Array.isArray(qToken) ? qToken[qToken.length - 1] : qToken;
     }
 
     if (!token) return res.sendStatus(401); // Unauthorized
@@ -133,6 +135,30 @@ function authenticateToken(req, res, next) {
         req.user = user;
         next();
     });
+}
+
+function adminOnly(req, res, next) {
+    if (req.user && req.user.role === 'admin') {
+        return next();
+    }
+
+    // Special case: If the system has no users yet, allow POST /api/config to create the first admin
+    if (req.path === '/api/config' && req.method === 'POST') {
+        try {
+            if (fs.existsSync(CONFIG_FILE)) {
+                const config = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+                if (!config.users || config.users.length === 0) {
+                    return next();
+                }
+            } else {
+                return next(); // No config file yet
+            }
+        } catch (e) {
+            return next(); // Invalid config, allow repair/initialization
+        }
+    }
+
+    res.status(403).json({ error: 'Admin access required' });
 }
 
 // --- Auth Endpoints ---
@@ -167,6 +193,13 @@ app.post('/api/auth/login', (req, res) => {
 let monitorMode = 'manual'; // 'manual' | 'periodic'
 let scanInterval = 60; // Minutes
 let periodicIntervalId = null;
+let scanState = {
+    status: 'idle',
+    count: 0,
+    currentPath: '',
+    shouldStop: false,
+    shouldPause: false
+};
 // Watcher state variables removed.
 // let isWatcherActive = false;
 // let watcher = null;
@@ -178,9 +211,86 @@ let pendingChanges = new Map(); // path -> timeout
 const DEBOUNCE_DELAY = 500; // ms
 
 // --- Helper Functions ---
+function getUserLibraryPaths(user) {
+    if (!user) return [];
+    const userId = user.username;
+    const isAdmin = user.role === 'admin';
+
+    if (fs.existsSync(CONFIG_FILE)) {
+        try {
+            const config = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+            if (isAdmin) {
+                // Admin sees global config paths OR their own specific paths? 
+                // Usually Admin sees EVERYTHING in config.libraryPaths (Main Library).
+                // But if we want to allow Admin to limit themselves (unlikely), we'd check adminUser.allowedPaths.
+                // For now, Keep Admin = Global Library Paths (config.libraryPaths) OR MEDIA_ROOT.
+                return config.libraryPaths || [MEDIA_ROOT];
+            }
+            const currentUser = config.users?.find(u => u.username === userId);
+            // Non-admin sees explicit allowedPaths. If none, they see NOTHING.
+            return currentUser?.allowedPaths || [];
+        } catch (e) {
+            console.error("Error reading config for library paths:", e);
+            return [];
+        }
+    }
+    // Only fallback for Admin if no config
+    return isAdmin ? [MEDIA_ROOT] : [];
+}
 // addWatcherLog function removed.
+// rebuildFolderStats function removed.
+// Helper to recursively count cached files
+function countCachedFiles(dir = CACHE_DIR) {
+    let count = 0;
+    if (!fs.existsSync(dir)) return 0;
+    try {
+        const items = fs.readdirSync(dir, { withFileTypes: true });
+        for (const item of items) {
+            if (item.isDirectory()) {
+                count += countCachedFiles(path.join(dir, item.name));
+            } else if (item.isFile() && item.name.endsWith('.webp')) {
+                count++;
+            }
+        }
+    } catch (e) {
+        // Ignore errors during counting (e.g. permission or locking)
+    }
+    return count;
+}
+
 function rebuildFolderStats() {
     console.log("Rebuilding folder stats...");
+}
+
+function getSubfolders(dir) {
+    if (!fs.existsSync(dir)) return [];
+    try {
+        const items = fs.readdirSync(dir, { withFileTypes: true });
+        return items
+            .filter(item => item.isDirectory() && !item.name.startsWith('.'))
+            .map(item => path.join(dir, item.name));
+    } catch (e) {
+        console.error("Error reading subfolders:", e);
+        return [];
+    }
+}
+
+function findCoverMedia(folderPath) {
+    try {
+        if (!fs.existsSync(folderPath)) return null;
+        const items = fs.readdirSync(folderPath, { withFileTypes: true });
+
+        // 1. Try to find an image first
+        const image = items.find(i => i.isFile() && /\.(jpg|jpeg|png|webp)$/i.test(i.name));
+        if (image) return { path: path.join(folderPath, image.name), type: 'image', name: image.name };
+
+        // 2. Try to find a video
+        const video = items.find(i => i.isFile() && /\.(mp4|mov|webm)$/i.test(i.name));
+        if (video) return { path: path.join(folderPath, video.name), type: 'video', name: video.name };
+    } catch (e) {
+        console.error("findCoverMedia error:", e);
+    }
+    return null;
 }
 
 // Process a single file for database insertion
@@ -296,40 +406,120 @@ function stopWatcher() {
 
 // --- API Endpoints ---
 
+// --- Security Barrier ---
+app.use((req, res, next) => {
+    // Only protect /api routes
+    if (!req.path.startsWith('/api')) return next();
+
+    // 1. Soft Authenticate (Try to set req.user if token is present)
+    const authHeader = req.headers['authorization'];
+    let token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
+    if (!token && req.query.token) token = req.query.token;
+
+    if (token) {
+        jwt.verify(token, JWT_SECRET, (err, user) => {
+            if (!err) req.user = user;
+            checkPath();
+        });
+    } else {
+        checkPath();
+    }
+
+    function checkPath() {
+        // 2. Whitelist
+        const whitelist = [
+            '/api/auth',
+            '/api/video/stream',
+            '/api/config', // GET /api/config is allowed for init checks
+            '/api/fs/list'  // Allow browsing for setup/config
+        ];
+
+        // If it's a whitelisted path (exact or startsWith for sub-routes like /api/auth/)
+        if (whitelist.some(p => req.path === p || req.path.startsWith(p + '/'))) {
+            // Special case: Config POST still needs protection UNLESS it's the bootstrap case
+            // Bootstrap case is handled by adminOnly and the logic below
+            if (req.path === '/api/config' && req.method === 'POST' && !req.user) {
+                // Check if system is unconfigured
+                try {
+                    if (fs.existsSync(CONFIG_FILE)) {
+                        const config = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+                        if (config.users && config.users.length > 0) {
+                            return res.status(401).json({ error: 'Auth required for this operation' });
+                        }
+                    }
+                } catch (e) { }
+            }
+            return next();
+        }
+
+        // 3. Final Auth Enforce
+        if (!req.user) return res.sendStatus(401);
+        next();
+    }
+});
+
+// --- API Endpoints ---
+
 // Config API
 app.get('/api/config', (req, res) => {
     try {
         if (fs.existsSync(CONFIG_FILE)) {
             const fileContent = fs.readFileSync(CONFIG_FILE, 'utf8');
             if (!fileContent.trim()) {
-                res.json({ configured: false });
-                return;
+                return res.json({ configured: false });
             }
             try {
                 const config = JSON.parse(fileContent);
-                // Security: Sanitize passwords before sending to client
-                if (config.users) {
-                    config.users = config.users.map(u => {
-                        const { password, ...safeUser } = u;
-                        return safeUser;
-                    });
+
+                // Scenario 1: Admin User (Full Config)
+                if (req.user && req.user.role === 'admin') {
+                    if (config.users) {
+                        config.users = config.users.map(u => {
+                            const { password, ...safeUser } = u;
+                            if (u.username !== 'admin') console.log(`[DEBUG] Config user ${u.username} allowedPaths:`, u.allowedPaths);
+                            return safeUser;
+                        });
+                    }
+                    return res.json(config);
                 }
-                res.json(config);
+
+                // Scenario 2: Regular User (Sanitized Config)
+                if (req.user) {
+                    const currentUser = (config.users || []).find(u => u.username === req.user.username);
+                    if (currentUser) {
+                        const { password, ...safeUser } = currentUser;
+                        return res.json({
+                            libraryPaths: safeUser.libraryPaths || [],
+                            homeSettings: safeUser.homeSettings || {},
+                            role: 'user',
+                            username: safeUser.username,
+                            title: config.title || 'Lumina Gallery'
+                        });
+                    }
+                }
+
+                // Scenario 3: Anonymous/Login stage (Public Info)
+                // Need to provide enough info for the frontend to decide whether to show Setup or Login
+                return res.json({
+                    configured: true,
+                    title: config.title || 'Lumina Gallery',
+                    users: (config.users || []).map(u => ({ username: u.username, isAdmin: u.isAdmin }))
+                });
+
             } catch (parseError) {
-                // If parse fails (e.g. invalid JSON), treat as not configured
                 console.error("Config parse error", parseError);
-                res.json({ configured: false });
+                return res.json({ configured: false });
             }
         } else {
-            res.json({ configured: false });
+            return res.json({ configured: false });
         }
     } catch (e) {
         console.error("Config read error", e);
-        res.status(500).json({ error: "Failed to read config" });
+        return res.status(500).json({ error: "Failed to read config" });
     }
 });
 
-app.post('/api/config', (req, res) => {
+app.post('/api/config', adminOnly, (req, res) => {
     let currentConfig = {};
     try {
         if (fs.existsSync(CONFIG_FILE)) {
@@ -343,14 +533,38 @@ app.post('/api/config', (req, res) => {
     const oldPaths = currentConfig.libraryPaths || [];
     const newPaths = req.body.libraryPaths || [];
 
+    const normalizedBody = { ...req.body };
+
+    // CRITICAL FIX: The frontend sends users without passwords (sanitized).
+    // We must merge with existing passwords to avoid wiping them.
+    if (normalizedBody.users && Array.isArray(normalizedBody.users) && currentConfig.users) {
+        normalizedBody.users = normalizedBody.users.map(newUser => {
+            const existingUser = currentConfig.users.find(u => u.username === newUser.username);
+            if (existingUser) {
+                // Determine if we should keep existing password
+                // If frontend sent a password (e.g. during change), use it.
+                // If frontend sent empty/undefined, keep existing.
+                // Note: Frontend likely strictly sends NO password field or empty string unless changing it.
+                return {
+                    ...newUser,
+                    password: newUser.password || existingUser.password,
+                    // Ensure other critical internal fields if any are preserved
+                    isAdmin: newUser.isAdmin !== undefined ? newUser.isAdmin : existingUser.isAdmin,
+                    allowedPaths: newUser.allowedPaths !== undefined ? newUser.allowedPaths : existingUser.allowedPaths
+                };
+            }
+            return newUser;
+        });
+    }
+
     const newConfig = {
-        ...req.body,
-        // watcherEnabled: currentConfig.watcherEnabled // Removed as watcher is deprecated
+        ...currentConfig, // Keep other server-only fields if any
+        ...normalizedBody,
     };
 
     fs.writeFileSync(CONFIG_FILE, JSON.stringify(newConfig, null, 2));
 
-    // Detect and cleanup removed paths
+    // Detect and cleanup removed paths (Admin operation)
     const removedPaths = oldPaths.filter(p => !newPaths.includes(p));
     if (removedPaths.length > 0) {
         console.log("Removing data for deleted paths:", removedPaths);
@@ -358,7 +572,7 @@ app.post('/api/config', (req, res) => {
             const deleteStmt = database.db.prepare("DELETE FROM files WHERE source_id = ?");
             const txn = database.db.transaction((paths) => {
                 for (const p of paths) {
-                    // Normalize path string to match how it was stored (see startServerScan)
+                    // Normalize path string to match how it was stored
                     let cleanSource = p.trim();
                     if (cleanSource.length > 1 && cleanSource.endsWith('/')) cleanSource = cleanSource.slice(0, -1);
                     if (cleanSource.length > 1 && cleanSource.endsWith('\\')) cleanSource = cleanSource.slice(0, -1);
@@ -368,118 +582,21 @@ app.post('/api/config', (req, res) => {
                 }
             });
             txn(removedPaths);
-
-            // Rebuild folder structure to remove empty folders left behind
             rebuildFolderStats();
         } catch (e) {
             console.error("Failed to cleanup DB:", e);
         }
     }
 
-    // if (isWatcherActive) { // Removed as watcher is deprecated
-    //     startWatcher(newConfig.libraryPaths || [MEDIA_ROOT]);
-    // }
-
     res.json({ success: true });
-});
-
-// --- API Endpoints ---
-
-// ... Config API (unchanged) ...
-
-// --- Helper Functions ---
-// Helper to recursively find cover media
-function findCoverMedia(dirPath, depth = 0, maxDepth = 3) {
-    try {
-        if (depth > maxDepth || !fs.existsSync(dirPath)) return null;
-
-        const items = fs.readdirSync(dirPath, { withFileTypes: true });
-
-        // 1. Look for Images in current folder
-        const img = items.find(i => i.isFile() && /\.(jpg|jpeg|png|webp)$/i.test(i.name));
-        if (img) {
-            return {
-                name: img.name,
-                path: path.join(dirPath, img.name),
-                type: 'image'
-            };
-        }
-
-        // 2. Look for Videos in current folder
-        const video = items.find(i => i.isFile() && /\.(mp4|mov|webm)$/i.test(i.name));
-        if (video) {
-            return {
-                name: video.name,
-                path: path.join(dirPath, video.name),
-                type: 'video'
-            };
-        }
-
-        // 3. Recurse into subfolders
-        const subfolders = items.filter(i => i.isDirectory() && !i.name.startsWith('.'));
-        for (const sub of subfolders) {
-            const found = findCoverMedia(path.join(dirPath, sub.name), depth + 1, maxDepth);
-            if (found) return found;
-        }
-
-        return null;
-    } catch (e) {
-        return null; // Ignore errors (permissions, etc)
-    }
-}
-
-function getSubfolders(dirPath) {
-    try {
-        // Resolve parent path safely
-        if (!fs.existsSync(dirPath)) return [];
-        return fs.readdirSync(dirPath, { withFileTypes: true })
-            .filter(dirent => dirent.isDirectory() && !dirent.name.startsWith('.'))
-            .map(dirent => path.join(dirPath, dirent.name));
-    } catch (e) {
-        console.error(`Error reading directory ${dirPath}:`, e);
-        return [];
-    }
-}
-
-function getAllFiles(dirPath, files = []) {
-    // This synchronous version is OK for small tests but blocking for control.
-    // We'll use an async approach in the scan loop instead.
-    return files;
-}
-
-// Scan State
-let scanState = {
-    status: 'idle', // idle, scanning, paused
-    count: 0,
-    currentPath: '',
-    shouldStop: false,
-    shouldPause: false
-};
-const PAUSE_CHECK_INTERVAL = 100; // Check every 100ms if paused
-
-// --- Security Barrier ---
-app.use((req, res, next) => {
-    // Only protect /api routes
-    if (!req.path.startsWith('/api')) return next();
-
-    // Whitelist
-    const whitelist = [
-        '/api/auth',
-        '/api/config',  // Needed for setup/login
-        '/api/video/stream', // Allow streaming if separate? (Check paths later)
-        '/api/system/status' // Allow status for now? No, protect it to force auth.
-    ];
-
-    // Check if path starts with any whitelist item
-    if (whitelist.some(p => req.path.startsWith(p))) {
-        return next();
-    }
-
-    authenticateToken(req, res, next);
 });
 
 app.get('/api/library/folders', (req, res) => {
     const favoritesOnly = req.query.favorites === 'true';
+    const userId = req.user.username;
+    const isAdmin = req.user.role === 'admin';
+
+    const userLibraryPaths = getUserLibraryPaths(req.user);
 
     if (favoritesOnly) {
         // Return favorite folders
@@ -487,7 +604,6 @@ app.get('/api/library/folders', (req, res) => {
             return res.status(503).json({ error: 'Database not ready' });
         }
 
-        const userId = 'admin'; // Default user ID
         const favoriteIds = database.getFavoriteIds(userId);
 
         // Get folder details for each favorite folder path
@@ -537,76 +653,66 @@ app.get('/api/library/folders', (req, res) => {
     // Normal folder browsing (non-favorites)
     // Decode if it came from encoded param
     let parentPath = req.query.parentPath || req.query.parent;
-
-    // If client passes "root" or "/", treat as root request
     const isRootRequest = !parentPath || parentPath === 'root' || parentPath === '/';
 
+    // If client passes "root" or "/", treat as root request
     // If it's a root request, we need to decide what to show
     let subs = [];
 
     if (isRootRequest) {
-        // 1. Try to read config for library paths
-        let libraryPaths = [];
-        if (fs.existsSync(CONFIG_FILE)) {
-            try {
-                const config = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
-                if (config.libraryPaths && config.libraryPaths.length > 0) {
-                    // Filter out paths that don't exist
-                    libraryPaths = config.libraryPaths.filter(p => fs.existsSync(p));
-                }
-            } catch (e) { }
-        }
-
-        if (libraryPaths.length > 0) {
+        if (userLibraryPaths.length > 0) {
             // If we have specific library paths configured, ONLY show those
-            subs = libraryPaths;
-            console.log(`[DEBUG] Root request: Showing configured library paths: ${subs.join(', ')}`);
-        } else {
-            // Fallback to MEDIA_ROOT if no config
+            subs = userLibraryPaths;
+            console.log(`[DEBUG] Root request: Showing user library paths: ${subs.join(', ')}`);
+        } else if (isAdmin) {
+            // Fallback to MEDIA_ROOT if no config AND is admin
             subs = getSubfolders(MEDIA_ROOT);
-            console.log(`[DEBUG] Root request: No config, showing MEDIA_ROOT subfolders: ${subs.join(', ')}`);
+            console.log(`[DEBUG] Root request: Admin/No User Config, showing MEDIA_ROOT subfolders: ${subs.join(', ')}`);
+        } else {
+            // Non-admin with no config sees NOTHING
+            subs = [];
         }
     } else {
         // Not root, just get subfolders of the requested parent
+        const resolvedPath = path.resolve(parentPath);
+
+        // Security Check: Is user allowed to browse this folder?
+        if (!isAdmin) {
+            const isAllowed = userLibraryPaths.some(lp => {
+                const lpResolved = path.resolve(lp);
+                return resolvedPath === lpResolved || resolvedPath.startsWith(lpResolved + path.sep) || resolvedPath.startsWith(lpResolved + '/');
+            });
+
+            if (!isAllowed) {
+                console.log(`[Security] User ${userId} blocked from browsing: ${resolvedPath}`);
+                return res.status(403).json({ error: "Access denied to this folder" });
+            }
+        }
+
         console.log(`[DEBUG] /api/library/folders request. mappedPath: ${parentPath}`);
         let rawSubs = getSubfolders(parentPath);
 
         // Security/Scope Check:
-        // Ensure that the requested folder and its returned subfolders are visually valid
-        // based on the libraryPaths config.
-        let libraryPaths = [];
-        if (fs.existsSync(CONFIG_FILE)) {
-            try {
-                const config = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
-                if (config.libraryPaths && config.libraryPaths.length > 0) {
-                    libraryPaths = config.libraryPaths.filter(p => fs.existsSync(p));
-                }
-            } catch (e) { }
-        }
-
-        if (libraryPaths.length > 0) {
+        if (userLibraryPaths.length > 0) {
             // Filter rawSubs
-            // A folder is valid to show IF:
-            // 1. It is a descendant of a libraryPath (i.e. we are deep in the allowed tree)
-            // 2. It is an ancestor of a libraryPath (i.e. we are navigating down to an allowed tree)
             subs = rawSubs.filter(subPath => {
                 // Check 1: Is subPath inside any libraryPath?
-                const isDescendant = libraryPaths.some(lp => subPath.startsWith(lp));
+                const isDescendant = userLibraryPaths.some(lp => subPath.startsWith(lp));
                 if (isDescendant) return true;
 
                 // Check 2: Is subPath on the way to any libraryPath?
-                // i.e. does some libraryPath start with subPath?
-                const isAncestor = libraryPaths.some(lp => lp.startsWith(subPath));
+                const isAncestor = userLibraryPaths.some(lp => lp.startsWith(subPath));
                 if (isAncestor) return true;
 
                 return false;
             });
-        } else {
+        } else if (isAdmin) {
             subs = rawSubs;
+        } else {
+            subs = []; // Normal user with no library paths assigned sees nothing
         }
     }
 
-    const userId = 'admin';
     const favoriteIds = database.getFavoriteIds(userId);
     const favoriteFolders = new Set(favoriteIds.folders || []);
 
@@ -915,14 +1021,46 @@ async function processScan() {
 }
 
 app.get('/api/scan/status', (req, res) => {
-    res.json({
-        status: scanState.status,
-        count: scanState.count,
-        currentPath: scanState.currentPath
-    });
+    if (!dbReady) {
+        return res.json({ status: 'initializing', count: 0, total: 0, mediaStats: {}, cacheCount: 0 });
+    }
+
+    try {
+        // Return sanitized status for non-admins to prevent crash but hide internal details
+        if (!req.user || req.user.role !== 'admin') {
+            return res.json({
+                status: 'idle',
+                count: 0,
+                currentPath: '',
+                total: 0,
+                mediaStats: { images: 0, videos: 0, audio: 0, totalFiles: 0 }, // Empty stats
+                cacheCount: 0,
+                totalItems: 0
+            });
+        }
+
+        const stats = database.getStats();
+        res.json({
+            status: scanState.status,
+            count: scanState.count,
+            currentPath: scanState.currentPath,
+            total: stats.totalFiles,
+            mediaStats: {
+                images: stats.totalImages,
+                videos: stats.totalVideos,
+                audio: stats.totalAudio,
+                totalFiles: stats.totalFiles
+            },
+            cacheCount: countCachedFiles(),
+            totalItems: stats.totalFiles
+        });
+    } catch (e) {
+        console.error("[Scan Status] Error:", e);
+        res.status(500).json({ error: "Status check failed" });
+    }
 });
 
-app.post('/api/scan/start', (req, res) => {
+app.post('/api/scan/start', adminOnly, (req, res) => {
     if (scanState.status === 'scanning' || scanState.status === 'paused') {
         return res.json({ success: true, message: 'Already running' });
     }
@@ -938,7 +1076,7 @@ app.post('/api/scan/start', (req, res) => {
     res.json({ success: true });
 });
 
-app.post('/api/scan/control', (req, res) => {
+app.post('/api/scan/control', adminOnly, (req, res) => {
     const { action } = req.body;
     if (action === 'pause') {
         scanState.shouldPause = true;
@@ -974,56 +1112,64 @@ app.get('/api/scan/results', (req, res) => {
     }
 
     let files, total;
+    const userId = req.user.username;
+    const isAdmin = req.user.role === 'admin';
+
+    const userLibraryPaths = getUserLibraryPaths(req.user);
 
     if (favoritesOnly) {
         // Query favorites from DB
-        const userId = 'admin'; // Match the hardcoded ID in toggleFavorite
         files = database.queryFavoriteFiles(userId, { offset, limit });
         total = database.countFavoriteFiles(userId);
     } else {
-        // Security Check: Restrict files based on libraryPaths
-        let libraryPaths = [];
-        if (fs.existsSync(CONFIG_FILE)) {
-            try {
-                const config = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
-                if (config.libraryPaths && config.libraryPaths.length > 0) {
-                    libraryPaths = config.libraryPaths.filter(p => fs.existsSync(p));
-                }
-            } catch (e) { }
-        }
+        const userLibraryPaths = getUserLibraryPaths(req.user);
 
-        let isBasePathValid = true;
-
-        // If specific library paths are configured, and a folderPath is requested
-        if (libraryPaths.length > 0 && folderPath) {
-            const resolvedPath = path.resolve(folderPath);
-            // We only show files if the requested folder is:
-            // 1. One of the library paths (Exact)
-            // 2. A subdirectory of a library path (Descendant)
-            // We do NOT show files if the folder is an Ancestor (e.g. /media containing /media/Photos).
-
-            const isDescendantOrEqual = libraryPaths.some(lp => {
-                const resolvedLp = path.resolve(lp);
-                return resolvedPath === resolvedLp || resolvedPath.startsWith(resolvedLp + path.sep) || resolvedPath.startsWith(resolvedLp + '/');
-            });
-
-            if (!isDescendantOrEqual) {
-                isBasePathValid = false;
-                console.log(`[Security] Blocking file listing for ancestor/unrelated path: ${resolvedPath}`);
-            }
-        }
-
-        if (!isBasePathValid) {
+        // Security Guard: If non-admin has no allowed paths, they see nothing.
+        // This prevents "allow everything" behavior if logic below is flawed.
+        if (!isAdmin && userLibraryPaths.length === 0) {
             files = [];
             total = 0;
         } else {
-            // Query database normally
-            const queryOptions = { offset, limit, random, recursive, mediaType, excludeMediaType };
-            if (folderPath) {
-                queryOptions.folderPath = path.resolve(folderPath);
+            let isBasePathValid = true;
+
+            if (userLibraryPaths.length > 0 && folderPath) {
+                const resolvedPath = path.resolve(folderPath);
+                const isDescendantOrEqual = userLibraryPaths.some(lp => {
+                    const resolvedLp = path.resolve(lp);
+                    return resolvedPath === resolvedLp || resolvedPath.startsWith(resolvedLp + path.sep) || resolvedPath.startsWith(resolvedLp + '/');
+                });
+
+                if (!isDescendantOrEqual) {
+                    isBasePathValid = false;
+                    console.log(`[Security] Blocking file listing for unauthorized path: ${resolvedPath}`);
+                }
+            } else if (!isAdmin && !folderPath) {
+                // If requesting a global view (random, recent) and not admin, must constrain to user's paths
+                // queryFiles needs update to support multiple paths constraint or we just filter results?
+                // Better: constraint in DB.
             }
-            files = database.queryFiles({ ...queryOptions, userId: 'admin' });
-            total = database.countFiles(folderPath ? { folderPath: path.resolve(folderPath), recursive } : {});
+
+            if (!isBasePathValid) {
+                files = [];
+                total = 0;
+            } else {
+                // Query database normally
+                const queryOptions = { offset, limit, random, recursive, mediaType, excludeMediaType, userId };
+
+                if (folderPath) {
+                    queryOptions.folderPath = path.resolve(folderPath);
+                } else if (!isAdmin) {
+                    // If no specific folder and not admin, ALWAYS apply path constraints
+                    queryOptions.allowedPaths = userLibraryPaths;
+                }
+
+                files = database.queryFiles(queryOptions);
+                total = database.countFiles({
+                    folderPath: folderPath ? path.resolve(folderPath) : null,
+                    recursive,
+                    allowedPaths: (!folderPath && !isAdmin) ? userLibraryPaths : null
+                });
+            }
         }
     }
 
@@ -1053,7 +1199,7 @@ app.get('/api/scan/results', (req, res) => {
 
 app.post('/api/favorites/toggle', (req, res) => {
     const { id, type } = req.body;
-    const userId = 'admin';
+    const userId = req.user.username;
     try {
         // Strict ID toggle. Frontend must send Base64 ID.
         const newStatus = database.toggleFavorite(userId, id, type || 'file');
@@ -1366,62 +1512,77 @@ async function processTaskQueue() {
                 console.log(`[Queue] Starting Smart Scan...`);
 
                 // Phase 1: Read Database
-                thumbState.currentPath = "Phase 1/3: Reading Database...";
-                const allFiles = database.queryFiles({ offset: 0, limit: 999999, recursive: true });
+                thumbState.currentPath = "Phase 1/3: Counting Records...";
+                const totalFileCount = database.countFiles({ recursive: true });
+                thumbState.total = totalFileCount + 3; // Est total: Count + 3 major phases
                 thumbState.count = 1;
 
-                // Phase 2: Read Cache
-                thumbState.currentPath = "Phase 2/3: Analyzing Cache (this may take a while)...";
+                thumbState.currentPath = "Phase 1/3: Loading file data...";
+                const allFiles = database.queryFiles({ offset: 0, limit: 999999, recursive: true });
+                thumbState.count = 2;
 
                 const missing = [];
                 const error = [];
                 const cacheSet = new Set();
 
-                // Read cache directory (Recursive for Sharding)
-                if (fs.existsSync(CACHE_DIR)) {
-                    const scanDir = (dir) => {
+                // Phase 2: Read Cache
+                thumbState.count = 3;
+                thumbState.currentPath = "Phase 2/3: Analyzing Cache contents...";
+                const scanDir = (dir) => {
+                    if (!fs.existsSync(dir)) return;
+                    try {
                         const items = fs.readdirSync(dir, { withFileTypes: true });
                         for (const item of items) {
                             if (item.isDirectory()) {
                                 scanDir(path.join(dir, item.name));
                             } else if (item.name.endsWith('.webp')) {
+                                cacheSet.add(item.name);
+                                // Check if file is empty (corrupted)
                                 try {
                                     const s = fs.statSync(path.join(dir, item.name));
-                                    cacheSet.add(item.name);
                                     if (s.size === 0) cacheSet.add(item.name + ":0");
                                 } catch (e) { }
                             }
                         }
-                    };
-                    scanDir(CACHE_DIR);
-                }
+                    } catch (e) { console.error(`[Queue] Error scanning cache dir ${dir}:`, e); }
+                };
+                scanDir(CACHE_DIR);
+                console.log(`[Queue] Cache analyzed. Found ${cacheSet.size} valid thumbnail names.`);
 
-                thumbState.count = 2;
+                thumbState.count = 4;
+                thumbState.total = allFiles.length + 4;
 
                 // Phase 3: Analysis
-                thumbState.currentPath = "Phase 3/3: Comparing...";
-                thumbState.total = allFiles.length + 3; // Adjust total to track progress through files
-                thumbState.count = 3;
-
+                thumbState.currentPath = "Phase 3/3: Comparing Records with Cache...";
                 let processed = 0;
                 for (const file of allFiles) {
                     if (thumbState.shouldStop) break;
 
-                    if (processed % 1000 === 0) {
-                        thumbState.count = 3 + processed;
-                        await new Promise(r => setImmediate(r)); // Yield
+                    if (processed % 100 === 0) {
+                        thumbState.count = 4 + processed;
+                        thumbState.currentPath = `Comparing: ${file.path.split(/[\\/]/).pop()}`;
+                        await new Promise(r => setImmediate(r));
                     }
                     processed++;
 
-                    const fileId = Buffer.from(file.path).toString('base64');
+                    // Debug Log for Cache Sample
+                    if (processed === 1 && cacheSet.size > 0) {
+                        console.log(`[SmartScan DEBUG] Cache Sample (first 3): ${Array.from(cacheSet).slice(0, 3).join(', ')}`);
+                    }
+
+                    // CRITICAL: Use the same ID generation as the rest of the app
+                    const fileId = file.id || Buffer.from(file.path).toString('base64');
                     const hash = crypto.createHash('md5').update(fileId).digest('hex') + '.webp';
 
                     if (!cacheSet.has(hash)) {
                         missing.push(file);
+                        // Debug log for first few missing
+                        if (missing.length <= 3) {
+                            console.log(`[SmartScan DEBUG] Missing File: Path="${file.path}" ID="${fileId}" Hash="${hash}"`);
+                        }
                     } else if (cacheSet.has(hash + ":0")) {
-                        error.push(file); // 0-byte file
+                        error.push(file);
                     }
-                    // Else exists and > 0 bytes
                 }
 
                 // Done
@@ -1459,6 +1620,14 @@ async function processTaskQueue() {
                         },
                         getThumbControl
                     );
+
+                    // If this was a repair task (inferred by name or context), clear results
+                    // To be safe, if we just processed a batch of files, we assume user acted on results.
+                    // Or specifically check for "Smart Repair" name if possible, but clearing on any mass op is safer UX.
+                    if (currentTask.name.includes('Smart Repair')) {
+                        console.log('[Queue] Smart Repair finished. clearing results.');
+                        smartScanResults = { missing: [], error: [], timestamp: Date.now() };
+                    }
                 }
             }
 
@@ -1752,68 +1921,79 @@ app.get('/api/file/:id', (req, res) => {
 
 // System Status API Stub
 app.get('/api/system/status', (req, res) => {
-    // Get Cache Stats
-    let cacheCount = 0;
+    const userId = req.user.username;
+    const isAdmin = req.user.role === 'admin';
+
+    const userLibraryPaths = getUserLibraryPaths(req.user);
+    const dbStats = dbReady ? database.getStats({ allowedPaths: isAdmin ? null : userLibraryPaths }) : { totalFiles: 0, totalImages: 0, totalVideos: 0, totalAudio: 0 };
+
     let cacheSize = 0;
-    try {
-        if (fs.existsSync(CACHE_DIR)) {
-            // Recursive count function
-            const countRecursive = (dir) => {
-                let count = 0;
-                let size = 0;
-                if (!fs.existsSync(dir)) return { count: 0, size: 0 };
+    let cacheCount = 0;
 
-                try {
-                    const items = fs.readdirSync(dir, { withFileTypes: true });
-                    for (const item of items) {
-                        const fullPath = path.join(dir, item.name);
-                        if (item.isDirectory()) {
-                            const sub = countRecursive(fullPath);
-                            count += sub.count;
-                            size += sub.size;
-                        } else {
-                            count++;
-                            try { size += fs.statSync(fullPath).size; } catch (e) { }
+    if (isAdmin) {
+        try {
+            if (fs.existsSync(CACHE_DIR)) {
+                const countRecursive = (dir) => {
+                    let count = 0;
+                    let size = 0;
+                    if (!fs.existsSync(dir)) return { count: 0, size: 0 };
+                    try {
+                        const items = fs.readdirSync(dir, { withFileTypes: true });
+                        for (const item of items) {
+                            const fullPath = path.join(dir, item.name);
+                            if (item.isDirectory()) {
+                                const sub = countRecursive(fullPath);
+                                count += sub.count;
+                                size += sub.size;
+                            } else {
+                                count++;
+                                try { size += fs.statSync(fullPath).size; } catch (e) { }
+                            }
                         }
-                    }
-                } catch (e) { }
-                return { count, size };
-            };
+                    } catch (e) { }
+                    return { count, size };
+                };
+                const stats = countRecursive(CACHE_DIR);
+                cacheCount = stats.count;
+                cacheSize = stats.size;
+            }
+        } catch (e) { }
+    }
 
-            const stats = countRecursive(CACHE_DIR);
-            cacheCount = stats.count;
-            cacheSize = stats.size;
-        }
-    } catch (e) { }
-
-    const dbStats = dbReady ? database.getStats() : { totalFiles: 0, totalImages: 0, totalVideos: 0, totalAudio: 0 };
-
-    res.json({
-        cpu: 0,
-        memory: 0,
-        storage: cacheSize,
-        watcherActive: isWatcherActive, // This will always be false now
-        mode: monitorMode,
-        scanInterval: scanInterval,
-        ffmpeg: true,
-        sharp: false,
-        imageProcessor: 'ffmpeg',
-        platform: process.platform,
-        ffmpegHwAccels: [],
-        cacheCount: cacheCount,
-        totalItems: dbStats.totalFiles,
-        dbStatus: dbReady ? 'connected' : 'initializing',
+    const status = {
         mediaStats: {
             totalFiles: dbStats.totalFiles || 0,
             images: dbStats.totalImages || 0,
             videos: dbStats.totalVideos || 0,
             audio: dbStats.totalAudio || 0
         }
-    });
+    };
+
+    if (isAdmin) {
+        Object.assign(status, {
+            uptime: Math.floor(process.uptime()),
+            cpu: 0,
+            memory: process.memoryUsage(),
+            storage: cacheSize,
+            watcherActive: false,
+            mode: monitorMode,
+            scanInterval: scanInterval,
+            ffmpeg: true,
+            sharp: false,
+            imageProcessor: 'ffmpeg',
+            platform: process.platform,
+            ffmpegHwAccels: [],
+            cacheCount: cacheCount,
+            totalItems: dbStats.totalFiles,
+            dbStatus: dbReady ? 'connected' : 'initializing',
+        });
+    }
+
+    res.json(status);
 });
 
 // Monitor Control Endpoint
-app.post('/api/system/monitor', (req, res) => {
+app.post('/api/system/monitor', adminOnly, (req, res) => {
     const { mode, interval, enabled } = req.body;
 
     try {
@@ -1867,7 +2047,7 @@ app.post('/api/system/monitor', (req, res) => {
 });
 
 // Watcher control endpoint (Legacy)
-app.get('/api/watcher/toggle', (req, res) => {
+app.get('/api/watcher/toggle', adminOnly, (req, res) => {
     try {
         let currentConfig = {};
         if (fs.existsSync(CONFIG_FILE)) {
@@ -1916,67 +2096,66 @@ app.get('/api/favorites/ids', (req, res) => {
         return res.status(503).json({ error: 'Database not ready' });
     }
 
-    const userId = 'admin'; // Default user ID
+    const userId = req.user.username;
     const favoriteIds = database.getFavoriteIds(userId);
     res.json(favoriteIds);
 });
 
-app.post('/api/favorites/toggle', (req, res) => {
-    console.log('[API] /api/favorites/toggle called, body:', req.body);
-
-    if (!dbReady) {
-        console.log('[API] Database not ready');
-        return res.status(503).json({ error: 'Database not ready' });
-    }
-
-    const { type, id } = req.body;
-    const userId = 'admin'; // Default user ID
-
-    console.log('[API] Parsed params:', { type, id, userId });
-
-    if (!type || !id) {
-        console.log('[API] Missing type or id');
-        return res.status(400).json({ success: false, error: 'Missing type or id' });
-    }
-
-    console.log('[API] Calling database.toggleFavorite...');
-    const isFavorite = database.toggleFavorite(userId, id, type);
-    console.log('[API] toggleFavorite returned:', isFavorite);
-
-    res.json({ success: true, isFavorite });
-});
+// app.post('/api/favorites/toggle', ...) -> DUPLICATE REMOVED (Defined above at line 1054)
 
 // EXIF API
 // EXIF API (Duplicate removed, see below)
 
-app.post('/api/cache/clear', (req, res) => {
+app.post('/api/cache/clear', adminOnly, (req, res) => {
     try {
+        console.log("[Cache] Starting cache clear operation...");
         if (fs.existsSync(CACHE_DIR)) {
-            // Recursive delete of valid cache directory
-            fs.rmSync(CACHE_DIR, { recursive: true, force: true });
+            // Helper to recursively delete contents instead of the directory itself
+            // Removing the root CACHE_DIR can cause issues if it's a Docker volume mount
+            const deleteContents = (dir) => {
+                const items = fs.readdirSync(dir);
+                for (const item of items) {
+                    const fullPath = path.join(dir, item);
+                    try {
+                        if (fs.statSync(fullPath).isDirectory()) {
+                            deleteContents(fullPath);
+                            fs.rmdirSync(fullPath);
+                        } else {
+                            fs.unlinkSync(fullPath);
+                        }
+                    } catch (err) {
+                        console.warn(`[Cache] Could not delete ${fullPath}: ${err.message}`);
+                    }
+                }
+            };
 
-            // Re-create the empty directory
-            if (!fs.existsSync(CACHE_DIR)) {
-                fs.mkdirSync(CACHE_DIR, { recursive: true });
-            }
+            deleteContents(CACHE_DIR);
+            console.log("[Cache] All contents within cache directory removed.");
         }
+
+        // Reset Smart Scan Results
+        smartScanResults = {
+            missing: [],
+            error: [],
+            timestamp: 0
+        };
 
         // Fix: Clear thumbnails table, not files table
         try {
             database.clearThumbnails();
-            console.log("Cleared thumbnails table.");
+            console.log("[DB] Thumbnails table cleared.");
         } catch (dbErr) {
-            console.error("Failed to clear thumbnails from DB", dbErr);
+            console.error("[DB] Failed to clear thumbnails from DB", dbErr);
         }
 
         res.json({ success: true });
     } catch (e) {
-        console.error("Clear cache failed", e);
-        res.status(500).json({ success: false });
+        console.error("[Cache] Clear cache fatal error:", e);
+        res.status(500).json({ success: false, error: e.message });
     }
 });
 
-app.post('/api/cache/prune', (req, res) => {
+app.post('/api/cache/prune', adminOnly, (req, res) => {
     if (!dbReady) {
         return res.status(503).json({ error: 'Database not ready' });
     }
@@ -2069,6 +2248,118 @@ app.get('/api/file/:id/exif', async (req, res) => {
 // Catch-all route to serve index.html for client-side routing
 app.get('*', (req, res) => {
     res.sendFile(path.join(__dirname, 'dist', 'index.html'));
+});
+
+// --- User Management Endpoints ---
+app.post('/api/users', adminOnly, (req, res) => {
+    const { username, password, isAdmin, allowedPaths } = req.body;
+
+    if (!username || !password) return res.status(400).json({ error: 'Missing fields' });
+
+    if (fs.existsSync(CONFIG_FILE)) {
+        try {
+            const config = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+            if (!config.users) config.users = [];
+
+            if (config.users.find(u => u.username === username)) {
+                return res.status(400).json({ error: 'User already exists' });
+            }
+
+            // Cleanup paths: remove empty, trim
+            const cleanedPaths = (allowedPaths || []).map(p => p.trim()).filter(Boolean);
+
+            config.users.push({
+                username,
+                password,
+                isAdmin: !!isAdmin,
+                allowedPaths: cleanedPaths
+            });
+
+            fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2));
+
+            const sanitizedUsers = config.users.map(({ password, ...u }) => u);
+            res.json({ success: true, users: sanitizedUsers });
+        } catch (e) { res.status(500).json({ error: 'Config error' }); }
+    } else {
+        res.status(500).json({ error: 'Config missing' });
+    }
+});
+
+app.post('/api/users/:targetUser', authenticateToken, (req, res) => {
+    const { targetUser } = req.params;
+    const { newUsername, newPassword, allowedPaths, isAdmin: newIsAdmin } = req.body;
+
+    console.log(`[DEBUG] Update user ${targetUser}:`, { newUsername, allowedPaths, newIsAdmin, reqUser: req.user });
+
+    const isSelf = req.user.username === targetUser;
+    const isAdmin = req.user.role === 'admin';
+
+    if (!isAdmin && !isSelf) {
+        console.log('[DEBUG] Permission denied');
+        return res.status(403).json({ error: 'Permission denied' });
+    }
+
+    // Non-admins can only change password
+    if (!isAdmin && (allowedPaths !== undefined || newUsername || newIsAdmin !== undefined)) {
+        console.log('[DEBUG] Admin fields denied for non-admin');
+        return res.status(403).json({ error: 'Admins only for these fields' });
+    }
+
+    if (fs.existsSync(CONFIG_FILE)) {
+        try {
+            const config = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+            const userIndex = config.users?.findIndex(u => u.username === targetUser);
+
+            if (userIndex === -1 || userIndex === undefined) return res.status(404).json({ error: 'User not found' });
+
+            // If renaming, check conflict
+            if (newUsername && newUsername !== targetUser) {
+                if (config.users.find(u => u.username === newUsername)) {
+                    return res.status(400).json({ error: 'Username already taken' });
+                }
+                config.users[userIndex].username = newUsername;
+            }
+
+            if (newPassword) config.users[userIndex].password = newPassword;
+            if (allowedPaths !== undefined && isAdmin) {
+                config.users[userIndex].allowedPaths = allowedPaths.map(p => p.trim()).filter(Boolean);
+            }
+            if (newIsAdmin !== undefined && isAdmin) {
+                config.users[userIndex].isAdmin = !!newIsAdmin;
+            }
+
+            fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2));
+
+            const sanitizedUsers = config.users.map(({ password, ...u }) => u);
+            res.json({ success: true, users: sanitizedUsers });
+        } catch (e) { res.status(500).json({ error: 'Config error' }); }
+    } else {
+        res.status(500).json({ error: 'Config missing' });
+    }
+});
+
+app.delete('/api/users/:targetUser', adminOnly, (req, res) => {
+    const { targetUser } = req.params;
+
+    // Prevent deleting self (though frontend should block too)
+    if (req.user.username === targetUser) return res.status(400).json({ error: "Cannot delete yourself" });
+
+    if (fs.existsSync(CONFIG_FILE)) {
+        try {
+            const config = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+            const initialLen = config.users?.length || 0;
+            config.users = config.users.filter(u => u.username !== targetUser);
+
+            if (config.users.length === initialLen) return res.status(404).json({ error: 'User not found' });
+
+            fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2));
+
+            const sanitizedUsers = config.users.map(({ password, ...u }) => u);
+            res.json({ success: true, users: sanitizedUsers });
+        } catch (e) { res.status(500).json({ error: 'Config error' }); }
+    } else {
+        res.status(500).json({ error: 'Config missing' });
+    }
 });
 
 app.listen(port, () => {

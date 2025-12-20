@@ -59,7 +59,7 @@ export default function App() {
     const [isUserModalOpen, setIsUserModalOpen] = useState(false);
     const [userFormType, setUserFormType] = useState<'add' | 'reset' | 'rename'>('add');
     const [targetUser, setTargetUser] = useState<User | null>(null);
-    const [newUserForm, setNewUserForm] = useState({ username: '', password: '', isAdmin: false });
+    const [newUserForm, setNewUserForm] = useState({ username: '', password: '', isAdmin: false, allowedPaths: '' });
 
     // --- Server Mode State ---
     const [isServerMode, setIsServerMode] = useState(false);
@@ -91,28 +91,37 @@ export default function App() {
     const [smartScanResults, setSmartScanResults] = useState<{ missing: any[], error: any[], timestamp: number } | null>(null);
 
     const handleSmartScan = async () => {
+        console.log("Starting Smart Scan v2...");
         try {
-            await fetch('/api/thumb/smart-scan', { method: 'POST' });
-            setThumbStatus('scanning'); // Optimistic
+            const res = await authFetch('/api/thumb/smart-scan', { method: 'POST' });
+            if (!res.ok) {
+                console.error("Smart scan request failed:", res.status, res.statusText);
+                return;
+            }
+            setThumbStatus('scanning');
+            thumbStatusRef.current = 'scanning';
+            setIsUnifiedModalOpen(true); // Open modal for progress
             startUnifiedPolling();
-        } catch (e) { console.error(e); }
+        } catch (e) { console.error("Smart scan failed:", e); }
     };
 
     const handleFetchSmartResults = async () => {
         try {
-            const res = await apiFetch('/api/thumb/smart-results');
+            const res = await authFetch('/api/thumb/smart-results');
             if (res.ok) setSmartScanResults(await res.json());
         } catch (e) { }
     };
 
     const handleSmartRepair = async () => {
         try {
-            await apiFetch('/api/thumb/smart-repair', {
+            await authFetch('/api/thumb/smart-repair', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ repairMissing: true, repairError: true })
             });
             setThumbStatus('scanning');
+            thumbStatusRef.current = 'scanning';
+            setIsUnifiedModalOpen(true); // Open modal for progress
             startUnifiedPolling();
         } catch (e) { console.error(e); }
     };
@@ -130,6 +139,7 @@ export default function App() {
     const [homeSubtitle, setHomeSubtitle] = useState('Your memories, beautifully organized. Rediscover your collection.');
     const [homeConfig, setHomeConfig] = useState<HomeScreenConfig>({ mode: 'random' });
     const [showDirPicker, setShowDirPicker] = useState(false);
+    const [dirPickerContext, setDirPickerContext] = useState<'library' | 'userAllowedPaths'>('library');
 
     // Derived state for current user
     const files = useMemo(() =>
@@ -251,6 +261,17 @@ export default function App() {
         localStorage.setItem(THEME_STORAGE_KEY, newTheme);
     };
 
+    // --- Auth Helper ---
+    // Defined at component level to be used everywhere
+    const authFetch = async (url: string, options: RequestInit = {}) => {
+        const token = localStorage.getItem('lumina_token');
+        const headers = { ...options.headers } as Record<string, string>;
+        if (token) {
+            headers['Authorization'] = `Bearer ${token}`;
+        }
+        return fetch(url, { ...options, headers });
+    };
+
     const [threadCount, setThreadCount] = useState<number>(2);
 
     // --- Persistence Helper ---
@@ -290,14 +311,19 @@ export default function App() {
         };
 
         if (isServerMode) {
-            try {
-                await apiFetch('/api/config', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(config)
-                });
-            } catch (e) {
-                console.error("Failed to sync to server", e);
+            // Only Admins can sync global config
+            if (currentUser && currentUser.isAdmin) {
+                try {
+                    await authFetch('/api/config', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(config)
+                    });
+                } catch (e) {
+                    console.error("Failed to sync to server", e);
+                }
+            } else {
+                console.log("[Persist] Skipping server sync (non-admin)");
             }
         } else {
             localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(u));
@@ -307,182 +333,155 @@ export default function App() {
         }
     };
 
-    // 1. Initial Load & Mode Detection
-    useEffect(() => {
-        const initApp = async () => {
-            let loadedUsers: User[] = [];
-            let loadedData: Record<string, UserData> = {};
-            let loadedTitle = 'Lumina Gallery';
-            let loadedSubtitle = 'Your memories, beautifully organized. Rediscover your collection.';
-            let loadedHomeConfig: HomeScreenConfig = { mode: 'random' };
-            let serverMode = false;
-            let loadedThreadCount = 2;
+    const initApp = async () => {
+        let loadedUsers: User[] = [];
+        let loadedData: Record<string, UserData> = {};
+        let loadedTitle = 'Lumina Gallery';
+        let loadedSubtitle = 'Your memories, beautifully organized. Rediscover your collection.';
+        let loadedHomeConfig: HomeScreenConfig = { mode: 'random' };
+        let serverMode = false;
+        let loadedThreadCount = 2;
 
-            try {
-                const res = await fetch('/api/config');
-                if (res.ok) {
-                    const text = await res.text();
-                    let config = null;
-                    try {
-                        config = JSON.parse(text);
-                    } catch (e) { }
+        try {
+            // First try to check config (this endpoint is whitelist-protected but good to be safe)
+            // Actually /api/config is protected for full data, public for basics.
+            // If we have a token, use it to get full data (users with allowedPaths).
+            const res = await authFetch('/api/config');
+            if (res.ok) {
+                const text = await res.text();
+                let config = null;
+                try {
+                    config = JSON.parse(text);
+                } catch (e) { }
 
+                if (config && config.configured !== false) {
                     serverMode = true;
                     setIsServerMode(true);
 
-                    if (config && typeof config === 'object' && config.users && config.users.length > 0) {
+                    if (config.users) {
                         loadedUsers = config.users;
-                        loadedTitle = config.title || 'Lumina Gallery';
-                        if (config.homeSubtitle) loadedSubtitle = config.homeSubtitle;
-                        if (config.homeScreen) loadedHomeConfig = config.homeScreen;
-                        setLibraryPaths(config.libraryPaths || []);
-                        if (config.threadCount) loadedThreadCount = config.threadCount;
-
-                        setThreadCount(loadedThreadCount);
-
                         config.users.forEach((u: User) => {
                             loadedData[u.username] = { sources: [], files: [], favoriteFolderPaths: [] };
                         });
-                    } else if (!config || config.configured === false) {
-                        setAuthStep('setup');
-                        return;
                     }
-                }
-            } catch (e) { }
-
-            // Fallback or Local
-            if (!serverMode || loadedUsers.length === 0) {
-                const storedUsers = localStorage.getItem(USERS_STORAGE_KEY);
-                const storedTitle = localStorage.getItem(APP_TITLE_KEY);
-                const storedSubtitle = localStorage.getItem(APP_SUBTITLE_KEY);
-                const storedSources = localStorage.getItem(SOURCES_STORAGE_KEY);
-
-                if (storedUsers) {
-                    loadedUsers = JSON.parse(storedUsers);
-                    if (storedTitle) loadedTitle = storedTitle;
-                    if (storedSubtitle) loadedSubtitle = storedSubtitle;
-
-                    if (storedSources) {
-                        const parsedSources = JSON.parse(storedSources);
-                        Object.keys(parsedSources).forEach(username => {
-                            loadedData[username] = { sources: parsedSources[username], files: [], favoriteFolderPaths: [] };
-                        });
-                    } else {
-                        loadedUsers.forEach((u: User) => loadedData[u.username] = { sources: [], files: [], favoriteFolderPaths: [] });
-                    }
-                } else {
+                    if (config.title) loadedTitle = config.title;
+                    if (config.homeSubtitle) loadedSubtitle = config.homeSubtitle;
+                    if (config.homeScreen) loadedHomeConfig = config.homeScreen;
+                    if (config.libraryPaths) setLibraryPaths(config.libraryPaths);
+                    if (config.threadCount) loadedThreadCount = config.threadCount;
+                    setThreadCount(loadedThreadCount);
+                } else if (!config || config.configured === false) {
                     setAuthStep('setup');
                     return;
                 }
             }
+        } catch (e) { }
 
-            setUsers(loadedUsers);
-            setAppTitle(loadedTitle);
-            setHomeSubtitle(loadedSubtitle);
+        // Fallback or Local
+        if (!serverMode || loadedUsers.length === 0) {
+            const storedUsers = localStorage.getItem(USERS_STORAGE_KEY);
+            const storedTitle = localStorage.getItem(APP_TITLE_KEY);
+            const storedSubtitle = localStorage.getItem(APP_SUBTITLE_KEY);
+            const storedSources = localStorage.getItem(SOURCES_STORAGE_KEY);
 
-            setHomeConfig(loadedHomeConfig);
+            if (storedUsers) {
+                loadedUsers = JSON.parse(storedUsers);
+                if (storedTitle) loadedTitle = storedTitle;
+                if (storedSubtitle) loadedSubtitle = storedSubtitle;
 
-            // Check Persistent Login & Load Cache (Performance)
-            const savedUser = localStorage.getItem(AUTH_USER_KEY);
-            const savedViewMode = localStorage.getItem(VIEW_MODE_KEY) as ViewMode;
-
-            if (savedUser && (!savedViewMode || savedViewMode === 'home' || savedViewMode === 'all')) {
-                try {
-                    const cached = localStorage.getItem('lumina_cache_home');
-                    if (cached && loadedData[savedUser]) {
-                        const cData = JSON.parse(cached);
-                        if (cData && Array.isArray(cData.files)) {
-                            loadedData[savedUser].files = cData.files;
-                            console.log('Processed Initial Cache:', cData.files.length);
-                        }
-                    }
-                } catch (e) { }
-            }
-
-            setAllUserData(loadedData);
-
-            if (savedUser) {
-                const user = loadedUsers.find(u => u.username === savedUser);
-                if (user) {
-                    setCurrentUser(user);
-                    setAuthStep('app');
-
-                    // Load saved ViewMode to decide what to fetch
-                    const savedViewMode = localStorage.getItem(VIEW_MODE_KEY) as ViewMode;
-
-                    if (serverMode) {
-                        // Ensure state is ready before fetching
-                        // At this point, setAllUserData(loadedData) has been called
-                        // so loadedData is the current state
-                        setTimeout(async () => {
-                            console.log('[DEBUG] initApp setTimeout - savedViewMode:', savedViewMode);
-                            // CRITICAL: Fetch favorites IDs first and get the data
-                            const favoriteIds = await fetchServerFavorites();
-                            console.log('[DEBUG] fetchServerFavorites completed, got:', favoriteIds);
-
-                            if (savedViewMode === 'favorites') {
-                                console.log('[DEBUG] Fetching favorite files and folders');
-                                // Pass favoriteIds directly to avoid state async issue
-                                fetchServerFiles(user.username, loadedData, 0, true, null, true, favoriteIds);
-                                fetchServerFolders(null, true);
-                            } else if (savedViewMode === 'folders') {
-                                // Default to root on load if no specific path logic yet
-                                fetchServerFolders('', false);
-                                // Don't fetch files immediately in folders view unless path is set
-                            } else {
-                                // Default / All Photos / Home
-                                fetchServerFiles(user.username, loadedData, 0, true, null, false, favoriteIds);
-                                fetchServerFolders('', false); // Fetch root folders
-                            }
-                        }, 50);
-
-                        // Restore background task state
-                        setTimeout(async () => {
-                            try {
-                                const [scanRes, thumbRes] = await Promise.all([
-                                    fetch('/api/scan/status'),
-                                    fetch('/api/thumb-gen/status')
-                                ]);
-
-                                let foundActive = false;
-
-                                if (scanRes.ok) {
-                                    const scanData = await scanRes.json();
-                                    if (scanData.status === 'scanning' || scanData.status === 'paused') {
-                                        setScanStatus(scanData.status);
-                                        setScanProgress({ count: scanData.count, currentPath: scanData.currentPath || '', currentEngine: '' });
-                                        scanStatusRef.current = scanData.status;
-                                        foundActive = true;
-                                    }
-                                }
-
-                                if (thumbRes.ok) {
-                                    const thumbData = await thumbRes.json();
-                                    if (thumbData.status === 'scanning' || thumbData.status === 'paused') {
-                                        setThumbStatus(thumbData.status);
-                                        setThumbProgress({ count: thumbData.count, total: thumbData.total, currentPath: thumbData.currentPath });
-                                        thumbStatusRef.current = thumbData.status;
-                                        foundActive = true;
-                                    }
-                                }
-
-                                if (foundActive) {
-                                    setIsUnifiedModalOpen(true);
-                                    startUnifiedPolling();
-                                }
-                            } catch (e) {
-                                console.error('[Restore] Failed to check background tasks', e);
-                            }
-                        }, 100);
-                    }
-                    return;
+                if (storedSources) {
+                    const parsedSources = JSON.parse(storedSources);
+                    Object.keys(parsedSources).forEach(username => {
+                        loadedData[username] = { sources: parsedSources[username], files: [], favoriteFolderPaths: [] };
+                    });
+                } else {
+                    loadedUsers.forEach((u: User) => loadedData[u.username] = { sources: [], files: [], favoriteFolderPaths: [] });
                 }
+            } else {
+                setAuthStep('setup');
+                return;
             }
+        }
 
-            setAuthStep('login');
-        };
+        setUsers(loadedUsers);
+        setAppTitle(loadedTitle);
+        setHomeSubtitle(loadedSubtitle);
+        setHomeConfig(loadedHomeConfig);
 
-        // Check if we are already initialized to prevent double loading
+        // Check Persistent Login & Load Cache (Performance)
+        const savedUser = localStorage.getItem(AUTH_USER_KEY);
+        const savedViewMode = localStorage.getItem(VIEW_MODE_KEY) as ViewMode;
+
+        if (savedUser && (!savedViewMode || savedViewMode === 'home' || savedViewMode === 'all')) {
+            try {
+                const cached = localStorage.getItem('lumina_cache_home');
+                if (cached && loadedData[savedUser]) {
+                    const cData = JSON.parse(cached);
+                    if (cData && Array.isArray(cData.files)) {
+                        loadedData[savedUser].files = cData.files;
+                        console.log('Processed Initial Cache:', cData.files.length);
+                    }
+                }
+            } catch (e) { }
+        }
+
+        setAllUserData(loadedData);
+
+        if (savedUser) {
+            const user = loadedUsers.find(u => u.username === savedUser);
+            if (user) {
+                setCurrentUser(user);
+                setAuthStep('app');
+
+                if (serverMode) {
+                    // Restore background task state
+                    setTimeout(async () => {
+                        try {
+                            const [scanRes, thumbRes] = await Promise.all([
+                                authFetch('/api/scan/status'),
+                                authFetch('/api/thumb-gen/status')
+                            ]);
+
+                            let foundActive = false;
+
+                            if (scanRes.ok) {
+                                const scanData = await scanRes.json();
+                                if (scanData.status === 'scanning' || scanData.status === 'paused') {
+                                    setScanStatus(scanData.status);
+                                    setScanProgress({ count: scanData.count, currentPath: scanData.currentPath || '', currentEngine: '' });
+                                    scanStatusRef.current = scanData.status;
+                                    foundActive = true;
+                                }
+                            }
+
+                            if (thumbRes.ok) {
+                                const thumbData = await thumbRes.json();
+                                if (thumbData.status === 'scanning' || thumbData.status === 'paused') {
+                                    setThumbStatus(thumbData.status);
+                                    setThumbProgress({ count: thumbData.count, total: thumbData.total, currentPath: thumbData.currentPath });
+                                    thumbStatusRef.current = thumbData.status;
+                                    foundActive = true;
+                                }
+                            }
+
+                            if (foundActive) {
+                                setIsUnifiedModalOpen(true);
+                                startUnifiedPolling();
+                            }
+                        } catch (e) {
+                            console.error('[Restore] Failed to check background tasks', e);
+                        }
+                    }, 100);
+                }
+                return;
+            }
+        }
+
+        setAuthStep('login');
+    };
+
+    // 1. Initial Load & Mode Detection
+    useEffect(() => {
         initApp();
 
         const savedViewMode = localStorage.getItem(VIEW_MODE_KEY) as ViewMode;
@@ -794,6 +793,11 @@ export default function App() {
                 scanTimeoutRef.current = setTimeout(poll, 1000);
             } else {
                 fetchSystemStatus();
+                // Auto-refresh smart scan results if we just finished a thumb task
+                if (settingsTab === 'system') {
+                    handleFetchSmartResults();
+                }
+
                 const user = currentUserRef.current;
                 if (user) {
                     const mode = viewModeRef.current;
@@ -864,6 +868,7 @@ export default function App() {
         if (!isServerMode || !confirm('Are you sure you want to clear all cache? Thumbnails will need to be regenerated.')) return;
         try {
             await apiFetch('/api/cache/clear', { method: 'POST' });
+            setSmartScanResults(null); // Clear local scan results as they are now invalid
             fetchSystemStatus(true);
             alert(t('cache_cleared'));
         } catch (e) { alert('Network error'); }
@@ -961,6 +966,7 @@ export default function App() {
         // Or we strictly follow: Close button only appears if both IDLE (in Component).
         // So here we just set open false.
         setIsUnifiedModalOpen(false);
+        handleFetchSmartResults(); // Refresh results on close to update UI counts
     };
 
     // Control Handlers
@@ -1088,7 +1094,7 @@ export default function App() {
 
     // User Management Handlers
     const handleAddUser = () => {
-        setNewUserForm({ username: '', password: '', isAdmin: false });
+        setNewUserForm({ username: '', password: '', isAdmin: false, allowedPaths: '' });
         setUserFormType('add');
         setIsUserModalOpen(true);
     };
@@ -1105,73 +1111,79 @@ export default function App() {
 
     const handleResetPassword = (user: User) => {
         setTargetUser(user);
-        setNewUserForm({ username: user.username, password: '', isAdmin: user.isAdmin });
+        setNewUserForm({
+            username: user.username,
+            password: '',
+            isAdmin: user.isAdmin || false,
+            allowedPaths: '' // Reset flow usually doesn't show paths, but type requires it. Could show if we want.
+        });
         setUserFormType('reset');
         setIsUserModalOpen(true);
     };
 
     const handleRenameUser = (user: User) => {
+        console.log('[DEBUG] Editing user:', user.username, 'AllowedPaths:', user.allowedPaths, 'IsAdmin:', user.isAdmin);
         setTargetUser(user);
-        setNewUserForm({ username: user.username, password: '', isAdmin: user.isAdmin });
+        setNewUserForm({
+            username: user.username,
+            password: '',
+            isAdmin: user.isAdmin || false,
+            allowedPaths: (user.allowedPaths || []).join('\n')
+        });
         setUserFormType('rename');
         setIsUserModalOpen(true);
     };
 
-    const submitUserForm = (e: React.FormEvent) => {
+    const submitUserForm = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (!newUserForm.username || (userFormType !== 'rename' && !newUserForm.password)) return;
+        try {
+            const pathsArray = newUserForm.allowedPaths.split(/[\n,]/).map(p => p.trim()).filter(Boolean);
 
-        if (userFormType === 'add') {
-            if (users.find(u => u.username === newUserForm.username)) {
-                alert('User already exists');
-                return;
-            }
-            const newUser: User = {
-                username: newUserForm.username,
-                password: newUserForm.password,
-                isAdmin: newUserForm.isAdmin,
-                avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${newUserForm.username}`
-            };
-            const updatedUsers = [...users, newUser];
-            const updatedData = { ...allUserData, [newUser.username]: { sources: [], files: [], favoriteFolderPaths: [] } };
-            persistData(updatedUsers, undefined, updatedData);
-        } else if (userFormType === 'rename' && targetUser) {
-            if (newUserForm.username !== targetUser.username) {
-                if (users.find(u => u.username === newUserForm.username)) {
-                    alert('Username already taken');
-                    return;
-                }
-                const updatedUsers = users.map(u => {
-                    if (u.username === targetUser.username) {
-                        return { ...u, username: newUserForm.username };
-                    }
-                    return u;
+            if (userFormType === 'add') {
+                if (!newUserForm.username || !newUserForm.password) return;
+                const res = await apiFetch('/api/users', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        username: newUserForm.username,
+                        password: newUserForm.password,
+                        isAdmin: newUserForm.isAdmin,
+                        allowedPaths: pathsArray
+                    })
                 });
-
-                const updatedData = { ...allUserData };
-                if (updatedData[targetUser.username]) {
-                    updatedData[newUserForm.username] = updatedData[targetUser.username];
-                    delete updatedData[targetUser.username];
-                }
-
-                if (currentUser?.username === targetUser.username) {
-                    const updatedUser = { ...currentUser, username: newUserForm.username };
-                    setCurrentUser(updatedUser);
-                    localStorage.setItem(AUTH_USER_KEY, JSON.stringify(updatedUser));
-                }
-
-                persistData(updatedUsers, undefined, updatedData);
+                if (!res.ok) throw new Error(await res.text());
+            } else if (userFormType === 'rename' && targetUser) {
+                const res = await apiFetch(`/api/users/${targetUser.username}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        newUsername: newUserForm.username !== targetUser.username ? newUserForm.username : undefined,
+                        newPassword: newUserForm.password || undefined,
+                        allowedPaths: pathsArray
+                    })
+                });
+                if (!res.ok) throw new Error(await res.text());
+            } else if (userFormType === 'reset' && targetUser) {
+                const res = await apiFetch(`/api/users/${targetUser.username}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        newPassword: newUserForm.password,
+                        isAdmin: newUserForm.isAdmin // Also allow updating role
+                    })
+                });
+                if (!res.ok) throw new Error(await res.text());
             }
-        } else if (userFormType === 'reset' && targetUser) {
-            const updatedUsers = users.map(u => {
-                if (u.username === targetUser.username) {
-                    return { ...u, password: newUserForm.password, isAdmin: newUserForm.isAdmin };
-                }
-                return u;
-            });
-            persistData(updatedUsers);
+
+            // Allow time for file write
+            await new Promise(r => setTimeout(r, 500));
+            // Refresh app state without full reload to preserve logs
+            await initApp();
+            setIsUserModalOpen(false); // Close modal on success
+        } catch (error) {
+            console.error(error);
+            alert('An error occurred');
         }
-        setIsUserModalOpen(false);
     };
 
     const handleToggleFavorite = async (item: MediaItem | string, type: 'file' | 'folder') => {
@@ -1869,7 +1881,7 @@ export default function App() {
                                                     />
                                                     <button
                                                         type="button"
-                                                        onClick={() => setShowDirPicker(true)}
+                                                        onClick={() => { setDirPickerContext('library'); setShowDirPicker(true); }}
                                                         className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-gray-400 hover:text-primary-500 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-md transition-colors"
                                                         title={t('browse')}
                                                     >
@@ -2236,7 +2248,7 @@ export default function App() {
                                             disabled={thumbStatus === 'scanning'}
                                             className={`w-full py-2.5 rounded-xl font-medium text-sm transition-colors ${thumbStatus === 'scanning' ? 'bg-gray-200 dark:bg-gray-700 text-gray-400' : 'bg-yellow-50 dark:bg-yellow-900/20 text-yellow-600 dark:text-yellow-400 hover:bg-yellow-100 dark:hover:bg-yellow-900/30'}`}
                                         >
-                                            {thumbStatus === 'scanning' ? (t('processing') || 'Processing...') : (t('start_smart_scan') || 'Start Analysis')}
+                                            {thumbStatus === 'scanning' ? 'Processing...' : 'Start Analysis (v2)'}
                                         </button>
                                     )}
                                 </div>
@@ -2263,7 +2275,7 @@ export default function App() {
                                 )}
                             </div>
                             <div className="bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded-2xl overflow-hidden shadow-sm">
-                                {users.map((user, idx) => (
+                                {users.filter(u => currentUser?.isAdmin || u.username === currentUser?.username).map((user, idx) => (
                                     <div key={user.username} className={`p-4 flex items-center justify-between ${idx !== users.length - 1 ? 'border-b border-gray-50 dark:border-gray-700/50' : ''}`}>
                                         <div className="flex items-center gap-4">
                                             <div className={`w-10 h-10 rounded-full flex items-center justify-center text-lg font-bold ${user.username === currentUser?.username ? 'bg-primary-100 dark:bg-primary-900 text-primary-600 dark:text-primary-400' : 'bg-gray-100 dark:bg-gray-700 text-gray-500'}`}>
@@ -2279,12 +2291,15 @@ export default function App() {
                                         </div>
 
                                         <div className="flex items-center gap-2">
+                                            {/* Self-service password change */}
+                                            {(currentUser?.isAdmin || user.username === currentUser?.username) && (
+                                                <button onClick={() => handleResetPassword(user)} className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg transition-colors" title={t('change_password')}>
+                                                    <Icons.Lock size={16} />
+                                                </button>
+                                            )}
                                             {currentUser?.isAdmin && (
                                                 <>
-                                                    <button onClick={() => handleResetPassword(user)} className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg transition-colors" title={t('reset_password')}>
-                                                        <Icons.Lock size={16} />
-                                                    </button>
-                                                    <button onClick={() => handleRenameUser(user)} className="p-2 text-gray-400 hover:text-orange-600 hover:bg-orange-50 dark:hover:bg-orange-900/20 rounded-lg transition-colors" title="Rename User">
+                                                    <button onClick={() => handleRenameUser(user)} className="p-2 text-gray-400 hover:text-orange-600 hover:bg-orange-50 dark:hover:bg-orange-900/20 rounded-lg transition-colors" title="Edit User">
                                                         <Icons.Edit size={16} />
                                                     </button>
                                                     {user.username !== currentUser.username && (
@@ -2570,23 +2585,27 @@ export default function App() {
                                             <Icons.Settings size={18} /> {t('general')}
                                         </button>
                                         <button
-                                            onClick={() => setSettingsTab('library')}
-                                            className={`w-full text-left px-4 py-3 rounded-xl flex items-center gap-3 transition-colors ${settingsTab === 'library' ? 'bg-white dark:bg-gray-800 shadow-sm font-medium text-primary-600 dark:text-primary-400' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800/50'}`}
-                                        >
-                                            <Icons.Database size={18} /> {t('storage_database')}
-                                        </button>
-                                        <button
-                                            onClick={() => setSettingsTab('system')}
-                                            className={`w-full text-left px-4 py-3 rounded-xl flex items-center gap-3 transition-colors ${settingsTab === 'system' ? 'bg-white dark:bg-gray-800 shadow-sm font-medium text-primary-600 dark:text-primary-400' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800/50'}`}
-                                        >
-                                            <Icons.Cpu size={18} /> {t('system')}
-                                        </button>
-                                        <button
                                             onClick={() => setSettingsTab('account')}
                                             className={`w-full text-left px-4 py-3 rounded-xl flex items-center gap-3 transition-colors ${settingsTab === 'account' ? 'bg-white dark:bg-gray-800 shadow-sm font-medium text-primary-600 dark:text-primary-400' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800/50'}`}
                                         >
                                             <Icons.User size={18} /> {t('users')}
                                         </button>
+                                        {currentUser?.isAdmin && (
+                                            <>
+                                                <button
+                                                    onClick={() => setSettingsTab('library')}
+                                                    className={`w-full text-left px-4 py-3 rounded-xl flex items-center gap-3 transition-colors ${settingsTab === 'library' ? 'bg-white dark:bg-gray-800 shadow-sm font-medium text-primary-600 dark:text-primary-400' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800/50'}`}
+                                                >
+                                                    <Icons.Database size={18} /> {t('storage_database')}
+                                                </button>
+                                                <button
+                                                    onClick={() => setSettingsTab('system')}
+                                                    className={`w-full text-left px-4 py-3 rounded-xl flex items-center gap-3 transition-colors ${settingsTab === 'system' ? 'bg-white dark:bg-gray-800 shadow-sm font-medium text-primary-600 dark:text-primary-400' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800/50'}`}
+                                                >
+                                                    <Icons.Cpu size={18} /> {t('system')}
+                                                </button>
+                                            </>
+                                        )}
                                     </div>
                                 </div>
 
@@ -2625,7 +2644,7 @@ export default function App() {
                             >
                                 <h3 className="text-xl font-bold mb-4 flex items-center gap-2">
                                     <Icons.User size={24} className="text-primary-600" />
-                                    {userFormType === 'add' ? t('add_user') : (userFormType === 'rename' ? 'Rename User' : t('reset_password'))}
+                                    {userFormType === 'add' ? t('add_user') : (userFormType === 'rename' ? 'Edit User' : t('change_password'))}
                                 </h3>
                                 <form onSubmit={submitUserForm} className="space-y-4">
                                     {(userFormType === 'add' || userFormType === 'rename') && (
@@ -2652,7 +2671,7 @@ export default function App() {
                                             />
                                         </div>
                                     )}
-                                    {userFormType === 'add' && (
+                                    {userFormType === 'add' && currentUser?.isAdmin && (
                                         <div className="flex items-center gap-2">
                                             <input
                                                 type="checkbox"
@@ -2664,9 +2683,31 @@ export default function App() {
                                             <label htmlFor="isAdmin" className="text-sm font-medium">{t('is_admin')}</label>
                                         </div>
                                     )}
+
+                                    {(userFormType === 'add' || userFormType === 'rename') && currentUser?.isAdmin && (
+                                        <div>
+                                            <div className="flex justify-between items-center mb-1">
+                                                <label className="block text-sm font-medium">Allowed Library Paths</label>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => { setDirPickerContext('userAllowedPaths'); setShowDirPicker(true); }}
+                                                    className="text-xs text-primary-600 hover:underline flex items-center gap-1"
+                                                >
+                                                    <Icons.FolderOpen size={12} /> {t('browse')}
+                                                </button>
+                                            </div>
+                                            <p className="text-xs text-gray-500 mb-2">Separate multiple paths with new lines. Leave empty to deny all access.</p>
+                                            <textarea
+                                                className="w-full px-4 py-2 rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 outline-none focus:ring-2 focus:ring-primary-500 min-h-[100px] text-sm font-mono"
+                                                placeholder="/data/media/user1&#10;/data/media/shared"
+                                                value={newUserForm.allowedPaths}
+                                                onChange={e => setNewUserForm({ ...newUserForm, allowedPaths: e.target.value })}
+                                            />
+                                        </div>
+                                    )}
                                     <div className="flex justify-end gap-3 pt-4">
                                         <button type="button" onClick={() => setIsUserModalOpen(false)} className="px-4 py-2 text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors">{t('cancel')}</button>
-                                        <button type="submit" className="px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded-lg font-bold transition-colors">{t('save')}</button>
+                                        <button type="submit" className="px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded-lg font-bold transition-colors">{t('save_changes') || t('save')}</button>
                                     </div>
                                 </form>
                             </motion.div>
@@ -2740,18 +2781,33 @@ export default function App() {
                 thumbTotal={thumbProgress.total}
                 thumbCurrentPath={thumbProgress.currentPath}
                 thumbQueue={thumbQueue}
+                smartResults={smartScanResults} // Pass analysis results
                 onThumbPause={() => controlThumb('pause')}
                 onThumbResume={() => controlThumb('resume')}
                 onThumbStop={() => controlThumb('stop')}
                 onThumbCancelTask={handleCancelTask}
+                onStartRepair={handleSmartRepair} // Pass repair handler
             />
 
             {showDirPicker && (
                 <DirectoryPicker
                     isOpen={showDirPicker}
                     onClose={() => setShowDirPicker(false)}
-                    onSelect={(path) => setNewPathInput(path)}
-                    initialPath={newPathInput}
+                    onSelect={(path) => {
+                        if (dirPickerContext === 'library') {
+                            setNewPathInput(path);
+                        } else {
+                            // Append to allowed paths, ensuring newline separation
+                            // Use functional update to avoid closure staleness
+                            setNewUserForm(prev => {
+                                const current = prev.allowedPaths || '';
+                                const newValue = current ? (current.trim() + '\n' + path) : path;
+                                return { ...prev, allowedPaths: newValue };
+                            });
+                        }
+                        setShowDirPicker(false);
+                    }}
+                    initialPath={dirPickerContext === 'library' ? newPathInput : ''}
                 />
             )}
         </div >

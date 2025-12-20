@@ -48,6 +48,7 @@ export interface User {
   password: string; // In a real app, this should be hashed. Here we use plain text for demo mock.
   isAdmin: boolean;
   avatar?: string;
+  allowedPaths?: string[]; // New: Per-user directory access control
 }
 
 // New interface for per-user data persistence

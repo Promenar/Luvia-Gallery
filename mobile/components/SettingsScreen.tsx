@@ -22,6 +22,7 @@ interface SettingsScreenProps {
     onBack?: () => void;
     onLogout?: () => void;
     username?: string;
+    isAdmin?: boolean;
 }
 
 interface SystemStatus {
@@ -36,7 +37,7 @@ interface SystemStatus {
     mode: string;
 }
 
-export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBack, onLogout, username }) => {
+export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBack, onLogout, username, isAdmin }) => {
     const { showToast } = useToast();
     const insets = useSafeAreaInsets();
     const { t, language, setLanguage } = useLanguage();
@@ -55,10 +56,21 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBack, onLogout
     const loadStats = async () => {
         setLoadingStats(true);
         try {
-            const res = await fetch(`${API_URL}/api/system/status`);
+            const url = `${API_URL}/api/system/status`;
+            const { getToken } = await import('../utils/api');
+            const token = getToken();
+
+            const res = await fetch(url, {
+                headers: {
+                    ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+                }
+            });
+
             if (res.ok) {
                 const data = await res.json();
                 setStats(data);
+            } else if (res.status === 403) {
+                console.log("Not authorized to see some system stats");
             }
         } catch (e) {
             console.error("Failed to load system stats", e);
@@ -275,44 +287,46 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBack, onLogout
                     </View>
                 </View>
 
-                {/* System Monitoring */}
-                <View className="mb-8">
-                    <View className="flex-row items-center mb-4 gap-2">
-                        <HardDrive color="#4b5563" size={20} />
-                        <Text className="text-lg font-bold text-gray-800 dark:text-gray-100">{t('section.system')}</Text>
-                    </View>
+                {/* System Monitoring (Only for Admin) */}
+                {isAdmin && (
+                    <View className="mb-8">
+                        <View className="flex-row items-center mb-4 gap-2">
+                            <HardDrive color="#4b5563" size={20} />
+                            <Text className="text-lg font-bold text-gray-800 dark:text-gray-100">{t('section.system')}</Text>
+                        </View>
 
-                    <View className="bg-gray-50 dark:bg-zinc-900 p-4 rounded-xl border border-gray-100 dark:border-zinc-800">
-                        {loadingStats ? (
-                            <ActivityIndicator color={mode === 'dark' ? "#fff" : "#000"} />
-                        ) : stats ? (
-                            <View className="gap-4">
-                                <View className="flex-row justify-between border-b border-gray-200 dark:border-zinc-800 pb-2">
-                                    <Text className="text-gray-500 dark:text-gray-400">{t('stats.total_media')}</Text>
-                                    <Text className="font-bold text-gray-900 dark:text-white">{stats.mediaStats?.totalFiles || 0}</Text>
+                        <View className="bg-gray-50 dark:bg-zinc-900 p-4 rounded-xl border border-gray-100 dark:border-zinc-800">
+                            {loadingStats ? (
+                                <ActivityIndicator color={mode === 'dark' ? "#fff" : "#000"} />
+                            ) : stats ? (
+                                <View className="gap-4">
+                                    <View className="flex-row justify-between border-b border-gray-200 dark:border-zinc-800 pb-2">
+                                        <Text className="text-gray-500 dark:text-gray-400">{t('stats.total_media')}</Text>
+                                        <Text className="font-bold text-gray-900 dark:text-white">{stats.mediaStats?.totalFiles || 0}</Text>
+                                    </View>
+                                    <View className="flex-row justify-between border-b border-gray-200 dark:border-zinc-800 pb-2">
+                                        <Text className="text-gray-500 dark:text-gray-400">{t('stats.cache_size')}</Text>
+                                        <Text className="font-bold text-gray-900 dark:text-white">{formatBytes(stats.storage || 0)}</Text>
+                                    </View>
+                                    <View className="flex-row justify-between border-b border-gray-200 dark:border-zinc-800 pb-2">
+                                        <Text className="text-gray-500 dark:text-gray-400">{t('stats.cache_items')}</Text>
+                                        <Text className="font-bold text-gray-900 dark:text-white">{stats.cacheCount || 0}</Text>
+                                    </View>
+                                    <View className="flex-row justify-between">
+                                        <Text className="text-gray-500 dark:text-gray-400">{t('stats.scan_mode')}</Text>
+                                        <Text className="font-bold text-gray-900 dark:text-white capitalize">{stats.mode || 'manual'}</Text>
+                                    </View>
                                 </View>
-                                <View className="flex-row justify-between border-b border-gray-200 dark:border-zinc-800 pb-2">
-                                    <Text className="text-gray-500 dark:text-gray-400">{t('stats.cache_size')}</Text>
-                                    <Text className="font-bold text-gray-900 dark:text-white">{formatBytes(stats.storage)}</Text>
-                                </View>
-                                <View className="flex-row justify-between border-b border-gray-200 dark:border-zinc-800 pb-2">
-                                    <Text className="text-gray-500 dark:text-gray-400">{t('stats.cache_items')}</Text>
-                                    <Text className="font-bold text-gray-900 dark:text-white">{stats.cacheCount}</Text>
-                                </View>
-                                <View className="flex-row justify-between">
-                                    <Text className="text-gray-500 dark:text-gray-400">{t('stats.scan_mode')}</Text>
-                                    <Text className="font-bold text-gray-900 dark:text-white capitalize">{stats.mode}</Text>
-                                </View>
-                            </View>
-                        ) : (
-                            <Text className="text-gray-400 text-center italic">{t('msg.load_error')}</Text>
-                        )}
-                        {/* Reload Stats Button */}
-                        <TouchableOpacity onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); loadStats(); }} className="mt-4 self-center px-4 py-2 bg-gray-200 dark:bg-zinc-800 rounded-full">
-                            <Text className="text-xs font-bold text-gray-600 dark:text-gray-300">{t('action.refresh')}</Text>
-                        </TouchableOpacity>
+                            ) : (
+                                <Text className="text-gray-400 text-center italic">{t('msg.load_error')}</Text>
+                            )}
+                            {/* Reload Stats Button */}
+                            <TouchableOpacity onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); loadStats(); }} className="mt-4 self-center px-4 py-2 bg-gray-200 dark:bg-zinc-800 rounded-full">
+                                <Text className="text-xs font-bold text-gray-600 dark:text-gray-300">{t('action.refresh')}</Text>
+                            </TouchableOpacity>
+                        </View>
                     </View>
-                </View>
+                )}
 
                 {/* Security */}
                 <View className="mb-8">
@@ -343,25 +357,27 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBack, onLogout
                     </View>
                 </View>
 
-                {/* Cache Management */}
-                <View className="mb-8">
-                    <View className="flex-row items-center mb-4 gap-2">
-                        <Database color="#4b5563" size={20} />
-                        <Text className="text-lg font-bold text-gray-800 dark:text-gray-100">{t('section.cache')}</Text>
+                {/* Cache Management (Only for Admin) */}
+                {isAdmin && (
+                    <View className="mb-8">
+                        <View className="flex-row items-center mb-4 gap-2">
+                            <Database color="#4b5563" size={20} />
+                            <Text className="text-lg font-bold text-gray-800 dark:text-gray-100">{t('section.cache')}</Text>
+                        </View>
+                        <View className="bg-gray-50 dark:bg-zinc-900 p-4 rounded-xl border border-gray-100 dark:border-zinc-800">
+                            <Text className="text-sm text-gray-600 dark:text-gray-400 mb-4 leading-relaxed">
+                                {t('msg.cache_desc')}
+                            </Text>
+                            <TouchableOpacity
+                                onPress={handleClearAppCache}
+                                className="bg-white dark:bg-zinc-800 border border-red-200 dark:border-red-900 flex-row items-center justify-center py-3 rounded-lg active:bg-red-50 dark:active:bg-red-900/10"
+                            >
+                                <Trash2 color="#ef4444" size={18} className="mr-2" />
+                                <Text className="text-red-500 font-bold">{t('label.clear_cache')}</Text>
+                            </TouchableOpacity>
+                        </View>
                     </View>
-                    <View className="bg-gray-50 dark:bg-zinc-900 p-4 rounded-xl border border-gray-100 dark:border-zinc-800">
-                        <Text className="text-sm text-gray-600 dark:text-gray-400 mb-4 leading-relaxed">
-                            {t('msg.cache_desc')}
-                        </Text>
-                        <TouchableOpacity
-                            onPress={handleClearAppCache}
-                            className="bg-white dark:bg-zinc-800 border border-red-200 dark:border-red-900 flex-row items-center justify-center py-3 rounded-lg active:bg-red-50 dark:active:bg-red-900/10"
-                        >
-                            <Trash2 color="#ef4444" size={18} className="mr-2" />
-                            <Text className="text-red-500 font-bold">{t('label.clear_cache')}</Text>
-                        </TouchableOpacity>
-                    </View>
-                </View>
+                )}
 
                 {/* Server Configuration */}
                 <View className="mb-8">

@@ -212,6 +212,8 @@ const translations = {
     is_admin: 'Administrator Access',
     cancel: 'Cancel',
     save: 'Save',
+    change_password: 'Change Password',
+    save_changes: 'Save Changes',
     delete_user_confirm: 'Are you sure you want to delete this user?',
 
     // Auth
@@ -449,6 +451,8 @@ const translations = {
     is_admin: '管理员权限',
     cancel: '取消',
     save: '保存',
+    change_password: '修改密码',
+    save_changes: '保存更改',
     delete_user_confirm: '确定要删除该用户吗？',
 
     // Auth
