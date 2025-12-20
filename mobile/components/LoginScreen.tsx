@@ -9,7 +9,7 @@ import { useLanguage } from '../utils/i18n';
 import { useToast } from '../utils/ToastContext';
 
 interface LoginScreenProps {
-    onLoginSuccess: () => void;
+    onLoginSuccess: (data: any) => void;
 }
 
 export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
@@ -40,8 +40,8 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
             // Update base URL and persist it immediately so it's not lost on restart
             await setBaseUrl(serverUrl, true);
 
-            await login(username, password);
-            onLoginSuccess();
+            const data = await login(username, password);
+            onLoginSuccess(data);
         } catch (e: any) {
             showToast(e.message || t('login.error_failed'), 'error');
         } finally {

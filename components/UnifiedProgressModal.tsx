@@ -20,11 +20,13 @@ interface UnifiedProgressModalProps {
     thumbCount: number;
     thumbTotal: number;
     thumbCurrentPath: string;
-    thumbQueue?: Array<{ id: string, name: string, total: number }>; // New
+    thumbQueue?: Array<{ id: string, name: string, total: number }>;
+    smartResults?: { missing: any[], error: any[] } | null; // New
     onThumbPause: () => void;
     onThumbResume: () => void;
-    onThumbStop: () => void; // Stops current
-    onThumbCancelTask?: (id: string) => void; // Cancels specific queued item
+    onThumbStop: () => void;
+    onThumbCancelTask?: (id: string) => void;
+    onStartRepair?: () => void; // New
 }
 
 export const UnifiedProgressModal: React.FC<UnifiedProgressModalProps> = ({
@@ -41,10 +43,12 @@ export const UnifiedProgressModal: React.FC<UnifiedProgressModalProps> = ({
     thumbTotal,
     thumbCurrentPath,
     thumbQueue = [],
+    smartResults,
     onThumbPause,
     onThumbResume,
     onThumbStop,
-    onThumbCancelTask
+    onThumbCancelTask,
+    onStartRepair
 }) => {
     const { t } = useLanguage();
     const [isMinimized, setIsMinimized] = React.useState(false);
@@ -182,6 +186,23 @@ export const UnifiedProgressModal: React.FC<UnifiedProgressModalProps> = ({
                                                     </div>
                                                 )}
                                             </div>
+
+                                            {/* Smart Scan Results Integration */}
+                                            {smartResults && (smartResults.missing.length > 0 || smartResults.error.length > 0) && (
+                                                <div className="flex gap-2 mb-2">
+                                                    {smartResults.missing.length > 0 && (
+                                                        <div className="px-2 py-1 bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-400 text-[10px] uppercase font-bold rounded border border-amber-100 dark:border-amber-800">
+                                                            Missing: {smartResults.missing.length}
+                                                        </div>
+                                                    )}
+                                                    {smartResults.error.length > 0 && (
+                                                        <div className="px-2 py-1 bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400 text-[10px] uppercase font-bold rounded border border-red-100 dark:border-red-800">
+                                                            Corrupted: {smartResults.error.length}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            )}
+
                                             {isThumbActive && (
                                                 <>
                                                     {renderProgressBar((thumbCount / (thumbTotal || 1)) * 100)}
@@ -189,6 +210,24 @@ export const UnifiedProgressModal: React.FC<UnifiedProgressModalProps> = ({
                                                         {thumbCurrentPath || t('processing')}
                                                     </div>
                                                 </>
+                                            )}
+
+                                            {/* Final Action Guide for Smart Scan */}
+                                            {!isThumbActive && thumbStatus === 'idle' && smartResults && (smartResults.missing.length > 0 || smartResults.error.length > 0) && (
+                                                <div className="mt-2 p-3 bg-primary-50 dark:bg-primary-900/10 rounded-xl border border-primary-100 dark:border-primary-800/50 flex items-center justify-between">
+                                                    <p className="text-xs text-primary-700 dark:text-primary-300">Analysis complete. Issues found.</p>
+                                                    {onStartRepair && (
+                                                        <button
+                                                            onClick={() => {
+                                                                if (onStartRepair) onStartRepair();
+                                                                onClose(); // Close modal to trigger refresh in parent
+                                                            }}
+                                                            className="px-3 py-1 bg-primary-600 hover:bg-primary-700 text-white rounded text-xs font-bold transition-all transform hover:scale-105"
+                                                        >
+                                                            Repair Now
+                                                        </button>
+                                                    )}
+                                                </div>
                                             )}
                                         </div>
                                     )}

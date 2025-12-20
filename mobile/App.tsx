@@ -73,6 +73,7 @@ const MainScreen = () => {
   const [checkingAuth, setCheckingAuth] = useState(true);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [username, setUsername] = useState<string | null>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
 
   const [activeTab, setActiveTab] = useState<Tab>('home');
 
@@ -135,6 +136,12 @@ const MainScreen = () => {
       if (token) {
         setIsLoggedIn(true);
         setUsername(username || 'User');
+
+        // Load role
+        const { default: AsyncStorage } = await import('@react-native-async-storage/async-storage');
+        const role = await AsyncStorage.getItem('lumina_is_admin');
+        setIsAdmin(role === 'true');
+
         loadHomeData();
       }
       setCheckingAuth(false);
@@ -486,8 +493,10 @@ const MainScreen = () => {
 
   if (!isLoggedIn) {
     return (
-      <LoginScreen onLoginSuccess={() => {
+      <LoginScreen onLoginSuccess={(data) => {
         setIsLoggedIn(true);
+        setUsername(data.user?.username || 'User');
+        setIsAdmin(data.user?.isAdmin || false);
         loadHomeData();
       }} />
     );
@@ -853,7 +862,11 @@ const MainScreen = () => {
 
         {/* Settings Tab */}
         {activeTab === 'settings' && (
-          <SettingsScreen onLogout={handleLogout} username={username || 'Guest'} />
+          <SettingsScreen
+            onLogout={handleLogout}
+            username={username || 'Guest'}
+            isAdmin={isAdmin}
+          />
         )}
       </Animated.View>
     );
