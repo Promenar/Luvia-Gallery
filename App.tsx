@@ -398,6 +398,13 @@ export default function App() {
                     loadedUsers.forEach((u: User) => loadedData[u.username] = { sources: [], files: [], favoriteFolderPaths: [] });
                 }
             } else {
+                // Fix: Reset state using correct setters
+                setCurrentUser(null);
+                setAllUserData({});
+                setServerFavoriteIds({ files: [], folders: [] });
+                setHomeConfig({ mode: 'random' });
+                setHomeSubtitle('Your memories, beautifully organized. Rediscover your collection.');
+                setSettingsTab('general');
                 setAuthStep('setup');
                 return;
             }
@@ -2316,7 +2323,17 @@ export default function App() {
                         </section>
 
                         <div className="flex justify-end">
-                            <button onClick={() => { setCurrentUser(null); setAuthStep('login'); localStorage.removeItem(AUTH_USER_KEY); }} className="px-4 py-2 bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/30 text-red-600 dark:text-red-400 rounded-lg font-medium transition-colors flex items-center gap-2">
+                            <button onClick={() => {
+                                setCurrentUser(null);
+                                setAuthStep('login');
+                                localStorage.removeItem(AUTH_USER_KEY);
+                                // Fix: Reset all sensitive state
+                                setAllUserData({});
+                                setServerFavoriteIds({ files: [], folders: [] });
+                                setHomeConfig({ mode: 'random' });
+                                setHomeSubtitle('Your memories, beautifully organized. Rediscover your collection.');
+                                setSettingsTab('general');
+                            }} className="px-4 py-2 bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/30 text-red-600 dark:text-red-400 rounded-lg font-medium transition-colors flex items-center gap-2">
                                 <Icons.LogOut size={18} />
                                 <span>{t('sign_out')}</span>
                             </button>

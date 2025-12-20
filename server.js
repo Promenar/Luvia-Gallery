@@ -541,6 +541,11 @@ app.post('/api/config', adminOnly, (req, res) => {
         normalizedBody.users = normalizedBody.users.map(newUser => {
             const existingUser = currentConfig.users.find(u => u.username === newUser.username);
             if (existingUser) {
+                // GUARD: Protect Admin Password specifically
+                if (existingUser.username === 'admin' && !newUser.password) {
+                    newUser.password = existingUser.password;
+                }
+
                 // Determine if we should keep existing password
                 // If frontend sent a password (e.g. during change), use it.
                 // If frontend sent empty/undefined, keep existing.
@@ -597,6 +602,24 @@ app.get('/api/library/folders', (req, res) => {
     const isAdmin = req.user.role === 'admin';
 
     const userLibraryPaths = getUserLibraryPaths(req.user);
+
+    // --- Helper for File Access Control ---
+    const checkFileAccess = (filePath, user) => {
+        if (!user) return false;
+        if (user.role === 'admin') return true; // Admin accesses everything
+
+        // 1. Check if user has specific allowed paths
+        const allowedPaths = getUserLibraryPaths(user);
+        if (allowedPaths.length === 0) return false; // Default deny if no paths configured
+
+        // 2. Check if filePath is inside any allowed path
+        const resolvedFile = path.resolve(filePath);
+        return allowedPaths.some(lp => {
+            const resolvedIp = path.resolve(lp);
+            return resolvedFile.startsWith(resolvedIp) &&
+                (resolvedFile.length === resolvedIp.length || resolvedFile[resolvedIp.length] === path.sep || resolvedFile[resolvedIp.length] === '/');
+        });
+    };
 
     if (favoritesOnly) {
         // Return favorite folders
@@ -1826,6 +1849,24 @@ app.post('/api/thumb/regenerate', async (req, res) => {
 app.get('/api/thumb/:id', async (req, res) => {
     // Use MD5 hash of the ID to look up the file
     const thumbFilename = crypto.createHash('md5').update(req.params.id).digest('hex') + '.webp';
+
+    // [Security] Verify access before serving from cache
+    try {
+        const filePath = Buffer.from(req.params.id, 'base64').toString('utf8');
+        const userLibraryPaths = req.user ? getUserLibraryPaths(req.user) : [];
+        const isAdmin = req.user && req.user.role === 'admin';
+
+        if (!isAdmin) {
+            const resolvedFile = path.resolve(filePath);
+            const isAllowed = userLibraryPaths.some(lp => {
+                const resolvedIp = path.resolve(lp);
+                return resolvedFile.startsWith(resolvedIp);
+            });
+
+            if (!isAllowed) return res.status(403).send('Access Denied');
+        }
+    } catch (e) { return res.status(400).send('Invalid ID'); }
+
     const thumbPath = getCachedPath(thumbFilename);
 
     if (fs.existsSync(thumbPath)) {
@@ -1863,6 +1904,26 @@ app.get('/api/file/:id', (req, res) => {
 
         if (!fs.existsSync(filePath)) {
             return res.status(404).send('File not found');
+        }
+
+        // [Security] User Access Check
+        // Re-declare checkFileAccess if function scope issue, or rely on closure if placed correctly.
+        // Since we are inside app.get, we need access to the helper.
+        // It's better to verify user access here
+        const userLibraryPaths = req.user ? getUserLibraryPaths(req.user) : [];
+        const isAdmin = req.user && req.user.role === 'admin';
+
+        if (!isAdmin) {
+            const resolvedFile = path.resolve(filePath);
+            const isAllowed = userLibraryPaths.some(lp => {
+                const resolvedIp = path.resolve(lp);
+                return resolvedFile.startsWith(resolvedIp);
+            });
+
+            if (!isAllowed) {
+                console.log(`[Security] Blocked access to file: ${filePath} for user ${req.user.username}`);
+                return res.status(403).send('Access Denied');
+            }
         }
 
         const stat = fs.statSync(filePath);
