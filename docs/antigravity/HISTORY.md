@@ -24,6 +24,9 @@
 - **用户隔离与权限管理**:
     - **Config Persistence**: 修复了 `POST /api/config` 和 `POST /api/users/:targetUser` 的合并逻辑，解决了编辑用户时 `allowedPaths` 和 `isAdmin` 字段意外丢失的问题。
     - **UI 安全**: 限制了非管理员对 `/api/config` 写入接口的调用。
+    - **Thumbnail 403 修复**: 统一了 `checkFileAccess` 的管理员判定逻辑，支持从 JWT 负载中识别 `role: 'admin'`，解决了管理员无法查看私有缩略图的 Bug。
+- **扫描器体验优化**:
+    - **状态同步回显**: 解决了媒体扫描器启动后因异步延迟导致的 UI 误报“完成”的问题。通过在 API 响应前同步锁定状态，确保前端轮询始终能获取到 `scanning` 状态。
 - **Docker 部署**: 修复了容器内代码版本与本地不一致的问题，确保补丁成功上线。
 
 ---
