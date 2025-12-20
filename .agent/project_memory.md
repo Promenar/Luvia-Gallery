@@ -12,6 +12,8 @@
     - **Theme Namespace**: The global theme hook is strictly renamed to `useAppTheme` to avoid conflict with `react-native-paper`'s `useTheme`.
     - **Zero-Blank Strategy**: Critical implementations like Home Carousel MUST implement a cache-first strategy (load Database -> Display -> Background Fetch -> Update).
     - **Anti-Jitter**: Dynamic text (percentages) in notifications must be wrapped in fixed-width containers to preserve layout stability.
+    - **Permission Consistency**: In `server.js`, always check for both `user.isAdmin` (direct object property) and `user.role === 'admin'` (from JWT payload) to ensure consistent access control across all middleware and helpers (e.g., `checkFileAccess`).
+    - **Scanner State Sync**: When starting background tasks (like `processScan`), the `status` flag must be updated * synchronously* before returning the HTTP response. This prevents race conditions where the frontend's first status poll hits an `idle` state before the async task has technically started.
 
 ## Anti-Patterns to Avoid
 - **Raw DB Access**: Never access `database.db` directly in `server.js`. It is private. Always use or create public helper methods (e.g., `getStats()`) in `database.js`.
