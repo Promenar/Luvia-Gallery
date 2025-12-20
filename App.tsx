@@ -346,7 +346,14 @@ export default function App() {
             // First try to check config (this endpoint is whitelist-protected but good to be safe)
             // Actually /api/config is protected for full data, public for basics.
             // If we have a token, use it to get full data (users with allowedPaths).
-            const res = await authFetch('/api/config');
+            // If we have a token, use it to get full data (users with allowedPaths).
+            let res = await authFetch('/api/config');
+
+            // Fix: If token is invalid (401), authFetch flushes it. Retry immediately to get public config.
+            if (res.status === 401) {
+                res = await authFetch('/api/config');
+            }
+
             if (res.ok) {
                 const text = await res.text();
                 let config = null;
