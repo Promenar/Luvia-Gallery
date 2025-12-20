@@ -15,6 +15,19 @@
 
 ---
 
+## 📅 最近更新 (2025-12-21)
+### 关键稳定性与安全修复 (v2.1.0)
+- **后端崩溃修复 (500 Error)**: 修复了 `/api/scan/status` 调用未定义的 `database.db` 导致的崩溃。通过重构为使用 `database.getStats()` 安全接口解决此类问题。
+- **认证体系加固 (403/401 Error)**: 
+    - 前端 `App.tsx` 实现全局 `authFetch` 拦截器，确保所有 API 请求（含初始化自检）均携带 JWT Token。
+    - 修复了 `initApp` 由于使用未认证 fetch 导致的配置加载失败和无限 401 循环。
+- **用户隔离与权限管理**:
+    - **Config Persistence**: 修复了 `POST /api/config` 和 `POST /api/users/:targetUser` 的合并逻辑，解决了编辑用户时 `allowedPaths` 和 `isAdmin` 字段意外丢失的问题。
+    - **UI 安全**: 限制了非管理员对 `/api/config` 写入接口的调用。
+- **Docker 部署**: 修复了容器内代码版本与本地不一致的问题，确保补丁成功上线。
+
+---
+
 ## 🏛️ 历史归档 (迁移自前期开发记录)
 
 ### 安全与认证体系 (v1.2.0)
