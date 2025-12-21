@@ -163,6 +163,8 @@ const translations = {
     clean_duplicate_cache: 'Clean Duplicate Cache',
     cache_cleared: 'Cache Cleared',
     cache_pruned: 'Cache Pruned',
+    maintenance: 'Maintenance',
+    generate: 'Generate',
 
     // Settings - Smart Repair
     smart_repair: 'Smart Repair',
@@ -256,7 +258,7 @@ const translations = {
     dark_mode: '深色模式',
     follow_system: '跟随系统',
     menu: '菜单',
-    system: '系统',
+    system: '系统状态',
     load_folder: '加载文件夹',
 
     // Home Screen
@@ -382,7 +384,7 @@ const translations = {
     language: '语言 / Language',
 
     // Settings - Storage
-    storage_database: '存储与数据库',
+    storage_database: '存储管理',
     server_persistence: '服务器持久化已激活',
     media_served: '媒体文件由配置的路径提供服务。',
     library_scan_paths: '图库扫描路径',
@@ -403,6 +405,8 @@ const translations = {
     clean_duplicate_cache: '清理重复缓存',
     cache_cleared: '缓存已清除',
     cache_pruned: '缓存已清理',
+    maintenance: '维护与修复',
+    generate: '立即生成',
 
     // Settings - Smart Repair
     smart_repair: '智能修复',
