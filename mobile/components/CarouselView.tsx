@@ -260,7 +260,7 @@ export const CarouselView: React.FC<CarouselViewProps> = ({ isActive }) => {
 
         timerRef.current = setTimeout(() => {
             scrollToNext();
-        }, ROTATION_INTERVAL);
+        }, carouselConfig.interval || 7000);
     };
 
     const scrollToNext = () => {
