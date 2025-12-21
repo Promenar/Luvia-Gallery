@@ -43,8 +43,11 @@ interface SettingsModalProps {
     onShowDirPicker: (val: boolean) => void;
     onPruneCache: () => void;
     onClearCache: () => void;
+    onFetchSmartResults: () => void;
     smartScanResults: any;
     thumbStatus: string;
+    activeTab?: SettingsTab;
+    onTabChange?: (tab: SettingsTab) => void;
     theme?: string;
     onToggleTheme?: () => void;
 }
@@ -61,14 +64,28 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
         onRemoveLibraryPath, onMonitorUpdate, onStartScan, onStartThumbGen,
         onSmartScan, onSmartRepair, onExportConfig, onLogout, onAddUser,
         onRenameUser, onResetPassword, onDeleteUser, onSetDirPickerContext,
-        onShowDirPicker, onPruneCache, onClearCache, smartScanResults, thumbStatus,
-        theme, onToggleTheme
+        onShowDirPicker, onPruneCache, onClearCache, onFetchSmartResults, smartScanResults, thumbStatus,
+        activeTab: externalTab, onTabChange, theme, onToggleTheme
     } = props;
+
+    // Sync with external tab state
+    useEffect(() => {
+        if (externalTab) {
+            setActiveTab(externalTab);
+        }
+    }, [externalTab]);
+
+    // Reset to general when opened if not specified
+    useEffect(() => {
+        if (isOpen && !externalTab) {
+            setActiveTab('general');
+        }
+    }, [isOpen, externalTab]);
 
     // Refresh smart results when system tab is opened
     useEffect(() => {
         if (isOpen && activeTab === 'system') {
-            onSmartScan(); // In App.tsx this was handleFetchSmartResults but let's use onSmartScan or similar
+            onFetchSmartResults();
         }
     }, [isOpen, activeTab]);
 
@@ -157,10 +174,21 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                         ) : (
                             <>
                                 <section>
-                                    <h4 className="text-sm font-bold uppercase text-gray-400 tracking-wider mb-4">{t('storage_database')}</h4>
+                                    <div className="flex items-center gap-2 mb-4">
+                                        <div className="w-1.5 h-6 bg-primary-500 rounded-full" />
+                                        <h4 className="text-lg font-bold text-gray-900 dark:text-white">{t('library_stats')}</h4>
+                                    </div>
                                     <div className="bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded-2xl overflow-hidden shadow-sm">
                                         <div className="p-6 border-b border-gray-100 dark:border-gray-700">
-                                            <h5 className="font-bold text-lg mb-2">{t('library_scan_paths')}</h5>
+                                            <div className="flex items-center justify-between mb-2">
+                                                <h5 className="font-bold text-lg">{t('library_scan_paths')}</h5>
+                                                <button
+                                                    onClick={onStartScan}
+                                                    className="flex items-center gap-2 px-3 py-1.5 bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 hover:bg-blue-100 dark:hover:bg-blue-900/50 rounded-lg text-xs font-bold transition-all border border-blue-100 dark:border-blue-800"
+                                                >
+                                                    <Icons.Scan size={14} /> {t('scan_library')}
+                                                </button>
+                                            </div>
                                             <p className="text-sm text-gray-500 mb-4">{t('media_served')}</p>
                                             <form onSubmit={onAddLibraryPath} className="flex gap-2">
                                                 <div className="flex-1 relative">
@@ -253,31 +281,65 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                         )}
                                     </div>
                                 </section>
-                                <section>
-                                    <h4 className="text-sm font-bold uppercase text-gray-400 tracking-wider mb-4">Maintenance</h4>
+                                <section className="mt-8 pt-6 border-t border-gray-100 dark:border-gray-700">
+                                    <div className="flex items-center gap-2 mb-4">
+                                        <div className="w-1.5 h-6 bg-blue-500 rounded-full" />
+                                        <h4 className="text-lg font-bold text-gray-900 dark:text-white">{t('maintenance')}</h4>
+                                    </div>
                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                        <div className="bg-white dark:bg-gray-800 p-6 rounded-2xl border border-gray-100 dark:border-gray-700 shadow-sm hover:shadow-md transition-shadow">
-                                            <div className="flex items-center gap-3 mb-3">
-                                                <div className="p-2.5 bg-blue-50 dark:bg-blue-900/30 text-blue-600 rounded-xl"><Icons.Scan size={24} /></div>
-                                                <div>
-                                                    <h5 className="font-bold text-gray-900 dark:text-white">{t('scan_library')}</h5>
-                                                    <p className="text-xs text-gray-500">Index files from disk</p>
+                                        <div className="bg-white dark:bg-gray-800 p-6 rounded-2xl border border-gray-100 dark:border-gray-700 shadow-sm flex flex-col h-full">
+                                            <h5 className="flex items-center gap-2 font-bold text-gray-900 dark:text-white mb-4">
+                                                <Icons.Database size={18} className="text-blue-500" /> {t('cache_management')}
+                                            </h5>
+                                            <div className="flex-1">
+                                                <div className="text-2xl font-bold mb-1 font-mono">{systemStatus?.cacheCount.toLocaleString() || '0'} <span className="text-sm font-normal text-gray-500">{t('cached')}</span></div>
+                                                <div className="flex gap-2 mt-4">
+                                                    <button onClick={onPruneCache} className="flex-1 px-3 py-2 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-lg text-xs font-medium transition-colors">{t('clean_duplicate_cache')}</button>
+                                                    <button onClick={onClearCache} className="px-3 py-2 bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/30 text-red-600 dark:text-red-400 rounded-lg text-xs font-medium transition-colors">{t('clear_all_cache')}</button>
                                                 </div>
                                             </div>
-                                            <button onClick={onStartScan} className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-medium text-sm transition-colors shadow-sm shadow-blue-500/20">
-                                                Start Scan
-                                            </button>
                                         </div>
-                                        <div className="bg-white dark:bg-gray-800 p-6 rounded-2xl border border-gray-100 dark:border-gray-700 shadow-sm hover:shadow-md transition-shadow">
-                                            <div className="flex items-center gap-3 mb-3">
-                                                <div className="p-2.5 bg-purple-50 dark:bg-purple-900/30 text-purple-600 rounded-xl"><Icons.Image size={24} /></div>
+
+                                        <div className="bg-white dark:bg-gray-800 p-6 rounded-2xl border border-gray-100 dark:border-gray-700 shadow-sm flex flex-col h-full">
+                                            <h5 className="flex items-center gap-2 font-bold text-gray-900 dark:text-white mb-4">
+                                                <Icons.Zap size={18} className="text-yellow-500" /> {t('smart_repair')}
+                                            </h5>
+                                            <div className="flex-1 flex flex-col justify-between">
+                                                {smartScanResults && smartScanResults.timestamp > 0 ? (
+                                                    <div className="space-y-4">
+                                                        <div className="flex gap-4">
+                                                            <div className="flex-1">
+                                                                <span className="block text-xs text-gray-500">Missing</span>
+                                                                <span className="text-lg font-bold text-red-500 font-mono">{smartScanResults.missing.length.toLocaleString()}</span>
+                                                            </div>
+                                                            <div className="flex-1">
+                                                                <span className="block text-xs text-gray-500">Broken</span>
+                                                                <span className="text-lg font-bold text-orange-500 font-mono">{smartScanResults.error.length.toLocaleString()}</span>
+                                                            </div>
+                                                        </div>
+                                                        <div className="flex gap-2">
+                                                            <button onClick={onSmartRepair} className="flex-1 py-2 bg-yellow-500 hover:bg-yellow-600 text-white rounded-lg text-xs font-bold transition-colors">{t('repair_now')}</button>
+                                                            <button onClick={onSmartScan} className="px-4 py-2 bg-gray-100 dark:bg-gray-800 rounded-lg text-xs font-medium transition-colors">{t('rescan')}</button>
+                                                        </div>
+                                                    </div>
+                                                ) : (
+                                                    <button onClick={onSmartScan} className="w-full py-2 bg-yellow-50 dark:bg-yellow-900/20 text-yellow-600 dark:text-yellow-400 rounded-lg text-sm font-medium transition-colors">Start Analysis</button>
+                                                )}
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div className="mt-4">
+                                        <div className="bg-white dark:bg-gray-800 p-5 rounded-2xl border border-gray-100 dark:border-gray-700 shadow-sm hover:shadow-md transition-shadow flex items-center justify-between gap-4">
+                                            <div className="flex items-center gap-4">
+                                                <div className="p-3 bg-purple-50 dark:bg-purple-900/30 text-purple-600 rounded-xl"><Icons.Image size={24} /></div>
                                                 <div>
                                                     <h5 className="font-bold text-gray-900 dark:text-white">{t('generate_thumbs')}</h5>
-                                                    <p className="text-xs text-gray-500">Process missing previews</p>
+                                                    <p className="text-xs text-gray-500">{t('generate_thumbs_desc')}</p>
                                                 </div>
                                             </div>
-                                            <button onClick={onStartThumbGen} className="w-full py-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-xl font-medium text-sm transition-colors shadow-sm shadow-purple-500/20">
-                                                Generate
+                                            <button onClick={onStartThumbGen} className="px-8 py-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-xl font-medium text-sm transition-colors shadow-sm shadow-purple-500/20">
+                                                {t('generate')}
                                             </button>
                                         </div>
                                     </div>
@@ -354,39 +416,27 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                     </div>
                                     <div className="bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded-2xl p-5 shadow-sm">
                                         <h5 className="flex items-center gap-2 font-bold text-gray-900 dark:text-white mb-4">
-                                            <Icons.Database size={18} className="text-blue-500" /> {t('cache_management')}
+                                            <Icons.Database size={18} className="text-blue-500" /> {t('media_statistics')}
                                         </h5>
-                                        <div className="text-2xl font-bold mb-1">{systemStatus.cacheCount.toLocaleString()} <span className="text-sm font-normal text-gray-500">{t('cached')}</span></div>
-                                        <div className="grid grid-cols-2 gap-2 mt-4">
-                                            <button onClick={onPruneCache} className="px-3 py-2 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-lg text-xs font-medium transition-colors">{t('clean_duplicate_cache')}</button>
-                                            <button onClick={onClearCache} className="px-3 py-2 bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/30 text-red-600 dark:text-red-400 rounded-lg text-xs font-medium transition-colors">{t('clear_all_cache')}</button>
+                                        <div className="flex flex-col gap-3">
+                                            {[
+                                                { label: t('total_files'), value: systemStatus.mediaStats?.totalFiles || 0, icon: Icons.List, color: 'text-primary-500', bg: 'bg-primary-50 dark:bg-primary-900/20' },
+                                                { label: t('images'), value: systemStatus.mediaStats?.images || 0, icon: Icons.Image, color: 'text-green-500', bg: 'bg-green-50 dark:bg-green-900/20' },
+                                                { label: t('videos'), value: systemStatus.mediaStats?.videos || 0, icon: Icons.Play, color: 'text-blue-500', bg: 'bg-blue-50 dark:bg-blue-900/20' },
+                                                { label: t('audio'), value: systemStatus.mediaStats?.audio || 0, icon: Icons.Music, color: 'text-purple-500', bg: 'bg-purple-50 dark:bg-purple-900/20' }
+                                            ].map((stat, i) => (
+                                                <div key={i} className="flex items-center justify-between p-3.5 bg-gray-50 dark:bg-gray-900/50 rounded-xl border border-gray-100 dark:border-gray-700/50 hover:bg-gray-100 dark:hover:bg-gray-800/50 transition-colors">
+                                                    <div className="flex items-center gap-4">
+                                                        <div className={`p-2 rounded-lg ${stat.bg} ${stat.color}`}>
+                                                            <stat.icon size={20} />
+                                                        </div>
+                                                        <span className="text-sm font-bold text-gray-600 dark:text-gray-400">{stat.label}</span>
+                                                    </div>
+                                                    <span className="text-xl font-black font-mono tracking-tight">{stat.value.toLocaleString()}</span>
+                                                </div>
+                                            ))}
                                         </div>
                                     </div>
-                                </div>
-                                <div className="bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded-2xl p-5 shadow-sm">
-                                    <h5 className="flex items-center gap-2 font-bold text-gray-900 dark:text-white mb-4">
-                                        <Icons.Zap size={18} className="text-yellow-500" /> {t('smart_repair')}
-                                    </h5>
-                                    {smartScanResults && smartScanResults.timestamp > 0 ? (
-                                        <div className="space-y-4">
-                                            <div className="flex gap-4">
-                                                <div className="flex-1">
-                                                    <span className="block text-sm text-gray-500">Missing</span>
-                                                    <span className="text-xl font-bold text-red-500">{smartScanResults.missing.length}</span>
-                                                </div>
-                                                <div className="flex-1">
-                                                    <span className="block text-sm text-gray-500">Broken</span>
-                                                    <span className="text-xl font-bold text-orange-500">{smartScanResults.error.length}</span>
-                                                </div>
-                                            </div>
-                                            <div className="flex gap-2">
-                                                <button onClick={onSmartRepair} className="flex-1 py-2 bg-yellow-500 hover:bg-yellow-600 text-white rounded-lg text-sm font-bold transition-colors">{t('repair_now')}</button>
-                                                <button onClick={onSmartScan} className="px-4 py-2 bg-gray-100 dark:bg-gray-800 rounded-lg text-sm font-medium transition-colors">{t('rescan')}</button>
-                                            </div>
-                                        </div>
-                                    ) : (
-                                        <button onClick={onSmartScan} className="w-full py-2 bg-yellow-50 dark:bg-yellow-900/20 text-yellow-600 dark:text-yellow-400 rounded-lg text-sm font-medium transition-colors">Start Analysis</button>
-                                    )}
                                 </div>
                             </div>
                         )}
@@ -478,7 +528,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                     return (
                                         <button
                                             key={tab}
-                                            onClick={() => setActiveTab(tab)}
+                                            onClick={() => { setActiveTab(tab); onTabChange?.(tab); }}
                                             className={`w-full text-left px-4 py-3 rounded-xl flex items-center gap-3 transition-colors ${activeTab === tab ? 'bg-white dark:bg-gray-800 shadow-sm font-medium text-primary-600' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800/50'}`}
                                         >
                                             <Icon size={18} /> {labels[tab]}
