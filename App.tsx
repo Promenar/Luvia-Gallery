@@ -169,13 +169,13 @@ export default function App() {
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
     const [settingsTab, setSettingsTab] = useState<SettingsTab>('general');
 
-    // --- Performance Optimization: Layered Blur logic ---
-
+    // Reset settings tab and fetch stats when closing
     useEffect(() => {
-        if (isSettingsOpen && settingsTab === 'system') {
-            handleFetchSmartResults();
+        if (!isSettingsOpen) {
+            setSettingsTab('general');
         }
-    }, [isSettingsOpen, settingsTab]);
+    }, [isSettingsOpen]);
+
 
 
     // --- Random Sort Stability ---
@@ -2101,7 +2101,10 @@ export default function App() {
                 onMonitorUpdate={handleMonitorUpdate}
                 onStartScan={startServerScan}
                 onStartThumbGen={startThumbnailGen}
+                onFetchSmartResults={handleFetchSmartResults}
                 onSmartScan={handleSmartScan}
+                activeTab={settingsTab}
+                onTabChange={setSettingsTab}
                 onSmartRepair={handleSmartRepair}
                 onExportConfig={handleExportConfig}
                 onLogout={handleLogout}
