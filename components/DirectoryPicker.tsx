@@ -82,13 +82,13 @@ export const DirectoryPicker: React.FC<DirectoryPickerProps> = ({
     return (
         <AnimatePresence>
             {isOpen && (
-                <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+                <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/80">
                     <motion.div
                         initial={{ opacity: 0, scale: 0.95, y: 20 }}
                         animate={{ opacity: 1, scale: 1, y: 0 }}
                         exit={{ opacity: 0, scale: 0.95, y: 20 }}
                         transition={{ duration: 0.2 }}
-                        className="bg-white/90 dark:bg-gray-800/90 backdrop-blur-md w-full max-w-2xl rounded-2xl shadow-2xl border border-white/20 dark:border-gray-700 overflow-hidden flex flex-col max-h-[80vh]"
+                        className="bg-white dark:bg-gray-800 w-full max-w-2xl rounded-2xl shadow-2xl border border-white/20 dark:border-gray-700 overflow-hidden flex flex-col max-h-[80vh] transform translate-z-0"
                     >
                         {/* Header */}
                         <div className="p-4 border-b border-gray-100 dark:border-gray-700 flex items-center gap-3 bg-gray-50/50 dark:bg-gray-900/50">
@@ -113,8 +113,8 @@ export const DirectoryPicker: React.FC<DirectoryPickerProps> = ({
                                 onClick={handleUp}
                                 disabled={isRoot}
                                 className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-all duration-200 ${isRoot
-                                        ? 'text-gray-300 dark:text-gray-600 cursor-not-allowed bg-gray-50 dark:bg-gray-900'
-                                        : 'text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 shadow-sm border border-gray-200 dark:border-gray-600'
+                                    ? 'text-gray-300 dark:text-gray-600 cursor-not-allowed bg-gray-50 dark:bg-gray-900'
+                                    : 'text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 shadow-sm border border-gray-200 dark:border-gray-600'
                                     }`}
                             >
                                 <Icons.ArrowUp size={16} />
@@ -124,8 +124,8 @@ export const DirectoryPicker: React.FC<DirectoryPickerProps> = ({
                             <button
                                 onClick={() => setCurrentPath('/')}
                                 className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-all duration-200 ${isRoot
-                                        ? 'text-primary-600 bg-primary-50 dark:bg-primary-900/20 border border-primary-100 dark:border-primary-900/50'
-                                        : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700'
+                                    ? 'text-primary-600 bg-primary-50 dark:bg-primary-900/20 border border-primary-100 dark:border-primary-900/50'
+                                    : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700'
                                     }`}
                             >
                                 <Icons.Server size={14} />
@@ -164,7 +164,7 @@ export const DirectoryPicker: React.FC<DirectoryPickerProps> = ({
                                         <button
                                             key={folder}
                                             onClick={() => handleNavigate(folder)}
-                                            className="flex items-center gap-3 p-3 bg-white dark:bg-gray-800 hover:bg-primary-50 dark:hover:bg-primary-900/20 rounded-xl text-left transition-all duration-200 group border border-gray-100 dark:border-gray-700 hover:border-primary-200 dark:hover:border-primary-800 hover:shadow-md hover:shadow-primary-500/5"
+                                            className="flex items-center gap-3 p-3 bg-white dark:bg-gray-800 hover:bg-primary-50 dark:hover:bg-primary-900/20 rounded-xl text-left transition-colors duration-150 group border border-gray-100 dark:border-gray-700 hover:border-primary-200 dark:hover:border-primary-800"
                                         >
                                             <div className="p-2 bg-blue-50 dark:bg-blue-900/20 text-blue-500 dark:text-blue-400 rounded-lg group-hover:scale-110 transition-transform duration-300">
                                                 <Icons.Folder size={20} fill="currentColor" className="opacity-90" />

@@ -41,6 +41,35 @@ if (!JWT_SECRET) {
     }
 }
 
+// --- Global Config Cache (Performance) ---
+let configCache = null;
+let lastConfigRead = 0;
+const CONFIG_CACHE_TTL = 5000; // 5 seconds cache
+
+function getConfig() {
+    const now = Date.now();
+    if (configCache && (now - lastConfigRead < CONFIG_CACHE_TTL)) {
+        return configCache;
+    }
+    if (fs.existsSync(CONFIG_FILE)) {
+        try {
+            const content = fs.readFileSync(CONFIG_FILE, 'utf8');
+            configCache = JSON.parse(content);
+            lastConfigRead = now;
+            return configCache;
+        } catch (e) {
+            console.error("Config read error", e);
+        }
+    }
+    return configCache || {};
+}
+
+function updateConfig(newConfig) {
+    fs.writeFileSync(CONFIG_FILE, JSON.stringify(newConfig, null, 2));
+    configCache = newConfig;
+    lastConfigRead = Date.now();
+}
+
 // Ensure directories exist
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true });
@@ -144,17 +173,10 @@ function adminOnly(req, res, next) {
 
     // Special case: If the system has no users yet, allow POST /api/config to create the first admin
     if (req.path === '/api/config' && req.method === 'POST') {
-        try {
-            if (fs.existsSync(CONFIG_FILE)) {
-                const config = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
-                if (!config.users || config.users.length === 0) {
-                    return next();
-                }
-            } else {
-                return next(); // No config file yet
-            }
-        } catch (e) {
-            return next(); // Invalid config, allow repair/initialization
+        // If no config file, system is unconfigured or has no users
+        const config = getConfig();
+        if (!config.users || config.users.length === 0) {
+            return next();
         }
     }
 
@@ -166,22 +188,18 @@ app.post('/api/auth/login', (req, res) => {
     const { username, password } = req.body;
 
     // Read config to find user
-    if (fs.existsSync(CONFIG_FILE)) {
-        try {
-            const config = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
-            if (config.users) {
-                const user = config.users.find(u => u.username === username);
-                // Note: Storing plaintext passwords in config is still not ideal, but this is a step up.
-                // Ideally, we should hash them. But for now, we match existing structure.
-                if (user && user.password === password) {
-                    const token = jwt.sign({ username: user.username, role: user.isAdmin ? 'admin' : 'user' }, JWT_SECRET, { expiresIn: '7d' });
-                    // Return user info sans password
-                    const { password: _, ...userInfo } = user;
-                    res.json({ token, user: userInfo });
-                    return;
-                }
-            }
-        } catch (e) { console.error("Login config error", e); }
+    const config = getConfig();
+    if (config.users) {
+        const user = config.users.find(u => u.username === username);
+        // Note: Storing plaintext passwords in config is still not ideal, but this is a step up.
+        // Ideally, we should hash them. But for now, we match existing structure.
+        if (user && user.password === password) {
+            const token = jwt.sign({ username: user.username, role: user.isAdmin ? 'admin' : 'user' }, JWT_SECRET, { expiresIn: '7d' });
+            // Return user info sans password
+            const { password: _, ...userInfo } = user;
+            res.json({ token, user: userInfo });
+            return;
+        }
     }
 
     // Default/Fallback Admin logic (if no config exists yet, maybe allow setup?)
@@ -211,38 +229,36 @@ let pendingChanges = new Map(); // path -> timeout
 const DEBOUNCE_DELAY = 500; // ms
 
 // --- Helper Functions ---
+// --- Helper Functions ---
 function getUserLibraryPaths(user) {
     if (!user) return [];
-    const userId = user.username;
-    const isAdmin = user.role === 'admin';
+    const config = getConfig();
+    const foundUser = (config.users || []).find(u => u.username === user.username);
 
-    if (fs.existsSync(CONFIG_FILE)) {
-        try {
-            const config = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
-            if (isAdmin) {
-                // Admin sees global config paths OR their own specific paths? 
-                // Usually Admin sees EVERYTHING in config.libraryPaths (Main Library).
-                // But if we want to allow Admin to limit themselves (unlikely), we'd check adminUser.allowedPaths.
-                // For now, Keep Admin = Global Library Paths (config.libraryPaths) OR MEDIA_ROOT.
-                return config.libraryPaths || [MEDIA_ROOT];
-            }
-            const currentUser = config.users?.find(u => u.username === userId);
-            // Non-admin sees explicit allowedPaths. If none, they see NOTHING.
-            return currentUser?.allowedPaths || [];
-        } catch (e) {
-        }
+    // Prioritize user-specific allowedPaths (even for admins)
+    if (foundUser && foundUser.allowedPaths && foundUser.allowedPaths.length > 0) {
+        return foundUser.allowedPaths;
     }
-    // Only fallback for Admin if no config
-    return isAdmin ? [MEDIA_ROOT] : [];
+
+    // Admin fallback to global libraryPaths
+    if (user.isAdmin || user.role === 'admin' || (foundUser && foundUser.isAdmin)) {
+        return (config.libraryPaths && config.libraryPaths.length > 0) ? config.libraryPaths : [path.resolve(MEDIA_ROOT)];
+    }
+
+    // Regular User fallback (JWT payload)
+    return user.allowedPaths || [];
 }
 
-// Check if user has access to a specific file/path
 function checkFileAccess(user, filePath) {
     if (!user) return false;
-    if (user.isAdmin || user.role === 'admin') return true;
+    const config = getConfig();
+    const foundUser = (config.users || []).find(u => u.username === user.username);
+
+    // Admin check
+    if (user.isAdmin || user.role === 'admin' || (foundUser && foundUser.isAdmin)) return true;
 
     // For non-admins, check allowedPaths
-    const allowedPaths = user.allowedPaths || [];
+    const allowedPaths = getUserLibraryPaths(user);
     if (allowedPaths.length === 0) return false;
 
     const normalizedFile = path.resolve(filePath).replace(/\\/g, '/').toLowerCase();
@@ -431,7 +447,21 @@ app.use((req, res, next) => {
 
     if (token) {
         jwt.verify(token, JWT_SECRET, (err, user) => {
-            if (!err) req.user = user;
+            if (!err) {
+                // Enrich user object with latest config data (role/allowedPaths)
+                const config = getConfig();
+                const foundUser = (config.users || []).find(u => u.username === user.username);
+                if (foundUser) {
+                    req.user = {
+                        ...user,
+                        isAdmin: foundUser.isAdmin,
+                        allowedPaths: foundUser.allowedPaths || [],
+                        role: foundUser.isAdmin ? 'admin' : 'user'
+                    };
+                } else {
+                    req.user = user;
+                }
+            }
             checkPath();
         });
     } else {
@@ -453,14 +483,10 @@ app.use((req, res, next) => {
             // Bootstrap case is handled by adminOnly and the logic below
             if (req.path === '/api/config' && req.method === 'POST' && !req.user) {
                 // Check if system is unconfigured
-                try {
-                    if (fs.existsSync(CONFIG_FILE)) {
-                        const config = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
-                        if (config.users && config.users.length > 0) {
-                            return res.status(401).json({ error: 'Auth required for this operation' });
-                        }
-                    }
-                } catch (e) { }
+                const config = getConfig();
+                if (config.users && config.users.length > 0) {
+                    return res.status(401).json({ error: 'Auth required for this operation' });
+                }
             }
             return next();
         }
@@ -475,78 +501,51 @@ app.use((req, res, next) => {
 
 // Config API
 app.get('/api/config', (req, res) => {
-    try {
-        if (fs.existsSync(CONFIG_FILE)) {
-            const fileContent = fs.readFileSync(CONFIG_FILE, 'utf8');
-            if (!fileContent.trim()) {
-                return res.json({ configured: false });
-            }
-            try {
-                const config = JSON.parse(fileContent);
-
-                // Scenario 1: Admin User (Full Config)
-                if (req.user && (req.user.isAdmin || req.user.role === 'admin')) {
-                    if (config.users) {
-                        config.users = config.users.map(u => {
-                            const { password, ...safeUser } = u;
-                            if (u.username !== 'admin') console.log(`[DEBUG] Config user ${u.username} allowedPaths:`, u.allowedPaths);
-                            return safeUser;
-                        });
-                    }
-                    return res.json(config);
-                }
-
-                // Scenario 2: Regular User (Sanitized Config)
-                if (req.user) {
-                    const currentUser = (config.users || []).find(u => u.username === req.user.username);
-                    if (currentUser) {
-                        const { password, ...safeUser } = currentUser;
-                        return res.json({
-                            configured: true,
-                            libraryPaths: safeUser.libraryPaths || [],
-                            homeSettings: safeUser.homeSettings || {},
-                            role: 'user',
-                            username: safeUser.username,
-                            title: config.title || 'Lumina Gallery'
-                        });
-                    }
-                }
-
-                // Scenario 3: Anonymous/Login stage (Public Info)
-                // Need to provide enough info for the frontend to decide whether to show Setup or Login
-                return res.json({
-                    configured: true,
-                    title: config.title || 'Lumina Gallery',
-                    users: (config.users || []).map(u => ({ username: u.username, isAdmin: u.isAdmin }))
-                });
-
-            } catch (parseError) {
-                console.error("Config parse error", parseError);
-                return res.json({ configured: false });
-            }
-        } else {
-            return res.json({ configured: false });
-        }
-    } catch (e) {
-        console.error("Config read error", e);
-        return res.status(500).json({ error: "Failed to read config" });
+    const config = getConfig();
+    if (Object.keys(config).length === 0) {
+        return res.json({ configured: false });
     }
+
+    // Scenario 1: Admin User (Full Config)
+    if (req.user && (req.user.isAdmin || req.user.role === 'admin')) {
+        const sanitizedConfig = JSON.parse(JSON.stringify(config));
+        if (sanitizedConfig.users) {
+            sanitizedConfig.users = sanitizedConfig.users.map(u => {
+                const { password, ...safeUser } = u;
+                return safeUser;
+            });
+        }
+        return res.json(sanitizedConfig);
+    }
+
+    // Scenario 2: Regular User (Sanitized Config)
+    if (req.user) {
+        const currentUser = (config.users || []).find(u => u.username === req.user.username);
+        if (currentUser) {
+            const { password, ...safeUser } = currentUser;
+            return res.json({
+                configured: true,
+                libraryPaths: safeUser.libraryPaths || [],
+                homeSettings: safeUser.homeSettings || {},
+                role: 'user',
+                username: safeUser.username,
+                title: config.title || 'Lumina Gallery'
+            });
+        }
+    }
+
+    // Scenario 3: Anonymous/Login stage (Public Info)
+    return res.json({
+        configured: true,
+        title: config.title || 'Lumina Gallery',
+        users: (config.users || []).map(u => ({ username: u.username, isAdmin: u.isAdmin }))
+    });
 });
 
 app.post('/api/config', adminOnly, (req, res) => {
-    let currentConfig = {};
-    try {
-        if (fs.existsSync(CONFIG_FILE)) {
-            const fileContent = fs.readFileSync(CONFIG_FILE, 'utf8');
-            if (fileContent.trim()) {
-                currentConfig = JSON.parse(fileContent);
-            }
-        }
-    } catch (e) { }
-
+    const currentConfig = getConfig();
     const oldPaths = currentConfig.libraryPaths || [];
     const newPaths = req.body.libraryPaths || [];
-
     const normalizedBody = { ...req.body };
 
     // CRITICAL FIX: The frontend sends users without passwords (sanitized).
@@ -555,11 +554,10 @@ app.post('/api/config', adminOnly, (req, res) => {
         normalizedBody.users = normalizedBody.users.map(newUser => {
             const existingUser = currentConfig.users.find(u => u.username === newUser.username);
             if (existingUser) {
-                // Merge: Preserve password and critical flags if missing in update
                 return {
                     ...existingUser,
                     ...newUser,
-                    password: newUser.password || existingUser.password, // Critical preservation
+                    password: newUser.password || existingUser.password,
                     isAdmin: newUser.isAdmin !== undefined ? !!newUser.isAdmin : !!existingUser.isAdmin,
                     allowedPaths: newUser.allowedPaths !== undefined ? newUser.allowedPaths : (existingUser.allowedPaths || [])
                 };
@@ -569,11 +567,11 @@ app.post('/api/config', adminOnly, (req, res) => {
     }
 
     const newConfig = {
-        ...currentConfig, // Keep other server-only fields if any
+        ...currentConfig,
         ...normalizedBody,
     };
 
-    fs.writeFileSync(CONFIG_FILE, JSON.stringify(newConfig, null, 2));
+    updateConfig(newConfig);
 
     // Detect and cleanup removed paths (Admin operation)
     const removedPaths = oldPaths.filter(p => !newPaths.includes(p));
@@ -608,24 +606,11 @@ app.get('/api/library/folders', (req, res) => {
     const isAdmin = req.user.role === 'admin';
 
     const userLibraryPaths = getUserLibraryPaths(req.user);
+    if (userLibraryPaths.length === 0) return res.json([]);
 
-    // --- Helper for File Access Control ---
-    const checkFileAccess = (filePath, user) => {
-        if (!user) return false;
-        if (user.role === 'admin') return true; // Admin accesses everything
-
-        // 1. Check if user has specific allowed paths
-        const allowedPaths = getUserLibraryPaths(user);
-        if (allowedPaths.length === 0) return false; // Default deny if no paths configured
-
-        // 2. Check if filePath is inside any allowed path
-        const resolvedFile = path.resolve(filePath);
-        return allowedPaths.some(lp => {
-            const resolvedIp = path.resolve(lp);
-            return resolvedFile.startsWith(resolvedIp) &&
-                (resolvedFile.length === resolvedIp.length || resolvedFile[resolvedIp.length] === path.sep || resolvedFile[resolvedIp.length] === '/');
-        });
-    };
+    // Check if the current requested path (if any) is allowed
+    // Note: LibraryFolders root request has no path, sub-folders are processed in frontend usually.
+    // However, if we filter here, we provide data isolation.
 
     if (favoritesOnly) {
         // Return favorite folders
@@ -885,13 +870,9 @@ async function processScan() {
     scanState.shouldStop = false;
 
     let libraryPaths = [MEDIA_ROOT];
-    if (fs.existsSync(CONFIG_FILE)) {
-        try {
-            const config = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
-            if (config.libraryPaths && config.libraryPaths.length > 0) {
-                libraryPaths = config.libraryPaths;
-            }
-        } catch (e) { console.error("Error reading config", e); }
+    const config = getConfig();
+    if (config.libraryPaths && config.libraryPaths.length > 0) {
+        libraryPaths = config.libraryPaths;
     }
     console.log('Scanning paths:', libraryPaths);
 
@@ -1628,12 +1609,8 @@ async function processTaskQueue() {
 
                 // Determine Thread Count
                 let threadCount = 2; // Default
-                if (fs.existsSync(CONFIG_FILE)) {
-                    try {
-                        const config = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
-                        if (config.threadCount && config.threadCount > 0) threadCount = config.threadCount;
-                    } catch (e) { }
-                }
+                const config = getConfig();
+                if (config.threadCount && config.threadCount > 0) threadCount = config.threadCount;
 
                 // Process Files
                 if (currentTask.files && currentTask.files.length > 0) {
@@ -2038,13 +2015,7 @@ app.post('/api/system/monitor', adminOnly, (req, res) => {
     const { mode, interval, enabled } = req.body;
 
     try {
-        let currentConfig = {};
-        if (fs.existsSync(CONFIG_FILE)) {
-            try {
-                const content = fs.readFileSync(CONFIG_FILE, 'utf8');
-                if (content.trim()) currentConfig = JSON.parse(content);
-            } catch (e) { }
-        }
+        const currentConfig = getConfig();
 
         // Stop everything first
         stopAllMonitoring();
@@ -2073,7 +2044,7 @@ app.post('/api/system/monitor', adminOnly, (req, res) => {
         // Remove watcherEnabled flag as it's confusing now
         delete currentConfig.watcherEnabled;
 
-        fs.writeFileSync(CONFIG_FILE, JSON.stringify(currentConfig, null, 2));
+        updateConfig(currentConfig);
 
         res.json({
             success: true,
@@ -2090,13 +2061,7 @@ app.post('/api/system/monitor', adminOnly, (req, res) => {
 // Watcher control endpoint (Legacy)
 app.get('/api/watcher/toggle', adminOnly, (req, res) => {
     try {
-        let currentConfig = {};
-        if (fs.existsSync(CONFIG_FILE)) {
-            try {
-                const content = fs.readFileSync(CONFIG_FILE, 'utf8');
-                if (content.trim()) currentConfig = JSON.parse(content);
-            } catch (e) { }
-        }
+        const currentConfig = getConfig();
 
         if (isWatcherActive) {
             // Turn off
@@ -2114,7 +2079,7 @@ app.get('/api/watcher/toggle', adminOnly, (req, res) => {
 
         // Persist setting
         try {
-            fs.writeFileSync(CONFIG_FILE, JSON.stringify(currentConfig, null, 2));
+            updateConfig(currentConfig);
         } catch (e) {
             console.error("Failed to save watcher config:", e);
         }
@@ -2297,32 +2262,32 @@ app.post('/api/users', adminOnly, (req, res) => {
 
     if (!username || !password) return res.status(400).json({ error: 'Missing fields' });
 
-    if (fs.existsSync(CONFIG_FILE)) {
-        try {
-            const config = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
-            if (!config.users) config.users = [];
+    try {
+        const config = getConfig();
+        if (Object.keys(config).length === 0) return res.status(500).json({ error: 'Config missing' });
+        if (!config.users) config.users = [];
 
-            if (config.users.find(u => u.username === username)) {
-                return res.status(400).json({ error: 'User already exists' });
-            }
+        if (config.users.find(u => u.username === username)) {
+            return res.status(400).json({ error: 'User already exists' });
+        }
 
-            // Cleanup paths: remove empty, trim
-            const cleanedPaths = (allowedPaths || []).map(p => p.trim()).filter(Boolean);
+        // Cleanup paths: remove empty, trim
+        const cleanedPaths = (allowedPaths || []).map(p => p.trim()).filter(Boolean);
 
-            config.users.push({
-                username,
-                password,
-                isAdmin: !!isAdmin,
-                allowedPaths: cleanedPaths
-            });
+        config.users.push({
+            username,
+            password,
+            isAdmin: !!isAdmin,
+            allowedPaths: cleanedPaths
+        });
 
-            fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2));
+        updateConfig(config);
 
-            const sanitizedUsers = config.users.map(({ password, ...u }) => u);
-            res.json({ success: true, users: sanitizedUsers });
-        } catch (e) { res.status(500).json({ error: 'Config error' }); }
-    } else {
-        res.status(500).json({ error: 'Config missing' });
+        const sanitizedUsers = config.users.map(({ password, ...u }) => u);
+        res.json({ success: true, users: sanitizedUsers });
+    } catch (e) {
+        console.error("User creation error", e);
+        res.status(500).json({ error: 'Internal server error' });
     }
 });
 
@@ -2346,36 +2311,35 @@ app.post('/api/users/:targetUser', authenticateToken, (req, res) => {
         return res.status(403).json({ error: 'Admins only for these fields' });
     }
 
-    if (fs.existsSync(CONFIG_FILE)) {
-        try {
-            const config = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
-            const userIndex = config.users?.findIndex(u => u.username === targetUser);
+    try {
+        const config = getConfig();
+        const userIndex = config.users?.findIndex(u => u.username === targetUser);
 
-            if (userIndex === -1 || userIndex === undefined) return res.status(404).json({ error: 'User not found' });
+        if (userIndex === -1 || userIndex === undefined) return res.status(404).json({ error: 'User not found' });
 
-            // If renaming, check conflict
-            if (newUsername && newUsername !== targetUser) {
-                if (config.users.find(u => u.username === newUsername)) {
-                    return res.status(400).json({ error: 'Username already taken' });
-                }
-                config.users[userIndex].username = newUsername;
+        // If renaming, check conflict
+        if (newUsername && newUsername !== targetUser) {
+            if (config.users.find(u => u.username === newUsername)) {
+                return res.status(400).json({ error: 'Username already taken' });
             }
+            config.users[userIndex].username = newUsername;
+        }
 
-            if (newPassword) config.users[userIndex].password = newPassword;
-            if (allowedPaths !== undefined && isAdmin) {
-                config.users[userIndex].allowedPaths = allowedPaths.map(p => p.trim()).filter(Boolean);
-            }
-            if (newIsAdmin !== undefined && isAdmin) {
-                config.users[userIndex].isAdmin = !!newIsAdmin;
-            }
+        if (newPassword) config.users[userIndex].password = newPassword;
+        if (allowedPaths !== undefined && isAdmin) {
+            config.users[userIndex].allowedPaths = allowedPaths.map(p => p.trim()).filter(Boolean);
+        }
+        if (newIsAdmin !== undefined && isAdmin) {
+            config.users[userIndex].isAdmin = !!newIsAdmin;
+        }
 
-            fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2));
+        updateConfig(config);
 
-            const sanitizedUsers = config.users.map(({ password, ...u }) => u);
-            res.json({ success: true, users: sanitizedUsers });
-        } catch (e) { res.status(500).json({ error: 'Config error' }); }
-    } else {
-        res.status(500).json({ error: 'Config missing' });
+        const sanitizedUsers = config.users.map(({ password, ...u }) => u);
+        res.json({ success: true, users: sanitizedUsers });
+    } catch (e) {
+        console.error("User update error", e);
+        res.status(500).json({ error: 'Internal server error' });
     }
 });
 
@@ -2385,21 +2349,20 @@ app.delete('/api/users/:targetUser', adminOnly, (req, res) => {
     // Prevent deleting self (though frontend should block too)
     if (req.user.username === targetUser) return res.status(400).json({ error: "Cannot delete yourself" });
 
-    if (fs.existsSync(CONFIG_FILE)) {
-        try {
-            const config = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
-            const initialLen = config.users?.length || 0;
-            config.users = config.users.filter(u => u.username !== targetUser);
+    try {
+        const config = getConfig();
+        const initialLen = config.users?.length || 0;
+        config.users = (config.users || []).filter(u => u.username !== targetUser);
 
-            if (config.users.length === initialLen) return res.status(404).json({ error: 'User not found' });
+        if (config.users.length === initialLen) return res.status(404).json({ error: 'User not found' });
 
-            fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2));
+        updateConfig(config);
 
-            const sanitizedUsers = config.users.map(({ password, ...u }) => u);
-            res.json({ success: true, users: sanitizedUsers });
-        } catch (e) { res.status(500).json({ error: 'Config error' }); }
-    } else {
-        res.status(500).json({ error: 'Config missing' });
+        const sanitizedUsers = config.users.map(({ password, ...u }) => u);
+        res.json({ success: true, users: sanitizedUsers });
+    } catch (e) {
+        console.error("User deletion error", e);
+        res.status(500).json({ error: 'Internal server error' });
     }
 });
 
@@ -2408,27 +2371,23 @@ app.listen(port, () => {
 
     // Check config for watcher auto-start
     try {
-        if (fs.existsSync(CONFIG_FILE)) {
-            const content = fs.readFileSync(CONFIG_FILE, 'utf8');
-            if (content.trim()) {
-                const config = JSON.parse(content);
+        const config = getConfig();
+        if (config && Object.keys(config).length > 0) {
+            // Restore settings
+            if (config.scanInterval) scanInterval = config.scanInterval;
 
-                // Restore settings
-                if (config.scanInterval) scanInterval = config.scanInterval;
+            const libraryPaths = (config.libraryPaths && config.libraryPaths.length > 0)
+                ? config.libraryPaths
+                : [MEDIA_ROOT];
 
-                const libraryPaths = (config.libraryPaths && config.libraryPaths.length > 0)
-                    ? config.libraryPaths
-                    : [MEDIA_ROOT];
-
-                // Determine mode
-                if (config.monitorMode === 'periodic') {
-                    console.log(`Starting periodic scanner (every ${scanInterval}m)...`);
-                    monitorMode = 'periodic';
-                    startPeriodicScanner(libraryPaths, scanInterval);
-                    startPeriodicScanner(libraryPaths, scanInterval);
-                } else {
-                    monitorMode = 'manual';
-                }
+            // Determine mode
+            if (config.monitorMode === 'periodic') {
+                console.log(`Starting periodic scanner (every ${scanInterval}m)...`);
+                monitorMode = 'periodic';
+                startPeriodicScanner(libraryPaths, scanInterval);
+                startPeriodicScanner(libraryPaths, scanInterval);
+            } else {
+                monitorMode = 'manual';
             }
         }
     } catch (e) {
