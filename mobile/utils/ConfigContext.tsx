@@ -8,6 +8,7 @@ interface CarouselConfig {
     sourceType: CarouselSourceType;
     sourceValue: string | null; // folderPath or fileId
     sourceName?: string; // friendly name for UI
+    interval?: number; // rotation interval in ms
 }
 
 interface ConfigContextType {
@@ -32,7 +33,8 @@ export const useConfig = () => {
 const DEFAULT_CONFIG: CarouselConfig = {
     sourceType: 'all',
     sourceValue: null,
-    sourceName: 'All Media'
+    sourceName: 'All Media',
+    interval: 7000
 };
 
 export const ConfigProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
