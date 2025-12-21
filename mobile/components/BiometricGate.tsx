@@ -23,24 +23,6 @@ export const BiometricGate: React.FC<BiometricGateProps> = ({ children }) => {
     const [isAuthenticating, setIsAuthenticating] = useState(false);
     const [isFocusLost, setIsFocusLost] = useState(false);
 
-    // System-level protection: Prevent snapshots/screenshots if biometrics enabled
-    // Note: This requires a Development Client (native build) to work on Android.
-    // In Expo Go, this may be a no-op or throw an error.
-    useEffect(() => {
-        const toggleCapture = async () => {
-            try {
-                if (isConfigLoaded && biometricsEnabled) {
-                    await ScreenCapture.preventScreenCaptureAsync('biometric-protection');
-                } else {
-                    await ScreenCapture.allowScreenCaptureAsync('biometric-protection');
-                }
-            } catch (e) {
-                console.warn('ScreenCapture not available in this environment:', e);
-            }
-        };
-        toggleCapture();
-    }, [isConfigLoaded, biometricsEnabled]);
-
     // Initial check on mount or when config loads
     useEffect(() => {
         if (!isConfigLoaded) return;
@@ -112,13 +94,22 @@ export const BiometricGate: React.FC<BiometricGateProps> = ({ children }) => {
     const showMask = !isConfigLoaded || isLocked || isFocusLost;
 
     return (
-        <View style={{ flex: 1 }}>
+        <View style={{ flex: 1, backgroundColor: isDark ? '#000' : '#fff' }}>
             {/* Content layer */}
             {children}
 
             {showMask && (
                 <View
-                    style={[StyleSheet.absoluteFill, { zIndex: 99999, backgroundColor: isDark ? '#000' : '#fff' }]}
+                    style={[
+                        StyleSheet.absoluteFill,
+                        {
+                            zIndex: 99999,
+                            backgroundColor: isDark ? '#121212' : '#f8f8f8',
+                            // 确保遮罩层覆盖状态栏区域
+                            marginTop: Platform.OS === 'android' ? -50 : 0,
+                            height: Platform.OS === 'android' ? '120%' : '100%',
+                        }
+                    ]}
                 >
                     <BlurView
                         intensity={Platform.OS === 'android' ? 100 : 80}
@@ -126,7 +117,7 @@ export const BiometricGate: React.FC<BiometricGateProps> = ({ children }) => {
                         style={[StyleSheet.absoluteFill, {
                             alignItems: 'center',
                             justifyContent: 'center',
-                            backgroundColor: isDark ? 'rgba(0,0,0,0.85)' : 'rgba(255,255,255,0.85)'
+                            backgroundColor: isDark ? 'rgba(18,18,18,0.85)' : 'rgba(248,248,248,0.85)'
                         }]}
                     >
                         {/* UI: Only show text/buttons if config is loaded and NOT just a temporary blur for App Switcher */}

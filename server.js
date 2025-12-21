@@ -18,6 +18,7 @@ const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 const CACHE_DIR = process.env.CACHE_DIR || path.join(__dirname, 'cache');
 const CONFIG_FILE = path.join(DATA_DIR, 'lumina-config.json');
 const SECRET_FILE = path.join(DATA_DIR, 'jwt_secret.key');
+const SMART_RESULTS_FILE = path.join(DATA_DIR, 'smart-results.json');
 let JWT_SECRET = process.env.JWT_SECRET;
 
 if (!JWT_SECRET) {
@@ -69,6 +70,47 @@ function updateConfig(newConfig) {
     configCache = newConfig;
     lastConfigRead = Date.now();
 }
+
+// --- Global Cache Stats (Performance) ---
+// Avoid blocking the event loop on every status request
+let globalCacheCount = 0;
+let globalCacheSize = 0;
+let lastCacheUpdate = 0;
+
+function updateGlobalCacheStats() {
+    try {
+        if (!fs.existsSync(CACHE_DIR)) return;
+
+        let count = 0;
+        let size = 0;
+
+        const countRecursive = (dir) => {
+            const items = fs.readdirSync(dir, { withFileTypes: true });
+            for (const item of items) {
+                const fullPath = path.join(dir, item.name);
+                if (item.isDirectory()) {
+                    countRecursive(fullPath);
+                } else if (item.isFile() && item.name.endsWith('.webp')) {
+                    count++;
+                    try { size += fs.statSync(fullPath).size; } catch (e) { }
+                }
+            }
+        };
+
+        console.log('[System] Start background cache stats update...');
+        countRecursive(CACHE_DIR);
+        globalCacheCount = count;
+        globalCacheSize = size;
+        lastCacheUpdate = Date.now();
+        console.log(`[System] Cache stats updated: ${count} files, ${globalCacheSize} bytes`);
+    } catch (e) {
+        console.error("[System] Failed to update cache stats", e);
+    }
+}
+
+// Schedule updates
+setTimeout(updateGlobalCacheStats, 2000); // 2s after start
+setInterval(updateGlobalCacheStats, 10 * 60 * 1000); // map every 10 mins
 
 // Ensure directories exist
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -1497,6 +1539,28 @@ let smartScanResults = {
     timestamp: 0
 };
 
+function saveSmartResults() {
+    try {
+        fs.writeFileSync(SMART_RESULTS_FILE, JSON.stringify(smartScanResults, null, 2));
+    } catch (e) {
+        console.error('[SmartScan] Failed to save results:', e);
+    }
+}
+
+function loadSmartResults() {
+    if (fs.existsSync(SMART_RESULTS_FILE)) {
+        try {
+            const data = fs.readFileSync(SMART_RESULTS_FILE, 'utf8');
+            smartScanResults = JSON.parse(data);
+            console.log(`[SmartScan] Loaded ${smartScanResults.missing.length + smartScanResults.error.length} results from disk.`);
+        } catch (e) {
+            console.error('[SmartScan] Failed to load results:', e);
+        }
+    }
+}
+
+// Load on init (moved down to after definition)
+
 // Queue Processor
 async function processTaskQueue() {
     if (isTaskProcessorRunning) return;
@@ -1598,6 +1662,7 @@ async function processTaskQueue() {
                     error: error,
                     timestamp: Date.now()
                 };
+                saveSmartResults();
                 console.log(`[Queue] Smart Scan Complete. Missing: ${missing.length}, Error: ${error.length}`);
                 thumbState.currentPath = "Analysis Complete.";
 
@@ -1630,6 +1695,7 @@ async function processTaskQueue() {
                     if (currentTask.name.includes('Smart Repair')) {
                         console.log('[Queue] Smart Repair finished. clearing results.');
                         smartScanResults = { missing: [], error: [], timestamp: Date.now() };
+                        saveSmartResults();
                     }
                 }
             }
@@ -1737,6 +1803,14 @@ app.post('/api/thumb/smart-scan', (req, res) => {
 });
 
 app.get('/api/thumb/smart-results', (req, res) => {
+    const summary = req.query.summary === 'true';
+    if (summary) {
+        return res.json({
+            missingCount: smartScanResults.missing.length,
+            errorCount: smartScanResults.error.length,
+            timestamp: smartScanResults.timestamp
+        });
+    }
     res.json(smartScanResults);
 });
 
@@ -1945,38 +2019,9 @@ app.get('/api/system/status', (req, res) => {
     const userLibraryPaths = getUserLibraryPaths(req.user);
     const dbStats = dbReady ? database.getStats({ allowedPaths: isAdmin ? null : userLibraryPaths }) : { totalFiles: 0, totalImages: 0, totalVideos: 0, totalAudio: 0 };
 
-    let cacheSize = 0;
-    let cacheCount = 0;
-
-    if (isAdmin) {
-        try {
-            if (fs.existsSync(CACHE_DIR)) {
-                const countRecursive = (dir) => {
-                    let count = 0;
-                    let size = 0;
-                    if (!fs.existsSync(dir)) return { count: 0, size: 0 };
-                    try {
-                        const items = fs.readdirSync(dir, { withFileTypes: true });
-                        for (const item of items) {
-                            const fullPath = path.join(dir, item.name);
-                            if (item.isDirectory()) {
-                                const sub = countRecursive(fullPath);
-                                count += sub.count;
-                                size += sub.size;
-                            } else {
-                                count++;
-                                try { size += fs.statSync(fullPath).size; } catch (e) { }
-                            }
-                        }
-                    } catch (e) { }
-                    return { count, size };
-                };
-                const stats = countRecursive(CACHE_DIR);
-                cacheCount = stats.count;
-                cacheSize = stats.size;
-            }
-        } catch (e) { }
-    }
+    // Use pre-calculated values to avoid blocking the event loop
+    const cacheSize = globalCacheSize;
+    const cacheCount = globalCacheCount;
 
     const status = {
         mediaStats: {
@@ -2145,6 +2190,13 @@ app.post('/api/cache/clear', adminOnly, (req, res) => {
             error: [],
             timestamp: 0
         };
+        saveSmartResults();
+
+        // Immediate update after clear
+        updateGlobalCacheStats();
+
+        // Trigger immediate stats update
+        updateGlobalCacheStats();
 
         // Fix: Clear thumbnails table, not files table
         try {
