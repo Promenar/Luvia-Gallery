@@ -14,6 +14,9 @@
     - **Anti-Jitter**: Dynamic text (percentages) in notifications must be wrapped in fixed-width containers to preserve layout stability.
     - **Permission Consistency**: In `server.js`, always check for both `user.isAdmin` (direct object property) and `user.role === 'admin'` (from JWT payload) to ensure consistent access control across all middleware and helpers (e.g., `checkFileAccess`).
     - **Scanner State Sync**: When starting background tasks (like `processScan`), the `status` flag must be updated * synchronously* before returning the HTTP response. This prevents race conditions where the frontend's first status poll hits an `idle` state before the async task has technically started.
+- **Config Caching**: `server.js` implements an in-memory TTL cache for `lumina-config.json` to minimize disk I/O. API endpoints and middleware should always use `getConfig()` helper.
+- **Frontend Debounce**: UI configuration inputs (Title, Subtitle) in `App.tsx` MUST use the debounced `persistData` call to prevent excessive server syncs during typing.
+- **Tailwind Build**: Standard Vite/PostCSS pipeline. No CDN links in `index.html`. Primary colors and fonts must be defined in `tailwind.config.js`.
 
 ## Anti-Patterns to Avoid
 - **Raw DB Access**: Never access `database.db` directly in `server.js`. It is private. Always use or create public helper methods (e.g., `getStats()`) in `database.js`.
@@ -21,7 +24,10 @@
 - **Layout Collapsing**:
     - Avoid `return null` in major UI sections (Carousel/Grid) during loading; always provide skeleton/placeholder view.
     - Fix `VirtualGallery` zero-height bugs by using `absolute inset-0` on container wrappers.
-- **Image Ghosting & Blur**: Never use `blur-xl` or high GPU-cost blurs in recurring list items (especially `FolderCard`); this causes "gray ghosting" during transitions.
+- **Image Ghosting & High-DPI Blur**: 
+    - Never use `backdrop-filter` on full-screen overlays, especially on high-DPI (4K) screens; it causes extreme GPU fill-rate bottlenecks. 
+    - Prefer high-opacity solid backgrounds (e.g., `bg-black/80`) for modal backdrops. 
+    - Never nest elements with `backdrop-filter`; redundant sampling will cause recursive performance drops.
 - **Authenticated Media**: Direct `<img>` or `<Image>` tags will fail if `?token=<jwt>` is not appended to the URL query parameters.
 - **Animation Overload**: Avoid bouncy/spring animations for system-level dialogs; prefer subtle Fade+Scale for a premium, non-distracting feel.
 

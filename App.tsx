@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { MediaItem, ViewMode, GridLayout, User, UserData, SortOption, FilterOption, AppConfig, FolderNode, SystemStatus, HomeScreenConfig } from './types';
+import { MediaItem, ViewMode, GridLayout, User, UserData, SortOption, FilterOption, AppConfig, FolderNode, SystemStatus, HomeScreenConfig, ExtendedSystemStatus, SettingsTab, ScanStatus } from './types';
 import { buildFolderTree, generateId, isVideo, isAudio, sortMedia, getImmediateSubfolders } from './utils/fileUtils';
 import { Icons } from './components/ui/Icon';
 import { Navigation } from './components/Navigation';
@@ -8,12 +8,13 @@ import { MediaCard } from './components/PhotoCard';
 import { FolderCard } from './components/FolderCard';
 import { ImageViewer } from './components/ImageViewer';
 import { UnifiedProgressModal } from './components/UnifiedProgressModal';
-import { ScanStatus } from './components/ScanProgressModal'; // Keeping Type for now if needed, or define in unified
 import { VirtualGallery } from './components/VirtualGallery';
 import { DirectoryPicker } from './components/DirectoryPicker';
 import { Home } from './components/Home';
 import { useLanguage } from './contexts/LanguageContext';
 import { AudioPlayer } from './components/AudioPlayer';
+import { UserModal } from './components/UserModal';
+import { SettingsModal } from './components/SettingsModal';
 
 const CONFIG_FILE_NAME = 'lumina-config.json';
 const USERS_STORAGE_KEY = 'lumina_users';
@@ -25,24 +26,7 @@ const SOURCES_STORAGE_KEY = 'lumina_sources';
 const THEME_STORAGE_KEY = 'lumina_theme';
 const AUTH_USER_KEY = 'lumina_auth_user';
 
-interface ExtendedSystemStatus extends SystemStatus {
-    // watcherActive?: boolean; // Deprecated
-    mode?: 'periodic' | 'manual';
-    scanInterval?: number;
-    dbStatus?: string;
-    mediaStats?: {
-        totalFiles: number;
-        images: number;
-        videos: number;
-        audio: number;
-    };
-    hardwareAcceleration?: {
-        type: string;
-        device: string | null;
-    };
-}
 
-type SettingsTab = 'general' | 'library' | 'system' | 'account';
 
 export default function App() {
     const { t, language, setLanguage } = useLanguage();
@@ -183,13 +167,15 @@ export default function App() {
     const [sortOption, setSortOption] = useState<SortOption>('dateDesc');
     const [filterOption, setFilterOption] = useState<FilterOption>('all');
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-    const [settingsTab, setSettingsTab] = useState<SettingsTab>('general'); // New state for tabs
+    const [settingsTab, setSettingsTab] = useState<SettingsTab>('general');
+
+    // --- Performance Optimization: Layered Blur logic ---
 
     useEffect(() => {
-        if (settingsTab === 'system') {
+        if (isSettingsOpen && settingsTab === 'system') {
             handleFetchSmartResults();
         }
-    }, [settingsTab]);
+    }, [isSettingsOpen, settingsTab]);
 
 
     // --- Random Sort Stability ---
@@ -297,7 +283,10 @@ export default function App() {
     const [threadCount, setThreadCount] = useState<number>(2);
 
     // --- Persistence Helper ---
-    const persistData = async (newUsers?: User[], newTitle?: string, newAllUserData?: Record<string, UserData>, newLibraryPaths?: string[], newHomeSubtitle?: string, newHomeConfig?: HomeScreenConfig, newThreadCount?: number) => {
+    // --- Persistence Helper ---
+    const persistTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    const persistData = async (newUsers?: User[], newTitle?: string, newAllUserData?: Record<string, UserData>, newLibraryPaths?: string[], newHomeSubtitle?: string, newHomeConfig?: HomeScreenConfig, newThreadCount?: number, debounce: boolean = false) => {
         const u = newUsers || users;
         const t = newTitle || appTitle;
         const s = newHomeSubtitle || homeSubtitle;
@@ -306,7 +295,7 @@ export default function App() {
         const l = newLibraryPaths || libraryPaths;
         const tc = newThreadCount !== undefined ? newThreadCount : threadCount;
 
-        // Update React State
+        // Update React State immediately for local UI responsiveness
         if (newUsers) setUsers(newUsers);
         if (newTitle) setAppTitle(newTitle);
         if (newHomeSubtitle) setHomeSubtitle(newHomeSubtitle);
@@ -315,43 +304,50 @@ export default function App() {
         if (newLibraryPaths) setLibraryPaths(newLibraryPaths);
         if (newThreadCount !== undefined) setThreadCount(newThreadCount);
 
-        // Construct Config Object
-        const userSources: Record<string, any[]> = {};
-        Object.keys(d).forEach(k => {
-            userSources[k] = d[k].sources;
-        });
+        const performPersist = async () => {
+            // Construct Config Object
+            const userSources: Record<string, any[]> = {};
+            Object.keys(d).forEach(k => {
+                userSources[k] = d[k]?.sources || [];
+            });
 
-        const config: AppConfig = {
-            title: t,
-            homeSubtitle: s,
-            homeScreen: hc,
-            users: u,
-            userSources: userSources,
-            libraryPaths: l,
-            threadCount: tc,
-            lastModified: Date.now()
-        };
+            const config: AppConfig = {
+                title: t,
+                homeSubtitle: s,
+                homeScreen: hc,
+                users: u,
+                userSources: userSources,
+                libraryPaths: l,
+                threadCount: tc,
+                lastModified: Date.now()
+            };
 
-        if (isServerMode) {
-            // Only Admins can sync global config
-            if (currentUser && currentUser.isAdmin) {
-                try {
-                    await apiFetch('/api/config', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(config)
-                    });
-                } catch (e) {
-                    console.error("Failed to sync to server", e);
+            if (isServerMode) {
+                // Only Admins can sync global config
+                if (currentUser && currentUser.isAdmin) {
+                    try {
+                        await apiFetch('/api/config', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(config)
+                        });
+                    } catch (e) {
+                        console.error("Failed to sync to server", e);
+                    }
                 }
             } else {
-                console.log("[Persist] Skipping server sync (non-admin)");
+                localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(u));
+                localStorage.setItem(APP_TITLE_KEY, t);
+                localStorage.setItem(APP_SUBTITLE_KEY, s);
+                localStorage.setItem(SOURCES_STORAGE_KEY, JSON.stringify(userSources));
             }
+        };
+
+        if (debounce) {
+            if (persistTimeoutRef.current) clearTimeout(persistTimeoutRef.current);
+            persistTimeoutRef.current = setTimeout(performPersist, 1000); // 1 second debounce
         } else {
-            localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(u));
-            localStorage.setItem(APP_TITLE_KEY, t);
-            localStorage.setItem(APP_SUBTITLE_KEY, s);
-            localStorage.setItem(SOURCES_STORAGE_KEY, JSON.stringify(userSources));
+            performPersist();
         }
     };
 
@@ -586,24 +582,28 @@ export default function App() {
         } catch (e) { }
     };
 
+    const favFetchRef = useRef<Promise<any> | null>(null);
     const fetchServerFavorites = async () => {
-        console.log('[DEBUG] fetchServerFavorites called');
-        try {
-            const res = await apiFetch('/api/favorites/ids');
-            if (res.ok) {
-                const data = await res.json();
-                console.log('[DEBUG] Favorites IDs received:', data);
-                setServerFavoriteIds(data);
-                console.log('[DEBUG] serverFavoriteIds state updated');
-                return data; // Return data for immediate use
-            } else {
-                console.error('[DEBUG] Failed to fetch favorites:', res.status);
+        if (favFetchRef.current) return favFetchRef.current;
+
+        favFetchRef.current = (async () => {
+            console.log('[DEBUG] fetchServerFavorites called');
+            try {
+                const res = await apiFetch('/api/favorites/ids');
+                if (res.ok) {
+                    const data = await res.json();
+                    setServerFavoriteIds(data);
+                    return data;
+                }
                 return { files: [], folders: [] };
+            } catch (e) {
+                return { files: [], folders: [] };
+            } finally {
+                favFetchRef.current = null;
             }
-        } catch (e) {
-            console.error('[DEBUG] fetchServerFavorites error:', e);
-            return { files: [], folders: [] };
-        }
+        })();
+
+        return favFetchRef.current;
     };
 
     const fetchServerFiles = async (
@@ -1162,20 +1162,19 @@ export default function App() {
         setIsUserModalOpen(true);
     };
 
-    const submitUserForm = async (e: React.FormEvent) => {
-        e.preventDefault();
+    const handleUserFormSubmit = async (formData: any) => {
         try {
-            const pathsArray = newUserForm.allowedPaths.split(/[\n,]/).map(p => p.trim()).filter(Boolean);
+            const pathsArray = formData.allowedPaths.split(/[\n,]/).map((p: string) => p.trim()).filter(Boolean);
 
             if (userFormType === 'add') {
-                if (!newUserForm.username || !newUserForm.password) return;
+                if (!formData.username || !formData.password) return;
                 const res = await apiFetch('/api/users', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        username: newUserForm.username,
-                        password: newUserForm.password,
-                        isAdmin: newUserForm.isAdmin,
+                        username: formData.username,
+                        password: formData.password,
+                        isAdmin: formData.isAdmin,
                         allowedPaths: pathsArray
                     })
                 });
@@ -1185,8 +1184,8 @@ export default function App() {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        newUsername: newUserForm.username !== targetUser.username ? newUserForm.username : undefined,
-                        newPassword: newUserForm.password || undefined,
+                        newUsername: formData.username !== targetUser.username ? formData.username : undefined,
+                        newPassword: formData.password || undefined,
                         allowedPaths: pathsArray
                     })
                 });
@@ -1196,8 +1195,8 @@ export default function App() {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        newPassword: newUserForm.password,
-                        isAdmin: newUserForm.isAdmin // Also allow updating role
+                        newPassword: formData.password,
+                        isAdmin: formData.isAdmin // Also allow updating role
                     })
                 });
                 if (!res.ok) throw new Error(await res.text());
@@ -1477,15 +1476,15 @@ export default function App() {
     };
 
     const handleUpdateTitle = (newTitle: string) => {
-        persistData(undefined, newTitle, undefined, undefined, undefined);
+        persistData(undefined, newTitle, undefined, undefined, undefined, undefined, undefined, true);
     };
 
     const handleUpdateSubtitle = (newSubtitle: string) => {
-        persistData(undefined, undefined, undefined, undefined, newSubtitle);
+        persistData(undefined, undefined, undefined, undefined, newSubtitle, undefined, undefined, true);
     };
 
     const handleUpdateHomeConfig = (newConfig: HomeScreenConfig) => {
-        persistData(undefined, undefined, undefined, undefined, undefined, newConfig);
+        persistData(undefined, undefined, undefined, undefined, undefined, newConfig, undefined, true);
     };
 
     const handleAddLibraryPath = (e?: React.FormEvent) => {
@@ -1851,562 +1850,6 @@ export default function App() {
         );
     }
 
-    // Helper to render specific tab content
-    const renderSettingsContent = () => {
-        switch (settingsTab) {
-            case 'general':
-                return (
-                    <div className="space-y-8 animate-in fade-in slide-in-from-right-4 duration-300">
-                        <section>
-                            <h4 className="text-sm font-bold uppercase text-gray-400 tracking-wider mb-4">{t('appearance')}</h4>
-                            <div className="space-y-4">
-                                <div>
-                                    <label className="block text-sm font-medium mb-1.5">{t('website_title')}</label>
-                                    <input
-                                        value={appTitle}
-                                        onChange={e => handleUpdateTitle(e.target.value)}
-                                        className="w-full px-4 py-2 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 outline-none focus:ring-2 focus:ring-primary-500 transition-all"
-                                    />
-                                </div>
-                                <div>
-                                    <label className="block text-sm font-medium mb-1.5">{t('home_subtitle')}</label>
-                                    <input
-                                        value={homeSubtitle}
-                                        onChange={e => handleUpdateSubtitle(e.target.value)}
-                                        className="w-full px-4 py-2 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 outline-none focus:ring-2 focus:ring-primary-500 transition-all"
-                                    />
-                                </div>
-                                <div>
-                                    <label className="block text-sm font-medium mb-1.5">{t('language')}</label>
-                                    <select
-                                        value={language}
-                                        onChange={(e) => setLanguage(e.target.value as 'en' | 'zh')}
-                                        className="w-full px-4 py-2 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 outline-none focus:ring-2 focus:ring-primary-500 transition-all"
-                                    >
-                                        <option value="en">English</option>
-                                        <option value="zh">中文 (Chinese)</option>
-                                    </select>
-                                </div>
-                                <div>
-                                    <label className="block text-sm font-medium mb-2">{t('home_screen_conf')}</label>
-                                    <div className="flex flex-wrap gap-2 mb-2">
-                                        {['random', 'folder', 'single'].map(m => (
-                                            <button
-                                                key={m}
-                                                onClick={() => handleUpdateHomeConfig({ ...homeConfig, mode: m as any })}
-                                                className={`px-4 py-2 rounded-lg text-sm font-medium capitalize border transition-colors ${homeConfig.mode === m ? 'bg-primary-50 dark:bg-primary-900/30 border-primary-500 text-primary-600' : 'bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300'}`}
-                                            >
-                                                {t(m === 'random' ? 'random_all' : (m === 'folder' ? 'specific_folder' : 'single_item'))}
-                                            </button>
-                                        ))}
-                                    </div>
-                                    {homeConfig.mode !== 'random' && (
-                                        <input
-                                            placeholder={t('enter_rel_path')}
-                                            value={homeConfig.path || ''}
-                                            onChange={e => handleUpdateHomeConfig({ ...homeConfig, path: e.target.value })}
-                                            className="w-full px-4 py-2 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 outline-none focus:ring-2 focus:ring-primary-500 font-mono text-sm transition-all"
-                                        />
-                                    )}
-                                </div>
-                            </div>
-                        </section>
-                    </div>
-                );
-            case 'library':
-                return (
-                    <div className="space-y-8 animate-in fade-in slide-in-from-right-4 duration-300">
-                        {!isServerMode ? (
-                            <div className="flex flex-col items-center justify-center p-8 bg-gray-50 dark:bg-gray-800/50 rounded-2xl border border-dashed border-gray-200 dark:border-gray-700">
-                                <div className="p-4 bg-gray-100 dark:bg-gray-800 rounded-full mb-4">
-                                    <Icons.Server size={32} className="text-gray-400" />
-                                </div>
-                                <h4 className="text-lg font-bold mb-2">{t('running_client_mode')}</h4>
-                                <p className="text-center text-sm text-gray-500 max-w-sm mb-6">
-                                    {t('client_mode_description')}
-                                </p>
-                                <button
-                                    onClick={() => { setIsServerMode(true); setSettingsTab('system'); }}
-                                    className="px-6 py-2 bg-primary-600 hover:bg-primary-700 text-white font-medium rounded-lg transition-colors"
-                                >
-                                    {t('switch_to_server')}
-                                </button>
-                            </div>
-                        ) : (
-                            <>
-                                {/* Library Paths */}
-                                <section>
-                                    <h4 className="text-sm font-bold uppercase text-gray-400 tracking-wider mb-4">{t('storage_database')}</h4>
-                                    <div className="bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded-2xl overflow-hidden shadow-sm">
-                                        <div className="p-6 border-b border-gray-100 dark:border-gray-700">
-                                            <h5 className="font-bold text-lg mb-2">{t('library_scan_paths')}</h5>
-                                            <p className="text-sm text-gray-500 mb-4">{t('media_served')}</p>
-                                            <form onSubmit={handleAddLibraryPath} className="flex gap-2">
-                                                <div className="flex-1 relative">
-                                                    <input
-                                                        value={newPathInput}
-                                                        onChange={(e) => setNewPathInput(e.target.value)}
-                                                        placeholder="/media"
-                                                        className="w-full px-4 py-2 pr-12 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-500 outline-none"
-                                                    />
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => { setDirPickerContext('library'); setShowDirPicker(true); }}
-                                                        className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-gray-400 hover:text-primary-500 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-md transition-colors"
-                                                        title={t('browse')}
-                                                    >
-                                                        <Icons.FolderOpen size={16} />
-                                                    </button>
-                                                </div>
-                                                <button type="submit" className="px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white font-medium rounded-lg transition-colors flex items-center gap-2">
-                                                    <Icons.Plus size={18} /> {t('add_path')}
-                                                </button>
-                                            </form>
-                                        </div>
-                                        <div className="bg-gray-50 dark:bg-gray-900/50 p-2 space-y-1 max-h-64 overflow-y-auto border-b border-gray-100 dark:border-gray-700">
-                                            {libraryPaths.length === 0 && (
-                                                <div className="p-4 text-center text-sm text-gray-500 italic">
-                                                    {t('scanning_default')} <span className="font-mono bg-gray-200 dark:bg-gray-700 px-1 rounded">/media</span>
-                                                </div>
-                                            )}
-                                            {libraryPaths.map(path => (
-                                                <div key={path} className="flex items-center justify-between p-3 bg-white dark:bg-gray-800 rounded-xl border border-gray-100 dark:border-gray-700 shadow-sm group">
-                                                    <div className="flex items-center gap-3">
-                                                        <Icons.Folder size={18} className="text-primary-500" />
-                                                        <span className="font-mono text-sm">{path}</span>
-                                                    </div>
-                                                    <button onClick={() => handleRemoveLibraryPath(path)} className="text-red-500 opacity-0 group-hover:opacity-100 p-2 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-all">
-                                                        <Icons.Trash size={16} />
-                                                    </button>
-                                                </div>
-                                            ))}
-                                        </div>
-
-                                        {/* Integrated Monitoring Strategy Selector */}
-                                        {systemStatus && (
-                                            <div className="p-4 bg-blue-50/50 dark:bg-blue-900/10 border-t border-gray-100 dark:border-gray-700">
-                                                <div className="mb-3">
-                                                    <div className="flex items-center gap-2 mb-2">
-                                                        <Icons.Activity size={18} className="text-gray-500" />
-                                                        <span className="text-sm font-bold text-gray-700 dark:text-gray-300">{t('monitoring_strategy')}</span>
-                                                    </div>
-
-                                                    <div className="flex flex-col gap-3">
-                                                        <div className="grid grid-cols-2 gap-2">
-                                                            {(['manual', 'periodic'] as const).map((m) => (
-                                                                <button
-                                                                    key={m}
-                                                                    onClick={() => handleMonitorUpdate(m, systemStatus.scanInterval)}
-                                                                    className={`px-3 py-2 rounded-lg text-xs font-medium border capitalize transition-all ${(systemStatus.mode || 'manual') === m
-                                                                        ? 'bg-blue-100 dark:bg-blue-900/40 border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-300 shadow-sm'
-                                                                        : 'bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700'
-                                                                        }`}
-                                                                >
-                                                                    {t((m + '_mode') as any)}
-                                                                </button>
-                                                            ))}
-                                                        </div>
-
-                                                        <div className="text-xs text-gray-500 dark:text-gray-400 bg-white dark:bg-gray-800/50 p-3 rounded-lg border border-gray-100 dark:border-gray-700/50">
-                                                            {(systemStatus.mode || 'manual') === 'manual' && <p>{t('monitoring_desc_manual')}</p>}
-                                                            {(systemStatus.mode || 'manual') === 'periodic' && (
-                                                                <div className="space-y-2">
-                                                                    <p>{t('monitoring_desc_periodic')}</p>
-                                                                    <div className="flex items-center gap-2 mt-2">
-                                                                        <span>{t('scan_every')}:</span>
-                                                                        <select
-                                                                            value={systemStatus.scanInterval || 60}
-                                                                            onChange={(e) => handleMonitorUpdate('periodic', parseInt(e.target.value))}
-                                                                            className="bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded px-2 py-1 text-xs outline-none focus:ring-1 focus:ring-primary-500"
-                                                                        >
-                                                                            <option value="15">15 {t('minutes')}</option>
-                                                                            <option value="30">30 {t('minutes')}</option>
-                                                                            <option value="60">1 {t('hour')}</option>
-                                                                            <option value="360">6 {t('hours')}</option>
-                                                                            <option value="720">12 {t('hours')}</option>
-                                                                            <option value="1440">24 {t('hours')}</option>
-                                                                        </select>
-                                                                    </div>
-                                                                </div>
-                                                            )}
-                                                        </div>
-                                                    </div>
-                                                </div>
-
-                                            </div>
-                                        )}
-                                    </div>
-                                </section>
-
-                                {/* Operations */}
-                                <section>
-                                    <h4 className="text-sm font-bold uppercase text-gray-400 tracking-wider mb-4">Maintenance</h4>
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                        <div className="bg-white dark:bg-gray-800 p-6 rounded-2xl border border-gray-100 dark:border-gray-700 shadow-sm hover:shadow-md transition-shadow">
-                                            <div className="flex items-center gap-3 mb-3">
-                                                <div className="p-2.5 bg-blue-50 dark:bg-blue-900/30 text-blue-600 rounded-xl"><Icons.Scan size={24} /></div>
-                                                <div>
-                                                    <h5 className="font-bold text-gray-900 dark:text-white">{t('scan_library')}</h5>
-                                                    <p className="text-xs text-gray-500">Index files from disk</p>
-                                                </div>
-                                            </div>
-                                            <button onClick={startServerScan} className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-medium text-sm transition-colors shadow-sm shadow-blue-500/20">
-                                                Start Scan
-                                            </button>
-                                        </div>
-
-                                        <div className="bg-white dark:bg-gray-800 p-6 rounded-2xl border border-gray-100 dark:border-gray-700 shadow-sm hover:shadow-md transition-shadow">
-                                            <div className="flex items-center gap-3 mb-3">
-                                                <div className="p-2.5 bg-purple-50 dark:bg-purple-900/30 text-purple-600 rounded-xl"><Icons.Image size={24} /></div>
-                                                <div>
-                                                    <h5 className="font-bold text-gray-900 dark:text-white">{t('generate_thumbs')}</h5>
-                                                    <p className="text-xs text-gray-500">Process missing previews</p>
-                                                </div>
-                                            </div>
-                                            <button onClick={startThumbnailGen} className="w-full py-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-xl font-medium text-sm transition-colors shadow-sm shadow-purple-500/20">
-                                                Generate
-                                            </button>
-                                        </div>
-                                    </div>
-                                </section>
-
-                            </>
-                        )
-                        }
-                    </div >
-                );
-            case 'system':
-                return (
-                    <div className="space-y-8 animate-in fade-in slide-in-from-right-4 duration-300">
-                        <section>
-                            <h4 className="text-sm font-bold uppercase text-gray-400 tracking-wider mb-4">{t('connection')}</h4>
-                            <div className="bg-gray-100 dark:bg-gray-800 p-1 rounded-xl inline-flex w-full md:w-auto">
-                                <button className={`flex-1 md:flex-none px-6 py-2 rounded-lg text-sm font-medium transition-all ${!isServerMode ? 'bg-white dark:bg-gray-700 shadow-sm text-gray-900 dark:text-white' : 'text-gray-500'}`} onClick={() => setIsServerMode(false)}>
-                                    {t('client_mode')}
-                                </button>
-                                <button className={`flex-1 md:flex-none px-6 py-2 rounded-lg text-sm font-medium transition-all ${isServerMode ? 'bg-white dark:bg-gray-700 shadow-sm text-gray-900 dark:text-white' : 'text-gray-500'}`} onClick={() => setIsServerMode(true)}>
-                                    {t('server_mode')}
-                                </button>
-                            </div>
-                        </section>
-
-                        {isServerMode && systemStatus && (
-                            <div className="space-y-6">
-                                {/* System Dashboard Grid */}
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                    <div className="bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded-2xl p-5 shadow-sm flex flex-col justify-between">
-                                        <div>
-                                            <h5 className="flex items-center gap-2 font-bold text-gray-900 dark:text-white mb-4">
-                                                <Icons.Cpu size={18} className="text-primary-500" /> {t('backend_components')}
-                                            </h5>
-                                            <div className="space-y-3">
-                                                <div className="flex justify-between items-center">
-                                                    <span className="text-sm text-gray-600 dark:text-gray-400">FFmpeg (Video)</span>
-                                                    <div className="flex items-center gap-2">
-                                                        <span className={`text-xs font-bold ${systemStatus.ffmpeg ? 'text-green-600 bg-green-50 dark:bg-green-900/20' : 'text-red-600 bg-red-50 dark:bg-red-900/20'} px-2 py-0.5 rounded`}>
-                                                            {systemStatus.ffmpeg ? t('active') : t('missing')}
-                                                        </span>
-                                                        <div className={`w-2 h-2 rounded-full ${systemStatus.ffmpeg ? 'bg-green-500' : 'bg-red-500'}`} />
-                                                    </div>
-                                                </div>
-                                                <div className="flex justify-between items-center">
-                                                    <span className="text-sm text-gray-600 dark:text-gray-400">{t('image_processor')}</span>
-                                                    <div className="flex items-center gap-2">
-                                                        <span className={`text-xs font-bold ${systemStatus.ffmpeg || systemStatus.sharp ? 'text-green-600 bg-green-50 dark:bg-green-900/20' : 'text-red-600 bg-red-50 dark:bg-red-900/20'} px-2 py-0.5 rounded`}>
-                                                            {systemStatus.ffmpeg || systemStatus.sharp ? (systemStatus.imageProcessor || 'Active') : t('missing')}
-                                                        </span>
-                                                        <div className={`w-2 h-2 rounded-full ${systemStatus.ffmpeg || systemStatus.sharp ? 'bg-green-500' : 'bg-red-500'}`} />
-                                                    </div>
-                                                </div>
-                                                <div className="flex justify-between items-center">
-                                                    <span className="text-sm text-gray-600 dark:text-gray-400">Database</span>
-                                                    <div className="flex items-center gap-2">
-                                                        <span className={`text-xs font-bold ${systemStatus.dbStatus === 'connected' ? 'text-green-600 bg-green-50 dark:bg-green-900/20' : 'text-yellow-600 bg-yellow-50 dark:bg-yellow-900/20'} px-2 py-0.5 rounded`}>
-                                                            {systemStatus.dbStatus === 'connected' ? 'Connected' : (systemStatus.dbStatus || 'Unknown')}
-                                                        </span>
-                                                        <div className={`w-2 h-2 rounded-full ${systemStatus.dbStatus === 'connected' ? 'bg-green-500' : 'bg-yellow-500'}`} />
-                                                    </div>
-                                                </div>
-                                                <div className="flex justify-between items-center">
-                                                    <span className="text-sm text-gray-600 dark:text-gray-400">GPU Acceleration</span>
-                                                    <div className="flex items-center gap-2">
-                                                        <span className={`text-xs font-bold ${systemStatus.hardwareAcceleration?.type && systemStatus.hardwareAcceleration.type !== 'none' ? 'text-green-600 bg-green-50 dark:bg-green-900/20' : 'text-gray-600 bg-gray-100 dark:bg-gray-800'} px-2 py-0.5 rounded uppercase`}>
-                                                            {systemStatus.hardwareAcceleration?.type === 'cuda' ? 'NVIDIA CUDA' : (systemStatus.hardwareAcceleration?.type === 'vaapi' ? 'Intel/AMD VAAPI' : 'Disabled')}
-                                                        </span>
-                                                        <div className={`w-2 h-2 rounded-full ${systemStatus.hardwareAcceleration?.type && systemStatus.hardwareAcceleration.type !== 'none' ? 'bg-green-500' : 'bg-gray-400'}`} />
-                                                    </div>
-                                                </div>
-
-                                                {/* HW Accel Details Inline */}
-                                                {systemStatus.ffmpegHwAccels && systemStatus.ffmpegHwAccels.length > 0 && (
-                                                    <div className="flex flex-wrap gap-1.5 justify-end mt-1 pl-8">
-                                                        {systemStatus.ffmpegHwAccels.map(accel => (
-                                                            <span key={accel} className="px-2 py-0.5 bg-gray-50 dark:bg-gray-700/50 text-gray-500 dark:text-gray-400 rounded text-[10px] uppercase font-medium border border-gray-100 dark:border-gray-700">
-                                                                {accel}
-                                                            </span>
-                                                        ))}
-                                                    </div>
-
-
-                                                )}
-                                            </div>
-                                        </div>
-
-                                        <div className="flex justify-between items-center pt-3 mt-3 border-t border-gray-100 dark:border-gray-700">
-                                            <span className="text-xs text-gray-400">Platform</span>
-                                            <span className="text-xs font-mono text-gray-500 bg-gray-50 dark:bg-gray-900/50 px-2 py-0.5 rounded">{systemStatus.platform}</span>
-                                        </div>
-                                    </div>
-
-                                    {/* Performance Settings */}
-                                    <div className="bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded-2xl p-5 shadow-sm flex flex-col justify-between">
-                                        <div>
-                                            <h5 className="flex items-center gap-2 font-bold text-gray-900 dark:text-white mb-4">
-                                                <Icons.Cpu size={18} className="text-orange-500" /> {t('performance_settings')}
-                                            </h5>
-                                            <div className="space-y-4">
-                                                <div>
-                                                    <div className="flex justify-between mb-2">
-                                                        <label className="text-sm font-medium text-gray-700 dark:text-gray-300">{t('thumbnail_threads')}</label>
-                                                        <span className="text-xs font-bold bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400 px-2 py-0.5 rounded">{threadCount}</span>
-                                                    </div>
-                                                    <input
-                                                        type="range"
-                                                        min="1"
-                                                        max="100"
-                                                        step="1"
-                                                        value={threadCount}
-                                                        onChange={(e) => {
-                                                            const val = parseInt(e.target.value);
-                                                            setThreadCount(val);
-                                                            persistData(undefined, undefined, undefined, undefined, undefined, undefined, val);
-                                                        }}
-                                                        className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700 accent-orange-500"
-                                                    />
-                                                    <p className="text-xs text-gray-400 mt-1">{t('thumbnail_threads_desc')}</p>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-
-                                    {/* Media Statistics */}
-                                    {systemStatus.mediaStats && (
-                                        <div className="bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded-2xl p-5 shadow-sm">
-                                            <h5 className="flex items-center gap-2 font-bold text-gray-900 dark:text-white mb-4">
-                                                <Icons.Database size={18} className="text-purple-500" /> {t('media_statistics')}
-                                            </h5>
-                                            <div className="grid grid-cols-2 gap-4">
-                                                <div className="flex flex-col items-center justify-center p-4 bg-gradient-to-br from-blue-50 to-blue-100 dark:from-blue-900/20 dark:to-blue-800/20 rounded-xl border border-blue-200 dark:border-blue-800">
-                                                    <Icons.Image size={24} className="text-blue-600 dark:text-blue-400 mb-2" />
-                                                    <span className="text-2xl font-bold text-blue-700 dark:text-blue-300">
-                                                        {systemStatus.mediaStats.images.toLocaleString()}
-                                                    </span>
-                                                    <span className="text-xs text-blue-600 dark:text-blue-400 font-medium mt-1">{t('images')}</span>
-                                                </div>
-                                                <div className="flex flex-col items-center justify-center p-4 bg-gradient-to-br from-green-50 to-green-100 dark:from-green-900/20 dark:to-green-800/20 rounded-xl border border-green-200 dark:border-green-800">
-                                                    <Icons.Video size={24} className="text-green-600 dark:text-green-400 mb-2" />
-                                                    <span className="text-2xl font-bold text-green-700 dark:text-green-300">
-                                                        {systemStatus.mediaStats.videos.toLocaleString()}
-                                                    </span>
-                                                    <span className="text-xs text-green-600 dark:text-green-400 font-medium mt-1">{t('videos')}</span>
-                                                </div>
-                                                <div className="flex flex-col items-center justify-center p-4 bg-gradient-to-br from-orange-50 to-orange-100 dark:from-orange-900/20 dark:to-orange-800/20 rounded-xl border border-orange-200 dark:border-orange-800">
-                                                    <Icons.Music size={24} className="text-orange-600 dark:text-orange-400 mb-2" />
-                                                    <span className="text-2xl font-bold text-orange-700 dark:text-orange-300">
-                                                        {systemStatus.mediaStats.audio.toLocaleString()}
-                                                    </span>
-                                                    <span className="text-xs text-orange-600 dark:text-orange-400 font-medium mt-1">{t('audio')}</span>
-                                                </div>
-                                                <div className="flex flex-col items-center justify-center p-4 bg-gradient-to-br from-purple-50 to-purple-100 dark:from-purple-900/20 dark:to-purple-800/20 rounded-xl border border-purple-200 dark:border-purple-800">
-                                                    <Icons.Folder size={24} className="text-purple-600 dark:text-purple-400 mb-2" />
-                                                    <span className="text-2xl font-bold text-purple-700 dark:text-purple-300">
-                                                        {systemStatus.mediaStats.totalFiles.toLocaleString()}
-                                                    </span>
-                                                    <span className="text-xs text-purple-600 dark:text-purple-400 font-medium mt-1">{t('total_files')}</span>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    )}
-
-                                    {/* Cache Control */}
-                                    <div className="bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded-2xl p-5 shadow-sm flex flex-col justify-between">
-                                        <div>
-                                            <div className="flex items-center justify-between mb-4">
-                                                <h5 className="flex items-center gap-2 font-bold text-gray-900 dark:text-white">
-                                                    <Icons.Database size={18} className="text-blue-500" /> {t('cache_management')}
-                                                </h5>
-                                                <div className="bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 px-3 py-1 rounded-full text-xs font-bold">
-                                                    {systemStatus.cacheCount.toLocaleString()} {t('cached')}
-                                                </div>
-                                            </div>
-
-                                            {/* Coverage Bar */}
-                                            <div className="mb-6">
-                                                <div className="flex justify-between text-xs mb-1.5">
-                                                    <span className="text-gray-500 dark:text-gray-400">{t('cache_coverage')}</span>
-                                                    <span className="font-bold text-gray-700 dark:text-gray-300">
-                                                        {systemStatus.totalItems > 0 ? Math.round((systemStatus.cacheCount / systemStatus.totalItems) * 100) : 0}%
-                                                    </span>
-                                                </div>
-                                                <div className="w-full h-2 bg-gray-100 dark:bg-gray-700 rounded-full overflow-hidden">
-                                                    <div
-                                                        className="h-full bg-green-500 rounded-full transition-all duration-1000"
-                                                        style={{ width: `${systemStatus.totalItems > 0 ? Math.min(100, (systemStatus.cacheCount / systemStatus.totalItems) * 100) : 0}%` }}
-                                                    />
-                                                </div>
-                                            </div>
-                                        </div>
-
-                                        <div className="grid grid-cols-2 gap-3 mt-4">
-                                            <button onClick={pruneCache} className="px-4 py-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200 rounded-xl text-sm font-medium transition-colors border border-transparent hover:border-gray-300 dark:hover:border-gray-500">
-                                                {t('clean_duplicate_cache')}
-                                            </button>
-                                            <button onClick={clearCache} className="px-4 py-2 bg-red-50 dark:bg-red-900/10 hover:bg-red-100 dark:hover:bg-red-900/20 text-red-600 dark:text-red-400 rounded-xl text-sm font-medium transition-colors border border-transparent hover:border-red-200 dark:hover:border-red-900/30">
-                                                {t('clear_all_cache')}
-                                            </button>
-                                        </div>
-                                    </div>
-                                </div>
-
-                                {/* Smart Repair */}
-                                <div className="bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded-2xl p-5 shadow-sm">
-                                    <h5 className="flex items-center gap-2 font-bold text-gray-900 dark:text-white mb-4">
-                                        <Icons.Zap size={18} className="text-yellow-500" /> {t('smart_repair') || 'Smart Repair'}
-                                    </h5>
-                                    <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
-                                        {t('smart_repair_desc') || 'Scan for missing or broken thumbnails and verify system integrity.'}
-                                    </p>
-
-                                    {smartScanResults && smartScanResults.timestamp > 0 ? (
-                                        <div className="space-y-4">
-                                            <div className="bg-gray-50 dark:bg-gray-900/50 p-4 rounded-xl border border-gray-100 dark:border-gray-700/50">
-                                                <div className="flex justify-between items-center mb-2">
-                                                    <span className="text-sm font-medium">{t('missing_thumbs') || 'Missing Thumbnails'}</span>
-                                                    <span className="font-bold text-red-500">{smartScanResults.missing.length}</span>
-                                                </div>
-                                                <div className="flex justify-between items-center">
-                                                    <span className="text-sm font-medium">{t('broken_thumbs') || 'Corrupted Thumbnails'}</span>
-                                                    <span className="font-bold text-orange-500">{smartScanResults.error.length}</span>
-                                                </div>
-                                                <div className="mt-2 text-xs text-gray-400 text-right">
-                                                    {t('last_scan') || 'Last Scan'}: {new Date(smartScanResults.timestamp).toLocaleTimeString()}
-                                                </div>
-                                            </div>
-
-                                            <div className="flex gap-2">
-                                                <button
-                                                    onClick={handleSmartRepair}
-                                                    disabled={thumbStatus === 'scanning' || (smartScanResults.missing.length === 0 && smartScanResults.error.length === 0)}
-                                                    className={`flex-1 py-2 rounded-xl text-sm font-medium transition-colors ${thumbStatus === 'scanning' || (smartScanResults.missing.length === 0 && smartScanResults.error.length === 0) ? 'bg-gray-200 dark:bg-gray-700 text-gray-400 cursor-not-allowed' : 'bg-yellow-500 hover:bg-yellow-600 text-white shadow-sm shadow-yellow-500/20'}`}
-                                                >
-                                                    {thumbStatus === 'scanning' ? (t('processing') || 'Processing...') : (t('repair_now') || 'Repair Issues')}
-                                                </button>
-                                                <button
-                                                    onClick={handleSmartScan}
-                                                    disabled={thumbStatus === 'scanning'}
-                                                    className="px-4 py-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200 rounded-xl text-sm font-medium transition-colors"
-                                                >
-                                                    {t('rescan') || 'Rescan'}
-                                                </button>
-                                            </div>
-                                        </div>
-                                    ) : (
-                                        <button
-                                            onClick={handleSmartScan}
-                                            disabled={thumbStatus === 'scanning'}
-                                            className={`w-full py-2.5 rounded-xl font-medium text-sm transition-colors ${thumbStatus === 'scanning' ? 'bg-gray-200 dark:bg-gray-700 text-gray-400' : 'bg-yellow-50 dark:bg-yellow-900/20 text-yellow-600 dark:text-yellow-400 hover:bg-yellow-100 dark:hover:bg-yellow-900/30'}`}
-                                        >
-                                            {thumbStatus === 'scanning' ? 'Processing...' : 'Start Analysis (v2)'}
-                                        </button>
-                                    )}
-                                </div>
-                            </div>
-                        )}
-
-                        <section className="pt-4 border-t border-gray-100 dark:border-gray-800">
-                            <button onClick={handleExportConfig} className="text-sm font-medium text-primary-600 hover:underline flex items-center gap-2">
-                                <Icons.Download size={16} /> {t('backup_config')}
-                            </button>
-                        </section>
-                    </div >
-                );
-            case 'account':
-                return (
-                    <div className="space-y-8 animate-in fade-in slide-in-from-right-4 duration-300">
-                        <section>
-                            <div className="flex items-center justify-between mb-4 pr-12">
-                                <h4 className="text-sm font-bold uppercase text-gray-400 tracking-wider">{t('users')}</h4>
-                                {currentUser?.isAdmin && (
-                                    <button onClick={handleAddUser} className="text-sm font-medium text-primary-600 hover:underline flex items-center gap-1">
-                                        <Icons.Plus size={16} /> {t('add_user')}
-                                    </button>
-                                )}
-                            </div>
-                            <div className="bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded-2xl overflow-hidden shadow-sm">
-                                {users.filter(u => currentUser?.isAdmin || u.username === currentUser?.username).map((user, idx) => (
-                                    <div key={user.username} className={`p-4 flex items-center justify-between ${idx !== users.length - 1 ? 'border-b border-gray-50 dark:border-gray-700/50' : ''}`}>
-                                        <div className="flex items-center gap-4">
-                                            <div className={`w-10 h-10 rounded-full flex items-center justify-center text-lg font-bold ${user.username === currentUser?.username ? 'bg-primary-100 dark:bg-primary-900 text-primary-600 dark:text-primary-400' : 'bg-gray-100 dark:bg-gray-700 text-gray-500'}`}>
-                                                {user.username.charAt(0).toUpperCase()}
-                                            </div>
-                                            <div>
-                                                <div className="flex items-center gap-2">
-                                                    <h5 className="font-bold text-gray-900 dark:text-white">{user.username}</h5>
-                                                    {user.username === currentUser?.username && <span className="text-[10px] bg-green-100 text-green-700 px-1.5 py-0.5 rounded font-bold">YOU</span>}
-                                                </div>
-                                                <p className="text-xs text-gray-500">{user.isAdmin ? 'Administrator' : 'User'}</p>
-                                            </div>
-                                        </div>
-
-                                        <div className="flex items-center gap-2">
-                                            {/* Self-service password change */}
-                                            {(currentUser?.isAdmin || user.username === currentUser?.username) && (
-                                                <button onClick={() => handleResetPassword(user)} className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg transition-colors" title={t('change_password')}>
-                                                    <Icons.Lock size={16} />
-                                                </button>
-                                            )}
-                                            {currentUser?.isAdmin && (
-                                                <>
-                                                    <button onClick={() => handleRenameUser(user)} className="p-2 text-gray-400 hover:text-orange-600 hover:bg-orange-50 dark:hover:bg-orange-900/20 rounded-lg transition-colors" title="Edit User">
-                                                        <Icons.Edit size={16} />
-                                                    </button>
-                                                    {user.username !== currentUser.username && (
-                                                        <button onClick={() => handleDeleteUser(user)} className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors" title={t('delete_user')}>
-                                                            <Icons.Trash size={16} />
-                                                        </button>
-                                                    )}
-                                                </>
-                                            )}
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                        </section>
-
-                        <div className="flex justify-end">
-                            <button onClick={() => {
-                                setCurrentUser(null);
-                                setAuthStep('login');
-                                localStorage.removeItem(AUTH_USER_KEY);
-                                // Fix: Reset all sensitive state
-                                setAllUserData({});
-                                setServerFavoriteIds({ files: [], folders: [] });
-                                setHomeConfig({ mode: 'random' });
-                                setHomeSubtitle('Your memories, beautifully organized. Rediscover your collection.');
-                                setSettingsTab('general');
-                            }} className="px-4 py-2 bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/30 text-red-600 dark:text-red-400 rounded-lg font-medium transition-colors flex items-center gap-2">
-                                <Icons.LogOut size={18} />
-                                <span>{t('sign_out')}</span>
-                            </button>
-                        </div>
-                    </div>
-                );
-            default:
-                return null;
-        }
-    };
 
 
 
@@ -2633,168 +2076,63 @@ export default function App() {
                 }
             </main >
 
-            {/* Settings Modal */}
-            <AnimatePresence>
-                {
-                    isSettingsOpen && (
-                        <motion.div
-                            initial={{ opacity: 0 }}
-                            animate={{ opacity: 1 }}
-                            exit={{ opacity: 0 }}
-                            className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 md:p-12"
-                            onClick={() => setIsSettingsOpen(false)}
-                        >
-                            <motion.div
-                                initial={{ scale: 0.95, y: 20 }}
-                                animate={{ scale: 1, y: 0 }}
-                                exit={{ scale: 0.95, y: 20 }}
-                                className="bg-white dark:bg-gray-900 w-full max-w-5xl h-[85vh] rounded-3xl shadow-2xl overflow-hidden flex flex-col md:flex-row"
-                                onClick={e => e.stopPropagation()}
-                            >
-                                {/* Settings Sidebar */}
-                                <div className="w-full md:w-64 bg-gray-50 dark:bg-gray-950/50 border-r border-gray-100 dark:border-gray-800 p-6 flex flex-col gap-1 shrink-0">
-                                    <h3 className="text-xl font-bold mb-6 px-2 flex items-center gap-2 text-gray-800 dark:text-white">
-                                        <Icons.Settings size={24} className="text-primary-600" /> {t('settings')}
-                                    </h3>
+            <SettingsModal
+                isOpen={isSettingsOpen}
+                onClose={() => setIsSettingsOpen(false)}
+                appTitle={appTitle}
+                homeSubtitle={homeSubtitle}
+                homeConfig={homeConfig}
+                language={language as 'en' | 'zh'}
+                setLanguage={setLanguage as (lang: 'en' | 'zh') => void}
+                isServerMode={isServerMode}
+                setIsServerMode={setIsServerMode}
+                libraryPaths={libraryPaths}
+                systemStatus={systemStatus}
+                threadCount={threadCount}
+                users={users}
+                currentUser={currentUser}
+                newPathInput={newPathInput}
+                setNewPathInput={setNewPathInput}
+                onUpdateTitle={handleUpdateTitle}
+                onUpdateSubtitle={handleUpdateSubtitle}
+                onUpdateHomeConfig={handleUpdateHomeConfig}
+                onAddLibraryPath={handleAddLibraryPath}
+                onRemoveLibraryPath={handleRemoveLibraryPath}
+                onMonitorUpdate={handleMonitorUpdate}
+                onStartScan={startServerScan}
+                onStartThumbGen={startThumbnailGen}
+                onSmartScan={handleSmartScan}
+                onSmartRepair={handleSmartRepair}
+                onExportConfig={handleExportConfig}
+                onLogout={handleLogout}
+                onAddUser={handleAddUser}
+                onRenameUser={handleRenameUser}
+                onResetPassword={handleResetPassword}
+                onDeleteUser={handleDeleteUser}
+                onSetDirPickerContext={setDirPickerContext}
+                onShowDirPicker={setShowDirPicker}
+                onPruneCache={pruneCache}
+                onClearCache={clearCache}
+                smartScanResults={smartScanResults}
+                thumbStatus={thumbStatus}
+                theme={theme}
+                onToggleTheme={toggleTheme}
+            />
 
-                                    <div className="space-y-1">
-                                        <button
-                                            onClick={() => setSettingsTab('general')}
-                                            className={`w-full text-left px-4 py-3 rounded-xl flex items-center gap-3 transition-colors ${settingsTab === 'general' ? 'bg-white dark:bg-gray-800 shadow-sm font-medium text-primary-600 dark:text-primary-400' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800/50'}`}
-                                        >
-                                            <Icons.Settings size={18} /> {t('general')}
-                                        </button>
-                                        <button
-                                            onClick={() => setSettingsTab('account')}
-                                            className={`w-full text-left px-4 py-3 rounded-xl flex items-center gap-3 transition-colors ${settingsTab === 'account' ? 'bg-white dark:bg-gray-800 shadow-sm font-medium text-primary-600 dark:text-primary-400' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800/50'}`}
-                                        >
-                                            <Icons.User size={18} /> {t('users')}
-                                        </button>
-                                        {currentUser?.isAdmin && (
-                                            <>
-                                                <button
-                                                    onClick={() => setSettingsTab('library')}
-                                                    className={`w-full text-left px-4 py-3 rounded-xl flex items-center gap-3 transition-colors ${settingsTab === 'library' ? 'bg-white dark:bg-gray-800 shadow-sm font-medium text-primary-600 dark:text-primary-400' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800/50'}`}
-                                                >
-                                                    <Icons.Database size={18} /> {t('storage_database')}
-                                                </button>
-                                                <button
-                                                    onClick={() => setSettingsTab('system')}
-                                                    className={`w-full text-left px-4 py-3 rounded-xl flex items-center gap-3 transition-colors ${settingsTab === 'system' ? 'bg-white dark:bg-gray-800 shadow-sm font-medium text-primary-600 dark:text-primary-400' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800/50'}`}
-                                                >
-                                                    <Icons.Cpu size={18} /> {t('system')}
-                                                </button>
-                                            </>
-                                        )}
-                                    </div>
-                                </div>
-
-                                {/* Settings Content */}
-                                <div className="flex-1 overflow-y-auto custom-scrollbar p-6 md:p-10 bg-white dark:bg-gray-900 relative">
-                                    {/* Close Button Mobile - Absolute position inside content area */}
-                                    <button onClick={() => setIsSettingsOpen(false)} className="absolute top-4 right-4 p-2 bg-gray-100 dark:bg-gray-800 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors z-50">
-                                        <Icons.Close size={20} />
-                                    </button>
-
-                                    <div className="max-w-3xl mx-auto pt-6">
-                                        {renderSettingsContent()}
-                                    </div>
-                                </div>
-                            </motion.div>
-                        </motion.div>
-                    )
-                }
-            </AnimatePresence >
-
-            {/* User Management Modal */}
-            <AnimatePresence>
-                {
-                    isUserModalOpen && (
-                        <motion.div
-                            initial={{ opacity: 0 }}
-                            animate={{ opacity: 1 }}
-                            exit={{ opacity: 0 }}
-                            className="fixed inset-0 z-[60] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4"
-                        >
-                            <motion.div
-                                initial={{ scale: 0.95, y: 20 }}
-                                animate={{ scale: 1, y: 0 }}
-                                exit={{ scale: 0.95, y: 20 }}
-                                className="bg-white dark:bg-gray-800 w-full max-w-md rounded-2xl shadow-xl p-6"
-                            >
-                                <h3 className="text-xl font-bold mb-4 flex items-center gap-2">
-                                    <Icons.User size={24} className="text-primary-600" />
-                                    {userFormType === 'add' ? t('add_user') : (userFormType === 'rename' ? 'Edit User' : t('change_password'))}
-                                </h3>
-                                <form onSubmit={submitUserForm} className="space-y-4">
-                                    {(userFormType === 'add' || userFormType === 'rename') && (
-                                        <div>
-                                            <label className="block text-sm font-medium mb-1">{t('username')}</label>
-                                            <input
-                                                type="text"
-                                                required
-                                                className="w-full px-4 py-2 rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 outline-none focus:ring-2 focus:ring-primary-500"
-                                                value={newUserForm.username}
-                                                onChange={e => setNewUserForm({ ...newUserForm, username: e.target.value })}
-                                            />
-                                        </div>
-                                    )}
-                                    {userFormType !== 'rename' && (
-                                        <div>
-                                            <label className="block text-sm font-medium mb-1">{t('password')}</label>
-                                            <input
-                                                type="password"
-                                                required
-                                                className="w-full px-4 py-2 rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 outline-none focus:ring-2 focus:ring-primary-500"
-                                                value={newUserForm.password}
-                                                onChange={e => setNewUserForm({ ...newUserForm, password: e.target.value })}
-                                            />
-                                        </div>
-                                    )}
-                                    {userFormType === 'add' && currentUser?.isAdmin && (
-                                        <div className="flex items-center gap-2">
-                                            <input
-                                                type="checkbox"
-                                                id="isAdmin"
-                                                checked={newUserForm.isAdmin}
-                                                onChange={e => setNewUserForm({ ...newUserForm, isAdmin: e.target.checked })}
-                                                className="w-4 h-4 rounded text-primary-600 focus:ring-primary-500"
-                                            />
-                                            <label htmlFor="isAdmin" className="text-sm font-medium">{t('is_admin')}</label>
-                                        </div>
-                                    )}
-
-                                    {(userFormType === 'add' || userFormType === 'rename') && currentUser?.isAdmin && (
-                                        <div>
-                                            <div className="flex justify-between items-center mb-1">
-                                                <label className="block text-sm font-medium">Allowed Library Paths</label>
-                                                <button
-                                                    type="button"
-                                                    onClick={() => { setDirPickerContext('userAllowedPaths'); setShowDirPicker(true); }}
-                                                    className="text-xs text-primary-600 hover:underline flex items-center gap-1"
-                                                >
-                                                    <Icons.FolderOpen size={12} /> {t('browse')}
-                                                </button>
-                                            </div>
-                                            <p className="text-xs text-gray-500 mb-2">Separate multiple paths with new lines. Leave empty to deny all access.</p>
-                                            <textarea
-                                                className="w-full px-4 py-2 rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 outline-none focus:ring-2 focus:ring-primary-500 min-h-[100px] text-sm font-mono"
-                                                placeholder="/data/media/user1&#10;/data/media/shared"
-                                                value={newUserForm.allowedPaths}
-                                                onChange={e => setNewUserForm({ ...newUserForm, allowedPaths: e.target.value })}
-                                            />
-                                        </div>
-                                    )}
-                                    <div className="flex justify-end gap-3 pt-4">
-                                        <button type="button" onClick={() => setIsUserModalOpen(false)} className="px-4 py-2 text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors">{t('cancel')}</button>
-                                        <button type="submit" className="px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded-lg font-bold transition-colors">{t('save_changes') || t('save')}</button>
-                                    </div>
-                                </form>
-                            </motion.div>
-                        </motion.div>
-                    )
-                }
-            </AnimatePresence >
+            <UserModal
+                isOpen={isUserModalOpen}
+                onClose={() => setIsUserModalOpen(false)}
+                type={userFormType}
+                targetUser={targetUser}
+                isAdmin={currentUser?.isAdmin || false}
+                onBrowsePaths={() => { setDirPickerContext('userAllowedPaths'); setShowDirPicker(true); }}
+                onSubmit={async (formData) => {
+                    // Adapt the internal form submit to the App-level newUserForm state if needed,
+                    // or just call submitUserForm directly with adapted logic.
+                    // The easiest is to update submitUserForm to accept the form data.
+                    await handleUserFormSubmit(formData);
+                }}
+            />
 
             <ImageViewer
                 item={selectedItem}

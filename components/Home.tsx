@@ -14,7 +14,7 @@ interface HomeProps {
     config?: HomeScreenConfig;
 }
 
-export const Home: React.FC<HomeProps> = ({ items, onEnterLibrary, onJumpToFolder, subtitle, config }) => {
+export const Home: React.FC<HomeProps> = React.memo(({ items, onEnterLibrary, onJumpToFolder, subtitle, config }) => {
     const { t } = useLanguage();
     const [currentIndex, setCurrentIndex] = useState(0);
     const [featured, setFeatured] = useState<MediaItem[]>([]);
@@ -133,4 +133,11 @@ export const Home: React.FC<HomeProps> = ({ items, onEnterLibrary, onJumpToFolde
             </div>
         </div>
     );
-};
+}, (prev, next) => {
+    return (
+        prev.items.length === next.items.length &&
+        prev.subtitle === next.subtitle &&
+        prev.config?.mode === next.config?.mode &&
+        prev.config?.path === next.config?.path
+    );
+});
