@@ -92,7 +92,25 @@ export interface SystemStatus {
   platform: string;
 }
 
+export interface ExtendedSystemStatus extends SystemStatus {
+  mode?: 'periodic' | 'manual';
+  scanInterval?: number;
+  dbStatus?: string;
+  mediaStats?: {
+    totalFiles: number;
+    images: number;
+    videos: number;
+    audio: number;
+  };
+  hardwareAcceleration?: {
+    type: string;
+    device: string | null;
+  };
+}
+
 export type ViewMode = 'home' | 'all' | 'folders' | 'favorites';
+export type SettingsTab = 'general' | 'library' | 'system' | 'account';
+export type ScanStatus = 'idle' | 'scanning' | 'paused' | 'error' | 'cancelled';
 export type GridLayout = 'grid' | 'masonry' | 'timeline';
 export type SortOption = 'dateDesc' | 'dateAsc' | 'nameAsc' | 'nameDesc' | 'sizeDesc' | 'random';
 export type FilterOption = 'all' | 'image' | 'video' | 'audio';

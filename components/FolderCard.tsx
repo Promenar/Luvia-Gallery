@@ -24,7 +24,7 @@ interface FolderCardProps {
     animate?: boolean;
 }
 
-export const FolderCard: React.FC<FolderCardProps> = ({ folder, onClick, isFavorite, onToggleFavorite, onRename, onDelete, onRegenerate, animate = true, layout = 'grid' }) => {
+export const FolderCard: React.FC<FolderCardProps> = React.memo(({ folder, onClick, isFavorite, onToggleFavorite, onRename, onDelete, onRegenerate, animate = true, layout = 'grid' }) => {
     const videoRef = useRef<HTMLVideoElement>(null);
     const [isPlaying, setIsPlaying] = useState(false);
     const [showMenu, setShowMenu] = useState(false);
@@ -98,7 +98,7 @@ export const FolderCard: React.FC<FolderCardProps> = ({ folder, onClick, isFavor
             animate={{ opacity: 1, scale: 1 }}
             whileHover={{ scale: 1.03, y: -2 }}
             whileTap={{ scale: 0.98 }}
-            className={`relative group cursor-pointer ${layout === 'masonry' ? 'h-full' : ''}`}
+            className={`relative group cursor-pointer ${layout === 'masonry' ? 'h-full' : ''} will-change-transform`}
             onClick={() => !isRenaming && onClick(folder.path)}
             onMouseEnter={handleMouseEnter}
             onMouseLeave={handleMouseLeave}
@@ -174,7 +174,7 @@ export const FolderCard: React.FC<FolderCardProps> = ({ folder, onClick, isFavor
 
                     {/* Favorite Indicator */}
                     {isFavorite && (
-                        <div className="absolute top-2 right-2 text-red-500 drop-shadow-md">
+                        <div className="absolute top-2 right-2 text-red-500 drop-shadow-md text-nowrap">
                             <Icons.Heart size={18} fill="currentColor" />
                         </div>
                     )}
@@ -248,4 +248,13 @@ export const FolderCard: React.FC<FolderCardProps> = ({ folder, onClick, isFavor
             </Card>
         </motion.div>
     );
-};
+}, (prev, next) => {
+    return (
+        prev.folder.path === next.folder.path &&
+        prev.folder.name === next.folder.name &&
+        prev.folder.mediaCount === next.folder.mediaCount &&
+        prev.isFavorite === next.isFavorite &&
+        prev.folder.coverMedia?.id === next.folder.coverMedia?.id &&
+        prev.layout === next.layout
+    );
+});

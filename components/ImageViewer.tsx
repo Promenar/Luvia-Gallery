@@ -338,7 +338,7 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                className="fixed inset-0 z-50 bg-black/95 backdrop-blur-sm flex items-center justify-center overflow-hidden"
+                className="fixed inset-0 z-50 bg-black/95 flex items-center justify-center overflow-hidden"
                 onClick={onClose}
                 onWheel={handleWheel}
             >
@@ -439,7 +439,7 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
                             initial={{ x: '100%' }}
                             animate={{ x: 0 }}
                             exit={{ x: '100%' }}
-                            className="absolute top-0 right-0 bottom-0 w-80 bg-black/80 backdrop-blur-md z-40 p-6 pt-20 border-l border-white/10 text-white overflow-y-auto"
+                            className="absolute top-0 right-0 bottom-0 w-80 bg-black/90 z-40 p-6 pt-20 border-l border-white/10 text-white overflow-y-auto transform translate-z-0"
                             onClick={(e) => e.stopPropagation()}
                         >
                             <h3 className="text-xl font-bold mb-6 flex items-center gap-2"><Icons.Info size={20} /> {t('file_info')}</h3>
@@ -595,7 +595,7 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
                             )}
                         </div>
                     ) : item.mediaType === 'audio' ? (
-                        <div className="w-full max-w-md bg-white/10 backdrop-blur-md p-8 rounded-3xl flex flex-col items-center gap-6" onClick={(e) => e.stopPropagation()}>
+                        <div className="w-full max-w-md bg-white/20 p-8 rounded-3xl flex flex-col items-center gap-6 transform translate-z-0" onClick={(e) => e.stopPropagation()}>
                             <div className="w-48 h-48 bg-gradient-to-br from-pink-500 to-orange-400 rounded-2xl flex items-center justify-center shadow-2xl">
                                 <Icons.Music size={80} className="text-white" />
                             </div>
