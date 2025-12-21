@@ -19,7 +19,7 @@ interface NavigationProps {
   onOpenSettings: () => void;
 }
 
-export const Navigation: React.FC<NavigationProps> = ({
+export const Navigation: React.FC<NavigationProps> = React.memo(({
   appTitle,
   viewMode,
   setViewMode,
@@ -228,4 +228,12 @@ export const Navigation: React.FC<NavigationProps> = ({
       }
     </>
   );
-};
+}, (prev, next) => {
+  return (
+    prev.viewMode === next.viewMode &&
+    prev.isSidebarOpen === next.isSidebarOpen &&
+    prev.theme === next.theme &&
+    prev.totalPhotos === next.totalPhotos &&
+    prev.appTitle === next.appTitle
+  );
+});
