@@ -341,20 +341,35 @@ export const SettingsScreenV2: React.FC<SettingsScreenV2Props> = ({ onBack, onLo
     const handleUpdateConcurrency = async (delta: number) => {
         if (!serverConfig) return;
         const current = serverConfig.threadCount || 2;
-        const newValue = Math.max(1, Math.min(16, current + delta));
+        const newValue = Math.max(1, Math.min(64, current + delta));
         if (newValue === current) return;
 
-        triggerHaptic(Haptics.ImpactFeedbackStyle.Medium);
-        try {
-            const newConfig = { ...serverConfig, threadCount: newValue };
-            await adminFetch('/api/config', {
-                method: 'POST',
-                body: JSON.stringify(newConfig)
-            });
-            setServerConfig(newConfig);
-            showToast(t('admin.concurrency_updated', { count: newValue }), 'success');
-        } catch (e: any) {
-            showToast(e.message, 'error');
+        const performUpdate = async (val: number) => {
+            triggerHaptic(Haptics.ImpactFeedbackStyle.Medium);
+            try {
+                const newConfig = { ...serverConfig, threadCount: val };
+                await adminFetch('/api/config', {
+                    method: 'POST',
+                    body: JSON.stringify(newConfig)
+                });
+                setServerConfig(newConfig);
+                showToast(t('admin.concurrency_updated', { count: val }), 'success');
+            } catch (e: any) {
+                showToast(e.message, 'error');
+            }
+        };
+
+        if (newValue > 16 && newValue > current) {
+            Alert.alert(
+                t('common.warning'),
+                t('admin.concurrency_warning', { count: 16 }),
+                [
+                    { text: t('btn.cancel'), style: 'cancel' },
+                    { text: t('dialog.confirm'), onPress: () => performUpdate(newValue) }
+                ]
+            );
+        } else {
+            performUpdate(newValue);
         }
     };
 
@@ -920,11 +935,14 @@ export const SettingsScreenV2: React.FC<SettingsScreenV2Props> = ({ onBack, onLo
                                                 <Text className="text-white font-bold">{t('admin.smart_repair_action')}</Text>
                                             </TouchableOpacity>
                                         )}
-                                        <OptionRow
-                                            icon={Zap}
-                                            title={t('admin.thumb_concurrency')}
-                                            subtitle={t('admin.thumb_concurrency_desc')}
-                                            right={
+                                        <View className="bg-gray-50 dark:bg-zinc-900 rounded-2xl border border-gray-100 dark:border-zinc-800 mb-2 p-4">
+                                            <View className="flex-row items-center justify-between gap-4">
+                                                <View className="flex-row items-center gap-3 flex-1">
+                                                    <View className="w-10 h-10 rounded-full bg-white dark:bg-zinc-800 items-center justify-center border border-gray-100 dark:border-zinc-700">
+                                                        <Zap size={18} color={isDark ? '#fff' : '#000'} />
+                                                    </View>
+                                                    <Text className="font-bold text-gray-900 dark:text-white flex-1">{t('admin.thumb_concurrency')}</Text>
+                                                </View>
                                                 <View className="flex-row items-center gap-3 bg-gray-100 dark:bg-zinc-800 p-1 rounded-xl">
                                                     <TouchableOpacity
                                                         onPress={() => handleUpdateConcurrency(-1)}
@@ -932,9 +950,11 @@ export const SettingsScreenV2: React.FC<SettingsScreenV2Props> = ({ onBack, onLo
                                                     >
                                                         <Minus size={14} color={isDark ? "#fff" : "#000"} />
                                                     </TouchableOpacity>
-                                                    <Text className="text-sm font-black text-gray-900 dark:text-white w-4 text-center">
-                                                        {serverConfig?.threadCount || 2}
-                                                    </Text>
+                                                    <View className="w-6 items-center">
+                                                        <Text className="text-sm font-black text-gray-900 dark:text-white">
+                                                            {serverConfig?.threadCount || 2}
+                                                        </Text>
+                                                    </View>
                                                     <TouchableOpacity
                                                         onPress={() => handleUpdateConcurrency(1)}
                                                         className="w-8 h-8 items-center justify-center rounded-lg bg-white dark:bg-zinc-700 shadow-sm"
@@ -942,8 +962,13 @@ export const SettingsScreenV2: React.FC<SettingsScreenV2Props> = ({ onBack, onLo
                                                         <Plus size={14} color={isDark ? "#fff" : "#000"} />
                                                     </TouchableOpacity>
                                                 </View>
-                                            }
-                                        />
+                                            </View>
+                                            <View className="mt-3 pl-[52px]">
+                                                <Text className="text-[11px] text-gray-500 dark:text-zinc-500 leading-4">
+                                                    {t('admin.thumb_concurrency_desc')}
+                                                </Text>
+                                            </View>
+                                        </View>
                                         <OptionRow
                                             icon={Trash2}
                                             title={t('admin.prune_cache')}
