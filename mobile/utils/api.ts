@@ -197,7 +197,7 @@ export const fetchFiles = async (options: FetchFilesOptions = {}) => {
         if (!random && data.files && data.files.length > 0) {
             // Await to ensure DB is consistent before UI allows interaction (blocking delete race condition)
             try {
-                await saveMediaItems(data.files, folderPath || 'root');
+                await saveMediaItems(data.files);
             } catch (e) {
                 console.error("Cache save error", e);
             }
