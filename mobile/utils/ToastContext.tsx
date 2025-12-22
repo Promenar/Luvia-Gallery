@@ -47,15 +47,17 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         lastVibratedTypeRef.current = type;
 
         if (shouldVibrate) {
-            if (type === 'success') {
-                Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-            } else if (type === 'error') {
-                Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-            } else if (type === 'progress') {
-                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-            } else {
-                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-            }
+            setTimeout(() => {
+                if (type === 'success') {
+                    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+                } else if (type === 'error') {
+                    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+                } else if (type === 'progress') {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                } else {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                }
+            }, 10);
         }
 
         if (type !== 'progress') {
