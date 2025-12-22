@@ -23,12 +23,19 @@ import {
     Zap,
     ChevronRight,
     HardDrive,
-    Database
+    Database,
+    Pause,
+    Play,
+    Square,
+    CheckCircle2
 } from 'lucide-react-native';
 import Animated, {
     useSharedValue,
     useAnimatedStyle,
     withSpring,
+    withTiming,
+    withRepeat,
+    Easing,
     FadeIn,
     FadeInLeft,
     FadeOutRight,
@@ -77,13 +84,15 @@ export const SettingsScreenV2: React.FC<SettingsScreenV2Props> = ({ onBack, onLo
     const [isPickerOpen, setIsPickerOpen] = useState<{ visible: boolean, mode: 'folder' | 'file' }>({ visible: false, mode: 'folder' });
     const [pickerContext, setPickerContext] = useState<'carousel' | 'user_add' | 'user_edit'>('carousel');
 
-    // Server Admin State
     const [stats, setStats] = useState<SystemStats | null>(null);
     const [loadingStats, setLoadingStats] = useState(false);
     const [serverUsers, setServerUsers] = useState<any[]>([]);
-    const [isScanning, setIsScanning] = useState(false);
-    const [isGeneratingThumbs, setIsGeneratingThumbs] = useState(false);
     const [serverConfig, setServerConfig] = useState<any>(null);
+
+    // Polling States
+    const [scanState, setScanState] = useState<any>(null);
+    const [thumbState, setThumbState] = useState<any>(null);
+    const [smartResults, setSmartResults] = useState<any>(null);
 
     // User Modal State
     const [showUserModal, setShowUserModal] = useState(false);
@@ -156,12 +165,49 @@ export const SettingsScreenV2: React.FC<SettingsScreenV2Props> = ({ onBack, onLo
         try {
             const data = await adminFetch('/api/scan/status');
             setStats(data);
+            setScanState(data); // Sync local scan state
         } catch (e: any) {
             if (!silent) console.error('Stats load failed', e);
         } finally {
             if (!silent) setLoadingStats(false);
         }
     };
+
+    const fetchThumbStatus = async () => {
+        if (!isAdmin) return;
+        try {
+            const data = await adminFetch('/api/thumb-gen/status');
+            setThumbState(data);
+        } catch (e) {
+            console.error("Fetch thumb status failed", e);
+        }
+    };
+
+    const fetchSmartResults = async () => {
+        if (!isAdmin) return;
+        try {
+            const data = await adminFetch('/api/thumb/smart-results?summary=true');
+            setSmartResults(data);
+        } catch (e) {
+            console.error("Fetch smart results failed", e);
+        }
+    };
+
+    // Global Polling Effect
+    useEffect(() => {
+        if (!isAdmin || activeTab !== 'server') return;
+
+        const poll = async () => {
+            await Promise.all([
+                loadStats(true),
+                fetchThumbStatus(),
+                fetchSmartResults()
+            ]);
+        };
+
+        const interval = setInterval(poll, 1500);
+        return () => clearInterval(interval);
+    }, [isAdmin, activeTab]);
 
     const fetchUsers = async () => {
         if (!isAdmin) return;
@@ -185,14 +231,12 @@ export const SettingsScreenV2: React.FC<SettingsScreenV2Props> = ({ onBack, onLo
         if (activeTab === 'server' && isAdmin) {
             loadStats();
             fetchUsers();
-            pollTimer.current = setInterval(() => loadStats(true), 10000);
-            return () => clearInterval(pollTimer.current);
         }
     }, [activeTab, isAdmin]);
 
-    const handleAction = async (endpoint: string, label: string) => {
+    const handleAction = async (endpoint: string, label: string, options: any = { method: 'POST' }) => {
         try {
-            await adminFetch(endpoint, { method: 'POST' });
+            await adminFetch(endpoint, options);
             showToast(t('admin.action_started', { label }), 'success');
             triggerNotification(Haptics.NotificationFeedbackType.Success);
         } catch (e: any) {
@@ -376,6 +420,101 @@ export const SettingsScreenV2: React.FC<SettingsScreenV2Props> = ({ onBack, onLo
             {right}
         </TouchableOpacity>
     );
+
+    const MaintenanceTaskRow = ({ icon: Icon, title, subtitle, status, progress, onStart, onPause, onResume, onCancel }: any) => {
+        const isActive = status !== 'idle' && status !== 'stopped' && status !== 'cancelled';
+        const isPaused = status === 'paused';
+        const percentage = progress && progress.total > 0 ? (progress.count / progress.total) : 0;
+
+        // Animations
+        const spinValue = useSharedValue(0);
+        useEffect(() => {
+            if (isActive && !isPaused) {
+                spinValue.value = withRepeat(withTiming(360, { duration: 2000, easing: Easing.linear }), -1, false);
+            } else {
+                spinValue.value = 0;
+            }
+        }, [isActive, isPaused]);
+
+        const spinStyle = useAnimatedStyle(() => ({
+            transform: [{ rotate: `${spinValue.value}deg` }]
+        }));
+
+        const progressWidth = useSharedValue(0);
+        useEffect(() => {
+            progressWidth.value = withTiming(percentage * 100, { duration: 500 });
+        }, [percentage]);
+
+        const progressStyle = useAnimatedStyle(() => ({
+            width: `${progressWidth.value}%`
+        }));
+
+        return (
+            <View className="bg-gray-50 dark:bg-zinc-900 rounded-2xl border border-gray-100 dark:border-zinc-800 mb-2 overflow-hidden relative">
+                {/* Progress Background */}
+                {isActive && (
+                    <Animated.View
+                        className="absolute left-0 top-0 bottom-0 bg-indigo-50 dark:bg-indigo-900/10"
+                        style={progressStyle}
+                    />
+                )}
+
+                <TouchableOpacity
+                    onPress={isActive ? undefined : onStart}
+                    activeOpacity={0.7}
+                    disabled={isActive}
+                    className="flex-row items-center justify-between p-4"
+                >
+                    <View className="flex-row items-center gap-3 flex-1">
+                        <Animated.View style={isActive && !isPaused ? spinStyle : {}} className={`w-10 h-10 rounded-full bg-white dark:bg-zinc-800 items-center justify-center border border-gray-100 dark:border-zinc-700`}>
+                            {isActive ? (
+                                <RefreshCw size={18} color="#6366f1" />
+                            ) : (
+                                <Icon size={18} color={isDark ? '#fff' : '#000'} />
+                            )}
+                        </Animated.View>
+                        <View className="flex-1">
+                            <View className="flex-row items-center justify-between">
+                                <Text className="font-bold text-gray-900 dark:text-white">{title}</Text>
+                                {isActive && (
+                                    <Text className="text-[10px] font-black text-indigo-500 uppercase tracking-tighter">
+                                        {Math.round(percentage * 100)}%
+                                    </Text>
+                                )}
+                            </View>
+                            {isActive ? (
+                                <Text className="text-[10px] text-gray-400 font-medium truncate" numberOfLines={1}>
+                                    {progress?.currentPath || 'Processing...'}
+                                </Text>
+                            ) : (
+                                <Text className="text-xs text-gray-500 dark:text-gray-400">{subtitle}</Text>
+                            )}
+                        </View>
+                    </View>
+
+                    {/* Inline Controls */}
+                    {isActive ? (
+                        <View className="flex-row items-center gap-1 ml-2">
+                            <TouchableOpacity
+                                onPress={isPaused ? onResume : onPause}
+                                className="w-8 h-8 items-center justify-center rounded-full bg-white dark:bg-zinc-800 border border-gray-100 dark:border-zinc-700"
+                            >
+                                {isPaused ? <Play size={14} color="#10b981" fill="#10b981" /> : <Pause size={14} color="#f59e0b" fill="#f59e0b" />}
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                onPress={onCancel}
+                                className="w-8 h-8 items-center justify-center rounded-full bg-white dark:bg-zinc-800 border border-gray-100 dark:border-zinc-700"
+                            >
+                                <Square size={12} color="#ef4444" fill="#ef4444" />
+                            </TouchableOpacity>
+                        </View>
+                    ) : (
+                        <ChevronRight size={16} color={isDark ? '#4b5563' : '#9ca3af'} />
+                    )}
+                </TouchableOpacity>
+            </View>
+        );
+    };
 
     const StatCard = ({ icon: Icon, label, value, color, subtitle }: any) => (
         <View className="flex-1 bg-gray-50 dark:bg-zinc-900 p-4 rounded-2xl border border-gray-100 dark:border-zinc-800">
@@ -690,18 +829,62 @@ export const SettingsScreenV2: React.FC<SettingsScreenV2Props> = ({ onBack, onLo
                                 <View>
                                     <SectionHeader title={t('admin.server_maintenance')} />
                                     <View className="gap-2">
-                                        <OptionRow
+                                        <MaintenanceTaskRow
                                             icon={RefreshCw}
                                             title={t('admin.scan_library')}
                                             subtitle={t('admin.scan_library_desc')}
-                                            onPress={() => handleAction('/api/scan/start', t('admin.scan_library'))}
+                                            status={scanState?.status || 'idle'}
+                                            progress={scanState}
+                                            onStart={() => handleAction('/api/scan/start', t('admin.scan_library'))}
+                                            onPause={() => handleAction('/api/scan/control', t('action.pause'), { method: 'POST', body: JSON.stringify({ action: 'pause' }) })}
+                                            onResume={() => handleAction('/api/scan/control', t('action.resume'), { method: 'POST', body: JSON.stringify({ action: 'resume' }) })}
+                                            onCancel={() => handleAction('/api/scan/control', t('action.cancel'), { method: 'POST', body: JSON.stringify({ action: 'stop' }) })}
                                         />
-                                        <OptionRow
+                                        <MaintenanceTaskRow
                                             icon={Cpu}
                                             title={t('admin.thumb_gen')}
                                             subtitle={t('admin.thumb_gen_desc')}
-                                            onPress={() => handleAction('/api/thumb-gen/start', t('admin.thumb_gen'))}
+                                            status={thumbState?.currentTaskName === 'System Thumbnail Scan' ? (thumbState?.status || 'idle') : 'idle'}
+                                            progress={thumbState}
+                                            onStart={() => handleAction('/api/thumb-gen/start', t('admin.thumb_gen'))}
+                                            onPause={() => handleAction('/api/thumb-gen/control', t('action.pause'), { method: 'POST', body: JSON.stringify({ action: 'pause' }) })}
+                                            onResume={() => handleAction('/api/thumb-gen/control', t('action.resume'), { method: 'POST', body: JSON.stringify({ action: 'resume' }) })}
+                                            onCancel={() => handleAction('/api/thumb-gen/control', t('action.cancel'), { method: 'POST', body: JSON.stringify({ action: 'stop' }) })}
                                         />
+                                        <MaintenanceTaskRow
+                                            icon={RotateCw}
+                                            title={t('admin.smart_repair')}
+                                            subtitle={
+                                                smartResults && (smartResults.missingCount > 0 || smartResults.errorCount > 0)
+                                                    ? t('admin.smart_results', { missing: smartResults.missingCount, error: smartResults.errorCount })
+                                                    : t('admin.scan_library_desc')
+                                            }
+                                            status={
+                                                (thumbState?.currentTaskName === 'Smart Thumbnail Scan' ||
+                                                    thumbState?.currentTaskName?.includes('Smart Repair'))
+                                                    ? (thumbState?.status || 'idle') : 'idle'
+                                            }
+                                            progress={thumbState}
+                                            onStart={() => handleAction('/api/thumb/smart-scan', t('admin.smart_repair'))}
+                                            onPause={() => handleAction('/api/thumb-gen/control', t('action.pause'), { method: 'POST', body: JSON.stringify({ action: 'pause' }) })}
+                                            onResume={() => handleAction('/api/thumb-gen/control', t('action.resume'), { method: 'POST', body: JSON.stringify({ action: 'resume' }) })}
+                                            onCancel={() => handleAction('/api/thumb-gen/control', t('action.cancel'), { method: 'POST', body: JSON.stringify({ action: 'stop' }) })}
+                                        />
+
+                                        {/* Smart Repair Action (Conditional) */}
+                                        {smartResults && (smartResults.missingCount > 0 || smartResults.errorCount > 0) && (
+                                            <TouchableOpacity
+                                                onPress={() => handleAction('/api/thumb/smart-repair', t('admin.smart_repair_action'), {
+                                                    method: 'POST',
+                                                    body: JSON.stringify({ repairMissing: true, repairError: true })
+                                                })}
+                                                disabled={thumbState?.status !== 'idle'}
+                                                className={`flex-row items-center justify-center p-3 bg-indigo-500 rounded-2xl mb-2 ${thumbState?.status !== 'idle' ? 'opacity-50' : ''}`}
+                                            >
+                                                <Zap size={16} color="#fff" className="mr-2" />
+                                                <Text className="text-white font-bold">{t('admin.smart_repair_action')}</Text>
+                                            </TouchableOpacity>
+                                        )}
                                         <OptionRow
                                             icon={Zap}
                                             title={t('admin.thumb_concurrency')}
