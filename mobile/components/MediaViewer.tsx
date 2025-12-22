@@ -20,7 +20,7 @@ import { IconButton } from 'react-native-paper';
 import { useLanguage } from '../utils/i18n';
 import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
 import Slider from '@react-native-community/slider';
-import { Play, Pause, SkipBack, SkipForward, RotateCw } from 'lucide-react-native';
+import { Play, Pause, SkipBack, SkipForward, RotateCw, PlayCircle, StopCircle } from 'lucide-react-native';
 import { BlurView } from 'expo-blur';
 import { useAudio } from '../utils/AudioContext';
 import * as ScreenOrientation from 'expo-screen-orientation';
@@ -453,17 +453,18 @@ export const MediaViewer: React.FC<MediaViewerProps> = ({ items, initialIndex, o
     const [networkSpeed, setNetworkSpeed] = useState<string>('--');
     const [bitrate, setBitrate] = useState<string>('--');
     const [isZoomed, setIsZoomed] = useState(false);
+    const [isSlideshowActive, setIsSlideshowActive] = useState(false);
     const flatListRef = useRef<FlatList>(null);
 
-    // Sync scroll on width change (orientation change)
+    // Sync scroll on width change or index change (Slideshow)
     useEffect(() => {
         if (flatListRef.current && items.length > 0) {
             flatListRef.current.scrollToIndex({
                 index: currentIndex,
-                animated: false
+                animated: true // Always animate for smooth slideshow
             });
         }
-    }, [width]);
+    }, [width, currentIndex]);
 
     // Orientation Logic
     useEffect(() => {
@@ -543,6 +544,50 @@ export const MediaViewer: React.FC<MediaViewerProps> = ({ items, initialIndex, o
             if (timer) clearTimeout(timer);
         };
     }, [currentIndex, items, player]);
+
+    // Slideshow Logic
+    useEffect(() => {
+        if (!isSlideshowActive) {
+            // Ensure loop is enabled by default when not in slideshow
+            if (player) player.loop = true;
+            return;
+        }
+
+        const current = items[currentIndex];
+        if (!current) return;
+
+        let timer: NodeJS.Timeout;
+
+        if (current.mediaType === 'video') {
+            // For video, wait for end
+            if (player) {
+                try {
+                    player.loop = false;
+                    const subscription = player.addListener('playToEnd', () => {
+                        setCurrentIndex(prev => (prev + 1) % items.length);
+                    });
+                    return () => {
+                        try {
+                            subscription.remove();
+                            // Only attempt to reset loop if player is still valid
+                            player.loop = true;
+                        } catch (e) {
+                            // Player likely released, safe to ignore during unmount
+                        }
+                    };
+                } catch (e) {
+                    console.log('Error configuring video player for slideshow:', e);
+                }
+            }
+        } else {
+            // For images/audio, wait 5 seconds
+            timer = setTimeout(() => {
+                setCurrentIndex(prev => (prev + 1) % items.length);
+            }, 5000);
+        }
+
+        return () => clearTimeout(timer);
+    }, [isSlideshowActive, currentIndex, items, player]);
 
     // Speed Detection Logic
     useEffect(() => {
@@ -794,49 +839,68 @@ export const MediaViewer: React.FC<MediaViewerProps> = ({ items, initialIndex, o
                                 }}
                             >
                                 <View className="flex-row items-center justify-between px-4 py-3" pointerEvents="box-none">
-                                    <IconButton
-                                        icon="arrow-left"
-                                        iconColor="white"
-                                        size={28}
-                                        onPress={onClose}
-                                        style={{ backgroundColor: 'rgba(0,0,0,0.1)' }}
-                                    />
+                                    <View className="flex-row items-center gap-2">
+                                        <IconButton
+                                            icon="arrow-left"
+                                            iconColor="white"
+                                            size={28}
+                                            onPress={onClose}
+                                            style={{ backgroundColor: 'rgba(0,0,0,0.1)' }}
+                                        />
 
-                                    <View className="flex-row gap-x-1" pointerEvents="box-none">
-                                        {currentItem.mediaType === 'audio' && (
-                                            <IconButton
-                                                icon="close-circle-outline"
-                                                iconColor="white"
-                                                size={28}
-                                                onPress={() => {
-                                                    minimizePlayer();
-                                                    onClose();
-                                                }}
-                                                style={{ backgroundColor: 'rgba(0,0,0,0.1)' }}
-                                            />
-                                        )}
-                                        <IconButton
-                                            icon={isFavorite ? "heart" : "heart-outline"}
-                                            iconColor={isFavorite ? "#ef4444" : "white"}
-                                            size={28}
-                                            onPress={handleFavorite}
-                                            style={{ backgroundColor: 'rgba(0,0,0,0.1)' }}
-                                        />
-                                        <IconButton
-                                            icon={isDownloading ? "sync" : "download-outline"}
-                                            iconColor="white"
-                                            size={28}
-                                            onPress={handleDownload}
-                                            disabled={isDownloading}
-                                            style={{ backgroundColor: 'rgba(0,0,0,0.1)' }}
-                                        />
-                                        <IconButton
-                                            icon="information-outline"
-                                            iconColor="white"
-                                            size={28}
-                                            onPress={() => setShowInfo(!showInfo)}
-                                            style={{ backgroundColor: 'rgba(0,0,0,0.1)' }}
-                                        />
+                                        <View className="flex-row gap-x-1" pointerEvents="box-none">
+                                            {currentItem.mediaType === 'audio' && (
+                                                <IconButton
+                                                    icon="close-circle-outline"
+                                                    iconColor="white"
+                                                    size={28}
+                                                    onPress={() => {
+                                                        minimizePlayer();
+                                                        onClose();
+                                                    }}
+                                                    style={{ backgroundColor: 'rgba(0,0,0,0.1)' }}
+                                                />
+                                            )}
+                                            <View className="flex-row gap-2">
+                                                {/* Slideshow Toggle */}
+                                                <IconButton
+                                                    icon={({ size, color }) => (
+                                                        isSlideshowActive ?
+                                                            <StopCircle size={size} color={color} /> :
+                                                            <PlayCircle size={size} color={color} />
+                                                    )}
+                                                    iconColor={isSlideshowActive ? "#818cf8" : "white"}
+                                                    size={24}
+                                                    onPress={() => {
+                                                        setIsSlideshowActive(prev => !prev);
+                                                        setShowControls(false); // Hide controls when starting
+                                                        showToast(!isSlideshowActive ? t('common.slideshow_start') : t('common.slideshow_stop'), 'info');
+                                                    }}
+                                                    containerColor="rgba(255,255,255,0.1)"
+                                                />
+                                                <IconButton
+                                                    icon={isFavorite ? "heart" : "heart-outline"}
+                                                    iconColor={isFavorite ? "#ef4444" : "white"}
+                                                    size={28}
+                                                    onPress={handleFavorite}
+                                                />
+                                                <IconButton
+                                                    icon={isDownloading ? "sync" : "download-outline"}
+                                                    iconColor="white"
+                                                    size={28}
+                                                    onPress={handleDownload}
+                                                    disabled={isDownloading}
+                                                    style={{ backgroundColor: 'rgba(0,0,0,0.1)' }}
+                                                />
+                                                <IconButton
+                                                    icon="information-outline"
+                                                    iconColor="white"
+                                                    size={28}
+                                                    onPress={() => setShowInfo(!showInfo)}
+                                                    style={{ backgroundColor: 'rgba(0,0,0,0.1)' }}
+                                                />
+                                            </View>
+                                        </View>
                                     </View>
                                 </View>
                             </Animated.View>
