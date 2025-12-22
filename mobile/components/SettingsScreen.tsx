@@ -71,7 +71,7 @@ const CollapsibleSection: React.FC<{
     };
 
     return (
-        <Animated.View className="mb-4">
+        <Animated.View layout={LinearTransition} className="mb-4">
             <TouchableOpacity
                 onPress={toggle}
                 activeOpacity={0.7}
@@ -84,9 +84,13 @@ const CollapsibleSection: React.FC<{
                 <ArrowLeft size={18} color="#9ca3af" style={{ transform: [{ rotate: isExpanded ? '90deg' : '-90deg' }] }} />
             </TouchableOpacity>
             {isExpanded && (
-                <View className="p-4 bg-white dark:bg-black border-x border-b border-gray-100 dark:border-zinc-800 rounded-b-2xl">
+                <Animated.View
+                    entering={FadeInDown.duration(300)}
+                    exiting={FadeOutUp.duration(300)}
+                    className="p-4 bg-white dark:bg-black border-x border-b border-gray-100 dark:border-zinc-800 rounded-b-2xl"
+                >
                     {children}
-                </View>
+                </Animated.View>
             )}
         </Animated.View>
     );
@@ -132,14 +136,14 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBack, onLogout
 
     useEffect(() => {
         if (activeTab === 'server') {
-            addBreadcrumb("Tab: Switched to Server Admin");
+            addBreadcrumb("Tab Change: Switching to Server Admin...");
             const timer = setTimeout(() => {
+                addBreadcrumb("Tab Change: Triggering Server Content Mount");
                 setIsServerMounted(true);
-                addBreadcrumb("Server Tab Content (Staggered) Mounted");
             }, 150);
             return () => clearTimeout(timer);
         } else {
-            addBreadcrumb("Tab: Switched to App Settings");
+            addBreadcrumb("Tab Change: Switching back to App Settings");
             setIsServerMounted(false);
         }
     }, [activeTab]);
@@ -185,10 +189,13 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBack, onLogout
             addBreadcrumb(`loadStats fetch status: ${res.status}`);
             if (res.ok) {
                 const data = await res.json();
+                addBreadcrumb("loadStats: JSON parsed, updating stats state");
                 setStats(data);
-                addBreadcrumb(`loadStats success, data size: ${JSON.stringify(data).length}`);
+                addBreadcrumb(`loadStats: success, data size: ${JSON.stringify(data).length}`);
                 // Background status check
+                addBreadcrumb("loadStats: starting background checkTasksStatus");
                 await checkTasksStatus();
+                addBreadcrumb("loadStats finished (all checks done)");
             }
         } catch (e: any) {
             addBreadcrumb(`loadStats Error: ${e.message}`);
@@ -201,45 +208,57 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBack, onLogout
 
     const checkTasksStatus = async () => {
         try {
+            addBreadcrumb("checkTasksStatus start");
             const { getToken } = await import('../utils/api');
             const token = getToken();
             const headers = { ...(token ? { 'Authorization': `Bearer ${token}` } : {}) };
 
+            addBreadcrumb("checkTasksStatus fetching...");
             const [scanRes, thumbRes] = await Promise.all([
                 fetchWithTimeout(`${API_URL}/api/scan/status`, { headers }, 8000),
                 fetchWithTimeout(`${API_URL}/api/thumb-gen/status`, { headers }, 8000)
             ]);
+            addBreadcrumb(`checkTasksStatus results: ${scanRes.status} / ${thumbRes.status}`);
 
             if (scanRes.ok) {
-                const scanData = await scanRes.ok ? await scanRes.json() : { status: 'idle' };
+                const scanData = await scanRes.json();
                 setIsServerScanning(scanData.status === 'scanning');
             }
             if (thumbRes.ok) {
-                const thumbData = await thumbRes.ok ? await thumbRes.json() : { status: 'idle' };
+                const thumbData = await thumbRes.json();
                 setIsServerThumbGen(thumbData.status === 'scanning');
             }
+            addBreadcrumb("checkTasksStatus success");
         } catch (e: any) {
+            addBreadcrumb(`checkTasksStatus Error: ${e.message}`);
             console.warn("Task status check failed", e.message);
         }
     };
 
     const fetchUsers = async () => {
+        addBreadcrumb("fetchUsers start");
         try {
             const { getToken } = await import('../utils/api');
             const token = getToken();
             const res = await fetchWithTimeout(`${API_URL}/api/config`, {
                 headers: { ...(token ? { 'Authorization': `Bearer ${token}` } : {}) }
             }, 10000);
+            addBreadcrumb(`fetchUsers status: ${res.status}`);
             if (res.ok) {
                 const data = await res.json();
-                if (data.users) setServerUsers(data.users);
+                if (data.users) {
+                    setServerUsers(data.users);
+                    addBreadcrumb(`fetchUsers success, count: ${data.users.length}`);
+                }
             }
-        } catch (e) {
+        } catch (e: any) {
+            addBreadcrumb(`fetchUsers Error: ${e.message}`);
             console.error("Failed to fetch users", e);
         }
     };
 
     const fetchSmartResults = async () => {
+        addBreadcrumb("fetchSmartResults start");
         try {
             const { getToken } = await import('../utils/api');
             const token = getToken();
@@ -247,8 +266,15 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBack, onLogout
             const res = await fetchWithTimeout(`${API_URL}/api/thumb/smart-results?summary=true`, {
                 headers: { ...(token ? { 'Authorization': `Bearer ${token}` } : {}) }
             }, 10000);
-            if (res.ok) setSmartResults(await res.json());
-        } catch (e) { }
+            addBreadcrumb(`fetchSmartResults status: ${res.status}`);
+            if (res.ok) {
+                const data = await res.json();
+                setSmartResults(data);
+                addBreadcrumb("fetchSmartResults success");
+            }
+        } catch (e: any) {
+            addBreadcrumb(`fetchSmartResults Error: ${e.message}`);
+        }
     };
 
     const handleServerAdminAction = async (endpoint: string, method = 'POST', body?: any) => {
@@ -977,9 +1003,9 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBack, onLogout
                             <Animated.View
                                 entering={FadeIn.duration(200).withInitialValues({ transform: [{ scale: 0.95 }] })}
                                 exiting={FadeOut.duration(150)}
-                                className="w-[85%] max-w-sm overflow-hidden rounded-3xl bg-white dark:bg-zinc-900 shadow-2xl"
+                                className="w-[85%] max-w-sm overflow-hidden rounded-3xl"
                             >
-                                <View className="p-6 items-center">
+                                <BlurView intensity={100} tint={isDark ? 'dark' : 'light'} className="p-6 items-center">
                                     <View className="w-12 h-12 rounded-full bg-red-100 dark:bg-red-900/30 items-center justify-center mb-4">
                                         <Trash2 size={24} color="#ef4444" />
                                     </View>
@@ -1013,7 +1039,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBack, onLogout
                                             <Text className="font-bold text-white">{t('dialog.confirm')}</Text>
                                         </TouchableOpacity>
                                     </View>
-                                </View>
+                                </BlurView>
                             </Animated.View>
                         </View>
                     </Portal>
