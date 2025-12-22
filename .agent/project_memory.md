@@ -3,7 +3,8 @@
 - **并发数据同步**：在 `Database.ts` 中实现全局写入队列。所有涉及事务的操作必须进入该队列排队执行，严禁在 Native 回调内直接触发可能导致嵌套事务的异步更新。
 - **图片加载稳定性**：针对 `expo-image`，在频繁切换或背景层渲染时，优先移除原生 `transition` 属性，转而使用 `react-native-reanimated` 控制容器透明度。这能有效规避 Native 层的声明周期冲突（`IllegalStateException`）。
 - **组件持久化导航**：在文件夹浏览等需要数据感知但视觉连贯的场景中，避免在容器视图上绑定基于路径的 `key`，通过状态驱动内容更新以消除闪烁。
-- **SQLite Concurrency**: `initDatabase` uses a singleton Promise pattern to prevent race conditions during early-stage multi-component initialization.
+- **SQLite Concurrency**: `initDatabase` uses a singleton Promise pattern to prevent race conditions during early-stage multi-component initialization. Added `updateFavoriteStatus` for optimistic local sync before server confirmation.
+- **Modal Stability**: Hoist complex dialogs (e.g., `ConfirmDialogComponent`) to the top level of the screen component. This prevents recreation on every render, resolving UI flicker and animation glitches.
 - **Grid Layout**: Precision pixel-based calculations for standard 8px gaps.
     - **Standard sizes**: Media items ~110px, Folder items ~160px. Use `useWindowDimensions` for responsiveness.
 - **Elite UI & Interaction Standards** (Updated 2025-12-19):
@@ -19,7 +20,7 @@
 - **Phoenix Protocol (Refactoring)**: For components with inexplicable freezes (like the original `SettingsScreen`), use a "burn and rebuild" approach. Create a V2 version from scratch, prioritize stability (no complex animations), and migrate features incrementally.
 - **API Robustness (MIME Check)**: Network wrappers (like `adminFetch`) MUST check the `Content-Type` header before calling `.json()`. If the server returns HTML (e.g., a 404 or 500 error page), the wrapper must handle it gracefully or log it as a text response to prevent "Unexpected character: <" parsing errors.
 - **Maintenance UI (Inline Progress)**: Server maintenance tasks (scan, thumb-gen) must use inline animated progress bars instead of modals. This includes real-time control (Pause/Cancel) integrated directly into the progress row for a seamless UX.
-- **Concurrency Parity**: Thumbnail generation concurrency (`thumbnail_threads`) must be adjustable from both mobile (stepper) and web (slider) consoles, with synchronization handled via `/api/config`.
+- **Concurrency Parity (Standardized)**: Thumbnail threads (`thumbnail_threads`) are capped at **64** on all platforms. A mandatory one-time safety warning is triggered when the value exceeds **16**. Implement using `useRef` (Mobile) or `window.confirm` (Web) to ensure the warning is non-intrusive.
 - **UI Non-Intrusion**: System versioning information should be placed at the bottom of the scrollable content area rather than fixed overlays, preserving screen real-estate for functional controls.
 - **Tailwind Build**: Standard Vite/PostCSS pipeline. No CDN links in `index.html`. Primary colors and fonts must be defined in `tailwind.config.js`.
 
@@ -37,6 +38,7 @@
 - **Animation Overload**: Avoid bouncy/spring animations for system-level dialogs; prefer subtle Fade+Scale for a premium, non-distracting feel.
 - **Native Bridge Deadlock (Haptics Trap)**: During massive UI recalculations (e.g., Theme switching via NativeWind 4 or complex Tab switching), AVOID synchronous Native-Bridge calls like `expo-haptics`. These calls can block the JS thread while the Native UI thread is also busy rendering, leading to an unrecoverable system freeze.
 
-## Development Workflows
-- **Performance**: Heavy UI components (VirtualGallery, ImageViewer) must be loaded using `React.lazy`.
-- **Docs Path**: Reference `docs/antigravity/` for detailed maintenance logs.
+- **Development Workflows**: 
+    - **Performance**: Heavy UI components (VirtualGallery, ImageViewer) must be loaded using `React.lazy`.
+    - **Windows Android Build**: When `eas build --local` is restricted by platform (macOS/Linux required), use `npx expo prebuild --platform android` followed by `gradlew.bat assembleRelease` in the `android` folder.
+    - **Docs Path**: Reference `docs/antigravity/` for detailed maintenance logs.
