@@ -1,6 +1,5 @@
-import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { View, Text, TextInput, TouchableOpacity, ScrollView, Alert, ActivityIndicator, Switch, Modal, Platform } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { View, Text, TextInput, TouchableOpacity, ScrollView, ActivityIndicator, Switch, Modal } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
 import {
@@ -8,38 +7,20 @@ import {
     ArrowLeft,
     Globe,
     Zap,
-    ShieldCheck,
     Database,
     User,
     LogOut,
-    Info,
-    Trash2,
     Plus,
     X,
-    Folder,
     AlertTriangle,
-    CheckCircle,
-    Layout,
-    Clock,
-    Square,
-    CheckCircle2
+    Layout
 } from 'lucide-react-native';
 import Animated, {
-    useSharedValue,
-    useAnimatedStyle,
-    withSpring,
-    withTiming,
-    withRepeat,
-    Easing,
-    FadeIn,
-    FadeInLeft,
-    FadeOutRight,
-    FadeInRight,
-    FadeOutLeft
+    FadeIn
 } from 'react-native-reanimated';
 import { ItemPicker } from './ItemPicker';
 import { useLanguage } from '../utils/i18n';
-import { fetchStats, fetchSystemMaintenance, fetchUsers, adminFetch, API_URL, getToken } from '../utils/api';
+import { fetchStats, fetchSystemMaintenance, fetchUsers, adminFetch, getToken } from '../utils/api';
 import { useToast } from '../utils/ToastContext';
 
 interface SettingsScreenV2Props {
@@ -59,7 +40,6 @@ const SettingsScreenV2 = ({ onBack, onLogout: onAppLogout, username: currentUser
     const [serverConfig, setServerConfig] = useState<any>(null);
     const [stats, setStats] = useState<any>(null);
     const [users, setUsers] = useState<any[]>([]);
-    const [maintenance, setMaintenance] = useState<any[]>([]);
     const [isLoading, setIsLoading] = useState(false);
 
     const [isPickerOpen, setIsPickerOpen] = useState({ visible: false, mode: 'folder' as 'folder' | 'file' });
@@ -97,7 +77,6 @@ const SettingsScreenV2 = ({ onBack, onLogout: onAppLogout, username: currentUser
                 adminFetch('/api/config')
             ]);
             setStats(s);
-            setMaintenance(m);
             setUsers(u);
             setServerConfig(c);
         } catch (e: any) {
@@ -397,10 +376,10 @@ const SettingsScreenV2 = ({ onBack, onLogout: onAppLogout, username: currentUser
                                     </View>
                                 </>
                             )}
-                        </ScrollView>
-                    </View>
-        </ScrollView>
-            </View >
+                        </View>
+                    )}
+                </ScrollView>
+            </View>
 
             <Modal visible={showUserModal} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setShowUserModal(false)}>
                 <View className="flex-1 bg-white dark:bg-black p-6" style={{ paddingTop: insets.top }}>
@@ -415,7 +394,7 @@ const SettingsScreenV2 = ({ onBack, onLogout: onAppLogout, username: currentUser
                         <View className="gap-6">
                             <View>
                                 <Text className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-2 ml-1">{t('admin.username')}</Text>
-                                <TextInput 
+                                <TextInput
                                     className="bg-gray-50 dark:bg-zinc-900 p-4 rounded-2xl border border-gray-100 dark:border-zinc-800 text-gray-900 dark:text-white"
                                     value={userForm.username}
                                     onChangeText={v => setUserForm({ ...userForm, username: v })}
@@ -423,7 +402,7 @@ const SettingsScreenV2 = ({ onBack, onLogout: onAppLogout, username: currentUser
                             </View>
                             <View>
                                 <Text className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-2 ml-1">{t('admin.password')}</Text>
-                                <TextInput 
+                                <TextInput
                                     className="bg-gray-50 dark:bg-zinc-900 p-4 rounded-2xl border border-gray-100 dark:border-zinc-800 text-gray-900 dark:text-white"
                                     value={userForm.password}
                                     onChangeText={v => setUserForm({ ...userForm, password: v })}
@@ -444,7 +423,7 @@ const SettingsScreenV2 = ({ onBack, onLogout: onAppLogout, username: currentUser
                                         </View>
                                     ))}
                                 </View>
-                                <TouchableOpacity 
+                                <TouchableOpacity
                                     onPress={() => setIsPickerOpen({ visible: true, mode: 'folder' })}
                                     className="flex-row items-center justify-center p-4 bg-indigo-50 dark:bg-indigo-900/10 rounded-2xl border border-dashed border-indigo-200"
                                 >
@@ -458,7 +437,7 @@ const SettingsScreenV2 = ({ onBack, onLogout: onAppLogout, username: currentUser
                                 <Switch value={userForm.isAdmin} onValueChange={v => setUserForm({ ...userForm, isAdmin: v })} />
                             </View>
 
-                            <TouchableOpacity 
+                            <TouchableOpacity
                                 onPress={handleSaveUser}
                                 className="bg-black dark:bg-white py-4 rounded-2xl items-center mt-4"
                             >
@@ -469,8 +448,8 @@ const SettingsScreenV2 = ({ onBack, onLogout: onAppLogout, username: currentUser
                 </View>
             </Modal>
 
-            <ItemPicker 
-                visible={isPickerOpen.visible} 
+            <ItemPicker
+                visible={isPickerOpen.visible}
                 mode={isPickerOpen.mode}
                 onClose={() => setIsPickerOpen({ ...isPickerOpen, visible: false })}
                 onSelect={(p) => {
@@ -481,8 +460,8 @@ const SettingsScreenV2 = ({ onBack, onLogout: onAppLogout, username: currentUser
                 }}
             />
 
-{ renderConfirmDialog }
-        </View >
+            {renderConfirmDialog}
+        </View>
     );
 };
 
