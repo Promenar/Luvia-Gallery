@@ -342,11 +342,18 @@ export const SettingsScreenV2: React.FC<SettingsScreenV2Props> = ({ onBack, onLo
         </TouchableOpacity>
     );
 
-    const StatCard = ({ icon: Icon, label, value, color }: any) => (
+    const StatCard = ({ icon: Icon, label, value, color, subtitle }: any) => (
         <View className="flex-1 bg-gray-50 dark:bg-zinc-900 p-4 rounded-2xl border border-gray-100 dark:border-zinc-800">
-            <Icon size={16} color={color} className="mb-2" />
-            <Text className="text-xl font-black text-gray-900 dark:text-white">{value}</Text>
-            <Text className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">{label}</Text>
+            <View className="flex-row items-center gap-2 mb-2">
+                <View className="w-6 h-6 rounded-lg items-center justify-center bg-white dark:bg-zinc-800 border border-gray-100 dark:border-zinc-700">
+                    <Icon size={14} color={color} />
+                </View>
+                <Text className="text-[10px] font-bold text-gray-400 uppercase tracking-widest leading-none">{label}</Text>
+            </View>
+            <Text className="text-lg font-black text-gray-900 dark:text-white leading-none">{value}</Text>
+            {subtitle && (
+                <Text className="text-[10px] font-bold text-gray-400 mt-1 uppercase tracking-tight">{subtitle}</Text>
+            )}
         </View>
     );
 
@@ -621,7 +628,13 @@ export const SettingsScreenV2: React.FC<SettingsScreenV2Props> = ({ onBack, onLo
                                             <View className="flex-row">
                                                 <StatCard icon={HardDrive} label={t('stats.total_media')} value={stats.mediaStats.totalFiles} color="#3b82f6" />
                                                 <View style={{ width: 8 }} />
-                                                <StatCard icon={Database} label={t('stats.cache_size')} value={formatBytes(stats.storage)} color="#10b981" />
+                                                <StatCard
+                                                    icon={Database}
+                                                    label={t('stats.cache_size')}
+                                                    value={formatBytes(stats.storage)}
+                                                    subtitle={t('stats.items_count', { count: stats.cacheCount || 0 })}
+                                                    color="#10b981"
+                                                />
                                             </View>
                                             <View style={{ height: 8 }} />
                                             <View className="flex-row">

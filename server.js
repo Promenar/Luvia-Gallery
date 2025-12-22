@@ -1103,7 +1103,8 @@ app.get('/api/scan/status', (req, res) => {
                 audio: stats.totalAudio,
                 totalFiles: stats.totalFiles
             },
-            cacheCount: countCachedFiles(),
+            storage: globalCacheSize,
+            cacheCount: globalCacheCount,
             totalItems: stats.totalFiles
         });
     } catch (e) {
