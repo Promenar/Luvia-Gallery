@@ -18,6 +18,9 @@
 - **Frontend Debounce**: UI configuration inputs (Title, Subtitle) in `App.tsx` MUST use the debounced `persistData` call to prevent excessive server syncs during typing.
 - **Phoenix Protocol (Refactoring)**: For components with inexplicable freezes (like the original `SettingsScreen`), use a "burn and rebuild" approach. Create a V2 version from scratch, prioritize stability (no complex animations), and migrate features incrementally.
 - **API Robustness (MIME Check)**: Network wrappers (like `adminFetch`) MUST check the `Content-Type` header before calling `.json()`. If the server returns HTML (e.g., a 404 or 500 error page), the wrapper must handle it gracefully or log it as a text response to prevent "Unexpected character: <" parsing errors.
+- **Maintenance UI (Inline Progress)**: Server maintenance tasks (scan, thumb-gen) must use inline animated progress bars instead of modals. This includes real-time control (Pause/Cancel) integrated directly into the progress row for a seamless UX.
+- **Concurrency Parity**: Thumbnail generation concurrency (`thumbnail_threads`) must be adjustable from both mobile (stepper) and web (slider) consoles, with synchronization handled via `/api/config`.
+- **UI Non-Intrusion**: System versioning information should be placed at the bottom of the scrollable content area rather than fixed overlays, preserving screen real-estate for functional controls.
 - **Tailwind Build**: Standard Vite/PostCSS pipeline. No CDN links in `index.html`. Primary colors and fonts must be defined in `tailwind.config.js`.
 
 ## Anti-Patterns to Avoid
