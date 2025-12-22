@@ -9,7 +9,7 @@ import { MediaCard } from './components/MediaCard';
 import { FolderCard } from './components/FolderCard';
 import { Carousel } from './components/Carousel';
 import { BottomTabs, Tab } from './components/BottomTabs';
-import { SettingsScreen } from './components/SettingsScreen';
+import { SettingsScreenV2 } from './components/SettingsScreenV2';
 import { LoginScreen } from './components/LoginScreen';
 import { ActionMenu } from './components/ActionMenu';
 import { deleteFile, deleteFolder, fetchFolders, fetchFiles, initApi, logout, onLogout, toggleFavorite } from './utils/api';
@@ -862,7 +862,7 @@ const MainScreen = () => {
 
         {/* Settings Tab */}
         {activeTab === 'settings' && (
-          <SettingsScreen
+          <SettingsScreenV2
             onLogout={handleLogout}
             username={username || 'Guest'}
             isAdmin={isAdmin}
