@@ -19,7 +19,7 @@ type Language = 'en' | 'zh';
 interface I18nState {
     language: Language;
     setLanguage: (lang: Language) => void;
-    t: (key: string) => string;
+    t: (key: string, vars?: Record<string, any>) => string;
 }
 
 const translations: Record<Language, Record<string, string>> = {
@@ -60,7 +60,9 @@ const translations: Record<Language, Record<string, string>> = {
         'settings.carousel.seconds': '{{count}}s',
         'settings.server': 'Server Connection',
         'action.switch': 'Switch',
+        'section.general': 'General',
         'section.appearance': 'Appearance',
+        'section.security': 'Security',
         'section.server': 'Server Connection',
         'section.system': 'System Monitor',
         'section.cache': 'Cache Management',
@@ -99,7 +101,7 @@ const translations: Record<Language, Record<string, string>> = {
         'stats.cache_items': 'Cache Items',
         'stats.scan_mode': 'Scan Mode',
         'msg.load_error': 'Failed to load status, please check connection.',
-        'msg.cache_desc': 'Clear local app cache. This removes stored thumbnails and temporary data to free up space.',
+        'msg.cache_desc': 'Clear local thumbnails and temporary data to free up space.',
         'msg.session_expired': 'Session Expired',
         'msg.session_expired_desc': 'Your login session has expired, please login again.',
         'empty.favorites': 'No Favorites Yet',
@@ -136,6 +138,8 @@ const translations: Record<Language, Record<string, string>> = {
         'auth.locked_desc': 'Unlock to view your gallery',
         'auth.unlock': 'Tap to Unlock',
         'auth.biometric_prompt': 'Authenticate to access Lumina',
+        'dialog.confirm': 'Confirm',
+        'dialog.cancel': 'Cancel',
         'auth.use_passcode': 'Use Passcode',
         'common.downloading': 'Downloading',
         'common.success': 'Success',
@@ -143,12 +147,14 @@ const translations: Record<Language, Record<string, string>> = {
         'common.download_success': 'Saved to Gallery',
         'common.download_failed': 'Download Failed',
         'msg.cache_cleared': 'Cache Cleared',
-        'dialog.confirm': 'Confirm',
-        'dialog.cancel': 'Cancel',
+        'msg.cache_clear_failed': 'Failed to clear cache',
+        'msg.tap_retry': 'Tap to retry',
         'admin.users': 'User Management',
         'admin.server_maintenance': 'Server Maintenance',
         'admin.add_user': 'Add User',
         'admin.edit_user': 'Edit User',
+        'admin.add_path': 'Add Path',
+        'admin.no_paths': 'No paths selected',
         'admin.select_folder': 'Select Folder',
         'admin.user_role': 'Regular User',
         'admin.admin_role': 'Administrator',
@@ -157,9 +163,18 @@ const translations: Record<Language, Record<string, string>> = {
         'admin.allowed_paths': 'Allowed Paths',
         'admin.allowed_paths_desc': 'One per line or comma separated', // New
         'admin.scan_library': 'Scan Library',
+        'admin.scan_library_desc': 'Identify new files on storage',
         'admin.thumb_gen': 'Generate Thumbnails',
+        'admin.thumb_gen_desc': 'Process images and videos',
         'admin.prune_cache': 'Prune Server Cache',
-        'admin.clear_all_cache': 'Clear All Server Cache',
+        'admin.prune_cache_desc': 'Remove unused thumbnails',
+        'admin.access_denied': 'Access Denied',
+        'admin.access_denied_desc': 'Administrator privileges are required to manage this server.',
+        'admin.role_admin': 'Administrator',
+        'admin.role_user': 'User',
+        'admin.action_started': '{{label}} Started',
+        'stats.images': 'Images',
+        'stats.videos': 'Videos',
         'admin.smart_repair': 'Smart Repair',
         'admin.repair_now': 'Repair Now',
         'admin.missing': 'Missing',
@@ -171,6 +186,8 @@ const translations: Record<Language, Record<string, string>> = {
         'admin.cancel': 'Cancel',
         'admin.confirm_clear_cache': 'This will clear ALL server thumbnails. Continue?',
         'admin.user_count': '{{count}} Users',
+        'admin.delete_user': 'Delete User',
+        'admin.confirm_delete_user': 'Are you sure you want to remove this user? This cannot be undone.',
     },
     zh: {
         'app.title': 'Lumina 图库',
@@ -209,7 +226,9 @@ const translations: Record<Language, Record<string, string>> = {
         'settings.language': '语言设置',
         'settings.server': '服务器连接',
         'action.switch': '切换',
+        'section.general': '常规设置',
         'section.appearance': '外观设置',
+        'section.security': '安全隐私',
         'section.server': '服务器连接',
         'section.system': '系统监控',
         'section.cache': '缓存管理',
@@ -248,7 +267,7 @@ const translations: Record<Language, Record<string, string>> = {
         'stats.cache_items': '缓存项数',
         'stats.scan_mode': '扫描模式',
         'msg.load_error': '无法加载状态，请检查连接。',
-        'msg.cache_desc': '清除本地应用缓存。这将删除存储的缩略图和临时数据以释放空间，服务器缓存将自动管理。',
+        'msg.cache_desc': '清理本地生成的缩略图和数据缓存以释放存储空间。',
         'msg.session_expired': '会话过期',
         'msg.session_expired_desc': '您的登录会话已过期，请重新登录。',
         'empty.favorites': '暂无收藏',
@@ -284,7 +303,9 @@ const translations: Record<Language, Record<string, string>> = {
         'auth.locked': '应用已锁定',
         'auth.locked_desc': '解锁以查看您的图库',
         'auth.unlock': '点击解锁',
-        'auth.biometric_prompt': '验证身份以访问 Lumina',
+        'auth.biometric_prompt': '请输入生物识别信息以访问 Lumina',
+        'dialog.confirm': '确认',
+        'dialog.cancel': '取消',
         'auth.use_passcode': '使用密码',
         'common.downloading': '正在下载',
         'common.success': '操作成功',
@@ -292,12 +313,14 @@ const translations: Record<Language, Record<string, string>> = {
         'common.download_success': '已成功存入相册',
         'common.download_failed': '下载失败',
         'msg.cache_cleared': '缓存已清理',
-        'dialog.confirm': '确认',
-        'dialog.cancel': '取消',
+        'msg.cache_clear_failed': '清理缓存失败',
+        'msg.tap_retry': '点击重试',
         'admin.users': '用户管理',
         'admin.server_maintenance': '服务器维护',
         'admin.add_user': '添加用户',
         'admin.edit_user': '编辑用户',
+        'admin.add_path': '添加路径',
+        'admin.no_paths': '未选择任何路径',
         'admin.select_folder': '选择文件夹',
         'admin.user_role': '普通用户',
         'admin.admin_role': '管理员',
@@ -305,10 +328,19 @@ const translations: Record<Language, Record<string, string>> = {
         'admin.pwd_placeholder': '留空则保持原密码不变', // New
         'admin.allowed_paths': '访问路径',
         'admin.allowed_paths_desc': '每行一个路径或使用逗号分隔', // New
-        'admin.scan_library': '扫描图库',
+        'admin.scan_library': '扫描媒体库',
+        'admin.scan_library_desc': '识别存储中的新文件',
         'admin.thumb_gen': '生成缩略图',
+        'admin.thumb_gen_desc': '处理图片和视频预览',
         'admin.prune_cache': '清理冗余缓存',
-        'admin.clear_all_cache': '清理全量缓存',
+        'admin.prune_cache_desc': '移除未使用的缩略图',
+        'admin.access_denied': '拒绝访问',
+        'admin.access_denied_desc': '管理此服务器需要管理员权限。',
+        'admin.role_admin': '管理员',
+        'admin.role_user': '普通用户',
+        'admin.action_started': '{{label}} 已开始',
+        'stats.images': '图片',
+        'stats.videos': '视频',
         'admin.smart_repair': '智能修复',
         'admin.repair_now': '立即修复',
         'admin.missing': '缺失',
@@ -318,8 +350,10 @@ const translations: Record<Language, Record<string, string>> = {
         'admin.reset_password': '重置密码',
         'admin.save': '保存',
         'admin.cancel': '取消',
-        'admin.confirm_clear_cache': '这将清理服务器所有缩略图。确定继续吗？',
-        'admin.user_count': '{{count}} 位用户',
+        'admin.confirm_clear_cache': '这将清除所有服务器缩略图，是否继续？',
+        'admin.user_count': '{{count}} 个用户',
+        'admin.delete_user': '删除用户',
+        'admin.confirm_delete_user': '确定要删除此用户吗？此操作无法撤销。',
     }
 };
 
@@ -330,9 +364,15 @@ export const useLanguage = create<I18nState>((set: (partial: Partial<I18nState>)
         set({ language: lang });
         await AsyncStorage.setItem('app_language', lang);
     },
-    t: (key: string) => {
+    t: (key: string, vars?: Record<string, any>) => {
         const l = get().language;
-        return translations[l][key] || key;
+        let text = translations[l][key] || key;
+        if (vars) {
+            Object.keys(vars).forEach(v => {
+                text = text.replace(new RegExp(`{{${v}}}`, 'g'), String(vars[v]));
+            });
+        }
+        return text;
     }
 }));
 
