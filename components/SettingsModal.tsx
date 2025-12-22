@@ -360,7 +360,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                                     <input
                                                         type="range"
                                                         min="1"
-                                                        max="16"
+                                                        max="64"
                                                         value={threadCount}
                                                         onChange={(e) => onUpdateThreadCount(parseInt(e.target.value))}
                                                         className="w-32 accent-primary-600"
