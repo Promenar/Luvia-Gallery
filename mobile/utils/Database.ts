@@ -1,133 +1,161 @@
+
 import * as SQLite from 'expo-sqlite';
 import { MediaItem } from '../types';
+import * as FileSystem from 'expo-file-system';
 
-let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
-let writeQueue: Promise<void> = Promise.resolve();
+// @ts-ignore
+const { Paths, File, Directory } = FileSystem;
 
-export const initDatabase = async (): Promise<SQLite.SQLiteDatabase> => {
-    if (dbPromise) return dbPromise;
+const db = SQLite.openDatabaseSync('lumina.db');
 
-    dbPromise = (async () => {
-        try {
-            const _db = await SQLite.openDatabaseAsync('lumina_cache.db');
-
-            // Create Table
-            await _db.execAsync(`
-                CREATE TABLE IF NOT EXISTS media_items (
-                    id TEXT PRIMARY KEY,
-                    name TEXT,
-                    path TEXT,
-                    mediaType TEXT,
-                    size INTEGER,
-                    lastModified INTEGER,
-                    isFavorite INTEGER,
-                    parentPath TEXT,
-                    thumbnailUrl TEXT
-                );
-                CREATE INDEX IF NOT EXISTS idx_parent ON media_items(parentPath);
-                CREATE INDEX IF NOT EXISTS idx_favorite ON media_items(isFavorite);
-            `);
-
-            return _db;
-        } catch (error) {
-            dbPromise = null; // 重试机制：如果失败了，允许下次重新初始化
-            throw error;
-        }
-    })();
-
-    return dbPromise;
+export const initDatabase = () => {
+    try {
+        db.execSync(`
+      CREATE TABLE IF NOT EXISTS media_items (
+        id TEXT PRIMARY KEY,
+        value TEXT
+      );
+    `);
+    } catch (e) {
+        console.error('[Database] Initialization failed:', e);
+    }
 };
 
-export const saveMediaItems = async (items: MediaItem[], parentPath: string | null) => {
-    // 使用队列防止“cannot start a transaction within a transaction”错误
-    writeQueue = writeQueue.then(async () => {
-        try {
-            const database = await initDatabase();
-            await database.withTransactionAsync(async () => {
-                for (const item of items) {
-                    await database.runAsync(
-                        `INSERT OR REPLACE INTO media_items (id, name, path, mediaType, size, lastModified, isFavorite, parentPath, thumbnailUrl) 
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                        [
-                            item.id ?? '',
-                            item.name ?? '',
-                            item.path ?? '',
-                            item.mediaType ?? 'image',
-                            item.size ?? 0,
-                            item.lastModified ?? Date.now(),
-                            item.isFavorite ? 1 : 0,
-                            parentPath || 'root',
-                            item.thumbnailUrl ?? ''
-                        ]
-                    );
-                }
-            });
-        } catch (e) {
-            console.error("[Database] Batch save error:", e);
+// Initialize immediately
+initDatabase();
+
+export const saveMediaItem = (item: MediaItem) => {
+    db.runSync('INSERT OR REPLACE INTO media_items (id, value) VALUES (?, ?)', [item.id, JSON.stringify(item)]);
+};
+
+export const saveMediaItems = (items: MediaItem[]) => {
+    db.withTransactionSync(() => {
+        for (const item of items) {
+            db.runSync('INSERT OR REPLACE INTO media_items (id, value) VALUES (?, ?)', [item.id, JSON.stringify(item)]);
         }
     });
-    return writeQueue;
 };
 
-export const getCachedFiles = async (options: {
-    folderPath?: string,
-    favorite?: boolean,
-    limit?: number,
-    offset?: number
-}) => {
-    const database = await initDatabase();
-    const folderPath = options.folderPath ?? null;
-    const favorite = options.favorite ?? false;
-    const limit = Number.isInteger(options.limit) ? options.limit! : 50;
-    const offset = Number.isInteger(options.offset) ? options.offset! : 0;
-
-    let query = `SELECT * FROM media_items WHERE 1=1`;
-    const params: any[] = [];
-
-    if (folderPath) {
-        query += ` AND parentPath = ?`;
-        params.push(folderPath);
+export const getMediaItem = (id: string): MediaItem | null => {
+    const result = db.getAllSync('SELECT value FROM media_items WHERE id = ?', [id]);
+    if (result.length > 0) {
+        // @ts-ignore
+        return JSON.parse(result[0].value);
     }
+    return null;
+};
 
-    if (favorite) {
-        query += ` AND isFavorite = 1`;
+export const deleteMediaItem = (id: string) => {
+    db.runSync('DELETE FROM media_items WHERE id = ?', [id]);
+};
+
+// @ts-ignore
+export const getCachedFiles = async ({ limit = 10 } = {}): Promise<MediaItem[]> => {
+    // Return items from SQLite
+    try {
+        const rows = db.getAllSync(`SELECT value FROM media_items LIMIT ?`, [limit]);
+        // @ts-ignore
+        return rows.map(row => JSON.parse(row.value));
+    } catch (e) {
+        return [];
     }
-
-    query += ` ORDER BY lastModified DESC LIMIT ? OFFSET ?`;
-    params.push(limit, offset);
-
-    const rows = await database.getAllAsync<any>(query, params);
-
-    return rows.map(row => ({
-        ...row,
-        isFavorite: row.isFavorite === 1
-    })) as MediaItem[];
 };
 
-export const updateFavoriteStatus = async (id: string, isFavorite: boolean) => {
-    const database = await initDatabase();
-    await database.runAsync(
-        `UPDATE media_items SET isFavorite = ? WHERE id = ?`,
-        [isFavorite ? 1 : 0, id ?? '']
-    );
+export const deleteFileFromCache = async (filename: string) => {
+    try {
+        if (!Paths || !File) return;
+        const cacheDir = Paths.cache;
+        const file = new File(cacheDir + '/' + filename);
+        if (file.exists) {
+            file.delete();
+        }
+    } catch (e) {
+        console.error("Error deleting file from cache", e);
+    }
 };
 
-export const deleteFileFromCache = async (id: string) => {
-    const database = await initDatabase();
-    if (!id) return;
-    const result = await database.runAsync(`DELETE FROM media_items WHERE id = ?`, [id]);
-    console.log(`[Cache] Deleted file ${id}. Changes:`, result.changes);
-};
-
-export const deleteFolderFromCache = async (folderPath: string) => {
-    const database = await initDatabase();
-    if (!folderPath) return;
-    // Delete the folder itself from logic (though usually folderFiles is what we care about)
-    // and all files inside it
-    await database.runAsync(`DELETE FROM media_items WHERE parentPath = ? OR parentPath LIKE ?`, [folderPath, `${folderPath}/%`]);
+export const deleteFolderFromCache = async (foldername: string) => {
+    try {
+        if (!Paths || !Directory) return;
+        const cacheDir = Paths.cache;
+        const dir = new Directory(cacheDir + '/' + foldername);
+        if (dir.exists) {
+            dir.delete();
+        }
+    } catch (e) {
+        console.error("Error deleting folder from cache", e);
+    }
 };
 
 export const clearStaticCache = async () => {
-    const database = await initDatabase();
-    await database.runAsync(`DELETE FROM media_items`);
+    db.runSync('DELETE FROM media_items');
+};
+
+// Recursive function to calculate size
+const calculateFolderSize = async (uriOrObject: any, depth = 0): Promise<number> => {
+    if (depth > 5) return 0; // Prevent infinite recursion
+    let size = 0;
+    try {
+        if (!Directory || !File) return 0;
+
+        let target;
+        if (typeof uriOrObject === 'string') {
+            // @ts-ignore
+            const dir = new Directory(uriOrObject);
+            // @ts-ignore
+            target = dir.exists ? dir : new File(uriOrObject);
+        } else {
+            target = uriOrObject;
+        }
+
+        // @ts-ignore
+        if (target instanceof Directory) {
+            // @ts-ignore
+            if (!target.exists) return 0;
+            // @ts-ignore
+            const items = target.list();
+            for (const item of items) {
+                size += await calculateFolderSize(item, depth + 1);
+            }
+            // @ts-ignore
+        } else if (target instanceof File) {
+            // @ts-ignore
+            if (target.exists) {
+                // @ts-ignore
+                size += (target.size ?? 0);
+            }
+        }
+    } catch (e) {
+        // console.log("Error sizing", e);
+    }
+    return size;
+};
+
+export const getCacheSize = async (): Promise<number> => {
+    let totalSize = 0;
+
+    try {
+        if (!Paths || !File) return 0;
+
+        // 1. SQLite DB Size
+        if (Paths.document) {
+            // @ts-ignore
+            const dbPath = Paths.document.uri + '/SQLite/lumina.db';
+            // @ts-ignore
+            const dbFile = new File(dbPath);
+            // @ts-ignore
+            if (dbFile.exists) {
+                // @ts-ignore
+                totalSize += (dbFile.size ?? 0);
+            }
+        }
+
+        // 2. Image Cache Size
+        if (Paths.cache) {
+            totalSize += await calculateFolderSize(Paths.cache);
+        }
+    } catch (e) {
+        console.error("Error getting cache size", e);
+    }
+    return totalSize;
 };
