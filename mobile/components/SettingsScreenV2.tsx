@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { View, Text, TextInput, TouchableOpacity, ScrollView, Alert, ActivityIndicator, Switch, Modal } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, ScrollView, Alert, ActivityIndicator, Switch, Modal, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { API_URL, setBaseUrl, clearStaticCache, getToken } from '../utils/api';
@@ -279,9 +279,14 @@ export const SettingsScreenV2: React.FC<SettingsScreenV2Props> = ({ onBack, onLo
     const handleSaveUser = async () => {
         if (!userForm.username || (!userForm.isEditing && !userForm.password)) return;
         try {
-            const payload = {
+            const payload = userForm.isEditing ? {
+                newUsername: userForm.username,
+                newPassword: userForm.password || undefined,
+                isAdmin: userForm.isAdmin,
+                allowedPaths: userForm.allowedPaths
+            } : {
                 username: userForm.username,
-                password: userForm.password || undefined,
+                password: userForm.password,
                 isAdmin: userForm.isAdmin,
                 allowedPaths: userForm.allowedPaths
             };
@@ -289,7 +294,7 @@ export const SettingsScreenV2: React.FC<SettingsScreenV2Props> = ({ onBack, onLo
             const endpoint = userForm.isEditing
                 ? `/api/users/${userForm.originalUsername}`
                 : '/api/users';
-            const method = userForm.isEditing ? 'PUT' : 'POST';
+            const method = 'POST';
 
             await adminFetch(endpoint, { method, body: JSON.stringify(payload) });
 
@@ -1060,7 +1065,10 @@ export const SettingsScreenV2: React.FC<SettingsScreenV2Props> = ({ onBack, onLo
 
             {/* User Editor Modal */}
             <Modal visible={showUserModal} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setShowUserModal(false)}>
-                <View className="flex-1 bg-white dark:bg-black p-6">
+                <View
+                    className="flex-1 bg-white dark:bg-black p-6"
+                    style={{ paddingTop: insets.top + (Platform.OS === 'android' ? 10 : 0) }}
+                >
                     <View className="flex-row items-center justify-between mb-8">
                         <Text className="text-2xl font-black text-gray-900 dark:text-white">
                             {userForm.isEditing ? t('admin.edit_user') : t('admin.add_user')}

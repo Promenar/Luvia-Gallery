@@ -329,7 +329,9 @@ const MainScreen = () => {
   }, [activeTab, currentPath]);
 
   const onRefresh = useCallback(() => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    setTimeout(() => {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    }, 10);
     onRefreshSilent();
   }, [onRefreshSilent]);
 
@@ -387,7 +389,9 @@ const MainScreen = () => {
   }, [activeTab, currentPath, isLoggedIn, onRefreshSilent]);
 
   const handleFolderPress = (folder: Folder) => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    setTimeout(() => {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    }, 10);
 
     if (activeTab === 'folders') {
       // Drilling down: Append current path to history
@@ -402,7 +406,9 @@ const MainScreen = () => {
   };
 
   const handleBack = () => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    setTimeout(() => {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    }, 10);
     if (history.length > 0) {
       const prev = history[history.length - 1];
       const newHistory = history.slice(0, -1);
@@ -414,13 +420,17 @@ const MainScreen = () => {
   };
 
   const handleMediaPress = (item: MediaItem, list: MediaItem[]) => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    setTimeout(() => {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    }, 10);
     const index = list.findIndex(i => i.id === item.id);
     setViewerContext({ items: list, index: index !== -1 ? index : 0 });
   };
 
   const handleManagePress = (item: MediaItem | { type: 'folder', name: string, path: string }) => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+    setTimeout(() => {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+    }, 10);
     setManagedItem(item);
     setIsMenuVisible(true);
   };
@@ -452,7 +462,9 @@ const MainScreen = () => {
               }
 
               setIsMenuVisible(false);
-              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+              setTimeout(() => {
+                Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+              }, 10);
               showToast(t('common.success'), 'success');
               onRefresh(); // Refresh UI
             } catch (e: any) {
@@ -471,14 +483,18 @@ const MainScreen = () => {
     const isFavorite = isFolder ? false : item.isFavorite;
 
     await toggleFavorite(item.id || item.path, !isFavorite, isFolder ? 'folder' : 'file');
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    setTimeout(() => {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    }, 10);
     onRefresh(); // Simple sync
   };
 
   const LayoutToggle = () => (
     <TouchableOpacity
       onPress={() => {
-        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+        setTimeout(() => {
+          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+        }, 10);
         setGalleryLayout(galleryLayout === 'grid' ? 'masonry' : 'grid');
       }}
       className="p-2 bg-gray-100 dark:bg-zinc-800 rounded-full"
