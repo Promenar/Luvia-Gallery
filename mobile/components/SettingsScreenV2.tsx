@@ -1083,9 +1083,8 @@ export const SettingsScreenV2: React.FC<SettingsScreenV2Props> = ({ onBack, onLo
                             <View>
                                 <Text className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-2 ml-1">{t('admin.username')}</Text>
                                 <TextInput
-                                    className={`bg-gray-50 dark:bg-zinc-900 p-4 rounded-2xl border border-gray-100 dark:border-zinc-800 text-gray-900 dark:text-white ${userForm.isEditing ? 'opacity-50' : ''}`}
+                                    className={`bg-gray-50 dark:bg-zinc-900 p-4 rounded-2xl border border-gray-100 dark:border-zinc-800 text-gray-900 dark:text-white`}
                                     value={userForm.username}
-                                    editable={!userForm.isEditing}
                                     onChangeText={(tVal) => setUserForm({ ...userForm, username: tVal })}
                                     placeholder={t('admin.username')}
                                     placeholderTextColor="#9ca3af"
@@ -1106,18 +1105,9 @@ export const SettingsScreenV2: React.FC<SettingsScreenV2Props> = ({ onBack, onLo
                             <View>
                                 <View className="flex-row items-center justify-between mb-2 ml-1">
                                     <Text className="text-xs font-bold text-gray-400 uppercase tracking-widest">{t('admin.allowed_paths')}</Text>
-                                    <TouchableOpacity
-                                        onPress={() => {
-                                            setIsPickerOpen({ visible: true, mode: 'folder' });
-                                        }}
-                                        className="flex-row items-center gap-1"
-                                    >
-                                        <Plus size={14} color="#4f46e5" />
-                                        <Text className="text-xs font-bold text-indigo-600">{t('admin.add_path') || 'Add Path'}</Text>
-                                    </TouchableOpacity>
                                 </View>
 
-                                {userForm.allowedPaths.length > 0 ? (
+                                {userForm.allowedPaths.length > 0 && (
                                     <View className="gap-2">
                                         {userForm.allowedPaths.map((path, idx) => (
                                             <View key={`${idx}-${path}`} className="flex-row items-center justify-between bg-gray-50 dark:bg-zinc-900 p-3 rounded-xl border border-gray-100 dark:border-zinc-800">
@@ -1136,11 +1126,17 @@ export const SettingsScreenV2: React.FC<SettingsScreenV2Props> = ({ onBack, onLo
                                             </View>
                                         ))}
                                     </View>
-                                ) : (
-                                    <View className="bg-gray-50 dark:bg-zinc-900 p-8 rounded-2xl border border-dashed border-gray-200 dark:border-zinc-800 items-center">
-                                        <Text className="text-gray-400 text-xs italic">No paths selected</Text>
-                                    </View>
                                 )}
+
+                                <TouchableOpacity
+                                    onPress={() => {
+                                        setIsPickerOpen({ visible: true, mode: 'folder' });
+                                    }}
+                                    className="mt-3 flex-row items-center justify-center p-4 bg-indigo-50 dark:bg-indigo-900/20 rounded-2xl border border-indigo-100 dark:border-indigo-800/50"
+                                >
+                                    <Plus size={20} color="#4f46e5" />
+                                    <Text className="ml-2 font-bold text-indigo-600">{t('admin.add_path') || 'Add Path'}</Text>
+                                </TouchableOpacity>
                             </View>
 
                             <OptionRow
