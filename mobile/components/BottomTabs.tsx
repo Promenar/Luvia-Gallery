@@ -56,7 +56,10 @@ export const BottomTabs = ({ activeTab, onTabChange }: BottomTabsProps) => {
                     <TouchableOpacity
                         key={tab}
                         onPress={() => {
-                            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                            // Deadlock prevention: delay native call during heavy UI transitions
+                            setTimeout(() => {
+                                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                            }, 10);
                             onTabChange(tab);
                         }}
                         className="items-center justify-center w-16"
