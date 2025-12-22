@@ -278,3 +278,43 @@ export const fetchExif = async (id: string) => {
         return null;
     }
 };
+
+export const adminFetch = async (endpoint: string, options: any = {}) => {
+    const token = getToken();
+    const headers = {
+        'Content-Type': 'application/json',
+        ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+    };
+
+    const res = await fetch(`${API_URL}${endpoint}`, {
+        ...options,
+        headers: { ...headers, ...options.headers }
+    });
+
+    if (!res.ok) {
+        let errorMsg = 'Admin API Error';
+        try {
+            const data = await res.json();
+            errorMsg = data.message || errorMsg;
+        } catch (e) { }
+        throw new Error(errorMsg);
+    }
+
+    const contentType = res.headers.get('content-type');
+    if (contentType && contentType.includes('application/json')) {
+        return await res.json();
+    }
+    return await res.text();
+};
+
+export const fetchUsers = async () => {
+    return await adminFetch('/api/users');
+};
+
+export const fetchStats = async () => {
+    return await adminFetch('/api/stats');
+};
+
+export const fetchSystemMaintenance = async () => {
+    return await adminFetch('/api/maintenance');
+};
