@@ -981,6 +981,12 @@ export const SettingsScreenV2: React.FC<SettingsScreenV2Props> = ({ onBack, onLo
                                         )}
                                     </View>
                                 </View>
+
+                                <View className="mt-8 mb-4 items-center opacity-50">
+                                    <Text className="text-[10px] text-gray-400 dark:text-zinc-500 font-mono">
+                                        Lumina Gallery Mobile v1.0.0 (Phoenix V2)
+                                    </Text>
+                                </View>
                             </>
                         ) : (
                             <View className="items-center justify-center py-20 bg-gray-50 dark:bg-zinc-900 rounded-3xl border border-gray-100 dark:border-zinc-800">
@@ -1115,12 +1121,6 @@ export const SettingsScreenV2: React.FC<SettingsScreenV2Props> = ({ onBack, onLo
                     </ScrollView>
                 </View>
             </Modal>
-
-            <View className="p-6 items-center">
-                <Text className="text-[10px] text-gray-300 dark:text-zinc-800 font-mono">
-                    Lumina Gallery Mobile v1.0.0 (Phoenix V2)
-                </Text>
-            </View>
             <ConfirmDialog />
         </View>
     );
