@@ -184,6 +184,7 @@ export default function App() {
     // --- Batch Operations State ---
     const [isRegenerating, setIsRegenerating] = useState(false);
     const [thumbQueue, setThumbQueue] = useState<Array<{ id: string, name: string, total: number }>>([]);
+    const concurrencyWarningShown = useRef(false);
 
     // --- Theme Logic ---
     useEffect(() => {
@@ -1488,7 +1489,14 @@ export default function App() {
     };
 
     const handleUpdateThreadCount = (newCount: number) => {
-        persistData(undefined, undefined, undefined, undefined, undefined, undefined, newCount, true);
+        if (newCount > 16 && newCount > threadCount && !concurrencyWarningShown.current) {
+            if (window.confirm(t('concurrency_warning').replace('{count}', newCount.toString()))) {
+                concurrencyWarningShown.current = true;
+                persistData(undefined, undefined, undefined, undefined, undefined, undefined, newCount, true);
+            }
+        } else {
+            persistData(undefined, undefined, undefined, undefined, undefined, undefined, newCount, true);
+        }
     };
 
     const handleAddLibraryPath = (e?: React.FormEvent) => {
