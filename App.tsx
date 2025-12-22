@@ -1487,6 +1487,10 @@ export default function App() {
         persistData(undefined, undefined, undefined, undefined, undefined, newConfig, undefined, true);
     };
 
+    const handleUpdateThreadCount = (newCount: number) => {
+        persistData(undefined, undefined, undefined, undefined, undefined, undefined, newCount, true);
+    };
+
     const handleAddLibraryPath = (e?: React.FormEvent) => {
         if (e) e.preventDefault();
         if (!newPathInput.trim()) return;
@@ -2099,6 +2103,7 @@ export default function App() {
                 onAddLibraryPath={handleAddLibraryPath}
                 onRemoveLibraryPath={handleRemoveLibraryPath}
                 onMonitorUpdate={handleMonitorUpdate}
+                onUpdateThreadCount={handleUpdateThreadCount}
                 onStartScan={startServerScan}
                 onStartThumbGen={startThumbnailGen}
                 onFetchSmartResults={handleFetchSmartResults}
