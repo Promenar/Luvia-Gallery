@@ -19,6 +19,8 @@ interface ConfigContextType {
     resetConfig: () => Promise<void>;
     galleryLayout: 'grid' | 'masonry';
     setGalleryLayout: (layout: 'grid' | 'masonry') => Promise<void>;
+    showRecent: boolean;
+    setShowRecent: (show: boolean) => Promise<void>;
     isConfigLoaded: boolean;
 }
 
@@ -41,6 +43,7 @@ export const ConfigProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const [carouselConfig, setConfigState] = useState<CarouselConfig>(DEFAULT_CONFIG);
     const [biometricsEnabled, setBiometricsEnabledState] = useState(false);
     const [galleryLayout, setGalleryLayoutState] = useState<'grid' | 'masonry'>('grid');
+    const [showRecent, setShowRecentState] = useState(false);
     const [isConfigLoaded, setIsConfigLoaded] = useState(false);
 
     useEffect(() => {
@@ -63,6 +66,11 @@ export const ConfigProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             if (savedLayout) {
                 setGalleryLayoutState(JSON.parse(savedLayout) as 'grid' | 'masonry');
             }
+
+            const savedShowRecent = await AsyncStorage.getItem('show_recent');
+            if (savedShowRecent) {
+                setShowRecentState(JSON.parse(savedShowRecent));
+            }
         } catch (e) {
             console.error("Failed to load config", e);
         } finally {
@@ -84,11 +92,17 @@ export const ConfigProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         await setCarouselConfig(DEFAULT_CONFIG);
         await setBiometricsEnabled(false);
         await setGalleryLayout('grid');
+        await setShowRecent(false); // Reset to default hidden
     };
 
     const setGalleryLayout = async (layout: 'grid' | 'masonry') => {
         setGalleryLayoutState(layout);
         await AsyncStorage.setItem('gallery_layout', JSON.stringify(layout));
+    };
+
+    const setShowRecent = async (show: boolean) => {
+        setShowRecentState(show);
+        await AsyncStorage.setItem('show_recent', JSON.stringify(show));
     };
 
     return (
@@ -100,6 +114,8 @@ export const ConfigProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             resetConfig,
             galleryLayout,
             setGalleryLayout,
+            showRecent,
+            setShowRecent,
             isConfigLoaded
         }}>
             {children}

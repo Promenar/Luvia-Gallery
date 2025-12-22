@@ -1,9 +1,9 @@
 import "./global.css";
 import React, { useState, useEffect, useCallback } from 'react';
 import { StatusBar } from 'expo-status-bar';
-import { View, FlatList, ActivityIndicator, BackHandler, Text, TouchableOpacity, ScrollView, Platform, LayoutAnimation, UIManager, RefreshControl, Alert, useWindowDimensions, DimensionValue } from 'react-native';
+import { View, FlatList, ActivityIndicator, BackHandler, Text, TouchableOpacity, ScrollView, Platform, LayoutAnimation, UIManager, RefreshControl, Alert, useWindowDimensions, DimensionValue, AppState, AppStateStatus } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
-import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
+import Animated, { FadeIn, FadeOut, FadeInLeft, FadeInRight, FadeOutLeft, FadeOutRight, LinearTransition } from 'react-native-reanimated';
 import { PaperProvider } from 'react-native-paper';
 import { MediaCard } from './components/MediaCard';
 import { FolderCard } from './components/FolderCard';
@@ -24,7 +24,7 @@ import * as Haptics from 'expo-haptics';
 import { useLanguage, initLanguage } from './utils/i18n';
 import { AudioProvider, useAudio } from './utils/AudioContext';
 import { MiniPlayer } from './components/MiniPlayer';
-import { deleteFileFromCache, deleteFolderFromCache, getCachedFiles } from './utils/Database';
+import { deleteFileFromCache, deleteFolderFromCache, getCachedFiles, initDatabase } from './utils/Database';
 import { useConfig } from './utils/ConfigContext';
 import { LayoutGrid, LayoutList } from 'lucide-react-native';
 import { MasonryGallery } from './components/MasonryGallery';
@@ -66,7 +66,7 @@ const MainScreen = () => {
   const { mode, isDark, paperTheme } = useAppTheme();
   const { t } = useLanguage();
   const { isMinimized, maximizePlayer, currentTrack, playlist, currentIndex } = useAudio();
-  const { galleryLayout, setGalleryLayout } = useConfig();
+  const { galleryLayout, setGalleryLayout, showRecent } = useConfig();
   const { showToast } = useToast();
 
   // Auth State
@@ -92,12 +92,31 @@ const MainScreen = () => {
   const [favoriteOffset, setFavoriteOffset] = useState(0);
   const [hasMoreFavorites, setHasMoreFavorites] = useState(true);
 
-  // Navigation State (Folders Tab)
   const [currentPath, setCurrentPath] = useState<string | null>(null);
   const [folderFiles, setFolderFiles] = useState<MediaItem[]>([]);
   const [folderOffset, setFolderOffset] = useState(0);
   const [hasMoreFolderFiles, setHasMoreFolderFiles] = useState(true);
   const [history, setHistory] = useState<string[]>([]);
+  const [prevTab, setPrevTab] = useState<Tab>('home');
+  const [prevHistoryLen, setPrevHistoryLen] = useState(0);
+  const [navDirection, setNavDirection] = useState<'forward' | 'backward'>('forward');
+
+  useEffect(() => {
+    const tabOrder: Tab[] = ['home', 'library', 'folders', 'favorites', 'settings'];
+    const currentIndex = tabOrder.indexOf(activeTab);
+    const prevIndex = tabOrder.indexOf(prevTab);
+    if (activeTab !== prevTab) {
+      setNavDirection(currentIndex > prevIndex ? 'forward' : 'backward');
+      setPrevTab(activeTab);
+    }
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (history.length !== prevHistoryLen) {
+      setNavDirection(history.length > prevHistoryLen ? 'forward' : 'backward');
+      setPrevHistoryLen(history.length);
+    }
+  }, [history.length]);
 
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -127,50 +146,6 @@ const MainScreen = () => {
       recentWidth: windowWidth > 600 ? 140 : 110
     };
   }, [windowWidth]);
-
-  // Initial Load
-  useEffect(() => {
-    const init = async () => {
-      await initLanguage();
-      const { token, username } = await initApi();
-      if (token) {
-        setIsLoggedIn(true);
-        setUsername(username || 'User');
-
-        // Load role
-        const { default: AsyncStorage } = await import('@react-native-async-storage/async-storage');
-        const role = await AsyncStorage.getItem('lumina_is_admin');
-        setIsAdmin(role === 'true');
-
-        loadHomeData();
-      }
-      setCheckingAuth(false);
-    };
-    init();
-
-    // Register Auto-Logout Callback
-    onLogout(() => {
-      showToast(t('msg.session_expired'), 'info');
-      handleLogout();
-    });
-  }, []);
-
-  // Load Data when tab changes
-  // Unified Data Loading Effect
-  useEffect(() => {
-    if (!isLoggedIn) return;
-
-    if (activeTab === 'home') {
-      if (recentMedia.length === 0) loadHomeData();
-    } else if (activeTab === 'library') {
-      if (libraryFiles.length === 0) loadLibraryData(0);
-    } else if (activeTab === 'folders') {
-      // For folders, we load on every path change or tab focus to ensure fresh view
-      loadFolderData(currentPath, 0);
-    } else if (activeTab === 'favorites') {
-      if (favoriteFiles.length === 0) loadFavoritesData(0);
-    }
-  }, [activeTab, currentPath, isLoggedIn]);
 
   const handleApiError = (e: any) => {
     console.error(e);
@@ -345,14 +320,71 @@ const MainScreen = () => {
     } catch (e) { handleApiError(e); } finally { setLoading(false); setLoadingMore(false); setRefreshing(false); }
   };
 
-  const onRefresh = useCallback(() => {
+  const onRefreshSilent = useCallback(() => {
     setRefreshing(true);
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     if (activeTab === 'home') loadHomeData(true);
     if (activeTab === 'library') loadLibraryData(0, false, true);
     if (activeTab === 'favorites') loadFavoritesData(0, false, true);
     if (activeTab === 'folders') loadFolderData(currentPath, 0, false, true);
   }, [activeTab, currentPath]);
+
+  const onRefresh = useCallback(() => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    onRefreshSilent();
+  }, [onRefreshSilent]);
+
+  // Initial Load
+  useEffect(() => {
+    const init = async () => {
+      try {
+        initDatabase();
+        await initLanguage();
+        const { token, username } = await initApi();
+        if (token) {
+          setIsLoggedIn(true);
+          setUsername(username || 'User');
+
+          // Load role
+          const { default: AsyncStorage } = await import('@react-native-async-storage/async-storage');
+          const role = await AsyncStorage.getItem('lumina_is_admin');
+          setIsAdmin(role === 'true');
+
+          loadHomeData();
+        }
+      } catch (e) {
+        console.error("Init failed", e);
+      } finally {
+        setCheckingAuth(false);
+      }
+    };
+    init();
+
+    // AppState Listener for Foreground Refresh
+    const appStateSubscription = AppState.addEventListener('change', (nextAppState: AppStateStatus) => {
+      if (nextAppState === 'active') {
+        console.log('[App] Became active, triggering silent refresh...');
+        onRefreshSilent();
+      }
+    });
+
+    // Register Auto-Logout Callback
+    onLogout(() => {
+      showToast(t('msg.session_expired'), 'info');
+      handleLogout();
+    });
+
+    return () => {
+      appStateSubscription.remove();
+    };
+  }, [onRefreshSilent]);
+
+  // Unified Data Loading Effect
+  useEffect(() => {
+    if (!isLoggedIn) return;
+
+    if (activeTab === 'settings') return;
+    onRefreshSilent();
+  }, [activeTab, currentPath, isLoggedIn, onRefreshSilent]);
 
   const handleFolderPress = (folder: Folder) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
@@ -497,16 +529,20 @@ const MainScreen = () => {
         setIsLoggedIn(true);
         setUsername(data.user?.username || 'User');
         setIsAdmin(data.user?.isAdmin || false);
-        loadHomeData();
+        loadHomeData(true);
       }} />
     );
   }
 
   const renderContent = (isParentActive: boolean) => {
+    const enteringAnimation = navDirection === 'forward' ? FadeInRight.duration(300) : FadeInLeft.duration(300);
+    const exitingAnimation = navDirection === 'forward' ? FadeOutLeft.duration(300) : FadeOutRight.duration(300);
+
     return (
       <Animated.View
         key={activeTab}
-        entering={FadeIn.duration(150)}
+        entering={enteringAnimation}
+        exiting={exitingAnimation}
         className="flex-1"
       >
         {activeTab === 'home' && (
@@ -520,41 +556,47 @@ const MainScreen = () => {
               <View className="mb-6 pt-4">
                 {/* Hero Carousel - Full Width Implementation */}
                 <View>
-                  <CarouselView isActive={activeTab === 'home' && isParentActive} />
+                  <CarouselView
+                    isActive={activeTab === 'home' && isParentActive}
+                    fullScreen={!showRecent}
+                    onPress={handleMediaPress}
+                  />
                 </View>
               </View>
 
-              <View className="pl-4 mb-4">
-                <Text className="text-xl font-bold text-gray-900 dark:text-white mb-3 tracking-tight">{t('section.just_added')}</Text>
+              {showRecent && (
+                <View className="pl-4 mb-4">
+                  <Text className="text-xl font-bold text-gray-900 dark:text-white mb-3 tracking-tight">{t('section.just_added')}</Text>
 
-                {/* Horizontal List for Recent Media */}
-                <FlatList
-                  data={recentMedia.length > 0 ? recentMedia : [1, 2, 3, 4] as any}
-                  horizontal
-                  showsHorizontalScrollIndicator={false}
-                  keyExtractor={(item) => typeof item === 'number' ? `skeleton-${item}` : item.id}
-                  contentContainerStyle={{ paddingRight: 16, gap: 12 }}
-                  renderItem={({ item }) => {
-                    if (typeof item === 'number') {
+                  {/* Horizontal List for Recent Media */}
+                  <FlatList
+                    data={recentMedia.length > 0 ? recentMedia : [1, 2, 3, 4] as any}
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    keyExtractor={(item) => typeof item === 'number' ? `skeleton-${item}` : item.id}
+                    contentContainerStyle={{ paddingRight: 16, gap: 12 }}
+                    renderItem={({ item }) => {
+                      if (typeof item === 'number') {
+                        return (
+                          <View
+                            style={{ width: recentWidth, height: recentWidth }}
+                            className="bg-gray-200 dark:bg-zinc-800 rounded-2xl animate-pulse"
+                          />
+                        );
+                      }
                       return (
-                        <View
-                          style={{ width: recentWidth, height: recentWidth }}
-                          className="bg-gray-200 dark:bg-zinc-800 rounded-2xl animate-pulse"
-                        />
+                        <View style={{ width: recentWidth, height: recentWidth }}>
+                          <MediaCard
+                            item={item}
+                            onPress={() => handleMediaPress(item, recentMedia)}
+                            onLongPress={handleManagePress}
+                          />
+                        </View>
                       );
-                    }
-                    return (
-                      <View style={{ width: recentWidth, height: recentWidth }}>
-                        <MediaCard
-                          item={item}
-                          onPress={() => handleMediaPress(item, recentMedia)}
-                          onLongPress={handleManagePress}
-                        />
-                      </View>
-                    );
-                  }}
-                />
-              </View>
+                    }}
+                  />
+                </View>
+              )}
             </ScrollView>
           </View>
         )}
@@ -740,7 +782,9 @@ const MainScreen = () => {
             />
 
             <Animated.View
-              entering={FadeIn.duration(150)}
+              key={currentPath || 'root'}
+              entering={enteringAnimation}
+              exiting={exitingAnimation}
               style={{ flex: 1 }}
             >
               {galleryLayout === 'grid' ? (

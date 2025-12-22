@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef, useCallback, memo, useMemo } from 'react';
-import { View, useWindowDimensions, FlatList, ViewToken, Text, NativeScrollEvent, NativeSyntheticEvent } from 'react-native';
+import { View, useWindowDimensions, FlatList, ViewToken, Text, NativeScrollEvent, NativeSyntheticEvent, Pressable } from 'react-native';
 import { Image } from 'expo-image';
 import { useConfig } from '../utils/ConfigContext';
 import { fetchFiles, getFileUrl, getThumbnailUrl, getToken } from '../utils/api';
@@ -7,14 +7,49 @@ import { getCachedFiles, saveMediaItems } from '../utils/Database';
 import { MediaItem } from '../types';
 import { useVideoPlayer, VideoView, VideoPlayer } from 'expo-video';
 import { LinearGradient } from 'expo-linear-gradient';
-import Animated, { useSharedValue, useAnimatedStyle, withTiming, useDerivedValue } from 'react-native-reanimated';
+import { Zap, Image as ImageIcon } from 'lucide-react-native';
+import Animated, { useSharedValue, useAnimatedStyle, withTiming, useDerivedValue, withRepeat, withSequence, withDelay, interpolate, Extrapolate, Easing } from 'react-native-reanimated';
 
 const TRANSITION_DURATION = 800; // 渐变时长
 const ROTATION_INTERVAL = 7000;  // 轮播间隔（延长至7秒）
 
+const AnimatedImage = Animated.createAnimatedComponent(Image);
+
 interface CarouselViewProps {
     isActive: boolean;
 }
+
+// 骨架屏组件 (Simple Pulse Skeleton)
+const SkeletonItem = memo(({ width, height }: { width: number, height: number }) => {
+    // 使用简单的透明度脉冲动画
+    const opacity = useSharedValue(0.5);
+
+    useEffect(() => {
+        opacity.value = withRepeat(
+            withSequence(
+                withTiming(1, { duration: 1000 }),
+                withTiming(0.5, { duration: 1000 })
+            ),
+            -1,
+            true
+        );
+    }, []);
+
+    const animatedStyle = useAnimatedStyle(() => ({
+        opacity: opacity.value
+    }));
+
+    return (
+        <Animated.View
+            style={[{ width, height, overflow: 'hidden' }, animatedStyle]}
+            className="bg-gray-200 dark:bg-zinc-800 rounded-[32px] justify-center items-center relative"
+        >
+            <View className="opacity-20">
+                <ImageIcon size={48} color="#94a3b8" />
+            </View>
+        </Animated.View>
+    );
+});
 
 // 独立的轮播项组件，负责自身的动画逻辑
 const CarouselItem = memo(({
@@ -28,6 +63,7 @@ const CarouselItem = memo(({
     itemHeight,
     numVisibleItems,
     isVisible,
+    onPress,
 }: {
     item: MediaItem,
     index: number,
@@ -39,6 +75,7 @@ const CarouselItem = memo(({
     itemHeight: number,
     numVisibleItems: number,
     isVisible: boolean,
+    onPress: () => void,
 }) => {
     const isFocused = index === activeIndex;
     const isExiting = index === fadeOutIndex;
@@ -60,6 +97,21 @@ const CarouselItem = memo(({
     // 动画透明度：多列模式下始终可见，单列模式下保留渐变效果
     const targetOpacity = (numVisibleItems > 1) ? 1 : (isFocused && !isExiting ? 1 : 0);
 
+    // Ken Burns Effect (Slow Zoom)
+    const scale = useSharedValue(1);
+    useEffect(() => {
+        if (isFocused && isVisible && item.mediaType !== 'video') {
+            scale.value = 1;
+            scale.value = withTiming(1.15, { duration: 10000, easing: Easing.out(Easing.quad) });
+        } else {
+            scale.value = withTiming(1, { duration: 500 });
+        }
+    }, [isFocused, isVisible, item.mediaType]);
+
+    const zoomStyle = useAnimatedStyle(() => ({
+        transform: [{ scale: scale.value }]
+    }));
+
     // 动画透明度
     const opacity = useSharedValue(0);
 
@@ -75,52 +127,72 @@ const CarouselItem = memo(({
 
     return (
         <View style={{ width: itemWidth, height: itemHeight, alignItems: 'center', justifyContent: 'center' }}>
-            {/* 底层占位（防止全黑） */}
+            {/* 底层占位（防止全黑）- 提升可见度并增加渐变背景 */}
             <View
-                style={{ width: visualWidth, height: itemHeight, position: 'absolute', opacity: 0.15 }}
-                className="bg-gray-200 dark:bg-zinc-800 rounded-3xl overflow-hidden"
+                style={{ width: visualWidth, height: itemHeight, position: 'absolute' }}
+                className="bg-gray-100 dark:bg-zinc-900 rounded-3xl overflow-hidden"
             >
                 <Image
                     source={{
                         uri: getThumbnailUrl(item.id),
                         headers: { Authorization: `Bearer ${getToken()}` }
                     }}
-                    style={{ width: '100%', height: '100%' }}
+                    style={{ width: '100%', height: '100%', opacity: 0.25 }}
                     contentFit="cover"
-                    blurRadius={10}
+                    blurRadius={20}
+                />
+                <LinearGradient
+                    colors={['rgba(0,0,0,0)', 'rgba(0,0,0,0.3)']}
+                    className="absolute inset-0"
                 />
             </View>
 
             {/* 内容层（带动画） */}
-            <Animated.View
-                style={[{ width: visualWidth, height: itemHeight }, animatedStyle]}
-                className="bg-black rounded-3xl overflow-hidden shadow-xl elevation-5"
-            >
-                {item.mediaType === 'video' && isVisible && isActive ? (
-                    <VideoView
-                        player={player}
-                        style={{ width: '100%', height: '100%' }}
-                        contentFit="cover"
-                        nativeControls={false}
-                    />
-                ) : (
-                    <Image
-                        source={{
-                            uri: getThumbnailUrl(item.id),
-                            headers: { Authorization: `Bearer ${getToken()}` }
-                        }}
-                        style={{ width: '100%', height: '100%' }}
-                        contentFit="cover"
-                        cachePolicy="memory-disk"
-                    />
-                )}
-            </Animated.View>
+            <Pressable onPress={onPress}>
+                <Animated.View
+                    style={[{ width: visualWidth, height: itemHeight }, animatedStyle]}
+                    className="bg-black rounded-3xl overflow-hidden shadow-xl elevation-5"
+                >
+                    {item.mediaType === 'video' && isVisible && isActive ? (
+                        <VideoView
+                            player={player}
+                            style={{ width: '100%', height: '100%' }}
+                            contentFit="cover"
+                            nativeControls={false}
+                        />
+                    ) : (
+                        <AnimatedImage
+                            source={{
+                                uri: getFileUrl(item.id),
+                                headers: { Authorization: `Bearer ${getToken()}` }
+                            }}
+                            placeholder={{
+                                uri: getThumbnailUrl(item.id),
+                                headers: { Authorization: `Bearer ${getToken()}` }
+                            }}
+                            style={[{ width: '100%', height: '100%' }, zoomStyle]}
+                            contentFit="cover"
+                            placeholderContentFit="cover"
+                            cachePolicy="memory-disk"
+                            transition={500}
+                        />
+                    )}
+                </Animated.View>
+            </Pressable>
         </View>
     );
 });
 
-export const CarouselView: React.FC<CarouselViewProps> = ({ isActive }) => {
-    const { width: windowWidth } = useWindowDimensions();
+interface CarouselViewProps {
+    isActive: boolean;
+    fullScreen?: boolean;
+    onPress?: (item: MediaItem, allItems: MediaItem[]) => void;
+}
+
+// ... CarouselItem ...
+
+export const CarouselView: React.FC<CarouselViewProps> = ({ isActive, fullScreen = false, onPress }) => {
+    const { width: windowWidth, height: windowHeight } = useWindowDimensions();
     const { carouselConfig } = useConfig();
     const [items, setItems] = useState<MediaItem[]>([]);
     const [displayItems, setDisplayItems] = useState<MediaItem[]>([]);
@@ -132,20 +204,24 @@ export const CarouselView: React.FC<CarouselViewProps> = ({ isActive }) => {
 
     // 计算动态尺寸
     const { itemWidth, visualWidth, itemHeight, numVisibleItems } = useMemo(() => {
-        const numVisible = windowWidth > 900 ? 3 : (windowWidth > 600 ? 2 : 1);
+        const numVisible = fullScreen ? 1 : (windowWidth > 900 ? 3 : (windowWidth > 600 ? 2 : 1));
         const width = windowWidth / numVisible;
-        const vWidth = width - (numVisible > 1 ? 16 : 32); // 多列时间距小一点
-        // 高度计算：增加多列模式下的高度，确保比例协调。单列维持较高比例。
-        const vHeight = numVisible > 1 ? Math.min(vWidth * 1.3, 500) : vWidth * 1.45;
+        const vWidth = width - (numVisible > 1 ? 16 : 32);
+
+        // Full screen height calculation:
+        // Use 75% of window height to ensure it doesn't overflow and leaves breathing room.
+        const vHeight = fullScreen
+            ? (windowHeight * 0.75)
+            : (numVisible > 1 ? Math.min(vWidth * 1.3, 500) : vWidth * 1.45);
+
         return {
             itemWidth: width,
             visualWidth: vWidth,
             itemHeight: vHeight,
             numVisibleItems: numVisible
         };
-    }, [windowWidth]);
+    }, [windowWidth, windowHeight, fullScreen]);
 
-    // 移除共享 Player，改为 CarouselItem 内部管理
     const timerRef = useRef<NodeJS.Timeout | null>(null);
 
     useEffect(() => {
@@ -161,47 +237,39 @@ export const CarouselView: React.FC<CarouselViewProps> = ({ isActive }) => {
     }, [isActive]);
 
     const loadData = async () => {
-        try {
-            let res: any = { files: [] };
-            const commonOptions = { limit: 30, random: true, excludeMediaType: 'audio' };
+        const commonOptions = { limit: 30, random: true, excludeMediaType: 'audio' };
 
+        try {
+            // 首先尝试从本地加载缓存
+            let cached: MediaItem[] = [];
             if (carouselConfig.sourceType === 'all') {
-                // 1. 先尝试加载本地缓存以快速显示
-                const cached = await getCachedFiles({ limit: 10 });
-                if (cached.length > 0) {
-                    const filteredCached = cached.filter((f: MediaItem) => f.mediaType !== 'audio');
-                    processData(filteredCached);
-                }
-                res = await fetchFiles(commonOptions);
-                // 2. 成功获取线上数据后保存至缓存
-                if (res.files && res.files.length > 0) {
-                    await saveMediaItems(res.files, 'root');
-                }
+                cached = await getCachedFiles({ limit: 15 });
             } else if (carouselConfig.sourceType === 'folder' && carouselConfig.sourceValue) {
-                // 针对特定文件夹，也尝试读取缓存
-                const cached = await getCachedFiles({ folderPath: carouselConfig.sourceValue, limit: 10 });
-                if (cached.length > 0) {
-                    processData(cached);
-                }
-                res = await fetchFiles({ ...commonOptions, folderPath: carouselConfig.sourceValue, recursive: true });
-                if (res.files && res.files.length > 0) {
-                    await saveMediaItems(res.files, carouselConfig.sourceValue);
-                }
+                cached = await getCachedFiles({ folderPath: carouselConfig.sourceValue, limit: 15 });
             } else if (carouselConfig.sourceType === 'favorites') {
-                const cached = await getCachedFiles({ favorite: true, limit: 10 });
-                if (cached.length > 0) {
-                    processData(cached);
-                }
+                cached = await getCachedFiles({ favorite: true, limit: 15 });
+            }
+
+            if (cached.length > 0) {
+                const filteredCached = cached.filter((f: MediaItem) => f.mediaType !== 'audio');
+                processData(filteredCached);
+            }
+
+            // 然后从线上加载
+            let res: any = { files: [] };
+            if (carouselConfig.sourceType === 'all') {
+                res = await fetchFiles(commonOptions);
+                if (res.files?.length > 0) await saveMediaItems(res.files, 'root');
+            } else if (carouselConfig.sourceType === 'folder' && carouselConfig.sourceValue) {
+                res = await fetchFiles({ ...commonOptions, folderPath: carouselConfig.sourceValue, recursive: true });
+                if (res.files?.length > 0) await saveMediaItems(res.files, carouselConfig.sourceValue);
+            } else if (carouselConfig.sourceType === 'favorites') {
                 res = await fetchFiles({ ...commonOptions, favorite: true });
+                // Favorites 状态同步较多，通常这里不直接 INSERT 而是同步所有状态，Database 已有 updateFavoriteStatus
             } else if (carouselConfig.sourceType === 'file' && carouselConfig.sourceValue) {
-                // Logic: Fetch files from the parent folder of the selected file
-                // Path manipulation (assuming standard slashes from picker)
                 const filePath = carouselConfig.sourceValue;
-                // Simple dirname implementation
                 const lastSlash = filePath.lastIndexOf('/');
                 const parentFolder = lastSlash > -1 ? filePath.substring(0, lastSlash) : 'root';
-
-                // Fetch files from that folder (no recursion, just context)
                 res = await fetchFiles({ ...commonOptions, folderPath: parentFolder, limit: 100, random: false });
             } else {
                 res = await fetchFiles(commonOptions);
@@ -209,16 +277,15 @@ export const CarouselView: React.FC<CarouselViewProps> = ({ isActive }) => {
 
             const filteredFiles = (res.files || []).filter((f: MediaItem) => f.mediaType !== 'audio');
 
-            // If a specific file is selected, handle it (context logic previously there)
             if (carouselConfig.sourceType === 'file' && carouselConfig.sourceValue) {
                 const targetID = carouselConfig.sourceValue;
                 const targetFile = filteredFiles.find((f: MediaItem) => f.id === targetID);
                 processData(targetFile ? [targetFile] : []);
-            } else {
+            } else if (filteredFiles.length > 0) {
                 processData(filteredFiles);
             }
         } catch (e) {
-            console.error(e);
+            console.error("[Carousel] Load data failed:", e);
         }
     };
 
@@ -231,7 +298,6 @@ export const CarouselView: React.FC<CarouselViewProps> = ({ isActive }) => {
             const extended = [lastItem, ...data, firstItem];
             setItems(data);
             setDisplayItems(extended);
-            // Only set activeIndex if not currently interacting or already set
             setActiveIndex(prev => (prev === 0 ? 1 : prev));
         } else {
             setItems(data);
@@ -265,11 +331,7 @@ export const CarouselView: React.FC<CarouselViewProps> = ({ isActive }) => {
 
     const scrollToNext = () => {
         if (displayItems.length <= 1) return;
-
-        // 步骤1：开始淡出当前项
         setFadeOutIndex(activeIndex);
-
-        // 步骤2：延迟等待淡出完成后执行滚动
         setTimeout(() => {
             const nextIndex = activeIndex + 1;
             if (nextIndex >= displayItems.length) {
@@ -285,22 +347,16 @@ export const CarouselView: React.FC<CarouselViewProps> = ({ isActive }) => {
 
     const handleMomentumScrollEnd = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
         const offsetX = event.nativeEvent.contentOffset.x;
-        // 使用更稳健的索引计算，避免亚像素误差
         const index = Math.round(offsetX / itemWidth);
-
         if (displayItems.length <= 1) {
             setActiveIndex(index);
             return;
         }
-
-        // 无缝循环逻辑
         if (index <= 0) {
-            // 滚动到开头（克隆的最后一项）-> 立即跳向真实的最后一项
             const realLastIndex = displayItems.length - 2;
             flatListRef.current?.scrollToIndex({ index: realLastIndex, animated: false });
             setActiveIndex(realLastIndex);
         } else if (index >= displayItems.length - 1) {
-            // 滚动到结尾（克隆的第一项）-> 立即跳向真实的第一项
             flatListRef.current?.scrollToIndex({ index: 1, animated: false });
             setActiveIndex(1);
         } else {
@@ -314,8 +370,6 @@ export const CarouselView: React.FC<CarouselViewProps> = ({ isActive }) => {
                 .filter(v => v.index !== null)
                 .map(v => v.index as number);
             setVisibleIndices(indices);
-
-            // 仍然保留第一个作为 activeIndex 用于自动滚动参考
             if (viewableItems[0].index !== null) {
                 setActiveIndex(viewableItems[0].index);
             }
@@ -339,6 +393,7 @@ export const CarouselView: React.FC<CarouselViewProps> = ({ isActive }) => {
                 itemHeight={itemHeight}
                 numVisibleItems={numVisibleItems}
                 isVisible={visibleIndices.includes(index)}
+                onPress={() => onPress && onPress(item, items)}
             />
         );
     };
@@ -346,10 +401,7 @@ export const CarouselView: React.FC<CarouselViewProps> = ({ isActive }) => {
     if (displayItems.length === 0) {
         return (
             <View style={{ height: itemHeight, paddingHorizontal: 16 }}>
-                <View
-                    style={{ width: visualWidth, height: itemHeight }}
-                    className="bg-gray-200 dark:bg-zinc-800 rounded-3xl animate-pulse"
-                />
+                <SkeletonItem width={visualWidth} height={itemHeight} />
             </View>
         );
     }
@@ -358,16 +410,16 @@ export const CarouselView: React.FC<CarouselViewProps> = ({ isActive }) => {
         <View style={{ height: itemHeight }}>
             <FlatList
                 ref={flatListRef}
-                key={`carousel-${numVisibleItems}`} // 布局改变时重建列表
+                key={`carousel-${numVisibleItems}`}
                 data={displayItems}
                 renderItem={renderItem}
                 keyExtractor={(item, index) => `${item.id}-${index}`}
                 horizontal
-                pagingEnabled={false} // 禁用原生分页，统一使用间隔捕捉
+                pagingEnabled={false}
                 snapToInterval={itemWidth}
                 snapToAlignment="start"
                 decelerationRate="fast"
-                disableIntervalMomentum={true} // 增强分页感
+                disableIntervalMomentum={true}
                 showsHorizontalScrollIndicator={false}
                 onViewableItemsChanged={onViewableItemsChanged}
                 onMomentumScrollEnd={handleMomentumScrollEnd}
