@@ -10,9 +10,20 @@ import { useConfig } from '../utils/ConfigContext';
 import * as Haptics from 'expo-haptics';
 import {
     ArrowLeft, Server, Settings, Trash2, Save, Activity, Sun, Moon, Monitor,
-    Languages, Image as ImageIcon, RotateCw, ShieldCheck, ChevronRight,
-    Database, Users, Plus, UserPlus, HardDrive, RefreshCw, Cpu, Pencil, X,
-    AlertTriangle
+    Languages, Image as ImageIcon, RotateCw, RefreshCw,
+    Cpu,
+    ShieldCheck,
+    Users,
+    UserPlus,
+    Pencil,
+    X,
+    AlertTriangle,
+    Minus,
+    Plus,
+    Zap,
+    ChevronRight,
+    HardDrive,
+    Database
 } from 'lucide-react-native';
 import Animated, {
     useSharedValue,
@@ -72,6 +83,7 @@ export const SettingsScreenV2: React.FC<SettingsScreenV2Props> = ({ onBack, onLo
     const [serverUsers, setServerUsers] = useState<any[]>([]);
     const [isScanning, setIsScanning] = useState(false);
     const [isGeneratingThumbs, setIsGeneratingThumbs] = useState(false);
+    const [serverConfig, setServerConfig] = useState<any>(null);
 
     // User Modal State
     const [showUserModal, setShowUserModal] = useState(false);
@@ -155,11 +167,14 @@ export const SettingsScreenV2: React.FC<SettingsScreenV2Props> = ({ onBack, onLo
         if (!isAdmin) return;
         try {
             const data = await adminFetch('/api/config');
-            if (data && data.users) {
-                const usersArr = Array.isArray(data.users)
-                    ? data.users
-                    : Object.keys(data.users).map(k => ({ username: k, ...data.users[k] }));
-                setServerUsers(usersArr);
+            if (data) {
+                setServerConfig(data);
+                if (data.users) {
+                    const usersArr = Array.isArray(data.users)
+                        ? data.users
+                        : Object.keys(data.users).map(k => ({ username: k, ...data.users[k] }));
+                    setServerUsers(usersArr);
+                }
             }
         } catch (e) {
             console.error("Fetch users failed", e);
@@ -241,16 +256,16 @@ export const SettingsScreenV2: React.FC<SettingsScreenV2Props> = ({ onBack, onLo
         setShowUserModal(true);
     };
 
-    const handleDeleteUser = (u: any) => {
-        if (u.username === username) return; // Can't delete self
+    const handleDeleteUser = (user: any) => {
+        if (user.username === username) return;
         setConfirmDialog({
             visible: true,
             title: t('admin.delete_user'),
-            message: t('admin.confirm_delete_user'),
+            message: t('admin.delete_user_confirm', { username: user.username }),
             isDestructive: true,
             onConfirm: async () => {
                 try {
-                    await adminFetch(`/api/users/${u.username}`, { method: 'DELETE' });
+                    await adminFetch(`/api/users/${user.username}`, { method: 'DELETE' });
                     fetchUsers();
                     showToast(t('common.success'), 'success');
                 } catch (e: any) {
@@ -258,6 +273,26 @@ export const SettingsScreenV2: React.FC<SettingsScreenV2Props> = ({ onBack, onLo
                 }
             }
         });
+    };
+
+    const handleUpdateConcurrency = async (delta: number) => {
+        if (!serverConfig) return;
+        const current = serverConfig.threadCount || 2;
+        const newValue = Math.max(1, Math.min(16, current + delta));
+        if (newValue === current) return;
+
+        triggerHaptic(Haptics.ImpactFeedbackStyle.Medium);
+        try {
+            const newConfig = { ...serverConfig, threadCount: newValue };
+            await adminFetch('/api/config', {
+                method: 'POST',
+                body: JSON.stringify(newConfig)
+            });
+            setServerConfig(newConfig);
+            showToast(t('admin.concurrency_updated', { count: newValue }), 'success');
+        } catch (e: any) {
+            showToast(e.message, 'error');
+        }
     };
 
     const formatBytes = (bytes: number) => {
@@ -666,6 +701,30 @@ export const SettingsScreenV2: React.FC<SettingsScreenV2Props> = ({ onBack, onLo
                                             title={t('admin.thumb_gen')}
                                             subtitle={t('admin.thumb_gen_desc')}
                                             onPress={() => handleAction('/api/thumb-gen/start', t('admin.thumb_gen'))}
+                                        />
+                                        <OptionRow
+                                            icon={Zap}
+                                            title={t('admin.thumb_concurrency')}
+                                            subtitle={t('admin.thumb_concurrency_desc')}
+                                            right={
+                                                <View className="flex-row items-center gap-3 bg-gray-100 dark:bg-zinc-800 p-1 rounded-xl">
+                                                    <TouchableOpacity
+                                                        onPress={() => handleUpdateConcurrency(-1)}
+                                                        className="w-8 h-8 items-center justify-center rounded-lg bg-white dark:bg-zinc-700 shadow-sm"
+                                                    >
+                                                        <Minus size={14} color={isDark ? "#fff" : "#000"} />
+                                                    </TouchableOpacity>
+                                                    <Text className="text-sm font-black text-gray-900 dark:text-white w-4 text-center">
+                                                        {serverConfig?.threadCount || 2}
+                                                    </Text>
+                                                    <TouchableOpacity
+                                                        onPress={() => handleUpdateConcurrency(1)}
+                                                        className="w-8 h-8 items-center justify-center rounded-lg bg-white dark:bg-zinc-700 shadow-sm"
+                                                    >
+                                                        <Plus size={14} color={isDark ? "#fff" : "#000"} />
+                                                    </TouchableOpacity>
+                                                </View>
+                                            }
                                         />
                                         <OptionRow
                                             icon={Trash2}
