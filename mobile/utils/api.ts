@@ -197,7 +197,7 @@ export const fetchFiles = async (options: FetchFilesOptions = {}) => {
         if (!random && data.files && data.files.length > 0) {
             // Await to ensure DB is consistent before UI allows interaction (blocking delete race condition)
             try {
-                await saveMediaItems(data.files);
+                await saveMediaItems(data.files, folderPath || 'root');
             } catch (e) {
                 console.error("Cache save error", e);
             }
@@ -229,7 +229,11 @@ export const toggleFavorite = async (id: string, isFavorite: boolean, type: 'fil
     try {
         // Sync to local SQLite cache first (Optimistic) - Only for files currently
         if (type === 'file') {
-            updateFavoriteStatus(id, isFavorite).catch(e => console.error("Local sync favorite error", e));
+            try {
+                updateFavoriteStatus(id, isFavorite);
+            } catch (e) {
+                console.error("Local sync favorite error", e);
+            }
         }
 
         const url = `${API_URL}/api/favorites/toggle`;
@@ -239,7 +243,7 @@ export const toggleFavorite = async (id: string, isFavorite: boolean, type: 'fil
             body: JSON.stringify({ id, type })
         });
         return await res.json();
-    } catch (error) {
+    } catch (error: any) {
         console.error("Error toggling favorite:", error);
         return null;
     }
@@ -277,44 +281,4 @@ export const fetchExif = async (id: string) => {
         console.error('Fetch EXIF error:', error);
         return null;
     }
-};
-
-export const adminFetch = async (endpoint: string, options: any = {}) => {
-    const token = getToken();
-    const headers = {
-        'Content-Type': 'application/json',
-        ...(token ? { 'Authorization': `Bearer ${token}` } : {})
-    };
-
-    const res = await fetch(`${API_URL}${endpoint}`, {
-        ...options,
-        headers: { ...headers, ...options.headers }
-    });
-
-    if (!res.ok) {
-        let errorMsg = 'Admin API Error';
-        try {
-            const data = await res.json();
-            errorMsg = data.message || errorMsg;
-        } catch (e) { }
-        throw new Error(errorMsg);
-    }
-
-    const contentType = res.headers.get('content-type');
-    if (contentType && contentType.includes('application/json')) {
-        return await res.json();
-    }
-    return await res.text();
-};
-
-export const fetchUsers = async () => {
-    return await adminFetch('/api/users');
-};
-
-export const fetchStats = async () => {
-    return await adminFetch('/api/stats');
-};
-
-export const fetchSystemMaintenance = async () => {
-    return await adminFetch('/api/maintenance');
 };

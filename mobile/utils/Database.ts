@@ -28,9 +28,10 @@ export const saveMediaItem = (item: MediaItem) => {
     db.runSync('INSERT OR REPLACE INTO media_items (id, value) VALUES (?, ?)', [item.id, JSON.stringify(item)]);
 };
 
-export const saveMediaItems = (items: MediaItem[]) => {
+export const saveMediaItems = (items: MediaItem[], limit?: number) => {
     db.withTransactionSync(() => {
-        for (const item of items) {
+        const toSave = limit ? items.slice(0, limit) : items;
+        for (const item of toSave) {
             db.runSync('INSERT OR REPLACE INTO media_items (id, value) VALUES (?, ?)', [item.id, JSON.stringify(item)]);
         }
     });
@@ -49,51 +50,42 @@ export const deleteMediaItem = (id: string) => {
     db.runSync('DELETE FROM media_items WHERE id = ?', [id]);
 };
 
+export const updateFavoriteStatus = (id: string, favorite: boolean) => {
+    const item = getMediaItem(id);
+    if (item) {
+        item.favorite = favorite;
+        saveMediaItem(item);
+    }
+};
+
 // @ts-ignore
-export const getCachedFiles = async ({ limit = 10, offset = 0, folderPath, favorite }: { limit?: number; offset?: number; folderPath?: string; favorite?: boolean } = {}): Promise<MediaItem[]> => {
+export const getCachedFiles = async ({ limit = 10, folderPath, favorite }: { limit?: number; folderPath?: string; favorite?: boolean } = {}): Promise<MediaItem[]> => {
     // Return items from SQLite
     try {
-        let query = `SELECT value FROM media_items`;
-        const params: any[] = [];
-        const conditions: string[] = [];
+        let query = 'SELECT value FROM media_items';
+        let params: any[] = [];
+        let where: string[] = [];
 
         if (folderPath) {
-            conditions.push(`JSON_EXTRACT(value, '$.folderPath') = ?`);
-            params.push(folderPath);
+            where.push('JSON_EXTRACT(value, "$.path") LIKE ?');
+            params.push(`${folderPath}%`);
         }
-
         if (favorite !== undefined) {
-            conditions.push(`JSON_EXTRACT(value, '$.isFavorite') = ?`);
+            where.push('JSON_EXTRACT(value, "$.favorite") = ?');
             params.push(favorite ? 1 : 0);
         }
 
-        if (conditions.length > 0) {
-            query += ` WHERE ` + conditions.join(' AND ');
+        if (where.length > 0) {
+            query += ' WHERE ' + where.join(' AND ');
         }
-
-        query += ` LIMIT ? OFFSET ?`;
-        params.push(limit, offset);
+        query += ' ORDER BY JSON_EXTRACT(value, "$.dateModified") DESC LIMIT ?';
+        params.push(limit);
 
         const rows = db.getAllSync(query, params);
         // @ts-ignore
         return rows.map(row => JSON.parse(row.value));
     } catch (e) {
-        console.error("Database query error", e);
         return [];
-    }
-};
-
-export const updateFavoriteStatus = async (id: string, isFavorite: boolean) => {
-    try {
-        // Find existing item
-        const row = db.getFirstSync(`SELECT value FROM media_items WHERE id = ?`, [id]) as any;
-        if (row) {
-            const item = JSON.parse(row.value);
-            item.isFavorite = isFavorite;
-            db.runSync(`UPDATE media_items SET value = ? WHERE id = ?`, [JSON.stringify(item), id]);
-        }
-    } catch (e) {
-        console.error("Database update favorite error", e);
     }
 };
 
