@@ -114,7 +114,10 @@ export const ItemPicker: React.FC<ItemPickerProps> = ({ visible, mode, onSelect,
             presentationStyle="pageSheet"
             onRequestClose={onClose} // Mandatory for Android Modal
         >
-            <View className="flex-1 bg-white dark:bg-black">
+            <View
+                className="flex-1 bg-white dark:bg-black"
+                style={{ paddingTop: insets.top }}
+            >
                 <View className="px-4 py-4 border-b border-gray-100 dark:border-white/10 flex-row items-center justify-between">
                     <TouchableOpacity onPress={onClose} className="p-2 bg-gray-100 dark:bg-zinc-800 rounded-full">
                         <X size={20} color={isDark ? "white" : "black"} />
