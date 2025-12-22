@@ -245,6 +245,8 @@ const translations = {
     audio: 'Audio',
     total_files: 'Total Files',
     favorite_folders: 'Favorite Folders',
+    warning: 'Warning',
+    concurrency_warning: 'Setting concurrency higher than 16 may significantly increase server CPU and memory load, potentially causing instability. Are you sure you want to set it to {count}?',
   },
   zh: {
     // Navigation & General
@@ -486,6 +488,8 @@ const translations = {
     audio: '音频',
     total_files: '总文件数',
     favorite_folders: '收藏的文件夹',
+    warning: '警告',
+    concurrency_warning: '将并发数设置为 16 以上可能会显著增加服务器 CPU 和内存负载，导致运行不稳定。确定要设置为 {count} 吗？',
   }
 };
 
