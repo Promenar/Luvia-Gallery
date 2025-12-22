@@ -3,6 +3,7 @@ import { View, Text, TextInput, TouchableOpacity, ScrollView, Alert, ActivityInd
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { API_URL, setBaseUrl, clearStaticCache, getToken } from '../utils/api';
+import { getCacheSize } from '../utils/Database';
 import { useToast } from '../utils/ToastContext';
 import { useLanguage } from '../utils/i18n';
 import { useAppTheme } from '../utils/ThemeContext';
@@ -66,9 +67,10 @@ export const SettingsScreenV2: React.FC<SettingsScreenV2Props> = ({ onBack, onLo
     const { showToast } = useToast();
     const { t, language, setLanguage } = useLanguage();
     const { mode, setMode, isDark } = useAppTheme();
-    const { carouselConfig, setCarouselConfig, biometricsEnabled, setBiometricsEnabled } = useConfig();
+    const { carouselConfig, setCarouselConfig, biometricsEnabled, setBiometricsEnabled, showRecent, setShowRecent } = useConfig();
 
     const [activeTab, setActiveTab] = useState<'app' | 'server'>('app');
+    const [cacheSize, setCacheSize] = useState<string>('');
 
     // Animation Shared Values
     const tabOffset = useSharedValue(0);
@@ -234,6 +236,15 @@ export const SettingsScreenV2: React.FC<SettingsScreenV2Props> = ({ onBack, onLo
         }
     }, [activeTab, isAdmin]);
 
+    // Load Cache Size
+    useEffect(() => {
+        const updateCacheSize = async () => {
+            const size = await getCacheSize();
+            setCacheSize(formatBytes(size));
+        };
+        updateCacheSize();
+    }, [activeTab]); // Refresh when tab changes
+
     const handleAction = async (endpoint: string, label: string, options: any = { method: 'POST' }) => {
         try {
             await adminFetch(endpoint, options);
@@ -255,6 +266,9 @@ export const SettingsScreenV2: React.FC<SettingsScreenV2Props> = ({ onBack, onLo
                     await AsyncStorage.removeItem('lumina_cache_home');
                     await clearStaticCache();
                     showToast(t('msg.cache_cleared'), 'success');
+                    // Refresh size
+                    const size = await getCacheSize();
+                    setCacheSize(formatBytes(size));
                 } catch (e) {
                     showToast(t('msg.cache_clear_failed'), 'error');
                 }
@@ -664,6 +678,22 @@ export const SettingsScreenV2: React.FC<SettingsScreenV2Props> = ({ onBack, onLo
                         {/* Carousel Config Section */}
                         <View>
                             <SectionHeader title={t('settings.carousel')} />
+                            <OptionRow
+                                icon={Activity}
+                                title={t('settings.show_recent')}
+                                subtitle={t('settings.show_recent_desc')}
+                                right={
+                                    <Switch
+                                        value={showRecent}
+                                        onValueChange={(val) => {
+                                            triggerHaptic(Haptics.ImpactFeedbackStyle.Light);
+                                            setShowRecent(val);
+                                        }}
+                                        trackColor={{ false: '#d1d5db', true: '#818cf8' }}
+                                        thumbColor="#fff"
+                                    />
+                                }
+                            />
                             <View className="bg-gray-50 dark:bg-zinc-900 p-4 rounded-3xl border border-gray-100 dark:border-zinc-800">
                                 <Text className="text-sm font-bold text-gray-900 dark:text-white mb-4 ml-1">
                                     {t('settings.carousel.source')}
@@ -746,7 +776,7 @@ export const SettingsScreenV2: React.FC<SettingsScreenV2Props> = ({ onBack, onLo
                             <SectionHeader title={t('section.cache')} />
                             <OptionRow
                                 icon={Trash2}
-                                title={t('label.clear_cache')}
+                                title={`${t('label.clear_cache')} (${cacheSize})`}
                                 subtitle={t('msg.cache_desc')}
                                 onPress={handleClearCache}
                                 red
