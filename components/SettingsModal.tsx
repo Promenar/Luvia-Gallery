@@ -41,6 +41,7 @@ interface SettingsModalProps {
     onDeleteUser: (user: User) => void;
     onSetDirPickerContext: (ctx: 'library' | 'userAllowedPaths') => void;
     onShowDirPicker: (val: boolean) => void;
+    onUpdateThreadCount: (count: number) => void;
     onPruneCache: () => void;
     onClearCache: () => void;
     onFetchSmartResults: () => void;
@@ -64,7 +65,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
         onRemoveLibraryPath, onMonitorUpdate, onStartScan, onStartThumbGen,
         onSmartScan, onSmartRepair, onExportConfig, onLogout, onAddUser,
         onRenameUser, onResetPassword, onDeleteUser, onSetDirPickerContext,
-        onShowDirPicker, onPruneCache, onClearCache, onFetchSmartResults, smartScanResults, thumbStatus,
+        onShowDirPicker, onUpdateThreadCount, onPruneCache, onClearCache, onFetchSmartResults, smartScanResults, thumbStatus,
         activeTab: externalTab, onTabChange, theme, onToggleTheme
     } = props;
 
@@ -343,6 +344,32 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                             </button>
                                         </div>
                                     </div>
+
+                                    <section className="mt-8 pt-6 border-t border-gray-100 dark:border-gray-700">
+                                        <div className="flex items-center gap-2 mb-4">
+                                            <div className="w-1.5 h-6 bg-orange-500 rounded-full" />
+                                            <h4 className="text-lg font-bold text-gray-900 dark:text-white">{t('performance_settings')}</h4>
+                                        </div>
+                                        <div className="bg-white dark:bg-gray-800 p-6 rounded-2xl border border-gray-100 dark:border-gray-700 shadow-sm">
+                                            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                                                <div className="flex-1">
+                                                    <h5 className="font-bold text-gray-900 dark:text-white mb-1">{t('thumbnail_threads')}</h5>
+                                                    <p className="text-xs text-gray-500">{t('thumbnail_threads_desc')}</p>
+                                                </div>
+                                                <div className="flex items-center gap-4 bg-gray-50 dark:bg-gray-900 p-3 rounded-xl border border-gray-100 dark:border-gray-700">
+                                                    <input
+                                                        type="range"
+                                                        min="1"
+                                                        max="16"
+                                                        value={threadCount}
+                                                        onChange={(e) => onUpdateThreadCount(parseInt(e.target.value))}
+                                                        className="w-32 accent-primary-600"
+                                                    />
+                                                    <span className="font-mono font-bold text-primary-600 w-8 text-center">{threadCount}</span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </section>
                                 </section>
                             </>
                         )}
