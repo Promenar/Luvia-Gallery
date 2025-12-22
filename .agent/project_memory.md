@@ -16,6 +16,8 @@
     - **Scanner State Sync**: When starting background tasks (like `processScan`), the `status` flag must be updated * synchronously* before returning the HTTP response. This prevents race conditions where the frontend's first status poll hits an `idle` state before the async task has technically started.
 - **Config Caching**: `server.js` implements an in-memory TTL cache for `lumina-config.json` to minimize disk I/O. API endpoints and middleware should always use `getConfig()` helper.
 - **Frontend Debounce**: UI configuration inputs (Title, Subtitle) in `App.tsx` MUST use the debounced `persistData` call to prevent excessive server syncs during typing.
+- **Phoenix Protocol (Refactoring)**: For components with inexplicable freezes (like the original `SettingsScreen`), use a "burn and rebuild" approach. Create a V2 version from scratch, prioritize stability (no complex animations), and migrate features incrementally.
+- **API Robustness (MIME Check)**: Network wrappers (like `adminFetch`) MUST check the `Content-Type` header before calling `.json()`. If the server returns HTML (e.g., a 404 or 500 error page), the wrapper must handle it gracefully or log it as a text response to prevent "Unexpected character: <" parsing errors.
 - **Tailwind Build**: Standard Vite/PostCSS pipeline. No CDN links in `index.html`. Primary colors and fonts must be defined in `tailwind.config.js`.
 
 ## Anti-Patterns to Avoid
@@ -30,6 +32,7 @@
     - Never nest elements with `backdrop-filter`; redundant sampling will cause recursive performance drops.
 - **Authenticated Media**: Direct `<img>` or `<Image>` tags will fail if `?token=<jwt>` is not appended to the URL query parameters.
 - **Animation Overload**: Avoid bouncy/spring animations for system-level dialogs; prefer subtle Fade+Scale for a premium, non-distracting feel.
+- **Native Bridge Deadlock (Haptics Trap)**: During massive UI recalculations (e.g., Theme switching via NativeWind 4 or complex Tab switching), AVOID synchronous Native-Bridge calls like `expo-haptics`. These calls can block the JS thread while the Native UI thread is also busy rendering, leading to an unrecoverable system freeze.
 
 ## Development Workflows
 - **Performance**: Heavy UI components (VirtualGallery, ImageViewer) must be loaded using `React.lazy`.
