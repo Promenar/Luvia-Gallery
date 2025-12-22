@@ -360,14 +360,13 @@ export const SettingsScreenV2: React.FC<SettingsScreenV2Props> = ({ onBack, onLo
         };
 
         if (newValue > 16 && newValue > current) {
-            Alert.alert(
-                t('common.warning'),
-                t('admin.concurrency_warning', { count: 16 }),
-                [
-                    { text: t('btn.cancel'), style: 'cancel' },
-                    { text: t('dialog.confirm'), onPress: () => performUpdate(newValue) }
-                ]
-            );
+            setConfirmDialog({
+                visible: true,
+                title: t('common.warning'),
+                message: t('admin.concurrency_warning', { count: 16 }),
+                isDestructive: true,
+                onConfirm: () => performUpdate(newValue)
+            });
         } else {
             performUpdate(newValue);
         }
