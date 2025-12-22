@@ -188,10 +188,11 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBack, onLogout
 
             addBreadcrumb(`loadStats fetch status: ${res.status}`);
             if (res.ok) {
+                addBreadcrumb("loadStats: starting JSON parse");
                 const data = await res.json();
                 addBreadcrumb("loadStats: JSON parsed, updating stats state");
                 setStats(data);
-                addBreadcrumb(`loadStats: success, data size: ${JSON.stringify(data).length}`);
+                addBreadcrumb(`loadStats: success, stats updated`);
                 // Background status check
                 addBreadcrumb("loadStats: starting background checkTasksStatus");
                 await checkTasksStatus();
@@ -221,10 +222,12 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBack, onLogout
             addBreadcrumb(`checkTasksStatus results: ${scanRes.status} / ${thumbRes.status}`);
 
             if (scanRes.ok) {
+                addBreadcrumb("checkTasksStatus: parsing scanData");
                 const scanData = await scanRes.json();
                 setIsServerScanning(scanData.status === 'scanning');
             }
             if (thumbRes.ok) {
+                addBreadcrumb("checkTasksStatus: parsing thumbData");
                 const thumbData = await thumbRes.json();
                 setIsServerThumbGen(thumbData.status === 'scanning');
             }
@@ -268,7 +271,9 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBack, onLogout
             }, 10000);
             addBreadcrumb(`fetchSmartResults status: ${res.status}`);
             if (res.ok) {
+                addBreadcrumb("fetchSmartResults: starting JSON parse");
                 const data = await res.json();
+                addBreadcrumb("fetchSmartResults: JSON parsed, updating state");
                 setSmartResults(data);
                 addBreadcrumb("fetchSmartResults success");
             }
@@ -475,7 +480,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBack, onLogout
             />
 
             <ScrollView className="flex-1 px-6 pt-6">
-                <View>
+                <Animated.View layout={LinearTransition.springify().damping(20)}>
                     {/* Tab Switcher */}
                     <View className="flex-row mb-6 bg-gray-100 dark:bg-zinc-900/50 p-1 rounded-2xl">
                         <TouchableOpacity
@@ -955,7 +960,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBack, onLogout
                             </TouchableOpacity>
                         )}
                     </View>
-                </View>
+                </Animated.View>
             </ScrollView>
 
             <ItemPicker
