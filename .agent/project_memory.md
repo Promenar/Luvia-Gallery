@@ -23,6 +23,21 @@
 - **Concurrency Parity (Standardized)**: Thumbnail threads (`thumbnail_threads`) are capped at **64** on all platforms. A mandatory one-time safety warning is triggered when the value exceeds **16**. Implement using `useRef` (Mobile) or `window.confirm` (Web) to ensure the warning is non-intrusive.
 - **UI Non-Intrusion**: System versioning information should be placed at the bottom of the scrollable content area rather than fixed overlays, preserving screen real-estate for functional controls.
 - **Tailwind Build**: Standard Vite/PostCSS pipeline. No CDN links in `index.html`. Primary colors and fonts must be defined in `tailwind.config.js`.
+- **Frontend State Resilience (Dual-Layer Navigation)** (Added 2025-12-23):
+    - **Priority 1 (Hash)**: Always check `window.location.hash` (`#folder=...`) for deep-linking.
+    - **Priority 2 (Storage)**: Use `localStorage` (`lumina_current_path`) as a fallback if the hash is lost due to aggressive browser navigation/refresh.
+    - **Cleanup**: Clear storage when explicitly switching to root views ('home', 'all').
+- **Component File Structure (Hoisting Strategy)**:
+    - For large components like `App.tsx`, satisfy dependencies by ordering:
+        1. **Static Constants** (Keys, IDs).
+        2. **Main Function & Context Hooks**.
+        3. **State & Ref Definitions**.
+        4. **Auth Handlers (Logout/Login)**: Must be early as they delete tokens.
+        5. **Secure Fetch Helper (`apiFetch`)**: Must follow Auth handlers.
+        6. **Core Data Fetchers (`fetchServerFiles`, `fetchSystemStatus`)**: Must follow `apiFetch`.
+        7. **High-Level Handlers & Polling Logic**: Call fetchers; must be placed after them to avoid `Cannot find name` errors.
+        8. **Initialization Effects (`useEffect`)**: The entry point for the component lifecycle.
+
 
 ## Anti-Patterns to Avoid
 - **Raw DB Access**: Never access `database.db` directly in `server.js`. It is private. Always use or create public helper methods (e.g., `getStats()`) in `database.js`.
