@@ -135,6 +135,7 @@ const SAFE_MODE_HTML = `
 <!DOCTYPE html>
 <html>
 <head>
+    <meta charset="UTF-8">
     <title>Lumina Gallery - Recovery Mode</title>
     <style>
         body { font-family: monospace; background: #1a1a1a; color: #ff5555; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; }
@@ -147,12 +148,12 @@ const SAFE_MODE_HTML = `
 </head>
 <body>
     <div class="box">
-        <h1>⚠️ SYSTEM CRASH DETECTED</h1>
-        <p>The application backend has crashed repeatedly.</p>
+        <h1>⚠️ 系统崩溃 (System Crash)</h1>
+        <p>后端服务多次崩溃，已进入安全模式。</p>
         <p>Running in <strong>SAFE MODE</strong> (Supervisor).</p>
         <hr style="border-color: #444; margin: 20px 0;">
-        <p>1. Check container logs for errors.<br>2. Push a fix to the repository.<br>3. Click below to pull update & restart.</p>
-        <button onclick="triggerUpdate()">FORCE SYSTEM UPDATE</button>
+        <p>1. 请检查容器日志。<br>2. 修复代码并推送到仓库。<br>3. 点击下方按钮拉取更新并重启。</p>
+        <button onclick="triggerUpdate()">强制更新系统 (Force Update)</button>
         <p id="status" style="margin-top: 15px; font-size: 14px; color: #888;"></p>
     </div>
     <script>
