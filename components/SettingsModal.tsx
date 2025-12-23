@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Icons } from './ui/Icon';
 import { User, ExtendedSystemStatus, HomeScreenConfig } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
+import SystemUpdater from './SystemUpdater';
 
 export type SettingsTab = 'general' | 'library' | 'system' | 'account';
 
@@ -467,6 +468,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                 </div>
                             </div>
                         )}
+                        <section className="pt-4 border-t border-gray-100 dark:border-gray-800">
+                            <SystemUpdater />
+                        </section>
                         <section className="pt-4 border-t border-gray-100 dark:border-gray-800">
                             <button onClick={onExportConfig} className="text-sm font-medium text-primary-600 hover:underline flex items-center gap-2">
                                 <Icons.Download size={16} /> {t('backup_config')}
