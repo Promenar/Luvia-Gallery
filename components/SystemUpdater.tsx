@@ -6,24 +6,39 @@ const SystemUpdater: React.FC = () => {
     const [statusMsg, setStatusMsg] = useState('');
     const [errorMsg, setErrorMsg] = useState('');
 
-    const handleUpdate = async () => {
-        if (!window.confirm('Confirm System Update? The server will restart. This may take 1-2 minutes.')) return;
+    const handleUpdate = async (token?: string) => {
+        if (!token && !window.confirm('Confirm System Update? The server will restart. This may take 1-2 minutes.')) return;
 
         setUpdating(true);
         setStatusMsg('Initiating update sequence...');
         setErrorMsg('');
 
         try {
+            const headers: Record<string, string> = {};
+            // If we have a token (from retry or saved), use it. 
+            // Otherwise, try without (or with main app's token if we wanted, but Runner ignores that).
+            // Let's rely on the explicit flow: Try -> 401 -> Prompt -> Retry.
+            if (token) {
+                headers['Authorization'] = `Bearer ${token}`;
+            }
+
             const res = await fetch('/api/admin/system/update', {
                 method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${localStorage.getItem('token')}`
-                }
+                headers: headers
             });
 
             if (!res.ok) {
                 if (res.status === 409) throw new Error('Update already in progress');
-                if (res.status === 401) throw new Error('Unauthorized');
+                if (res.status === 401) {
+                    // Auth required
+                    const userInput = window.prompt("Security Check: Please enter the Update Token to proceed.");
+                    if (userInput) {
+                        // Retry with token
+                        return handleUpdate(userInput);
+                    } else {
+                        throw new Error('Update cancelled (Token required).');
+                    }
+                }
                 throw new Error('Update request failed');
             }
 
