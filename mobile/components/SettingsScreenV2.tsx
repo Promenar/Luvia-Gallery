@@ -311,9 +311,12 @@ export const SettingsScreenV2: React.FC<SettingsScreenV2Props> = ({ onBack, onLo
                     await AsyncStorage.removeItem('lumina_cache_home');
                     await clearStaticCache();
                     showToast(t('msg.cache_cleared'), 'success');
-                    // Refresh size
-                    const size = await getCacheSize();
-                    setCacheSize(formatBytes(size));
+
+                    // Refresh size with a small delay for FS consistency
+                    setTimeout(async () => {
+                        const size = await getCacheSize();
+                        setCacheSize(formatBytes(size));
+                    }, 500);
                 } catch (e) {
                     showToast(t('msg.cache_clear_failed'), 'error');
                 }
