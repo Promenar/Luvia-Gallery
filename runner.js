@@ -40,7 +40,7 @@ function startApp() {
 
     childProcess.on('exit', (code, signal) => {
         log(`${SERVER_SCRIPT} exited with code ${code} / signal ${signal}`);
-        
+
         if (updateInProgress) {
             log("Exit due to update. Not restarting immediately.");
             return;
@@ -63,11 +63,26 @@ function startApp() {
         log(`Failed to spawn child process: ${err}`);
         retryCount++; // Immediate fail counts as retry
         if (retryCount > MAX_RETRIES) {
-             isSafeMode = true;
-             childProcess = null;
+            isSafeMode = true;
+            childProcess = null;
         }
     });
 }
+
+// Helper: Get hash of current file (Supervisor)
+const crypto = require('crypto');
+function getSelfHash() {
+    try {
+        const content = fs.readFileSync(__filename);
+        return crypto.createHash('md5').update(content).digest('hex');
+    } catch (e) {
+        return null;
+    }
+}
+
+// Initial Hash
+const initialHash = getSelfHash();
+log(`Supervisor initialized. Hash: ${initialHash}`);
 
 // Function to handle updates (Git Pull + Rebuild)
 function performUpdate(res) {
@@ -80,37 +95,36 @@ function performUpdate(res) {
     updateInProgress = true;
     log("Starting System Update...");
 
-    // Notify client the update started
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.write(JSON.stringify({ status: "started", message: "Update process started. Check logs." }) + "\n");
-    // Don't close res yet if we want to stream partial results, 
-    // but simplified: we respond then kill connection or keep it to stream? 
-    // Let's just respond immediately, the client will poll or wait for reload.
-    // Actually, client expects a response. Let's finish response.
+    res.write(JSON.stringify({ status: "started", message: "Update process started." }) + "\n");
     res.end();
 
-    // Kill child process if running
     if (childProcess) {
         log("Stopping app for update...");
         childProcess.kill();
     }
 
-    // Run update script
     const updateScript = path.join(__dirname, 'scripts', 'update.sh');
     const updateCmd = spawn('sh', [updateScript], { stdio: 'inherit' });
 
     updateCmd.on('close', (code) => {
         updateInProgress = false;
         if (code === 0) {
-            log("Update successful! Restarting app...");
-            isSafeMode = false; // Reset safe mode on successful update
+            log("Update successful!");
+
+            // Check if Supervisor (this file) was updated
+            const newHash = getSelfHash();
+            if (newHash && newHash !== initialHash) {
+                log(`Supervisor update detected (${initialHash} -> ${newHash}). Exiting to let Docker restart container...`);
+                process.exit(0); // Docker Restart Policy will bring us back up with new code
+            }
+
+            log("Restarting app...");
+            isSafeMode = false;
             retryCount = 0;
             startApp();
         } else {
             log(`Update failed with code ${code}. Remaining in current state.`);
-            // If we were in safe mode, stay in safe mode. 
-            // If we were normal, try to restart old app? (Likely broken if git pull half-succeeded)
-            // Safer to go to Safe Mode if update fails to be sure user checks logs.
             isSafeMode = true;
         }
     });
