@@ -23,6 +23,9 @@ services:
     environment:
       - NODE_ENV=production
       - MEDIA_ROOT=/media
+      # [SECURITY] Set this to enable password protection for the Update API.
+      # If provided, the web UI will prompt for this token when you click Update.
+      # - UPDATE_TOKEN=change_this_to_a_secret_string
       # - GIT_TOKEN=ghp_xxxx  # Alternative: Use Token instead of SSH
       # GPU Support: Set these if using NVIDIA GPU
       # GPU Support: Set these if using NVIDIA GPU
