@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { View, Text, Modal, FlatList, Dimensions, StatusBar, TouchableOpacity, Image, Platform, Pressable, useWindowDimensions } from 'react-native';
+import { View, Text, Modal, FlatList, Dimensions, StatusBar, TouchableOpacity, Platform, Pressable, useWindowDimensions } from 'react-native';
+import { Image } from 'expo-image';
+const AnimatedExpoImage = Animated.createAnimatedComponent(Image);
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { X, Music } from 'lucide-react-native';
 import { MediaItem } from '../types';
@@ -104,7 +106,7 @@ const VideoSlide = ({
             <Image
                 source={{ uri: thumbUrl }}
                 className="absolute inset-0 w-full h-full opacity-50"
-                resizeMode="contain"
+                contentFit="contain"
                 blurRadius={Platform.OS === 'ios' ? 0 : 10}
             />
 
@@ -220,6 +222,7 @@ const AudioSlide = ({ item, items, isActive, showControls, onToggleControls }: {
                     <Image
                         source={{ uri: thumbUrl }}
                         className="w-full h-full opacity-60"
+                        contentFit="cover"
                         blurRadius={Platform.OS === 'ios' ? 0 : 50}
                     />
                     {Platform.OS === 'ios' && (
@@ -426,15 +429,16 @@ const ImageSlide = ({
                     <Image
                         source={{ uri: getThumbnailUrl(item.id) }}
                         className="absolute inset-0 w-full h-full opacity-50"
-                        resizeMode="contain"
+                        contentFit="contain"
                         blurRadius={5}
                     />
                 )}
-                <Animated.Image
+                <AnimatedExpoImage
                     source={{ uri: getFileUrl(item.id) }}
                     style={[{ width, height }, animatedStyle]}
-                    resizeMode="contain"
+                    contentFit="contain"
                     onLoad={() => setLoaded(true)}
+                    transition={200}
                 />
             </View>
         </GestureDetector>
@@ -796,6 +800,10 @@ export const MediaViewer: React.FC<MediaViewerProps> = ({ items, initialIndex, o
                             getItemLayout={(_, index) => ({ length: width, offset: width * index, index })}
                             showsHorizontalScrollIndicator={false}
                             onMomentumScrollEnd={handleScroll}
+                            windowSize={3}
+                            removeClippedSubviews={true}
+                            initialNumToRender={1}
+                            maxToRenderPerBatch={1}
                             renderItem={({ item, index }) => (
                                 <View style={{ width, height }}>
                                     {item.mediaType === 'video' ? (
@@ -872,7 +880,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = ({ items, initialIndex, o
                                                     iconColor={isSlideshowActive ? "#818cf8" : "white"}
                                                     size={24}
                                                     onPress={() => {
-                                                        setIsSlideshowActive(prev => !prev);
+                                                        setIsSlideshowActive((prev: boolean) => !prev);
                                                         setShowControls(false); // Hide controls when starting
                                                         showToast(!isSlideshowActive ? t('common.slideshow_start') : t('common.slideshow_stop'), 'info');
                                                     }}

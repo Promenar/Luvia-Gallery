@@ -1,5 +1,6 @@
 import "./global.css";
 import React, { useState, useEffect, useCallback } from 'react';
+import { FlashList } from '@shopify/flash-list';
 import { StatusBar } from 'expo-status-bar';
 import { View, FlatList, ActivityIndicator, BackHandler, Text, TouchableOpacity, ScrollView, Platform, LayoutAnimation, UIManager, RefreshControl, Alert, useWindowDimensions, DimensionValue, AppState, AppStateStatus } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -43,22 +44,7 @@ interface Folder {
 
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
-// Helper for grid alignment
-const formatGridData = (data: MediaItem[], numColumns: number) => {
-  if (!data) return [];
-  const totalRows = Math.floor(data.length / numColumns);
-  let totalLastRow = data.length - (totalRows * numColumns);
 
-  if (totalLastRow === 0) return data;
-
-  const newData = [...data]; // Clone array
-  while (totalLastRow !== numColumns && totalLastRow !== 0) {
-    // @ts-ignore
-    newData.push({ id: `blank-${totalLastRow}-${Date.now()}`, empty: true });
-    totalLastRow++;
-  }
-  return newData;
-};
 
 const MainScreen = () => {
   const insets = useSafeAreaInsets();
@@ -200,7 +186,9 @@ const MainScreen = () => {
       const filesRes = await fetchFiles({ offset, limit, excludeMediaType: 'audio', refresh });
       const newFiles = filesRes.files || [];
 
-      if (newFiles.length < limit) setHasMoreLibrary(false);
+      // Critical Fix: Only stop infinite scroll if we hit the end of NETWORK data.
+      // Partial cache hits shouldn't stop us.
+      if (!filesRes.fromCache && newFiles.length < limit) setHasMoreLibrary(false);
       else setHasMoreLibrary(true);
 
       if (append) {
@@ -254,7 +242,8 @@ const MainScreen = () => {
 
       const newFiles = (filesRes.files || []).map((f: MediaItem) => ({ ...f, isFavorite: true }));
 
-      if (newFiles.length < limit) setHasMoreFavorites(false);
+      // Critical Fix: Only stop infinite scroll if we hit the end of NETWORK data.
+      if (!filesRes.fromCache && newFiles.length < limit) setHasMoreFavorites(false);
       else setHasMoreFavorites(true);
 
       if (append) {
@@ -393,6 +382,12 @@ const MainScreen = () => {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     }, 10);
 
+    // Clear old data immediately to prevent flash of old content
+    setFolderFiles([]);
+    setFolders([]);
+    setFolderOffset(0);
+    setHasMoreFolderFiles(true);
+
     if (activeTab === 'folders') {
       // Drilling down: Append current path to history
       setHistory(prev => [...prev, currentPath || 'root']);
@@ -409,6 +404,13 @@ const MainScreen = () => {
     setTimeout(() => {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     }, 10);
+
+    // Clear old data immediately to prevent flash of old content
+    setFolderFiles([]);
+    setFolders([]);
+    setFolderOffset(0);
+    setHasMoreFolderFiles(true);
+
     if (history.length > 0) {
       const prev = history[history.length - 1];
       const newHistory = history.slice(0, -1);
@@ -589,9 +591,9 @@ const MainScreen = () => {
                     data={recentMedia.length > 0 ? recentMedia : [1, 2, 3, 4] as any}
                     horizontal
                     showsHorizontalScrollIndicator={false}
-                    keyExtractor={(item) => typeof item === 'number' ? `skeleton-${item}` : item.id}
+                    keyExtractor={(item: MediaItem | number) => typeof item === 'number' ? `skeleton-${item}` : item.id}
                     contentContainerStyle={{ paddingRight: 16, gap: 12 }}
-                    renderItem={({ item }) => {
+                    renderItem={({ item }: { item: MediaItem | number }) => {
                       if (typeof item === 'number') {
                         return (
                           <View
@@ -625,12 +627,12 @@ const MainScreen = () => {
               rightAction={<LayoutToggle />}
             />
             {galleryLayout === 'grid' ? (
-              <FlatList
-                key={`lib-${numColumns}`}
-                data={formatGridData(libraryFiles, numColumns)}
-                keyExtractor={item => item.id}
+              <FlashList
+                key={`lib-flash-${numColumns}`}
+                data={libraryFiles}
                 numColumns={numColumns}
-                columnWrapperStyle={{ gap: 8 }}
+                estimatedItemSize={200}
+                keyExtractor={(item: MediaItem) => item.id}
                 contentContainerStyle={{ padding: 12, paddingBottom: 100 }}
                 refreshControl={<RefreshControl refreshing={refreshing || loading} onRefresh={onRefresh} />}
                 onEndReached={() => {
@@ -638,25 +640,22 @@ const MainScreen = () => {
                     loadLibraryData(libraryOffset + 100, true);
                   }
                 }}
-                onEndReachedThreshold={0.5}
+                onEndReachedThreshold={2}
                 ListFooterComponent={loadingMore ? <ActivityIndicator className="py-4" color={isDark ? "#fff" : "#000"} /> : null}
-                renderItem={({ item }) => {
-                  // @ts-ignore
-                  if (item.empty) return <View style={{ width: cardWidth }} className="mb-2 bg-transparent" />;
-                  return (
-                    <View style={{ width: cardWidth }} className="mb-2">
-                      <MediaCard
-                        item={item}
-                        onPress={(i: MediaItem) => handleMediaPress(i, libraryFiles)}
-                        onLongPress={handleManagePress}
-                      />
-                    </View>
-                  );
-                }}
+                renderItem={({ item }: { item: MediaItem }) => (
+                  <View className="flex-1 p-1">
+                    <MediaCard
+                      item={item}
+                      onPress={(i: MediaItem) => handleMediaPress(i, libraryFiles)}
+                      onLongPress={handleManagePress}
+                    />
+                  </View>
+                )}
               />
             ) : (
               <MasonryGallery
                 data={libraryFiles}
+                numColumns={numColumns}
                 onPress={handleMediaPress}
                 onLongPress={handleManagePress}
                 onRefresh={onRefresh}
@@ -680,12 +679,12 @@ const MainScreen = () => {
               rightAction={<LayoutToggle />}
             />
             {galleryLayout === 'grid' ? (
-              <FlatList
-                key={`fav-${numColumns}`}
-                data={formatGridData(favoriteFiles, numColumns)}
-                keyExtractor={item => item.id}
+              <FlashList
+                key={`fav-flash-${numColumns}`}
+                data={favoriteFiles}
                 numColumns={numColumns}
-                columnWrapperStyle={{ gap: 8 }}
+                estimatedItemSize={200}
+                keyExtractor={(item: MediaItem) => item.id}
                 contentContainerStyle={{ padding: 12, paddingBottom: 100 }}
                 refreshControl={<RefreshControl refreshing={refreshing || loading} onRefresh={onRefresh} />}
                 onEndReached={() => {
@@ -693,7 +692,7 @@ const MainScreen = () => {
                     loadFavoritesData(favoriteOffset + 50, true);
                   }
                 }}
-                onEndReachedThreshold={0.5}
+                onEndReachedThreshold={2}
                 ListFooterComponent={loadingMore ? <ActivityIndicator className="py-4" color={isDark ? "#fff" : "#000"} /> : null}
                 ListHeaderComponent={
                   favoriteFolders.length > 0 ? (
@@ -718,19 +717,15 @@ const MainScreen = () => {
                     </View>
                   ) : null
                 }
-                renderItem={({ item }) => {
-                  // @ts-ignore
-                  if (item.empty) return <View style={{ width: cardWidth }} className="mb-2 bg-transparent" />;
-                  return (
-                    <View style={{ width: cardWidth }} className="mb-2">
-                      <MediaCard
-                        item={item}
-                        onPress={(i: MediaItem) => handleMediaPress(i, favoriteFiles)}
-                        onLongPress={handleManagePress}
-                      />
-                    </View>
-                  );
-                }}
+                renderItem={({ item }: { item: MediaItem }) => (
+                  <View className="flex-1 p-1">
+                    <MediaCard
+                      item={item}
+                      onPress={(i: MediaItem) => handleMediaPress(i, favoriteFiles)}
+                      onLongPress={handleManagePress}
+                    />
+                  </View>
+                )}
                 ListEmptyComponent={
                   (!loading && favoriteFiles.length === 0 && favoriteFolders.length === 0) ? (
                     <View className="p-20 items-center justify-center opacity-50">
@@ -742,6 +737,7 @@ const MainScreen = () => {
             ) : (
               <MasonryGallery
                 data={favoriteFiles}
+                numColumns={numColumns}
                 onPress={handleMediaPress}
                 onLongPress={handleManagePress}
                 onRefresh={onRefresh}
@@ -804,12 +800,12 @@ const MainScreen = () => {
               style={{ flex: 1 }}
             >
               {galleryLayout === 'grid' ? (
-                <FlatList
-                  key={`folders-grid-${currentPath}-${numColumns}`}
-                  data={formatGridData(folderFiles, numColumns)}
-                  keyExtractor={item => item.id}
+                <FlashList
+                  key={`folders-flash-${currentPath}-${numColumns}`}
+                  data={folderFiles}
                   numColumns={numColumns}
-                  columnWrapperStyle={{ gap: 8 }}
+                  estimatedItemSize={200}
+                  keyExtractor={(item: MediaItem) => item.id}
                   contentContainerStyle={{ padding: 12, paddingBottom: 100 }}
                   refreshControl={<RefreshControl refreshing={refreshing || loading} onRefresh={onRefresh} />}
                   onEndReached={() => {
@@ -817,7 +813,7 @@ const MainScreen = () => {
                       loadFolderData(currentPath, folderOffset + 50, true);
                     }
                   }}
-                  onEndReachedThreshold={0.5}
+                  onEndReachedThreshold={2}
                   ListFooterComponent={loadingMore ? <ActivityIndicator className="py-4" color={isDark ? "#fff" : "#000"} /> : null}
                   ListHeaderComponent={
                     <View>
@@ -846,19 +842,15 @@ const MainScreen = () => {
                       )}
                     </View>
                   }
-                  renderItem={({ item }) => {
-                    // @ts-ignore
-                    if (item.empty) return <View style={{ width: cardWidth }} className="mb-2 bg-transparent" />;
-                    return (
-                      <View style={{ width: cardWidth }} className="mb-2">
-                        <MediaCard
-                          item={item}
-                          onPress={(i: MediaItem) => handleMediaPress(i, folderFiles)}
-                          onLongPress={handleManagePress}
-                        />
-                      </View>
-                    );
-                  }}
+                  renderItem={({ item }: { item: MediaItem }) => (
+                    <View className="flex-1 p-1">
+                      <MediaCard
+                        item={item}
+                        onPress={(i: MediaItem) => handleMediaPress(i, folderFiles)}
+                        onLongPress={handleManagePress}
+                      />
+                    </View>
+                  )}
                   ListEmptyComponent={
                     (!loading && folders.length === 0) ? (
                       <View className="p-20 items-center justify-center opacity-50">
@@ -870,6 +862,7 @@ const MainScreen = () => {
               ) : (
                 <MasonryGallery
                   data={folderFiles}
+                  numColumns={numColumns}
                   onPress={handleMediaPress}
                   onLongPress={handleManagePress}
                   onRefresh={onRefresh}
@@ -907,6 +900,7 @@ const MainScreen = () => {
                       )}
                     </View>
                   }
+
                   ListEmptyComponent={
                     (!loading && folders.length === 0) ? (
                       <View className="p-20 items-center justify-center opacity-50">
