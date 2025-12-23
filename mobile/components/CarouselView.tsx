@@ -264,7 +264,7 @@ export const CarouselView: React.FC<CarouselViewProps> = ({ isActive, fullScreen
                 res = await fetchFiles({ ...commonOptions, folderPath: carouselConfig.sourceValue, recursive: true });
                 if (res.files?.length > 0) await saveMediaItems(res.files, 30);
             } else if (carouselConfig.sourceType === 'favorites') {
-                res = await fetchFiles({ ...commonOptions, favorite: true });
+                res = await fetchFiles({ ...commonOptions, favorite: true, recursive: true });
                 // Favorites 状态同步较多，通常这里不直接 INSERT 而是同步所有状态，Database 已有 updateFavoriteStatus
             } else if (carouselConfig.sourceType === 'file' && carouselConfig.sourceValue) {
                 const filePath = carouselConfig.sourceValue;
