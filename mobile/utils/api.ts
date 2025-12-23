@@ -44,29 +44,48 @@ let isEmittingLogout = false;
 export const onLogout = (cb: () => void) => { logoutCallback = cb; };
 
 const authenticatedFetch = async (url: string, options: RequestInit = {}) => {
-    const headers = {
-        ...options.headers,
-        ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {})
-    };
+    try {
+        const headers = {
+            ...options.headers,
+            ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {})
+        };
 
-    const res = await fetch(url, { ...options, headers });
+        const res = await fetch(url, { ...options, headers });
 
-    if (res.status === 401) {
-        // Token expired or invalid - FORCE LOGOUT
-        if (logoutCallback && !isEmittingLogout) {
-            isEmittingLogout = true;
-            logoutCallback();
-            setTimeout(() => { isEmittingLogout = false; }, 5000);
+        if (res.status === 401) {
+            // Token expired or invalid - FORCE LOGOUT
+            if (logoutCallback && !isEmittingLogout) {
+                isEmittingLogout = true;
+                logoutCallback();
+                setTimeout(() => { isEmittingLogout = false; }, 5000);
+            }
+            throw new Error('SESSION_EXPIRED');
         }
-        throw new Error('Session Expired');
-    }
 
-    if (res.status === 403) {
-        // Forbidden - DON'T LOGOUT, just report permission error
-        throw new Error('Permission Denied');
-    }
+        if (res.status === 403) {
+            // Forbidden - DON'T LOGOUT, just report permission error
+            throw new Error('PERMISSION_DENIED');
+        }
 
-    return res;
+        return res;
+    } catch (error: any) {
+        // 保持认证错误
+        if (error.message === 'SESSION_EXPIRED' || error.message === 'PERMISSION_DENIED') {
+            throw error;
+        }
+
+        // 网络完全不可达 (TypeError: Failed to fetch)
+        if (error.name === 'TypeError' || error.message?.includes('Network request failed')) {
+            throw new Error('NETWORK_OFFLINE');
+        }
+
+        // 超时错误
+        if (error.name === 'AbortError' || error.message?.includes('timeout')) {
+            throw new Error('NETWORK_TIMEOUT');
+        }
+
+        throw error;
+    }
 };
 
 export const login = async (username: string, password: string) => {
@@ -198,7 +217,12 @@ export const fetchFiles = async (options: FetchFilesOptions = {}) => {
         }
 
         const res = await authenticatedFetch(url);
-        if (!res.ok) throw new Error(`API Error: ${res.status}`);
+        if (!res.ok) {
+            // 根据状态码抛出友好错误
+            if (res.status >= 500) throw new Error('SERVER_ERROR');
+            if (res.status === 404) throw new Error('NOT_FOUND');
+            throw new Error(`HTTP_${res.status}`);
+        }
         const data = await res.json();
 
         // 3. Save to Cache (if not random)
@@ -289,4 +313,28 @@ export const fetchExif = async (id: string) => {
         console.error('Fetch EXIF error:', error);
         return null;
     }
+};
+
+// 错误消息转换函数 - 将错误对象转换为用户友好的i18n key
+export const getErrorMessage = (error: any, t: (key: string) => string): string => {
+    const message = error?.message || '';
+
+    // 特殊错误代码
+    if (message === 'SESSION_EXPIRED') return t('error.session_expired');
+    if (message === 'PERMISSION_DENIED') return t('error.permission_denied');
+    if (message === 'NETWORK_OFFLINE') return t('error.network_offline');
+    if (message === 'NETWORK_TIMEOUT') return t('error.network_timeout');
+    if (message === 'SERVER_ERROR') return t('error.server_error');
+    if (message === 'NOT_FOUND') return t('error.not_found');
+
+    // HTTP状态码模式
+    if (message.includes('HTTP_502') || message.includes('HTTP_503')) {
+        return t('error.server_offline');
+    }
+    if (message.includes('HTTP_500')) {
+        return t('error.server_error');
+    }
+
+    // 默认错误
+    return t('error.unknown');
 };

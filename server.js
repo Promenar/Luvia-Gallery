@@ -1170,8 +1170,97 @@ app.get('/api/scan/results', (req, res) => {
 
     if (favoritesOnly) {
         // Query favorites from DB
-        files = database.queryFavoriteFiles(userId, { offset, limit });
-        total = database.countFavoriteFiles(userId);
+        if (recursive) {
+            // Recursive mode: Favorite files + All files in favorite folders
+            console.log('[Favorites Carousel] Recursive mode enabled');
+
+            // 1. Get directly favorited files
+            const favoriteFiles = database.queryFavoriteFiles(userId, { offset: 0, limit: 999999 });
+
+            // 2. Get all favorite folder paths
+            const favoriteIds = database.getFavoriteIds(userId);
+            const favoriteFolderPaths = favoriteIds.folders || [];
+
+            console.log(`[Favorites Carousel] Found ${favoriteFiles.length} favorite files and ${favoriteFolderPaths.length} favorite folders`);
+
+            // 3. Recursively get all files from favorite folders
+            let folderFiles = [];
+            for (const folderPath of favoriteFolderPaths) {
+                try {
+                    // Security check: ensure folder is within user's allowed paths
+                    let canAccess = isAdmin;
+                    if (!canAccess && userLibraryPaths.length > 0) {
+                        const resolvedPath = path.resolve(folderPath);
+                        canAccess = userLibraryPaths.some(lp => {
+                            const resolvedLp = path.resolve(lp);
+                            return resolvedPath === resolvedLp ||
+                                resolvedPath.startsWith(resolvedLp + path.sep) ||
+                                resolvedPath.startsWith(resolvedLp + '/');
+                        });
+                    }
+
+                    if (canAccess) {
+                        const files = database.queryFiles({
+                            folderPath: path.resolve(folderPath),
+                            offset: 0,
+                            limit: 999999,
+                            userId,
+                            recursive: true, // Enable recursive scanning
+                            allowedPaths: isAdmin ? null : userLibraryPaths
+                        });
+                        folderFiles = folderFiles.concat(files);
+                        console.log(`[Favorites Carousel] Folder ${folderPath}: ${files.length} files`);
+                    } else {
+                        console.log(`[Favorites Carousel] Skipping unauthorized folder: ${folderPath}`);
+                    }
+                } catch (e) {
+                    console.error(`[Favorites Carousel] Error querying folder ${folderPath}:`, e);
+                }
+            }
+
+            // 4. Merge and deduplicate (by id or path)
+            const allFiles = [...favoriteFiles, ...folderFiles];
+            const uniqueFilesMap = new Map();
+            allFiles.forEach(f => {
+                if (!uniqueFilesMap.has(f.id)) {
+                    uniqueFilesMap.set(f.id, f);
+                }
+            });
+
+            const uniqueFiles = Array.from(uniqueFilesMap.values());
+            console.log(`[Favorites Carousel] Total unique files after merge: ${uniqueFiles.length}`);
+
+            // 5. Apply filters (mediaType, excludeMediaType, random)
+            let filteredFiles = uniqueFiles;
+
+            if (mediaType) {
+                const types = Array.isArray(mediaType) ? mediaType : [mediaType];
+                filteredFiles = filteredFiles.filter(f => types.includes(f.mediaType));
+            }
+
+            if (excludeMediaType) {
+                const excludeTypes = Array.isArray(excludeMediaType) ? excludeMediaType : [excludeMediaType];
+                filteredFiles = filteredFiles.filter(f => !excludeTypes.includes(f.mediaType));
+            }
+
+            if (random) {
+                // Shuffle array using Fisher-Yates
+                for (let i = filteredFiles.length - 1; i > 0; i--) {
+                    const j = Math.floor(Math.random() * (i + 1));
+                    [filteredFiles[i], filteredFiles[j]] = [filteredFiles[j], filteredFiles[i]];
+                }
+            }
+
+            // 6. Apply pagination
+            total = filteredFiles.length;
+            files = filteredFiles.slice(offset, offset + limit);
+
+            console.log(`[Favorites Carousel] Returning ${files.length} files (total: ${total})`);
+        } else {
+            // Non-recursive mode: Only directly favorited files
+            files = database.queryFavoriteFiles(userId, { offset, limit });
+            total = database.countFavoriteFiles(userId);
+        }
     } else {
         const userLibraryPaths = getUserLibraryPaths(req.user);
 
