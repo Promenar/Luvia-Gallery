@@ -74,48 +74,14 @@ export default function App() {
     const [thumbProgress, setThumbProgress] = useState({ count: 0, total: 0, currentPath: '' });
     const [smartScanResults, setSmartScanResults] = useState<{ missing: any[], error: any[], timestamp: number } | null>(null);
 
-    const handleSmartScan = async () => {
-        console.log("Starting Smart Scan v2...");
-        try {
-            const res = await authFetch('/api/thumb/smart-scan', { method: 'POST' });
-            if (!res.ok) {
-                console.error("Smart scan request failed:", res.status, res.statusText);
-                return;
-            }
-            setThumbStatus('scanning');
-            thumbStatusRef.current = 'scanning';
-            setIsUnifiedModalOpen(true); // Open modal for progress
-            startUnifiedPolling();
-        } catch (e) { console.error("Smart scan failed:", e); }
-    };
 
-    const handleFetchSmartResults = async () => {
-        try {
-            const res = await authFetch('/api/thumb/smart-results');
-            if (res.ok) setSmartScanResults(await res.json());
-        } catch (e) { }
-    };
-
-    const handleSmartRepair = async () => {
-        try {
-            await authFetch('/api/thumb/smart-repair', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ repairMissing: true, repairError: true })
-            });
-            setThumbStatus('scanning');
-            thumbStatusRef.current = 'scanning';
-            setIsUnifiedModalOpen(true); // Open modal for progress
-            startUnifiedPolling();
-        } catch (e) { console.error(e); }
-    };
-
-
-
-    const scanProgressRef = useRef({ count: 0 }); // Added ref for progress
-    const scanStatusRef = useRef<ScanStatus>('idle'); // Added ref for status
+    // --- Refs ---
+    const scanProgressRef = useRef({ count: 0 });
+    const scanStatusRef = useRef<ScanStatus>('idle');
     const thumbStatusRef = useRef<'idle' | 'scanning' | 'paused' | 'error'>('idle');
     const scanTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+
 
     // --- App Data State ---
     const [allUserData, setAllUserData] = useState<Record<string, UserData>>({});
@@ -151,7 +117,43 @@ export default function App() {
 
     // Sync refs with state
     useEffect(() => { viewModeRef.current = viewMode; }, [viewMode]);
-    useEffect(() => { currentPathRef.current = currentPath; }, [currentPath]);
+    const CURRENT_PATH_KEY = 'lumina_current_path';
+
+    useEffect(() => {
+        currentPathRef.current = currentPath;
+        if (currentPath) localStorage.setItem(CURRENT_PATH_KEY, currentPath);
+        else if (viewMode === 'home' || viewMode === 'all') localStorage.removeItem(CURRENT_PATH_KEY);
+    }, [currentPath, viewMode]);
+
+
+    // 1. Initial Load & Mode Detection
+    useEffect(() => {
+        initApp();
+
+        const savedViewMode = localStorage.getItem(VIEW_MODE_KEY) as ViewMode;
+        if (savedViewMode) setViewMode(savedViewMode);
+
+        const savedLayout = localStorage.getItem(LAYOUT_MODE_KEY) as GridLayout;
+        if (savedLayout) setLayoutMode(savedLayout);
+
+        // Restore path Strategy:
+        // 1. Priority: URL Hash (Deep linking)
+        // 2. Fallback: LocalStorage (Refresh restoration)
+        let restoredPath = '';
+        if (window.location.hash.startsWith('#folder=')) {
+            restoredPath = decodeURIComponent(window.location.hash.substring(8));
+        } else {
+            const savedPath = localStorage.getItem(CURRENT_PATH_KEY);
+            if (savedPath && savedViewMode === 'folders') {
+                restoredPath = savedPath;
+            }
+        }
+
+        if (restoredPath) {
+            setCurrentPath(restoredPath);
+            currentPathRef.current = restoredPath;
+        }
+    }, []);
     useEffect(() => { currentUserRef.current = currentUser; }, [currentUser]);
 
     // --- Audio Player State ---
@@ -258,7 +260,7 @@ export default function App() {
         setServerFavoriteIds({ files: [], folders: [] });
     };
 
-    // --- Secure Fetch Helper (Consolidated) ---
+    // --- Secure Fetch Helper ---
     const apiFetch = async (url: string, options: RequestInit = {}) => {
         const token = localStorage.getItem('lumina_token');
         const headers: any = { ...options.headers };
@@ -266,11 +268,8 @@ export default function App() {
 
         const res = await fetch(url, { ...options, headers });
 
-        // Handle 401 specifically for auth invalidation
         if (res.status === 401) {
-            localStorage.removeItem('lumina_token'); // Clear bad token immediately
-            // If we were on /api/config, it might just be the public check during init
-            // But if we are already in 'app' mode, it means our session expired
+            localStorage.removeItem('lumina_token');
             if (authStep === 'app') {
                 handleLogout();
             }
@@ -278,8 +277,10 @@ export default function App() {
         return res;
     };
 
-    // authFetch is now just an alias for consistency during migration
     const authFetch = apiFetch;
+
+
+
 
     const [threadCount, setThreadCount] = useState<number>(2);
 
@@ -530,7 +531,39 @@ export default function App() {
 
         const savedLayout = localStorage.getItem(LAYOUT_MODE_KEY) as GridLayout;
         if (savedLayout) setLayoutMode(savedLayout);
+
+        // Restore path from URL hash if present
+        if (window.location.hash.startsWith('#folder=')) {
+            const hashPath = decodeURIComponent(window.location.hash.substring(8));
+            if (hashPath) {
+                setCurrentPath(hashPath);
+                currentPathRef.current = hashPath; // Sync ref immediately
+            }
+        }
     }, []);
+
+    // 1.5 Initial Data Fetch (When App Ready)
+    useEffect(() => {
+        if (authStep === 'app' && currentUser && isServerMode) {
+            console.log("App Ready: Triggering initial fetch for", viewMode);
+            // Small delay to ensure state is settled
+            setTimeout(() => {
+                if (viewMode === 'all') fetchServerFiles(currentUser.username, allUserData, 0, true, null);
+                else if (viewMode === 'folders') {
+                    // Use ref to ensure we get the path restored from hash even if closure is stale
+                    const path = currentPathRef.current || currentPath;
+                    fetchServerFiles(currentUser.username, allUserData, 0, true, path);
+                    fetchServerFolders(path);
+                }
+                else if (viewMode === 'favorites') {
+                    fetchServerFavorites().then(() => {
+                        fetchServerFiles(currentUser.username, allUserData, 0, true, null, true);
+                        fetchServerFolders(null, true);
+                    });
+                }
+            }, 100);
+        }
+    }, [authStep, currentUser?.username, isServerMode]); // Run once when user becomes available
 
     // --- Browser History Integration ---
     useEffect(() => {
@@ -755,84 +788,58 @@ export default function App() {
         } catch (e) { }
     };
 
-    const startUnifiedPolling = () => {
-        stopPolling();
+    const handleFetchSmartResults = async () => {
+        try {
+            const res = await authFetch('/api/thumb/smart-results');
+            if (res.ok) setSmartScanResults(await res.json());
+        } catch (e) { }
+    };
 
+    const startUnifiedPolling = () => {
         const poll = async () => {
-            // Poll Scan
+            if (!scanStatusRef.current && !thumbStatusRef.current) return;
+
             try {
-                const scanRes = await apiFetch('/api/scan/status');
+                const [scanRes, thumbRes] = await Promise.all([
+                    apiFetch('/api/scan/status'),
+                    apiFetch('/api/thumb-gen/status')
+                ]);
+
                 if (scanRes.ok) {
                     const scanData = await scanRes.json();
-                    const newScanStatus = scanData.status as ScanStatus;
-
-                    setScanStatus(newScanStatus);
-                    scanStatusRef.current = newScanStatus;
-
-                    if (newScanStatus !== 'idle') {
-                        setScanProgress({
-                            count: scanData.count || 0,
-                            currentPath: scanData.currentPath || '',
-                            currentEngine: ''
-                        });
-                        scanProgressRef.current = { count: scanData.count || 0 };
-                    }
+                    setScanStatus(scanData.status);
+                    setScanProgress({ count: scanData.count, currentPath: scanData.currentPath || '', currentEngine: '' });
+                    scanStatusRef.current = scanData.status;
                 }
-            } catch (e) { }
 
-            // Poll Thumb
-            try {
-                const thumbRes = await apiFetch('/api/thumb-gen/status');
                 if (thumbRes.ok) {
                     const thumbData = await thumbRes.json();
-                    const newThumbStatus = thumbData.status === 'scanning' || thumbData.status === 'paused' ? thumbData.status : 'idle';
-
-                    // Update Queue (if available)
-                    if (thumbData.queue) {
-                        setThumbQueue(thumbData.queue);
-                    } else {
-                        setThumbQueue([]);
-                    }
-
-                    // If we encounter an error or finished state that isn't idle, we might want to show it
-                    // but for now, track active states.
                     setThumbStatus(thumbData.status);
-                    thumbStatusRef.current = thumbData.status;
-
-                    setThumbProgress({
-                        count: thumbData.count || 0,
-                        total: thumbData.total || 0, // Ensure total is captured
-                        currentPath: thumbData.currentPath || ''
-                    });
+                    if (thumbData.status === 'scanning' || thumbData.status === 'paused') {
+                        thumbStatusRef.current = thumbData.status;
+                        setThumbProgress({
+                            count: thumbData.count || 0,
+                            total: thumbData.total || 0,
+                            currentPath: thumbData.currentPath || ''
+                        });
+                    }
                 }
             } catch (e) { }
 
-            // Continue polling if ANY active OR queue has items
             const isScanActive = scanStatusRef.current === 'scanning' || scanStatusRef.current === 'paused';
             const isThumbActive = thumbStatusRef.current === 'scanning' || thumbStatusRef.current === 'paused';
-
-            // Check queue length from state is risky due to closure stale state
-            // relying on active status for poll continuation is safer for now.
-            // If the queue has items, the status SHOULD be scanning (processing queue)
-            // But if we just finished one task and waiting for next tick, it might arguably briefly be idle.
-            // But the backend sets status to scanning immediately if queue > 0.
-            // So checking status is sufficient.
 
             if (isScanActive || isThumbActive) {
                 scanTimeoutRef.current = setTimeout(poll, 1000);
             } else {
                 fetchSystemStatus();
-                // Auto-refresh smart scan results if we just finished a thumb task
                 if (settingsTab === 'system') {
                     handleFetchSmartResults();
                 }
-
                 const user = currentUserRef.current;
                 if (user) {
                     const mode = viewModeRef.current;
                     const path = currentPathRef.current;
-
-                    // Only refresh if we are in a relevant view
                     fetchServerFiles(user.username, allUserData, 0, true, path, mode === 'favorites');
                     if (mode === 'folders' || mode === 'favorites') {
                         fetchServerFolders(path, mode === 'favorites');
@@ -842,6 +849,37 @@ export default function App() {
         };
         poll();
     };
+
+    const handleSmartScan = async () => {
+        console.log("Starting Smart Scan v2...");
+        try {
+            const res = await authFetch('/api/thumb/smart-scan', { method: 'POST' });
+            if (!res.ok) {
+                console.error("Smart scan request failed:", res.status, res.statusText);
+                return;
+            }
+            setThumbStatus('scanning');
+            thumbStatusRef.current = 'scanning';
+            setIsUnifiedModalOpen(true);
+            startUnifiedPolling();
+        } catch (e) { console.error("Smart scan failed:", e); }
+    };
+
+    const handleSmartRepair = async () => {
+        try {
+            await authFetch('/api/thumb/smart-repair', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ repairMissing: true, repairError: true })
+            });
+            setThumbStatus('scanning');
+            thumbStatusRef.current = 'scanning';
+            setIsUnifiedModalOpen(true);
+            startUnifiedPolling();
+        } catch (e) { console.error(e); }
+    };
+
+
 
     const startServerScan = async () => {
         if (!isServerMode || !currentUser) return;
