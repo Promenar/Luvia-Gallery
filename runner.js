@@ -211,6 +211,19 @@ function proxyRequest(req, res) {
 const server = http.createServer((req, res) => {
     // 1. Handle Update Endpoint (Always available)
     if (req.url === '/api/admin/system/update' && req.method === 'POST') {
+        const requiredToken = process.env.UPDATE_TOKEN;
+        if (requiredToken) {
+            const authHeader = req.headers['authorization'];
+            const providedToken = authHeader && authHeader.split(' ')[1]; // Bearer <token>
+
+            if (providedToken !== requiredToken) {
+                // Determine if it was missing or wrong for better log/response
+                log(`Blocked unauthorized update attempt from ${req.socket.remoteAddress}`);
+                res.writeHead(401, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: "Unauthorized: Invalid or missing Update Token." }));
+                return;
+            }
+        }
         return performUpdate(res);
     }
 
