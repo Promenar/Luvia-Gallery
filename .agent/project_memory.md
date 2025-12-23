@@ -50,7 +50,19 @@
     - **Toast Integration**: All caught API errors should be displayed via the global `ToastContext` (BlurView/Haptics) rather than `alert()`.
     - **RedBox Policy**: Do NOT disable RedBox (LogBox) in development. It is vital for catching unhandled runtime crashes, while handled API errors should be toasted.
 
-- **Windows Android Build (File Locking)**: 
-    - Building Android locally on Windows often fails with `EBUSY` or `unlink` errors due to active Metro Bundler processes locking generated C++ object files (e.g., `autolinking.cpp.o`).
     - **Fix**: Before running `npx expo prebuild --clean` or `rm -rf android`, you **MUST** terminate all running node processes (`taskkill /F /IM node.exe`) and stop the Expo development server.
+
+- **Docker & Deployment Architecture** (Updated 2025-12-23):
+    - **Supervisor Pattern (The Undying Process)**: Use a lightweight Node.js entrypoint (`runner.js`) to spawn and monitor the main application (`server.js`). This enables:
+        - **Crash Loop Detection**: Automatically enter "Safe Mode" (hosting a static recovery page) if the app crashes repeatedly.
+        - **Zero-External-Downtime Updates**: The supervisor remains running while the child process is killed, updated via `git pull`, and restarted.
+        - **Self-Evolution**: The supervisor hashes its own file content at startup. If an update modifies the supervisor code, it exits (`process.exit(0)`), triggering the Docker daemon's `restart: unless-stopped` policy to reload the new code.
+    - **Data-Driven Security**: Support hot-swappable authentication for admin endpoints by reading secrets from a mounted volume (e.g., `/app/data/update_secret.txt`) on every request, rather than relying solely on static environment variables.
+
+- **Windows Docker Bind Mounts (The 777 Trap)**:
+    - **Problem**: Mounting `~/.ssh` directly into a Linux container on Windows results in `0777` permissions, causing OpenSSH to fail with "Bad owner or permissions".
+    - **Solution**: Mount the folder to a temporary location (e.g., `/tmp/ssh_mount:ro`) and use an entrypoint script (`update.sh`) to `cp` keys to `/root/.ssh/` and `chmod 600` them at runtime. Never mount directly to `~/.ssh` on Windows hosts.
+
+- **Production Dependency Build**:
+    - When `NODE_ENV=production`, `npm install` skips `devDependencies`. If your build process (e.g., `vite build`) relies on dev tools, you MUST explicitly run `npm install --include=dev` in your update/build scripts.
 
