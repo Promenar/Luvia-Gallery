@@ -15,9 +15,16 @@ services:
 
       # Persistence for generated thumbnails
       - ./cache:/app/cache
+      # [NEW] GIT AUTH: Mount SSH keys for private repo updates
+      # Setup: Create 'ssh' folder in project root, put your 'id_ed25519' private key there.
+      # WE MOUNT TO /tmp/ssh_mount to avoid permission issues on Windows.
+      # The update script will copy them to /root/.ssh and fix permissions.
+      - ./ssh:/tmp/ssh_mount:ro
     environment:
       - NODE_ENV=production
       - MEDIA_ROOT=/media
+      # - GIT_TOKEN=ghp_xxxx  # Alternative: Use Token instead of SSH
+      # GPU Support: Set these if using NVIDIA GPU
       # GPU Support: Set these if using NVIDIA GPU
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,video,utility

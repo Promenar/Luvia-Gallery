@@ -11,7 +11,7 @@ const exifr = require('exifr');
 const sizeOf = require('image-size');
 
 const app = express();
-const port = 3001;
+const port = process.env.PORT || 3001;
 
 // --- Constants ---
 const MEDIA_ROOT = process.env.MEDIA_ROOT || path.join(__dirname, 'media');
