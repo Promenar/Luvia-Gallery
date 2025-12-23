@@ -13,7 +13,7 @@ import { BottomTabs, Tab } from './components/BottomTabs';
 import { SettingsScreenV2 } from './components/SettingsScreenV2';
 import { LoginScreen } from './components/LoginScreen';
 import { ActionMenu } from './components/ActionMenu';
-import { deleteFile, deleteFolder, fetchFolders, fetchFiles, initApi, logout, onLogout, toggleFavorite } from './utils/api';
+import { deleteFile, deleteFolder, fetchFolders, fetchFiles, initApi, logout, onLogout, toggleFavorite, getErrorMessage } from './utils/api';
 import { MediaItem } from './types';
 import { CarouselView } from './components/CarouselView';
 import { ConfigProvider } from './utils/ConfigContext';
@@ -54,6 +54,7 @@ const MainScreen = () => {
   const { isMinimized, maximizePlayer, currentTrack, playlist, currentIndex } = useAudio();
   const { galleryLayout, setGalleryLayout, showRecent } = useConfig();
   const { showToast } = useToast();
+
 
   // Auth State
   const [checkingAuth, setCheckingAuth] = useState(true);
@@ -134,10 +135,10 @@ const MainScreen = () => {
   }, [windowWidth]);
 
   const handleApiError = (e: any) => {
-    console.error(e);
-    if (e.message === 'Unauthorized' || e.message?.includes('401')) {
-      handleLogout();
-    }
+    console.error('API Error:', e);
+    // 使用友好的错误消息而不是原始错误
+    const friendlyMessage = getErrorMessage(e, t);
+    showToast(friendlyMessage, 'error');
   };
 
   const handleLogout = async () => {
@@ -470,7 +471,8 @@ const MainScreen = () => {
               showToast(t('common.success'), 'success');
               onRefresh(); // Refresh UI
             } catch (e: any) {
-              showToast(e.message || 'Failed to delete', 'error');
+              const friendlyMessage = getErrorMessage(e, t);
+              showToast(friendlyMessage, 'error');
             }
           }
         }
