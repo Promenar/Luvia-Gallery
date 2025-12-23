@@ -28,7 +28,8 @@ import {
     Pause,
     Play,
     Square,
-    CheckCircle2
+    CheckCircle2,
+    Ruler
 } from 'lucide-react-native';
 import Animated, {
     useSharedValue,
@@ -610,10 +611,11 @@ export const SettingsScreenV2: React.FC<SettingsScreenV2Props> = ({ onBack, onLo
                                 bottom: 4,
                                 width: '48.5%',
                                 borderRadius: 12,
+                                elevation: 0,
                             },
                             animatedIndicatorStyle
                         ]}
-                        className="bg-white dark:bg-zinc-800 shadow-sm"
+                        className="bg-white dark:bg-zinc-800"
                     />
 
                     <TouchableOpacity
@@ -924,6 +926,23 @@ export const SettingsScreenV2: React.FC<SettingsScreenV2Props> = ({ onBack, onLo
                                             }
                                             progress={thumbState}
                                             onStart={() => handleAction('/api/thumb/smart-scan', t('admin.smart_repair'))}
+                                            onPause={() => handleAction('/api/thumb-gen/control', t('action.pause'), { method: 'POST', body: JSON.stringify({ action: 'pause' }) })}
+                                            onResume={() => handleAction('/api/thumb-gen/control', t('action.resume'), { method: 'POST', body: JSON.stringify({ action: 'resume' }) })}
+                                            onCancel={() => handleAction('/api/thumb-gen/control', t('action.cancel'), { method: 'POST', body: JSON.stringify({ action: 'stop' }) })}
+                                        />
+
+                                        {/* Extract Thumbnail Dimensions Task */}
+                                        <MaintenanceTaskRow
+                                            icon={Ruler}
+                                            title={t('admin.extract_dimensions')}
+                                            subtitle={t('admin.extract_dimensions_desc')}
+                                            status={
+                                                thumbState?.currentTaskName === 'Extract Thumbnail Dimensions'
+                                                    ? (thumbState?.status || 'idle')
+                                                    : 'idle'
+                                            }
+                                            progress={thumbState}
+                                            onStart={() => handleAction('/api/thumb/extract-dimensions', t('admin.extract_dimensions'))}
                                             onPause={() => handleAction('/api/thumb-gen/control', t('action.pause'), { method: 'POST', body: JSON.stringify({ action: 'pause' }) })}
                                             onResume={() => handleAction('/api/thumb-gen/control', t('action.resume'), { method: 'POST', body: JSON.stringify({ action: 'resume' }) })}
                                             onCancel={() => handleAction('/api/thumb-gen/control', t('action.cancel'), { method: 'POST', body: JSON.stringify({ action: 'stop' }) })}

@@ -1,5 +1,6 @@
 import React from 'react';
-import { View, ScrollView, RefreshControl, ActivityIndicator, Text } from 'react-native';
+import { View, RefreshControl, ActivityIndicator } from 'react-native';
+import { FlashList } from '@shopify/flash-list';
 import { MediaItem } from '../types';
 import { MediaCard } from './MediaCard';
 import { useAppTheme } from '../utils/ThemeContext';
@@ -13,8 +14,9 @@ interface MasonryGalleryProps {
     onEndReached?: () => void;
     onEndReachedThreshold?: number;
     loadingMore?: boolean;
-    ListHeaderComponent?: React.ReactNode;
-    ListEmptyComponent?: React.ReactNode;
+    ListHeaderComponent?: any;
+    ListEmptyComponent?: any;
+    numColumns?: number;
 }
 
 export const MasonryGallery: React.FC<MasonryGalleryProps> = ({
@@ -27,96 +29,82 @@ export const MasonryGallery: React.FC<MasonryGalleryProps> = ({
     loadingMore,
     ListHeaderComponent,
     ListEmptyComponent,
-    onEndReachedThreshold = 0.5
+    onEndReachedThreshold = 0.5,
+    numColumns = 2
 }) => {
     const { isDark } = useAppTheme();
-    const isFetching = React.useRef(false);
 
-    // Reset fetching state when loadingMore changes to false
-    React.useEffect(() => {
-        if (!loadingMore) {
-            isFetching.current = false;
+    // Three-tier fallback strategy for aspect ratio
+    const getAspectRatio = (item: MediaItem): number => {
+        // 1. Priority: Use server-provided aspectRatio (thumbnail)
+        if (item.aspectRatio && item.aspectRatio > 0) {
+            return item.aspectRatio;
         }
-    }, [loadingMore]);
 
-    // Split data into two columns
-    const leftColumn: MediaItem[] = [];
-    const rightColumn: MediaItem[] = [];
+        // 2. Fallback: Calculate from width/height (thumbnail)
+        if (item.width && item.height && item.height > 0) {
+            return item.width / item.height;
+        }
 
-    data.forEach((item, index) => {
-        if (index % 2 === 0) leftColumn.push(item);
-        else rightColumn.push(item);
-    });
-
-    const isCloseToBottom = ({ layoutMeasurement, contentOffset, contentSize }: any) => {
-        const threshold = layoutMeasurement.height * onEndReachedThreshold;
-        return layoutMeasurement.height + contentOffset.y >= contentSize.height - threshold;
-    };
-
-    const getItemAspectRatio = (id: string) => {
-        // Simple hash to get a consistent pseudo-random ratio
+        // 3. Legacy fallback: ID-based random ratio (for old data without dimensions)
         let hash = 0;
-        for (let i = 0; i < id.length; i++) {
-            hash = id.charCodeAt(i) + ((hash << 5) - hash);
+        for (let i = 0; i < item.id.length; i++) {
+            hash = item.id.charCodeAt(i) + ((hash << 5) - hash);
         }
-        // Map hash to range [0.75, 1.25]
         const min = 0.75;
-        const max = 1.25;
-        const ratio = min + (Math.abs(hash) % 100) / 100 * (max - min);
-        return ratio;
+        const max = 1.35;
+        return min + (Math.abs(hash) % 100) / 100 * (max - min);
     };
 
     return (
-        <ScrollView
-            className="flex-1"
-            contentContainerStyle={{ padding: 12, paddingBottom: 100 }}
-            refreshControl={onRefresh ? <RefreshControl refreshing={refreshing || false} onRefresh={onRefresh} /> : undefined}
-            onScroll={({ nativeEvent }) => {
-                if (isCloseToBottom(nativeEvent)) {
-                    if (!isFetching.current && onEndReached) {
-                        isFetching.current = true;
-                        onEndReached();
-                    }
+        <View className="flex-1 w-full h-full">
+            <FlashList
+                data={data}
+                // ✨ Enable native Masonry layout
+                // @ts-ignore - masonry prop exists in 2.2.0 but types may not be updated
+                masonry={true}
+                numColumns={numColumns}
+                estimatedItemSize={250}
+                keyExtractor={(item: MediaItem) => item.id}
+                contentContainerStyle={{ padding: 12, paddingBottom: 100 }}
+                refreshControl={onRefresh ? <RefreshControl refreshing={refreshing || false} onRefresh={onRefresh} /> : undefined}
+                onEndReached={onEndReached}
+                onEndReachedThreshold={onEndReachedThreshold}
+                ListHeaderComponent={ListHeaderComponent}
+                ListEmptyComponent={ListEmptyComponent}
+                ListFooterComponent={
+                    <View className="py-8 items-center h-24 justify-center w-full">
+                        {loadingMore ? (
+                            <ActivityIndicator size="small" color={isDark ? "#fff" : "#000"} />
+                        ) : (
+                            <View
+                                style={{ height: 20, width: '100%' }}
+                                onLayout={() => {
+                                    if (onEndReached && data.length > 0) {
+                                        onEndReached();
+                                    }
+                                }}
+                            />
+                        )}
+                    </View>
                 }
-            }}
-            scrollEventThrottle={16}
-        >
-            {ListHeaderComponent}
-
-            {data.length === 0 ? (
-                ListEmptyComponent
-            ) : (
-                <View className="flex-row" style={{ gap: 12 }}>
-                    <View className="flex-1" style={{ gap: 12 }}>
-                        {leftColumn.map(item => (
-                            <MediaCard
-                                key={item.id}
-                                item={item}
-                                aspectRatio={getItemAspectRatio(item.id)}
-                                onPress={(i) => onPress(i, data)}
-                                onLongPress={onLongPress}
-                            />
-                        ))}
+                // @ts-ignore - overrideItemLayout exists but may not be in types
+                overrideItemLayout={(layout, item: MediaItem) => {
+                    // In masonry mode, set span to 1 (each item takes 1 column)
+                    layout.span = 1;
+                    // FlashList will automatically calculate height based on aspectRatio
+                }}
+                renderItem={({ item }: { item: MediaItem }) => (
+                    <View className="flex-1 p-1">
+                        <MediaCard
+                            item={item}
+                            aspectRatio={getAspectRatio(item)}
+                            onPress={(i) => onPress(i, data)}
+                            onLongPress={onLongPress}
+                        />
                     </View>
-                    <View className="flex-1" style={{ gap: 12 }}>
-                        {rightColumn.map(item => (
-                            <MediaCard
-                                key={item.id}
-                                item={item}
-                                aspectRatio={getItemAspectRatio(item.id)}
-                                onPress={(i) => onPress(i, data)}
-                                onLongPress={onLongPress}
-                            />
-                        ))}
-                    </View>
-                </View>
-            )}
-
-            {loadingMore && (
-                <View className="py-6 items-center">
-                    <ActivityIndicator color={isDark ? "#fff" : "#000"} />
-                </View>
-            )}
-        </ScrollView>
+                )}
+            />
+        </View>
     );
 };

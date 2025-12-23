@@ -8,6 +8,7 @@ const jwt = require('jsonwebtoken'); // Added for Auth
 // const chokidar = require('chokidar'); // REMOVED: Realtime watcher deprecated for performance
 const database = require('./database');
 const exifr = require('exifr');
+const sizeOf = require('image-size');
 
 const app = express();
 const port = 3001;
@@ -1236,7 +1237,10 @@ app.get('/api/scan/results', (req, res) => {
         lastModified: f.lastModified,
         mediaType: f.mediaType,
         sourceId: f.sourceId,
-        isFavorite: f.isFavorite // Pass through
+        isFavorite: f.isFavorite, // Pass through
+        width: f.thumb_width,           // ✨ NEW
+        height: f.thumb_height,         // ✨ NEW
+        aspectRatio: f.thumb_aspect_ratio // ✨ NEW
     }));
 
     res.json({
@@ -1342,7 +1346,24 @@ async function detectHardwareAcceleration() {
 // Initialize HW Check on startup
 detectHardwareAcceleration();
 
-
+/**
+ * Extract thumbnail dimensions
+ * @param {string} thumbPath - Path to thumbnail file
+ * @returns {{width: number, height: number, aspectRatio: number}|null}
+ */
+function extractThumbnailDimensions(thumbPath) {
+    try {
+        const dimensions = sizeOf(thumbPath);
+        return {
+            width: dimensions.width,
+            height: dimensions.height,
+            aspectRatio: dimensions.width / dimensions.height
+        };
+    } catch (error) {
+        console.error(`[DimExtract] Failed to read ${thumbPath}:`, error.message);
+        return null;
+    }
+}
 
 // Helper to get video duration
 async function getVideoDuration(filePath) {
@@ -1445,6 +1466,30 @@ async function generateThumbnail(file, force = false) {
                             resolve(false);
                         } else {
                             if (fs.existsSync(thumbPath) && fs.statSync(thumbPath).size > 0) {
+                                // ✨ Extract dimensions and update database (software fallback)
+                                try {
+                                    const dimensions = extractThumbnailDimensions(thumbPath);
+                                    if (dimensions) {
+                                        database.upsertFile({
+                                            id: file.id,
+                                            path: file.path,
+                                            name: file.name,
+                                            folderPath: file.folderPath,
+                                            size: file.size,
+                                            type: file.type,
+                                            mediaType: file.mediaType,
+                                            lastModified: file.lastModified,
+                                            sourceId: file.sourceId,
+                                            thumb_width: dimensions.width,
+                                            thumb_height: dimensions.height,
+                                            thumb_aspect_ratio: dimensions.aspectRatio
+                                        });
+                                        console.log(`[Thumb] Extracted dimensions (SW fallback) for ${file.name}: ${dimensions.width}x${dimensions.height}`);
+                                    }
+                                } catch (dbErr) {
+                                    console.error(`[Thumb] Failed to update dimensions in DB:`, dbErr);
+                                }
+
                                 resolve(true);
                             } else {
                                 console.error(`[Thumb] Software fallback success but empty file: ${thumbPath}`);
@@ -1457,6 +1502,30 @@ async function generateThumbnail(file, force = false) {
                 }
             } else {
                 if (fs.existsSync(thumbPath) && fs.statSync(thumbPath).size > 0) {
+                    // ✨ Extract dimensions and update database
+                    try {
+                        const dimensions = extractThumbnailDimensions(thumbPath);
+                        if (dimensions) {
+                            database.upsertFile({
+                                id: file.id,
+                                path: file.path,
+                                name: file.name,
+                                folderPath: file.folderPath,
+                                size: file.size,
+                                type: file.type,
+                                mediaType: file.mediaType,
+                                lastModified: file.lastModified,
+                                sourceId: file.sourceId,
+                                thumb_width: dimensions.width,
+                                thumb_height: dimensions.height,
+                                thumb_aspect_ratio: dimensions.aspectRatio
+                            });
+                            console.log(`[Thumb] Extracted dimensions for ${file.name}: ${dimensions.width}x${dimensions.height}`);
+                        }
+                    } catch (dbErr) {
+                        console.error(`[Thumb] Failed to update dimensions in DB:`, dbErr);
+                    }
+
                     resolve(true);
                 } else {
                     console.error(`[Thumb] Primary success but empty file: ${thumbPath}`);
@@ -1579,7 +1648,102 @@ async function processTaskQueue() {
             thumbState.shouldPause = false;
 
             // Handle different task types
-            if (currentTask.type === 'smart_scan') {
+            if (currentTask.type === 'dimension_extract') {
+                // ✨ NEW: Extract dimensions from existing thumbnails
+                console.log(`[Queue] Starting Dimension Extract...`);
+
+                // Phase 1: Load all files  
+                thumbState.currentPath = "Phase 1/3: Loading database records...";
+                const allFiles = database.queryFiles({
+                    offset: 0,
+                    limit: 999999,
+                    recursive: true
+                });
+                thumbState.total = allFiles.length;
+                thumbState.count = 0;
+
+                let processedCount = 0;
+                let successCount = 0;
+                let skipCount = 0;
+
+                // Phase 2: Process files
+                thumbState.currentPath = "Phase 2/3: Extracting dimensions...";
+
+                for (const file of allFiles) {
+                    // Check control signals
+                    if (thumbState.shouldStop) break;
+
+                    // Pause check
+                    while (thumbState.shouldPause && !thumbState.shouldStop) {
+                        await new Promise(r => setTimeout(r, 500));
+                    }
+
+                    processedCount++;
+                    thumbState.count = processedCount;
+
+                    // Update progress display
+                    if (processedCount % 100 === 0) {
+                        thumbState.currentPath = `Extracting: ${file.name}`;
+                        await new Promise(r => setImmediate(r));
+                    }
+
+                    // Skip files that already have dimensions
+                    if (file.thumb_width && file.thumb_height) {
+                        skipCount++;
+                        continue;
+                    }
+
+                    // Calculate thumbnail path
+                    const fileId = Buffer.from(file.path).toString('base64');
+                    const thumbFilename = crypto.createHash('md5').update(fileId).digest('hex') + '.webp';
+                    const thumbPath = getCachedPath(thumbFilename);
+
+                    // Check if thumbnail exists
+                    if (!fs.existsSync(thumbPath)) {
+                        continue;
+                    }
+
+                    // Extract dimensions
+                    const dimensions = extractThumbnailDimensions(thumbPath);
+
+                    if (dimensions) {
+                        // Update database
+                        try {
+                            database.upsertFile({
+                                id: file.id,
+                                path: file.path,
+                                name: file.name,
+                                folderPath: file.folderPath,
+                                size: file.size,
+                                type: file.type,
+                                mediaType: file.mediaType,
+                                lastModified: file.lastModified,
+                                sourceId: file.sourceId,
+                                thumb_width: dimensions.width,
+                                thumb_height: dimensions.height,
+                                thumb_aspect_ratio: dimensions.aspectRatio
+                            });
+                            successCount++;
+                        } catch (dbErr) {
+                            console.error(`[DimExtract] DB update failed for ${file.id}:`, dbErr);
+                        }
+                    }
+
+                    // Save database periodically
+                    if (processedCount % 1000 === 0) {
+                        database.saveDatabase();
+                        console.log(`[DimExtract] Progress: ${processedCount}/${allFiles.length} (${successCount} extracted, ${skipCount} skipped)`);
+                    }
+                }
+
+                // Phase 3: Final save
+                thumbState.currentPath = "Phase 3/3: Saving to database...";
+                database.saveDatabase();
+
+                console.log(`[Queue] Dimension Extract Complete. Processed: ${processedCount}, Extracted: ${successCount}, Skipped: ${skipCount}`);
+                thumbState.currentPath = `Extraction Complete: ${successCount} dimensions extracted.`;
+
+            } else if (currentTask.type === 'smart_scan') {
                 thumbState.total = 4; // Phases: ReadDB, ReadCache, Analyze, Save
                 console.log(`[Queue] Starting Smart Scan...`);
 
@@ -1813,6 +1977,25 @@ app.get('/api/thumb/smart-results', (req, res) => {
         });
     }
     res.json(smartScanResults);
+});
+
+// ✨ NEW: Extract Dimensions Endpoint
+app.post('/api/thumb/extract-dimensions', authenticateToken, adminOnly, (req, res) => {
+    console.log('[API] Dimension extract task requested');
+
+    // Queue task
+    enqueueTask({
+        id: 'dimension-extract-' + Date.now(),
+        type: 'dimension_extract',
+        name: 'Extract Thumbnail Dimensions',
+        files: [],  // Task queries files itself
+        total: 0    // Task calculates total
+    });
+
+    res.json({
+        success: true,
+        message: 'Dimension extraction task queued'
+    });
 });
 
 app.post('/api/thumb/smart-repair', (req, res) => {
