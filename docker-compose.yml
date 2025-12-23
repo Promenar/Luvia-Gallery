@@ -1,7 +1,7 @@
 services:
   lumina-gallery:
     build: .
-    image: promenarleng/lumina-gallery:latest
+    image: promenarleng/lumina-gallery:v1.2.0
     container_name: lumina-gallery
     restart: unless-stopped
     ports:
