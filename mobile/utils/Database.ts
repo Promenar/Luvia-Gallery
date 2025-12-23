@@ -60,7 +60,7 @@ export const updateFavoriteStatus = (id: string, favorite: boolean) => {
 };
 
 // @ts-ignore
-export const getCachedFiles = async ({ limit = 10, folderPath, favorite }: { limit?: number; folderPath?: string; favorite?: boolean } = {}): Promise<MediaItem[]> => {
+export const getCachedFiles = async ({ limit = 10, offset = 0, folderPath, favorite }: { limit?: number; offset?: number; folderPath?: string; favorite?: boolean } = {}): Promise<MediaItem[]> => {
     // Return items from SQLite
     try {
         let query = 'SELECT value FROM media_items';
@@ -79,8 +79,9 @@ export const getCachedFiles = async ({ limit = 10, folderPath, favorite }: { lim
         if (where.length > 0) {
             query += ' WHERE ' + where.join(' AND ');
         }
-        query += ' ORDER BY JSON_EXTRACT(value, "$.dateModified") DESC LIMIT ?';
+        query += ' ORDER BY JSON_EXTRACT(value, "$.dateModified") DESC LIMIT ? OFFSET ?';
         params.push(limit);
+        params.push(offset);
 
         const rows = db.getAllSync(query, params);
         // @ts-ignore
