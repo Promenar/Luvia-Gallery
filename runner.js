@@ -157,22 +157,37 @@ const SAFE_MODE_HTML = `
         <p id="status" style="margin-top: 15px; font-size: 14px; color: #888;"></p>
     </div>
     <script>
-        function triggerUpdate() {
+        function triggerUpdate(token) {
             const btn = document.querySelector('button');
             const stat = document.getElementById('status');
             btn.disabled = true;
             btn.innerText = "UPDATING...";
             stat.innerText = "Pulling from git & rebuilding... this may take a minute.";
             
-            fetch('/api/admin/system/update', { method: 'POST' })
-                .then(r => r.json())
+            const headers = {};
+            if (token) headers['Authorization'] = 'Bearer ' + token;
+
+            fetch('/api/admin/system/update', { method: 'POST', headers: headers })
+                .then(r => {
+                    if (r.status === 401) {
+                         const input = prompt("Security Check: Please enter the Update Token.");
+                         if (input) return triggerUpdate(input); // Retry
+                         throw new Error("Update cancelled.");
+                    }
+                    return r.json().then(d => {
+                        if (!r.ok) throw new Error(d.error || "Update failed");
+                        return d;
+                    });
+                })
                 .then(d => {
+                    if (!d) return; // Handled by retry
                     stat.innerText = "Command sent: " + d.message + " Reloading in 30s...";
                     setTimeout(() => location.reload(), 30000);
                 })
                 .catch(e => {
                     stat.innerText = "Error: " + e.message;
                     btn.disabled = false;
+                    btn.innerText = "FORCE SYSTEM UPDATE";
                 });
         }
     </script>
