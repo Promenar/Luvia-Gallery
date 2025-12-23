@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { View, Text, TextInput, TouchableOpacity, ScrollView, Alert, ActivityIndicator, Switch, Modal, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -29,7 +29,10 @@ import {
     Play,
     Square,
     CheckCircle2,
-    Ruler
+    Ruler,
+    Film,
+    Sparkles,
+    Clock
 } from 'lucide-react-native';
 import Animated, {
     useSharedValue,
@@ -42,7 +45,8 @@ import Animated, {
     FadeInLeft,
     FadeOutRight,
     FadeInRight,
-    FadeOutLeft
+    FadeOutLeft,
+    cancelAnimation
 } from 'react-native-reanimated';
 import { ItemPicker } from './ItemPicker';
 
@@ -106,6 +110,182 @@ const ConfirmDialogComponent = ({
         </View>
     </Modal>
 );
+
+const SectionHeader = React.memo(({ title }: { title: string }) => (
+    <Text className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-4 ml-1">
+        {title}
+    </Text>
+));
+
+const OptionRow = React.memo(({ icon: Icon, title, subtitle, right, onPress, red, isDark }: any) => (
+    <TouchableOpacity
+        onPress={onPress}
+        disabled={!onPress}
+        className={`flex-row items-center justify-between p-4 bg-gray-50 dark:bg-zinc-900 rounded-2xl border border-gray-100 dark:border-zinc-800 mb-2 ${onPress ? 'active:opacity-70' : ''}`}
+    >
+        <View className="flex-row items-center gap-3 flex-1">
+            <View className={`w-10 h-10 rounded-full ${red ? 'bg-red-50 dark:bg-red-900/20' : 'bg-white dark:bg-zinc-800'} items-center justify-center border border-gray-100 dark:border-zinc-700`}>
+                <Icon size={18} color={red ? '#ef4444' : (isDark ? '#fff' : '#000')} />
+            </View>
+            <View className="flex-1">
+                <Text className={`font-bold ${red ? 'text-red-500' : 'text-gray-900 dark:text-white'}`}>
+                    {title}
+                </Text>
+                {subtitle && (
+                    <Text className="text-xs text-gray-500 dark:text-gray-400">
+                        {subtitle}
+                    </Text>
+                )}
+            </View>
+        </View>
+        {right}
+    </TouchableOpacity>
+));
+
+const MaintenanceTaskRow = React.memo(({ icon: Icon, title, subtitle, status, progress, onStart, onPause, onResume, onCancel, isDark }: any) => {
+    const isActive = status !== 'idle' && status !== 'stopped' && status !== 'cancelled';
+    const isPaused = status === 'paused';
+    const percentage = progress && progress.total > 0 ? (progress.count / progress.total) : 0;
+
+    // 使用 useSharedValue，它会自动在重渲染期间保持稳定
+    const spinValue = useSharedValue(0);
+    const progressWidth = useSharedValue(0);
+
+    const isAnimating = useRef(false);
+    const lastActiveStatus = useRef(false);
+
+    // 旋转动画 - 只在 isActive 或 isPaused 真正变化时处理
+    useEffect(() => {
+        const shouldAnimate = isActive && !isPaused;
+
+        if (shouldAnimate) {
+            if (!isAnimating.current) {
+                isAnimating.current = true;
+                // 开始无限旋转
+                spinValue.value = withRepeat(
+                    withTiming(spinValue.value + 360, {
+                        duration: 2000,
+                        easing: Easing.linear
+                    }),
+                    -1,
+                    false
+                );
+            }
+        } else {
+            // 只有当真正停止或暂停时才取消动画
+            if (isAnimating.current) {
+                cancelAnimation(spinValue);
+                isAnimating.current = false;
+
+                // 如果任务彻底结束（不是暂停），平滑回到 0
+                // 我们加一个小延迟，防止状态抖动导致的误归零
+                if (status === 'idle' || status === 'stopped' || status === 'cancelled') {
+                    setTimeout(() => {
+                        // 再次检查确认仍然是停止状态
+                        if (!lastActiveStatus.current) {
+                            spinValue.value = withTiming(0, { duration: 300 });
+                        }
+                    }, 500);
+                }
+            }
+        }
+        lastActiveStatus.current = isActive && !isPaused;
+    }, [isActive, isPaused, status]);
+
+    const spinStyle = useAnimatedStyle(() => ({
+        transform: [{ rotate: `${spinValue.value}deg` }]
+    }));
+
+    // 进度条动画
+    useEffect(() => {
+        progressWidth.value = withTiming(percentage * 100, { duration: 500 });
+    }, [percentage]);
+
+    const progressStyle = useAnimatedStyle(() => ({
+        width: `${progressWidth.value}%`
+    }));
+
+    return (
+        <View className="bg-gray-50 dark:bg-zinc-900 rounded-2xl border border-gray-100 dark:border-zinc-800 mb-2 overflow-hidden relative">
+            {isActive && (
+                <Animated.View
+                    className="absolute left-0 top-0 bottom-0 bg-indigo-50 dark:bg-indigo-900/10"
+                    style={progressStyle}
+                />
+            )}
+
+            <TouchableOpacity
+                onPress={isActive ? undefined : onStart}
+                activeOpacity={0.7}
+                disabled={isActive}
+                className="flex-row items-center justify-between p-4"
+            >
+                <View className="flex-row items-center gap-3 flex-1">
+                    <Animated.View style={isActive && !isPaused ? spinStyle : {}} className={`w-10 h-10 rounded-full bg-white dark:bg-zinc-800 items-center justify-center border border-gray-100 dark:border-zinc-700`}>
+                        {isActive ? (
+                            <RefreshCw size={18} color="#6366f1" />
+                        ) : (
+                            <Icon size={18} color={isDark ? '#fff' : '#000'} />
+                        )}
+                    </Animated.View>
+                    <View className="flex-1">
+                        <View className="flex-row items-center justify-between">
+                            <Text className="font-bold text-gray-900 dark:text-white">{title}</Text>
+                            {isActive && (
+                                <Text className="text-[10px] font-black text-indigo-500 uppercase tracking-tighter">
+                                    {Math.round(percentage * 100)}%
+                                </Text>
+                            )}
+                        </View>
+                        {isActive ? (
+                            <Text className="text-[10px] text-gray-400 font-medium truncate" numberOfLines={1}>
+                                {progress?.currentPath || 'Processing...'}
+                            </Text>
+                        ) : (
+                            <Text className="text-xs text-gray-500 dark:text-gray-400">{subtitle}</Text>
+                        )}
+                    </View>
+                </View>
+
+                {isActive ? (
+                    <View className="flex-row items-center gap-1 ml-2">
+                        <TouchableOpacity
+                            onPress={isPaused ? onResume : onPause}
+                            className="w-8 h-8 items-center justify-center rounded-full bg-white dark:bg-zinc-800 border border-gray-100 dark:border-zinc-700"
+                        >
+                            {isPaused ? <Play size={14} color="#10b981" fill="#10b981" /> : <Pause size={14} color="#f59e0b" fill="#f59e0b" />}
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            onPress={onCancel}
+                            className="w-8 h-8 items-center justify-center rounded-full bg-white dark:bg-zinc-800 border border-gray-100 dark:border-zinc-700"
+                        >
+                            <Square size={12} color="#ef4444" fill="#ef4444" />
+                        </TouchableOpacity>
+                    </View>
+                ) : (
+                    <ChevronRight size={16} color={isDark ? '#4b5563' : '#9ca3af'} />
+                )}
+            </TouchableOpacity>
+        </View>
+    );
+});
+
+const StatCard = React.memo(({ icon: Icon, label, value, color, subtitle, isDark }: any) => (
+    <View className="flex-1 bg-gray-50 dark:bg-zinc-900 p-4 rounded-2xl border border-gray-100 dark:border-zinc-800">
+        <View className="flex-row items-center gap-2 mb-2">
+            <View className="w-6 h-6 rounded-lg items-center justify-center bg-white dark:bg-zinc-800 border border-gray-100 dark:border-zinc-700">
+                <Icon size={14} color={color} />
+            </View>
+            <Text className="text-[10px] font-bold text-gray-400 uppercase tracking-widest leading-none">{label}</Text>
+        </View>
+        <Text className="text-lg font-black text-gray-900 dark:text-white leading-none">{value}</Text>
+        {subtitle && (
+            <Text className="text-[10px] font-bold text-gray-400 dark:text-zinc-500 mt-1.5 uppercase tracking-tighter">
+                {subtitle}
+            </Text>
+        )}
+    </View>
+));
 
 export const SettingsScreenV2: React.FC<SettingsScreenV2Props> = ({ onBack, onLogout, username, isAdmin }) => {
     const insets = useSafeAreaInsets();
@@ -432,147 +612,7 @@ export const SettingsScreenV2: React.FC<SettingsScreenV2Props> = ({ onBack, onLo
         return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
     };
 
-    // Sub-components
-    const SectionHeader = ({ title }: { title: string }) => (
-        <Text className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-4 ml-1">
-            {title}
-        </Text>
-    );
 
-    const OptionRow = ({ icon: Icon, title, subtitle, right, onPress, red }: any) => (
-        <TouchableOpacity
-            onPress={onPress}
-            disabled={!onPress}
-            className={`flex-row items-center justify-between p-4 bg-gray-50 dark:bg-zinc-900 rounded-2xl border border-gray-100 dark:border-zinc-800 mb-2 ${onPress ? 'active:opacity-70' : ''}`}
-        >
-            <View className="flex-row items-center gap-3 flex-1">
-                <View className={`w-10 h-10 rounded-full ${red ? 'bg-red-50 dark:bg-red-900/20' : 'bg-white dark:bg-zinc-800'} items-center justify-center border border-gray-100 dark:border-zinc-700`}>
-                    <Icon size={18} color={red ? '#ef4444' : (isDark ? '#fff' : '#000')} />
-                </View>
-                <View className="flex-1">
-                    <Text className={`font-bold ${red ? 'text-red-500' : 'text-gray-900 dark:text-white'}`}>
-                        {title}
-                    </Text>
-                    {subtitle && (
-                        <Text className="text-xs text-gray-500 dark:text-gray-400">
-                            {subtitle}
-                        </Text>
-                    )}
-                </View>
-            </View>
-            {right}
-        </TouchableOpacity>
-    );
-
-    const MaintenanceTaskRow = ({ icon: Icon, title, subtitle, status, progress, onStart, onPause, onResume, onCancel }: any) => {
-        const isActive = status !== 'idle' && status !== 'stopped' && status !== 'cancelled';
-        const isPaused = status === 'paused';
-        const percentage = progress && progress.total > 0 ? (progress.count / progress.total) : 0;
-
-        // Animations
-        const spinValue = useSharedValue(0);
-        useEffect(() => {
-            if (isActive && !isPaused) {
-                spinValue.value = withRepeat(withTiming(360, { duration: 2000, easing: Easing.linear }), -1, false);
-            } else {
-                spinValue.value = 0;
-            }
-        }, [isActive, isPaused]);
-
-        const spinStyle = useAnimatedStyle(() => ({
-            transform: [{ rotate: `${spinValue.value}deg` }]
-        }));
-
-        const progressWidth = useSharedValue(0);
-        useEffect(() => {
-            progressWidth.value = withTiming(percentage * 100, { duration: 500 });
-        }, [percentage]);
-
-        const progressStyle = useAnimatedStyle(() => ({
-            width: `${progressWidth.value}%`
-        }));
-
-        return (
-            <View className="bg-gray-50 dark:bg-zinc-900 rounded-2xl border border-gray-100 dark:border-zinc-800 mb-2 overflow-hidden relative">
-                {/* Progress Background */}
-                {isActive && (
-                    <Animated.View
-                        className="absolute left-0 top-0 bottom-0 bg-indigo-50 dark:bg-indigo-900/10"
-                        style={progressStyle}
-                    />
-                )}
-
-                <TouchableOpacity
-                    onPress={isActive ? undefined : onStart}
-                    activeOpacity={0.7}
-                    disabled={isActive}
-                    className="flex-row items-center justify-between p-4"
-                >
-                    <View className="flex-row items-center gap-3 flex-1">
-                        <Animated.View style={isActive && !isPaused ? spinStyle : {}} className={`w-10 h-10 rounded-full bg-white dark:bg-zinc-800 items-center justify-center border border-gray-100 dark:border-zinc-700`}>
-                            {isActive ? (
-                                <RefreshCw size={18} color="#6366f1" />
-                            ) : (
-                                <Icon size={18} color={isDark ? '#fff' : '#000'} />
-                            )}
-                        </Animated.View>
-                        <View className="flex-1">
-                            <View className="flex-row items-center justify-between">
-                                <Text className="font-bold text-gray-900 dark:text-white">{title}</Text>
-                                {isActive && (
-                                    <Text className="text-[10px] font-black text-indigo-500 uppercase tracking-tighter">
-                                        {Math.round(percentage * 100)}%
-                                    </Text>
-                                )}
-                            </View>
-                            {isActive ? (
-                                <Text className="text-[10px] text-gray-400 font-medium truncate" numberOfLines={1}>
-                                    {progress?.currentPath || 'Processing...'}
-                                </Text>
-                            ) : (
-                                <Text className="text-xs text-gray-500 dark:text-gray-400">{subtitle}</Text>
-                            )}
-                        </View>
-                    </View>
-
-                    {/* Inline Controls */}
-                    {isActive ? (
-                        <View className="flex-row items-center gap-1 ml-2">
-                            <TouchableOpacity
-                                onPress={isPaused ? onResume : onPause}
-                                className="w-8 h-8 items-center justify-center rounded-full bg-white dark:bg-zinc-800 border border-gray-100 dark:border-zinc-700"
-                            >
-                                {isPaused ? <Play size={14} color="#10b981" fill="#10b981" /> : <Pause size={14} color="#f59e0b" fill="#f59e0b" />}
-                            </TouchableOpacity>
-                            <TouchableOpacity
-                                onPress={onCancel}
-                                className="w-8 h-8 items-center justify-center rounded-full bg-white dark:bg-zinc-800 border border-gray-100 dark:border-zinc-700"
-                            >
-                                <Square size={12} color="#ef4444" fill="#ef4444" />
-                            </TouchableOpacity>
-                        </View>
-                    ) : (
-                        <ChevronRight size={16} color={isDark ? '#4b5563' : '#9ca3af'} />
-                    )}
-                </TouchableOpacity>
-            </View>
-        );
-    };
-
-    const StatCard = ({ icon: Icon, label, value, color, subtitle }: any) => (
-        <View className="flex-1 bg-gray-50 dark:bg-zinc-900 p-4 rounded-2xl border border-gray-100 dark:border-zinc-800">
-            <View className="flex-row items-center gap-2 mb-2">
-                <View className="w-6 h-6 rounded-lg items-center justify-center bg-white dark:bg-zinc-800 border border-gray-100 dark:border-zinc-700">
-                    <Icon size={14} color={color} />
-                </View>
-                <Text className="text-[10px] font-bold text-gray-400 uppercase tracking-widest leading-none">{label}</Text>
-            </View>
-            <Text className="text-lg font-black text-gray-900 dark:text-white leading-none">{value}</Text>
-            {subtitle && (
-                <Text className="text-[10px] font-bold text-gray-400 mt-1 uppercase tracking-tight">{subtitle}</Text>
-            )}
-        </View>
-    );
 
     return (
         <View className="flex-1 bg-white dark:bg-black">
@@ -709,7 +749,7 @@ export const SettingsScreenV2: React.FC<SettingsScreenV2Props> = ({ onBack, onLo
                         <View>
                             <SectionHeader title={t('settings.carousel')} />
                             <OptionRow
-                                icon={Activity}
+                                icon={Clock}
                                 title={t('settings.show_recent')}
                                 subtitle={t('settings.show_recent_desc')}
                                 right={
@@ -810,6 +850,7 @@ export const SettingsScreenV2: React.FC<SettingsScreenV2Props> = ({ onBack, onLo
                                 subtitle={t('msg.cache_desc')}
                                 onPress={handleClearCache}
                                 red
+                                isDark={isDark}
                             />
                         </View>
 
@@ -860,7 +901,7 @@ export const SettingsScreenV2: React.FC<SettingsScreenV2Props> = ({ onBack, onLo
                                     ) : stats ? (
                                         <>
                                             <View className="flex-row">
-                                                <StatCard icon={HardDrive} label={t('stats.total_media')} value={stats.mediaStats.totalFiles} color="#3b82f6" />
+                                                <StatCard icon={HardDrive} label={t('stats.total_media')} value={stats.mediaStats.totalFiles} color="#3b82f6" isDark={isDark} />
                                                 <View style={{ width: 8 }} />
                                                 <StatCard
                                                     icon={Database}
@@ -868,13 +909,14 @@ export const SettingsScreenV2: React.FC<SettingsScreenV2Props> = ({ onBack, onLo
                                                     value={formatBytes(stats.storage)}
                                                     subtitle={t('stats.items_count', { count: stats.cacheCount || 0 })}
                                                     color="#10b981"
+                                                    isDark={isDark}
                                                 />
                                             </View>
                                             <View style={{ height: 8 }} />
                                             <View className="flex-row">
-                                                <StatCard icon={ImageIcon} label={t('stats.images')} value={stats.mediaStats.images} color="#8b5cf6" />
+                                                <StatCard icon={ImageIcon} label={t('stats.images')} value={stats.mediaStats.images} color="#8b5cf6" isDark={isDark} />
                                                 <View style={{ width: 8 }} />
-                                                <StatCard icon={Activity} label={t('stats.videos')} value={stats.mediaStats.videos} color="#f59e0b" />
+                                                <StatCard icon={Film} label={t('stats.videos')} value={stats.mediaStats.videos} color="#f59e0b" isDark={isDark} />
                                             </View>
                                         </>
                                     ) : (
@@ -890,7 +932,7 @@ export const SettingsScreenV2: React.FC<SettingsScreenV2Props> = ({ onBack, onLo
                                     <SectionHeader title={t('admin.server_maintenance')} />
                                     <View className="gap-2">
                                         <MaintenanceTaskRow
-                                            icon={RefreshCw}
+                                            icon={Database}
                                             title={t('admin.scan_library')}
                                             subtitle={t('admin.scan_library_desc')}
                                             status={scanState?.status || 'idle'}
@@ -899,6 +941,7 @@ export const SettingsScreenV2: React.FC<SettingsScreenV2Props> = ({ onBack, onLo
                                             onPause={() => handleAction('/api/scan/control', t('action.pause'), { method: 'POST', body: JSON.stringify({ action: 'pause' }) })}
                                             onResume={() => handleAction('/api/scan/control', t('action.resume'), { method: 'POST', body: JSON.stringify({ action: 'resume' }) })}
                                             onCancel={() => handleAction('/api/scan/control', t('action.cancel'), { method: 'POST', body: JSON.stringify({ action: 'stop' }) })}
+                                            isDark={isDark}
                                         />
                                         <MaintenanceTaskRow
                                             icon={Cpu}
@@ -910,14 +953,15 @@ export const SettingsScreenV2: React.FC<SettingsScreenV2Props> = ({ onBack, onLo
                                             onPause={() => handleAction('/api/thumb-gen/control', t('action.pause'), { method: 'POST', body: JSON.stringify({ action: 'pause' }) })}
                                             onResume={() => handleAction('/api/thumb-gen/control', t('action.resume'), { method: 'POST', body: JSON.stringify({ action: 'resume' }) })}
                                             onCancel={() => handleAction('/api/thumb-gen/control', t('action.cancel'), { method: 'POST', body: JSON.stringify({ action: 'stop' }) })}
+                                            isDark={isDark}
                                         />
                                         <MaintenanceTaskRow
-                                            icon={RotateCw}
+                                            icon={Sparkles}
                                             title={t('admin.smart_repair')}
                                             subtitle={
                                                 smartResults && (smartResults.missingCount > 0 || smartResults.errorCount > 0)
                                                     ? t('admin.smart_results', { missing: smartResults.missingCount, error: smartResults.errorCount })
-                                                    : t('admin.scan_library_desc')
+                                                    : t('admin.smart_repair_desc')
                                             }
                                             status={
                                                 (thumbState?.currentTaskName === 'Smart Thumbnail Scan' ||
@@ -929,6 +973,7 @@ export const SettingsScreenV2: React.FC<SettingsScreenV2Props> = ({ onBack, onLo
                                             onPause={() => handleAction('/api/thumb-gen/control', t('action.pause'), { method: 'POST', body: JSON.stringify({ action: 'pause' }) })}
                                             onResume={() => handleAction('/api/thumb-gen/control', t('action.resume'), { method: 'POST', body: JSON.stringify({ action: 'resume' }) })}
                                             onCancel={() => handleAction('/api/thumb-gen/control', t('action.cancel'), { method: 'POST', body: JSON.stringify({ action: 'stop' }) })}
+                                            isDark={isDark}
                                         />
 
                                         {/* Extract Thumbnail Dimensions Task */}
@@ -946,6 +991,7 @@ export const SettingsScreenV2: React.FC<SettingsScreenV2Props> = ({ onBack, onLo
                                             onPause={() => handleAction('/api/thumb-gen/control', t('action.pause'), { method: 'POST', body: JSON.stringify({ action: 'pause' }) })}
                                             onResume={() => handleAction('/api/thumb-gen/control', t('action.resume'), { method: 'POST', body: JSON.stringify({ action: 'resume' }) })}
                                             onCancel={() => handleAction('/api/thumb-gen/control', t('action.cancel'), { method: 'POST', body: JSON.stringify({ action: 'stop' }) })}
+                                            isDark={isDark}
                                         />
 
                                         {/* Smart Repair Action (Conditional) */}
@@ -970,21 +1016,21 @@ export const SettingsScreenV2: React.FC<SettingsScreenV2Props> = ({ onBack, onLo
                                                     </View>
                                                     <Text className="font-bold text-gray-900 dark:text-white flex-1">{t('admin.thumb_concurrency')}</Text>
                                                 </View>
-                                                <View className="flex-row items-center gap-3 bg-gray-100 dark:bg-zinc-800 p-1 rounded-xl">
+                                                <View className="flex-row items-center gap-3 bg-gray-100 dark:bg-zinc-800 p-1.5 rounded-full">
                                                     <TouchableOpacity
                                                         onPress={() => handleUpdateConcurrency(-1)}
-                                                        className="w-8 h-8 items-center justify-center rounded-lg bg-white dark:bg-zinc-700 shadow-sm"
+                                                        className="w-8 h-8 items-center justify-center rounded-full bg-white dark:bg-zinc-700 shadow-sm"
                                                     >
                                                         <Minus size={14} color={isDark ? "#fff" : "#000"} />
                                                     </TouchableOpacity>
-                                                    <View className="w-6 items-center">
+                                                    <View className="w-8 items-center">
                                                         <Text className="text-sm font-black text-gray-900 dark:text-white">
                                                             {serverConfig?.threadCount || 2}
                                                         </Text>
                                                     </View>
                                                     <TouchableOpacity
                                                         onPress={() => handleUpdateConcurrency(1)}
-                                                        className="w-8 h-8 items-center justify-center rounded-lg bg-white dark:bg-zinc-700 shadow-sm"
+                                                        className="w-8 h-8 items-center justify-center rounded-full bg-white dark:bg-zinc-700 shadow-sm"
                                                     >
                                                         <Plus size={14} color={isDark ? "#fff" : "#000"} />
                                                     </TouchableOpacity>
@@ -1001,7 +1047,7 @@ export const SettingsScreenV2: React.FC<SettingsScreenV2Props> = ({ onBack, onLo
                                             title={t('admin.prune_cache')}
                                             onPress={() => handleAction('/api/cache/prune', t('admin.prune_cache'))}
                                             red
-                                        />
+                                            isDark={isDark} />
                                     </View>
                                 </View>
 
@@ -1224,6 +1270,6 @@ export const SettingsScreenV2: React.FC<SettingsScreenV2Props> = ({ onBack, onLo
                 isDark={isDark}
                 t={t}
             />
-        </View>
+        </View >
     );
 };
