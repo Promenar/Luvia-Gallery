@@ -20,6 +20,10 @@ export interface MediaItem {
   mediaCount?: number;
   coverMedia?: MediaItem;
   children?: Record<string, FolderNode>; // For folder items
+  // Thumbnail dimensions (for perfect masonry layout)
+  width?: number;
+  height?: number;
+  aspectRatio?: number;
 }
 
 export interface ExifData {
