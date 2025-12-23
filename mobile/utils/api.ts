@@ -166,9 +166,9 @@ export const fetchFiles = async (options: FetchFilesOptions = {}) => {
 
         // 1. Try Cache First (if not random and not forcing refresh)
         if (!random && !refresh) {
-            const cached = await getCachedFiles({ folderPath, favorite, limit });
-            // Only return from cache if it fills a whole page (to ensure infinite scroll works correctly)
-            if (cached.length === limit) {
+            const cached = await getCachedFiles({ folderPath, favorite, limit, offset });
+            // Only return from cache if it fills a whole page or is the last partial page
+            if (cached.length > 0) {
                 return { files: cached, fromCache: true };
             }
         }

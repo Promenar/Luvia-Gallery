@@ -12,7 +12,7 @@ interface MediaCardProps {
     aspectRatio?: number;
 }
 
-export const MediaCard: React.FC<MediaCardProps> = ({ item, onPress, onLongPress, aspectRatio = 1 }) => {
+export const MediaCard = React.memo<MediaCardProps>(({ item, onPress, onLongPress, aspectRatio = 1 }) => {
     return (
         <Pressable
             onPress={() => onPress(item)}
@@ -39,6 +39,10 @@ export const MediaCard: React.FC<MediaCardProps> = ({ item, onPress, onLongPress
                         style={{ width: '100%', height: '100%' }}
                         contentFit="cover"
                         transition={100}
+                        cachePolicy="memory-disk"
+                        priority="normal"
+                        recyclingKey={item.id}
+                        placeholderContentFit="cover"
                     />
                 )}
 
@@ -65,4 +69,9 @@ export const MediaCard: React.FC<MediaCardProps> = ({ item, onPress, onLongPress
             </View>
         </Pressable>
     );
-};
+}, (prevProps, nextProps) => {
+    // Custom comparison for better memoization
+    return prevProps.item.id === nextProps.item.id &&
+        prevProps.item.isFavorite === nextProps.item.isFavorite &&
+        prevProps.aspectRatio === nextProps.aspectRatio;
+});
