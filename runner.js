@@ -84,6 +84,11 @@ function getSelfHash() {
 const initialHash = getSelfHash();
 log(`Supervisor initialized. Hash: ${initialHash}`);
 
+// Log Security Status
+const hasEnvToken = !!process.env.UPDATE_TOKEN;
+const hasFileToken = fs.existsSync(path.join('/app/data', 'update_secret.txt'));
+log(`Update Token Protection: ${hasEnvToken || hasFileToken ? 'ENABLED 🔒' : 'DISABLED ⚠️'}`);
+
 // Function to handle updates (Git Pull + Rebuild)
 function performUpdate(res) {
     if (updateInProgress) {
