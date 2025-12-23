@@ -201,6 +201,8 @@ const translations: Record<Language, Record<string, string>> = {
         'admin.user_count': '{{count}} Users',
         'admin.delete_user': 'Delete User',
         'admin.confirm_delete_user': 'Are you sure you want to remove this user? This cannot be undone.',
+        'admin.extract_dimensions': 'Extract Thumbnail Dimensions',
+        'admin.extract_dimensions_desc': 'Extract dimensions from existing thumbnails (for perfect masonry layout)',
         'feedback.success': 'Operation successful!',
         'feedback.error': 'Operation failed!',
     },
@@ -382,6 +384,8 @@ const translations: Record<Language, Record<string, string>> = {
         'admin.user_count': '{{count}} 个用户',
         'admin.delete_user': '删除用户',
         'admin.confirm_delete_user': '确定要删除此用户吗？此操作无法撤销。',
+        'admin.extract_dimensions': '提取缩略图尺寸',
+        'admin.extract_dimensions_desc': '扫描已有缩略图并提取尺寸信息（用于完美瀑布流布局）',
     }
 };
 

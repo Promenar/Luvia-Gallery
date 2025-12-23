@@ -56,7 +56,10 @@ function createSchema() {
             media_type TEXT NOT NULL,
             last_modified INTEGER NOT NULL,
             source_id TEXT NOT NULL,
-            created_at INTEGER DEFAULT (strftime('%s', 'now'))
+            created_at INTEGER DEFAULT (strftime('%s', 'now')),
+            thumb_width INTEGER,
+            thumb_height INTEGER,
+            thumb_aspect_ratio REAL
         )
     `);
 
@@ -111,6 +114,32 @@ function ensureSchema() {
 
     if (!tableNames.includes('files')) {
         createSchema();
+        return;
+    }
+
+    // Migration: Add thumbnail dimension columns if they don't exist
+    try {
+        const tableInfo = db.exec("PRAGMA table_info(files)");
+        const columns = tableInfo.length > 0 ? tableInfo[0].values.map(row => row[1]) : [];
+
+        if (!columns.includes('thumb_width')) {
+            console.log('[Migration] Adding thumb_width column to files table');
+            db.run('ALTER TABLE files ADD COLUMN thumb_width INTEGER');
+        }
+
+        if (!columns.includes('thumb_height')) {
+            console.log('[Migration] Adding thumb_height column to files table');
+            db.run('ALTER TABLE files ADD COLUMN thumb_height INTEGER');
+        }
+
+        if (!columns.includes('thumb_aspect_ratio')) {
+            console.log('[Migration] Adding thumb_aspect_ratio column to files table');
+            db.run('ALTER TABLE files ADD COLUMN thumb_aspect_ratio REAL');
+        }
+
+        saveDatabase();
+    } catch (error) {
+        console.error('[Migration] Failed to add thumbnail dimension columns:', error);
     }
 }
 
@@ -137,12 +166,15 @@ function saveDatabase() {
  */
 function upsertFile(file) {
     const stmt = db.prepare(`
-        INSERT INTO files (id, path, name, folder_path, size, type, media_type, last_modified, source_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO files (id, path, name, folder_path, size, type, media_type, last_modified, source_id, thumb_width, thumb_height, thumb_aspect_ratio)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(path) DO UPDATE SET
             name = excluded.name,
             size = excluded.size,
-            last_modified = excluded.last_modified
+            last_modified = excluded.last_modified,
+            thumb_width = excluded.thumb_width,
+            thumb_height = excluded.thumb_height,
+            thumb_aspect_ratio = excluded.thumb_aspect_ratio
     `);
 
     stmt.run([
@@ -154,7 +186,10 @@ function upsertFile(file) {
         file.type,
         file.mediaType,
         file.lastModified,
-        file.sourceId
+        file.sourceId,
+        file.thumb_width || null,
+        file.thumb_height || null,
+        file.thumb_aspect_ratio || null
     ]);
 
     stmt.free();
@@ -283,7 +318,10 @@ function queryFiles(options = {}) {
             mediaType: row.media_type,
             lastModified: row.last_modified,
             sourceId: row.source_id,
-            isFavorite: !!row.is_fav
+            isFavorite: !!row.is_fav,
+            thumb_width: row.thumb_width,
+            thumb_height: row.thumb_height,
+            thumb_aspect_ratio: row.thumb_aspect_ratio
         });
     }
     stmt.free();
@@ -440,7 +478,10 @@ function getFileByPath(filePath) {
             type: row.type,
             mediaType: row.media_type,
             lastModified: row.last_modified,
-            sourceId: row.source_id
+            sourceId: row.source_id,
+            thumb_width: row.thumb_width,
+            thumb_height: row.thumb_height,
+            thumb_aspect_ratio: row.thumb_aspect_ratio
         };
     }
     stmt.free();
@@ -595,7 +636,10 @@ function queryFavoriteFiles(userId, options = {}) {
             type: row.type,
             mediaType: row.media_type,
             lastModified: row.last_modified,
-            sourceId: row.source_id
+            sourceId: row.source_id,
+            thumb_width: row.thumb_width,
+            thumb_height: row.thumb_height,
+            thumb_aspect_ratio: row.thumb_aspect_ratio
         });
     }
     stmt.free();
