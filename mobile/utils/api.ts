@@ -100,6 +100,14 @@ export const logout = async (isManual = false) => {
     await SecureStore.deleteItemAsync('lumina_token');
     await AsyncStorage.removeItem('lumina_username');
     await AsyncStorage.removeItem('lumina_is_admin');
+
+    // Clear local metadata and image cache on logout to prevent leakage
+    try {
+        await clearStaticCache();
+    } catch (e) {
+        console.error("Failed to clear cache during logout", e);
+    }
+
     if (logoutCallback && !isManual) {
         logoutCallback();
     }
@@ -158,7 +166,7 @@ export const fetchFiles = async (options: FetchFilesOptions = {}) => {
 
         // 1. Try Cache First (if not random and not forcing refresh)
         if (!random && !refresh) {
-            const cached = await getCachedFiles({ folderPath, favorite, limit, offset });
+            const cached = await getCachedFiles({ folderPath, favorite, limit });
             // Only return from cache if it fills a whole page (to ensure infinite scroll works correctly)
             if (cached.length === limit) {
                 return { files: cached, fromCache: true };
@@ -197,7 +205,7 @@ export const fetchFiles = async (options: FetchFilesOptions = {}) => {
         if (!random && data.files && data.files.length > 0) {
             // Await to ensure DB is consistent before UI allows interaction (blocking delete race condition)
             try {
-                await saveMediaItems(data.files, folderPath || 'root');
+                await saveMediaItems(data.files);
             } catch (e) {
                 console.error("Cache save error", e);
             }
