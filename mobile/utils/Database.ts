@@ -2,6 +2,7 @@
 import * as SQLite from 'expo-sqlite';
 import { MediaItem } from '../types';
 import * as FileSystem from 'expo-file-system';
+import { Image } from 'expo-image';
 
 // @ts-ignore
 const { Paths, File, Directory } = FileSystem;
@@ -53,7 +54,7 @@ export const deleteMediaItem = (id: string) => {
 export const updateFavoriteStatus = (id: string, favorite: boolean) => {
     const item = getMediaItem(id);
     if (item) {
-        item.favorite = favorite;
+        item.isFavorite = favorite;
         saveMediaItem(item);
     }
 };
@@ -71,7 +72,7 @@ export const getCachedFiles = async ({ limit = 10, folderPath, favorite }: { lim
             params.push(`${folderPath}%`);
         }
         if (favorite !== undefined) {
-            where.push('JSON_EXTRACT(value, "$.favorite") = ?');
+            where.push('JSON_EXTRACT(value, "$.isFavorite") = ?');
             params.push(favorite ? 1 : 0);
         }
 
@@ -116,7 +117,20 @@ export const deleteFolderFromCache = async (foldername: string) => {
 };
 
 export const clearStaticCache = async () => {
-    db.runSync('DELETE FROM media_items');
+    try {
+        db.execSync('DELETE FROM media_items');
+        db.execSync('VACUUM');
+    } catch (e) {
+        console.error('[Database] Failed to clear media_items table:', e);
+    }
+
+    // Clear expo-image cache
+    try {
+        await Image.clearMemoryCache();
+        await Image.clearDiskCache();
+    } catch (e) {
+        console.error('[Database] Failed to clear image cache:', e);
+    }
 };
 
 // Recursive function to calculate size
@@ -163,27 +177,28 @@ export const getCacheSize = async (): Promise<number> => {
     let totalSize = 0;
 
     try {
-        if (!Paths || !File) return 0;
+        if (!Paths) return 0;
 
         // 1. SQLite DB Size
-        if (Paths.document) {
-            // @ts-ignore
-            const dbPath = Paths.document.uri + '/SQLite/lumina.db';
-            // @ts-ignore
-            const dbFile = new File(dbPath);
-            // @ts-ignore
+        const dbBase = Paths.document?.uri;
+        if (dbBase) {
+            const dbFile = new File(dbBase + '/SQLite/lumina.db');
             if (dbFile.exists) {
-                // @ts-ignore
                 totalSize += (dbFile.size ?? 0);
             }
         }
 
-        // 2. Image Cache Size
+        // 2. Image Cache Size (Recursively)
         if (Paths.cache) {
-            totalSize += await calculateFolderSize(Paths.cache);
+            const cacheDir = new Directory(Paths.cache.uri);
+            if (cacheDir.exists) {
+                totalSize += await calculateFolderSize(cacheDir);
+            }
         }
     } catch (e) {
         console.error("Error getting cache size", e);
     }
     return totalSize;
 };
+
+// Removed deprecated calculateRecursiveSize as calculateFolderSize is the new standard
