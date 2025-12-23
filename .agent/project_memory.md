@@ -42,3 +42,15 @@
     - **Performance**: Heavy UI components (VirtualGallery, ImageViewer) must be loaded using `React.lazy`.
     - **Windows Android Build**: When `eas build --local` is restricted by platform (macOS/Linux required), use `npx expo prebuild --platform android` followed by `gradlew.bat assembleRelease` in the `android` folder.
     - **Docs Path**: Reference `docs/antigravity/` for detailed maintenance logs.
+
+- **Recursive Media Scanning**: The `/api/scan/results` endpoint (backend) and `fetchFiles` (frontend) now support a `recursive=true` flag. When combined with `favorites=true`, this recursively specifically expands *favorited folders* to include all their contained media, merging them with directly favorited files. This ensures "Favorites" mode is comprehensive.
+- **Network Error Humanization**: 
+    - API layer (`api.ts`) must classify errors into `NETWORK_OFFLINE` (TypeError), `NETWORK_TIMEOUT` (AbortError), and `SERVER_ERROR` (HTTP 500+).
+    - Frontend must use a unified `getErrorMessage(e, t)` helper to convert technical errors into user-friendly i18n strings.
+    - **Toast Integration**: All caught API errors should be displayed via the global `ToastContext` (BlurView/Haptics) rather than `alert()`.
+    - **RedBox Policy**: Do NOT disable RedBox (LogBox) in development. It is vital for catching unhandled runtime crashes, while handled API errors should be toasted.
+
+- **Windows Android Build (File Locking)**: 
+    - Building Android locally on Windows often fails with `EBUSY` or `unlink` errors due to active Metro Bundler processes locking generated C++ object files (e.g., `autolinking.cpp.o`).
+    - **Fix**: Before running `npx expo prebuild --clean` or `rm -rf android`, you **MUST** terminate all running node processes (`taskkill /F /IM node.exe`) and stop the Expo development server.
+
