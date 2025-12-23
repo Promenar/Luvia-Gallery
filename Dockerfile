@@ -30,14 +30,21 @@ RUN apk add --no-cache ffmpeg mesa-va-gallium intel-media-driver libva-intel-dri
 COPY package*.json ./
 RUN npm install --production
 
+# Install Git & OpenSSH for Auto-Update Feature
+RUN apk add --no-cache git openssh
+
 # Copy built frontend assets
 COPY --from=builder /app/dist ./dist
 
-# Copy server script and database module
+# Copy server scripts
 COPY --from=builder /app/server.js ./server.js
 COPY --from=builder /app/database.js ./database.js
+
+# Copy Runner & Scripts
+COPY --from=builder /app/runner.js ./runner.js
+COPY --from=builder /app/scripts ./scripts
 
 ENV NODE_ENV=production
 EXPOSE 3001
 
-CMD ["node", "server.js"]
+CMD ["node", "runner.js"]
