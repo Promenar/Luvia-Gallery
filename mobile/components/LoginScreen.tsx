@@ -83,7 +83,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
                             <Text className="text-white text-4xl font-bold italic">L</Text>
                         </View>
                         <Text className="text-4xl font-black text-gray-900 dark:text-white tracking-tighter text-center">
-                            Lumina Gallery
+                            Luvia Gallery
                         </Text>
                         <Text className="text-gray-500 dark:text-gray-400 font-medium text-center mt-2">
                             {t('login.subtitle')}

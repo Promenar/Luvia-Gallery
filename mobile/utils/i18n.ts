@@ -24,7 +24,7 @@ interface I18nState {
 
 const translations: Record<Language, Record<string, string>> = {
     en: {
-        'app.title': 'Lumina Gallery',
+        'app.title': 'Luvia Gallery',
         'tab.home': 'Home',
         'tab.library': 'Library',
         'tab.favorites': 'Favorites',
@@ -136,10 +136,10 @@ const translations: Record<Language, Record<string, string>> = {
         'settings.security': 'Security',
         'settings.biometric': 'Biometric Lock',
         'settings.biometric_desc': 'Require FaceID/TouchID to access app',
-        'auth.locked': 'Lumina Locked',
+        'auth.locked': 'Luvia Locked',
         'auth.locked_desc': 'Unlock to view your gallery',
         'auth.unlock': 'Tap to Unlock',
-        'auth.biometric_prompt': 'Authenticate to access Lumina',
+        'auth.biometric_prompt': 'Authenticate to access Luvia',
         'dialog.confirm': 'Confirm',
         'dialog.cancel': 'Cancel',
         'auth.use_passcode': 'Use Passcode',
@@ -216,7 +216,7 @@ const translations: Record<Language, Record<string, string>> = {
         'error.unknown': 'Unknown error\nPlease try again',
     },
     zh: {
-        'app.title': 'Lumina 图库',
+        'app.title': 'Luvia 图库',
         'tab.home': '首页',
         'tab.library': '图库',
         'tab.favorites': '收藏',
@@ -331,7 +331,7 @@ const translations: Record<Language, Record<string, string>> = {
         'auth.locked': '应用已锁定',
         'auth.locked_desc': '解锁以查看您的图库',
         'auth.unlock': '点击解锁',
-        'auth.biometric_prompt': '请输入生物识别信息以访问 Lumina',
+        'auth.biometric_prompt': '请输入生物识别信息以访问 Luvia',
         'dialog.confirm': '确认',
         'dialog.cancel': '取消',
         'auth.use_passcode': '使用密码',

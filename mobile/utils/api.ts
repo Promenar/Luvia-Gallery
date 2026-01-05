@@ -4,6 +4,20 @@ import * as SecureStore from 'expo-secure-store';
 import { getCachedFiles, saveMediaItems, updateFavoriteStatus, clearStaticCache } from './Database';
 export { clearStaticCache };
 
+const STORAGE_KEYS = {
+    apiUrl: 'luvia_api_url',
+    token: 'luvia_token',
+    username: 'luvia_username',
+    isAdmin: 'luvia_is_admin',
+};
+
+const LEGACY_KEYS = {
+    apiUrl: 'lumina_api_url',
+    token: 'lumina_token',
+    username: 'lumina_username',
+    isAdmin: 'lumina_is_admin',
+};
+
 // Default Remote Backend URL
 export let API_URL = '';
 let authToken: string | null = null;
@@ -12,7 +26,8 @@ export const setBaseUrl = async (url: string, persist: boolean = true) => {
     const cleanUrl = url.trim().replace(/\/$/, '');
     API_URL = cleanUrl;
     if (persist && cleanUrl) {
-        await AsyncStorage.setItem('lumina_api_url', cleanUrl);
+        await AsyncStorage.setItem(STORAGE_KEYS.apiUrl, cleanUrl);
+        await AsyncStorage.removeItem(LEGACY_KEYS.apiUrl);
     }
 };
 
@@ -25,9 +40,12 @@ export const getToken = () => authToken;
 // Initialize URL & Token from storage (call this early in App.tsx)
 export const initApi = async () => {
     try {
-        const storedUrl = await AsyncStorage.getItem('lumina_api_url');
-        const storedToken = await SecureStore.getItemAsync('lumina_token');
-        const storedUsername = await AsyncStorage.getItem('lumina_username');
+        const storedUrl = (await AsyncStorage.getItem(STORAGE_KEYS.apiUrl))
+            ?? (await AsyncStorage.getItem(LEGACY_KEYS.apiUrl));
+        const storedToken = (await SecureStore.getItemAsync(STORAGE_KEYS.token))
+            ?? (await SecureStore.getItemAsync(LEGACY_KEYS.token));
+        const storedUsername = (await AsyncStorage.getItem(STORAGE_KEYS.username))
+            ?? (await AsyncStorage.getItem(LEGACY_KEYS.username));
         if (storedUrl) API_URL = storedUrl;
         if (storedToken) authToken = storedToken;
         return { token: storedToken, username: storedUsername };
@@ -100,10 +118,14 @@ export const login = async (username: string, password: string) => {
             const data = await res.json();
             if (data.token) {
                 authToken = data.token;
-                await SecureStore.setItemAsync('lumina_token', data.token);
-                await AsyncStorage.setItem('lumina_username', username);
+                await SecureStore.setItemAsync(STORAGE_KEYS.token, data.token);
+                await SecureStore.deleteItemAsync(LEGACY_KEYS.token);
+
+                await AsyncStorage.setItem(STORAGE_KEYS.username, username);
+                await AsyncStorage.removeItem(LEGACY_KEYS.username);
                 if (data.user) {
-                    await AsyncStorage.setItem('lumina_is_admin', data.user.isAdmin ? 'true' : 'false');
+                    await AsyncStorage.setItem(STORAGE_KEYS.isAdmin, data.user.isAdmin ? 'true' : 'false');
+                    await AsyncStorage.removeItem(LEGACY_KEYS.isAdmin);
                 }
                 return data;
             }
@@ -116,9 +138,12 @@ export const login = async (username: string, password: string) => {
 
 export const logout = async (isManual = false) => {
     authToken = null;
-    await SecureStore.deleteItemAsync('lumina_token');
-    await AsyncStorage.removeItem('lumina_username');
-    await AsyncStorage.removeItem('lumina_is_admin');
+    await SecureStore.deleteItemAsync(STORAGE_KEYS.token);
+    await SecureStore.deleteItemAsync(LEGACY_KEYS.token);
+    await AsyncStorage.removeItem(STORAGE_KEYS.username);
+    await AsyncStorage.removeItem(LEGACY_KEYS.username);
+    await AsyncStorage.removeItem(STORAGE_KEYS.isAdmin);
+    await AsyncStorage.removeItem(LEGACY_KEYS.isAdmin);
 
     // Clear local metadata and image cache on logout to prevent leakage
     try {

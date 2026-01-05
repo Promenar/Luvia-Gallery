@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "Lumina Gallery",
+    "name": "Luvia Gallery",
     "slug": "mobile",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -27,7 +27,7 @@
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-      "package": "com.promenar.lumina"
+      "package": "com.promenar.luvia"
     },
     "web": {
       "favicon": "./assets/favicon.png"
