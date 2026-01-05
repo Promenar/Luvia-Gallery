@@ -78,8 +78,8 @@ sed -i 's/const port = 3001;/const port = process.env.PORT || 3001;/g' server.js
 # ------------------------------------------------------------
 
 # 2. Dependency Check & Install
-# Needed for vite build. 
-# NOTE: We must force --include=dev because NODE_ENV is production in Docker, 
+# Needed for vite build.
+# NOTE: We must force --include=dev because NODE_ENV is production in Docker,
 # which causes npm install to skip devDependencies (like vite).
 echo "[Update] Installing dependencies (including dev)..."
 npm install --include=dev
