@@ -572,7 +572,7 @@ app.get('/api/config', (req, res) => {
                 homeSettings: safeUser.homeSettings || {},
                 role: 'user',
                 username: safeUser.username,
-                title: config.title || 'Lumina Gallery'
+                title: config.title || 'Luvia Gallery'
             });
         }
     }
@@ -580,7 +580,7 @@ app.get('/api/config', (req, res) => {
     // Scenario 3: Anonymous/Login stage (Public Info)
     return res.json({
         configured: true,
-        title: config.title || 'Lumina Gallery',
+        title: config.title || 'Luvia Gallery',
         users: (config.users || []).map(u => ({ username: u.username, isAdmin: u.isAdmin }))
     });
 });

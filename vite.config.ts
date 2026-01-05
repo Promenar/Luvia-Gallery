@@ -17,8 +17,8 @@ export default defineConfig(({ mode }) => {
         registerType: 'autoUpdate',
         includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'masked-icon.svg', 'pwa-192x192.png', 'pwa-512x512.png'],
         manifest: {
-          name: 'Lumina Gallery',
-          short_name: 'Lumina',
+          name: 'Luvia Gallery',
+          short_name: 'Luvia',
           description: 'A modern, self-hosted media gallery.',
           theme_color: '#ffffff',
           background_color: '#ffffff',

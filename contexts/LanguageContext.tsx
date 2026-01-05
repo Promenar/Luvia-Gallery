@@ -505,7 +505,7 @@ export const LanguageProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const [language, setLanguageState] = useState<Language>('en');
 
   useEffect(() => {
-    const savedLang = localStorage.getItem('lumina_language') as Language;
+    const savedLang = (localStorage.getItem('luvia_language') || localStorage.getItem('lumina_language')) as Language;
     if (savedLang && (savedLang === 'en' || savedLang === 'zh')) {
       setLanguageState(savedLang);
     } else {
@@ -519,7 +519,8 @@ export const LanguageProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const setLanguage = (lang: Language) => {
     setLanguageState(lang);
-    localStorage.setItem('lumina_language', lang);
+    localStorage.setItem('luvia_language', lang);
+    localStorage.removeItem('lumina_language');
   };
 
   const t = (key: keyof typeof translations['en']) => {
