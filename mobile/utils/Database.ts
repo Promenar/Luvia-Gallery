@@ -7,7 +7,7 @@ import { Image } from 'expo-image';
 // @ts-ignore
 const { Paths, File, Directory } = FileSystem;
 
-const db = SQLite.openDatabaseSync('lumina.db');
+const db = SQLite.openDatabaseSync('luvia.db');
 
 export const initDatabase = () => {
     try {
@@ -183,7 +183,7 @@ export const getCacheSize = async (): Promise<number> => {
         // 1. SQLite DB Size
         const dbBase = Paths.document?.uri;
         if (dbBase) {
-            const dbFile = new File(dbBase + '/SQLite/lumina.db');
+            const dbFile = new File(dbBase + '/SQLite/luvia.db');
             if (dbFile.exists) {
                 totalSize += (dbFile.size ?? 0);
             }

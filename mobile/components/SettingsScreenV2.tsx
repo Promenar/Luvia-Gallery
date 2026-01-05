@@ -489,6 +489,7 @@ export const SettingsScreenV2: React.FC<SettingsScreenV2Props> = ({ onBack, onLo
             isDestructive: true,
             onConfirm: async () => {
                 try {
+                    await AsyncStorage.removeItem('luvia_cache_home');
                     await AsyncStorage.removeItem('lumina_cache_home');
                     await clearStaticCache();
                     showToast(t('msg.cache_cleared'), 'success');
@@ -1117,7 +1118,7 @@ export const SettingsScreenV2: React.FC<SettingsScreenV2Props> = ({ onBack, onLo
 
                                 <View className="mt-8 mb-4 items-center opacity-50">
                                     <Text className="text-[10px] text-gray-400 dark:text-zinc-500 font-mono">
-                                        Lumina Gallery Mobile v1.0.0 (Phoenix V2)
+                                        Luvia Gallery Mobile v1.0.0 (Phoenix V2)
                                     </Text>
                                 </View>
                             </>
