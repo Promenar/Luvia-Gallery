@@ -95,7 +95,7 @@ export const Home: React.FC<HomeProps> = React.memo(({ items, onEnterLibrary, on
                     transition={{ delay: 0.5 }}
                 >
                     <h1 className="text-5xl md:text-7xl font-bold text-white mb-6 tracking-tight drop-shadow-2xl">
-                        Lumina Gallery
+                        Luvia Gallery
                     </h1>
                     <p className="text-lg md:text-xl text-gray-200 mb-6 max-w-2xl mx-auto font-light drop-shadow-md">
                         {subtitle}

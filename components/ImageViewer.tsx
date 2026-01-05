@@ -78,7 +78,7 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
                 setIsExifLoading(true);
                 try {
                     // Use Server-Side API instead of client-side parsing (avoids Auth/CORS issues)
-                    const token = localStorage.getItem('lumina_token');
+                    const token = localStorage.getItem('luvia_token') || localStorage.getItem('lumina_token');
                     const headers: any = {};
                     if (token) headers['Authorization'] = `Bearer ${token}`;
 
