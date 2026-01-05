@@ -74,7 +74,7 @@ export const BiometricGate: React.FC<BiometricGateProps> = ({ children }) => {
             }
 
             const result = await LocalAuthentication.authenticateAsync({
-                promptMessage: t('auth.biometric_prompt') || 'Authenticate to access Lumina',
+                promptMessage: t('auth.biometric_prompt') || 'Authenticate to access Luvia',
                 fallbackLabel: t('auth.use_passcode') || 'Use Passcode',
                 cancelLabel: t('btn.cancel') || 'Cancel',
                 disableDeviceFallback: false,
@@ -127,7 +127,7 @@ export const BiometricGate: React.FC<BiometricGateProps> = ({ children }) => {
                                     <Lock size={48} color={isDark ? '#fff' : '#000'} />
                                 </View>
                                 <Text className="text-2xl font-bold text-gray-900 dark:text-white mb-2">
-                                    {t('auth.locked') || 'Lumina Locked'}
+                                    {t('auth.locked') || 'Luvia Locked'}
                                 </Text>
                                 <Text className="text-gray-500 dark:text-gray-400 mb-8 text-center max-w-[250px]">
                                     {t('auth.locked_desc') || 'Unlock to view your gallery'}

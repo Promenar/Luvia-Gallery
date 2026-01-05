@@ -338,7 +338,8 @@ const MainScreen = () => {
 
           // Load role
           const { default: AsyncStorage } = await import('@react-native-async-storage/async-storage');
-          const role = await AsyncStorage.getItem('lumina_is_admin');
+          const role = (await AsyncStorage.getItem('luvia_is_admin'))
+            ?? (await AsyncStorage.getItem('lumina_is_admin'));
           setIsAdmin(role === 'true');
 
           loadHomeData();

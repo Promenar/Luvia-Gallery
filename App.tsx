@@ -16,15 +16,63 @@ import { AudioPlayer } from './components/AudioPlayer';
 import { UserModal } from './components/UserModal';
 import { SettingsModal } from './components/SettingsModal';
 
-const CONFIG_FILE_NAME = 'lumina-config.json';
-const USERS_STORAGE_KEY = 'lumina_users';
-const VIEW_MODE_KEY = 'lumina_view_mode';
-const LAYOUT_MODE_KEY = 'lumina_layout_mode';
-const APP_TITLE_KEY = 'lumina_app_title';
-const APP_SUBTITLE_KEY = 'lumina_app_subtitle';
-const SOURCES_STORAGE_KEY = 'lumina_sources';
-const THEME_STORAGE_KEY = 'lumina_theme';
-const AUTH_USER_KEY = 'lumina_auth_user';
+const STORAGE_KEYS = {
+    configFile: 'lumina-config.json', // keep filename stable for server compatibility
+    users: 'luvia_users',
+    viewMode: 'luvia_view_mode',
+    layoutMode: 'luvia_layout_mode',
+    appTitle: 'luvia_app_title',
+    appSubtitle: 'luvia_app_subtitle',
+    sources: 'luvia_sources',
+    theme: 'luvia_theme',
+    authUser: 'luvia_auth_user',
+    currentPath: 'luvia_current_path',
+    cacheHome: 'luvia_cache_home',
+    token: 'luvia_token',
+};
+
+const LEGACY_KEYS = {
+    users: 'lumina_users',
+    viewMode: 'lumina_view_mode',
+    layoutMode: 'lumina_layout_mode',
+    appTitle: 'lumina_app_title',
+    appSubtitle: 'lumina_app_subtitle',
+    sources: 'lumina_sources',
+    theme: 'lumina_theme',
+    authUser: 'lumina_auth_user',
+    currentPath: 'lumina_current_path',
+    cacheHome: 'lumina_cache_home',
+    token: 'lumina_token',
+};
+
+const CONFIG_FILE_NAME = STORAGE_KEYS.configFile;
+const USERS_STORAGE_KEY = STORAGE_KEYS.users;
+const VIEW_MODE_KEY = STORAGE_KEYS.viewMode;
+const LAYOUT_MODE_KEY = STORAGE_KEYS.layoutMode;
+const APP_TITLE_KEY = STORAGE_KEYS.appTitle;
+const APP_SUBTITLE_KEY = STORAGE_KEYS.appSubtitle;
+const SOURCES_STORAGE_KEY = STORAGE_KEYS.sources;
+const THEME_STORAGE_KEY = STORAGE_KEYS.theme;
+const AUTH_USER_KEY = STORAGE_KEYS.authUser;
+const CURRENT_PATH_KEY = STORAGE_KEYS.currentPath;
+const CACHE_HOME_KEY = STORAGE_KEYS.cacheHome;
+const TOKEN_STORAGE_KEY = STORAGE_KEYS.token;
+
+const getStorageItem = (key: string, legacyKey?: string) => {
+    const value = localStorage.getItem(key);
+    if (value !== null) return value;
+    return legacyKey ? localStorage.getItem(legacyKey) : null;
+};
+
+const setStorageItem = (key: string, value: string, legacyKey?: string) => {
+    localStorage.setItem(key, value);
+    if (legacyKey) localStorage.removeItem(legacyKey);
+};
+
+const removeStorageItem = (key: string, legacyKey?: string) => {
+    localStorage.removeItem(key);
+    if (legacyKey) localStorage.removeItem(legacyKey);
+};
 
 
 
@@ -85,7 +133,7 @@ export default function App() {
 
     // --- App Data State ---
     const [allUserData, setAllUserData] = useState<Record<string, UserData>>({});
-    const [appTitle, setAppTitle] = useState('Lumina Gallery');
+    const [appTitle, setAppTitle] = useState('Luvia Gallery');
     const [homeSubtitle, setHomeSubtitle] = useState('Your memories, beautifully organized. Rediscover your collection.');
     const [homeConfig, setHomeConfig] = useState<HomeScreenConfig>({ mode: 'random' });
     const [showDirPicker, setShowDirPicker] = useState(false);
@@ -117,12 +165,11 @@ export default function App() {
 
     // Sync refs with state
     useEffect(() => { viewModeRef.current = viewMode; }, [viewMode]);
-    const CURRENT_PATH_KEY = 'lumina_current_path';
 
     useEffect(() => {
         currentPathRef.current = currentPath;
-        if (currentPath) localStorage.setItem(CURRENT_PATH_KEY, currentPath);
-        else if (viewMode === 'home' || viewMode === 'all') localStorage.removeItem(CURRENT_PATH_KEY);
+        if (currentPath) setStorageItem(CURRENT_PATH_KEY, currentPath, LEGACY_KEYS.currentPath);
+        else if (viewMode === 'home' || viewMode === 'all') removeStorageItem(CURRENT_PATH_KEY, LEGACY_KEYS.currentPath);
     }, [currentPath, viewMode]);
 
 
@@ -130,10 +177,10 @@ export default function App() {
     useEffect(() => {
         initApp();
 
-        const savedViewMode = localStorage.getItem(VIEW_MODE_KEY) as ViewMode;
+        const savedViewMode = getStorageItem(VIEW_MODE_KEY, LEGACY_KEYS.viewMode) as ViewMode;
         if (savedViewMode) setViewMode(savedViewMode);
 
-        const savedLayout = localStorage.getItem(LAYOUT_MODE_KEY) as GridLayout;
+        const savedLayout = getStorageItem(LAYOUT_MODE_KEY, LEGACY_KEYS.layoutMode) as GridLayout;
         if (savedLayout) setLayoutMode(savedLayout);
 
         // Restore path Strategy:
@@ -143,7 +190,7 @@ export default function App() {
         if (window.location.hash.startsWith('#folder=')) {
             restoredPath = decodeURIComponent(window.location.hash.substring(8));
         } else {
-            const savedPath = localStorage.getItem(CURRENT_PATH_KEY);
+            const savedPath = getStorageItem(CURRENT_PATH_KEY, LEGACY_KEYS.currentPath);
             if (savedPath && savedViewMode === 'folders') {
                 restoredPath = savedPath;
             }
@@ -190,7 +237,7 @@ export default function App() {
 
     // --- Theme Logic ---
     useEffect(() => {
-        const savedTheme = localStorage.getItem(THEME_STORAGE_KEY) as 'light' | 'dark' | 'system' | null;
+        const savedTheme = getStorageItem(THEME_STORAGE_KEY, LEGACY_KEYS.theme) as 'light' | 'dark' | 'system' | null;
         if (savedTheme) {
             setTheme(savedTheme);
         }
@@ -247,12 +294,12 @@ export default function App() {
         };
         const newTheme = next[theme] || 'system';
         setTheme(newTheme);
-        localStorage.setItem(THEME_STORAGE_KEY, newTheme);
+        setStorageItem(THEME_STORAGE_KEY, newTheme, LEGACY_KEYS.theme);
     };
 
     const handleLogout = () => {
-        localStorage.removeItem('lumina_token');
-        localStorage.removeItem(AUTH_USER_KEY);
+        removeStorageItem(TOKEN_STORAGE_KEY, LEGACY_KEYS.token);
+        removeStorageItem(AUTH_USER_KEY, LEGACY_KEYS.authUser);
         setCurrentUser(null);
         setAuthStep('login');
         // Optionally clear other user-specific state
@@ -262,14 +309,14 @@ export default function App() {
 
     // --- Secure Fetch Helper ---
     const apiFetch = async (url: string, options: RequestInit = {}) => {
-        const token = localStorage.getItem('lumina_token');
+        const token = getStorageItem(TOKEN_STORAGE_KEY, LEGACY_KEYS.token);
         const headers: any = { ...options.headers };
         if (token) headers['Authorization'] = `Bearer ${token}`;
 
         const res = await fetch(url, { ...options, headers });
 
         if (res.status === 401) {
-            localStorage.removeItem('lumina_token');
+            removeStorageItem(TOKEN_STORAGE_KEY, LEGACY_KEYS.token);
             if (authStep === 'app') {
                 handleLogout();
             }
@@ -338,10 +385,10 @@ export default function App() {
                     }
                 }
             } else {
-                localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(u));
-                localStorage.setItem(APP_TITLE_KEY, t);
-                localStorage.setItem(APP_SUBTITLE_KEY, s);
-                localStorage.setItem(SOURCES_STORAGE_KEY, JSON.stringify(userSources));
+                setStorageItem(USERS_STORAGE_KEY, JSON.stringify(u), LEGACY_KEYS.users);
+                setStorageItem(APP_TITLE_KEY, t, LEGACY_KEYS.appTitle);
+                setStorageItem(APP_SUBTITLE_KEY, s, LEGACY_KEYS.appSubtitle);
+                setStorageItem(SOURCES_STORAGE_KEY, JSON.stringify(userSources), LEGACY_KEYS.sources);
             }
         };
 
@@ -356,7 +403,7 @@ export default function App() {
     const initApp = async () => {
         let loadedUsers: User[] = [];
         let loadedData: Record<string, UserData> = {};
-        let loadedTitle = 'Lumina Gallery';
+        let loadedTitle = 'Luvia Gallery';
         let loadedSubtitle = 'Your memories, beautifully organized. Rediscover your collection.';
         let loadedHomeConfig: HomeScreenConfig = { mode: 'random' };
         let serverMode = false;
@@ -414,10 +461,10 @@ export default function App() {
 
         // Fallback or Local
         if (!serverMode) {
-            const storedUsers = localStorage.getItem(USERS_STORAGE_KEY);
-            const storedTitle = localStorage.getItem(APP_TITLE_KEY);
-            const storedSubtitle = localStorage.getItem(APP_SUBTITLE_KEY);
-            const storedSources = localStorage.getItem(SOURCES_STORAGE_KEY);
+            const storedUsers = getStorageItem(USERS_STORAGE_KEY, LEGACY_KEYS.users);
+            const storedTitle = getStorageItem(APP_TITLE_KEY, LEGACY_KEYS.appTitle);
+            const storedSubtitle = getStorageItem(APP_SUBTITLE_KEY, LEGACY_KEYS.appSubtitle);
+            const storedSources = getStorageItem(SOURCES_STORAGE_KEY, LEGACY_KEYS.sources);
 
             if (storedUsers) {
                 loadedUsers = JSON.parse(storedUsers);
@@ -451,12 +498,12 @@ export default function App() {
         setHomeConfig(loadedHomeConfig);
 
         // Check Persistent Login & Load Cache (Performance)
-        const savedUser = localStorage.getItem(AUTH_USER_KEY);
-        const savedViewMode = localStorage.getItem(VIEW_MODE_KEY) as ViewMode;
+        const savedUser = getStorageItem(AUTH_USER_KEY, LEGACY_KEYS.authUser);
+        const savedViewMode = getStorageItem(VIEW_MODE_KEY, LEGACY_KEYS.viewMode) as ViewMode;
 
         if (savedUser && (!savedViewMode || savedViewMode === 'home' || savedViewMode === 'all')) {
             try {
-                const cached = localStorage.getItem('lumina_cache_home');
+                const cached = getStorageItem(CACHE_HOME_KEY, LEGACY_KEYS.cacheHome);
                 if (cached && loadedData[savedUser]) {
                     const cData = JSON.parse(cached);
                     if (cData && Array.isArray(cData.files)) {
@@ -526,10 +573,10 @@ export default function App() {
     useEffect(() => {
         initApp();
 
-        const savedViewMode = localStorage.getItem(VIEW_MODE_KEY) as ViewMode;
+        const savedViewMode = getStorageItem(VIEW_MODE_KEY, LEGACY_KEYS.viewMode) as ViewMode;
         if (savedViewMode) setViewMode(savedViewMode);
 
-        const savedLayout = localStorage.getItem(LAYOUT_MODE_KEY) as GridLayout;
+        const savedLayout = getStorageItem(LAYOUT_MODE_KEY, LEGACY_KEYS.layoutMode) as GridLayout;
         if (savedLayout) setLayoutMode(savedLayout);
 
         // Restore path from URL hash if present
@@ -709,7 +756,7 @@ export default function App() {
                             total: data.total,
                             timestamp: Date.now()
                         };
-                        localStorage.setItem('lumina_cache_home', JSON.stringify(cacheData));
+                        setStorageItem(CACHE_HOME_KEY, JSON.stringify(cacheData), LEGACY_KEYS.cacheHome);
                     } catch (e) { console.error('Cache save failed', e); }
                 }
             }
@@ -1075,7 +1122,7 @@ export default function App() {
 
     const handleSetViewMode = async (mode: ViewMode) => {
         setViewMode(mode);
-        localStorage.setItem(VIEW_MODE_KEY, mode);
+        setStorageItem(VIEW_MODE_KEY, mode, LEGACY_KEYS.viewMode);
         setCurrentPath('');
 
         if (isServerMode && currentUser) {
@@ -1084,7 +1131,7 @@ export default function App() {
             let initialFiles: MediaItem[] = [];
             if (mode === 'all' || mode === 'home') {
                 try {
-                    const cached = localStorage.getItem('lumina_cache_home');
+                    const cached = getStorageItem(CACHE_HOME_KEY, LEGACY_KEYS.cacheHome);
                     if (cached) {
                         const cData = JSON.parse(cached);
                         if (cData && Array.isArray(cData.files)) {
@@ -1155,7 +1202,7 @@ export default function App() {
 
     const handleJumpToFolder = (item: MediaItem) => {
         setViewMode('folders');
-        localStorage.setItem(VIEW_MODE_KEY, 'folders');
+        setStorageItem(VIEW_MODE_KEY, 'folders', LEGACY_KEYS.viewMode);
         handleFolderClick(item.folderPath);
     };
 
@@ -1511,7 +1558,7 @@ export default function App() {
         else if (layoutMode === 'timeline') newMode = 'grid';
 
         setLayoutMode(newMode);
-        localStorage.setItem(LAYOUT_MODE_KEY, newMode);
+        setStorageItem(LAYOUT_MODE_KEY, newMode, LEGACY_KEYS.layoutMode);
     };
 
     const handleUpdateTitle = (newTitle: string) => {
@@ -1740,7 +1787,7 @@ export default function App() {
                         {authStep === 'setup' ? t('welcome') : t('sign_in')}
                     </h1>
                     <p className="text-center text-gray-500 dark:text-gray-400 mb-8">
-                        {authStep === 'setup' ? t('setup_admin') : 'Access your Lumina Gallery'}
+                        {authStep === 'setup' ? t('setup_admin') : 'Access your Luvia Gallery'}
                     </p>
 
                     {authError && (
@@ -1772,7 +1819,7 @@ export default function App() {
                                         headers: { 'Content-Type': 'application/json' },
                                         body: JSON.stringify({
                                             users: [adminUser],
-                                            title: appTitle || 'Lumina Gallery'
+                                            title: appTitle || 'Luvia Gallery'
                                         })
                                     });
 
@@ -1790,9 +1837,9 @@ export default function App() {
 
                                     if (loginRes.ok) {
                                         const data = await loginRes.json();
-                                        localStorage.setItem('lumina_token', data.token);
+                                        setStorageItem(TOKEN_STORAGE_KEY, data.token, LEGACY_KEYS.token);
                                         setCurrentUser(data.user);
-                                        localStorage.setItem(AUTH_USER_KEY, data.user.username);
+                                        setStorageItem(AUTH_USER_KEY, data.user.username, LEGACY_KEYS.authUser);
                                         setAuthStep('app');
                                         // Trigger init
                                         initApp();
@@ -1812,7 +1859,7 @@ export default function App() {
                                 setAllUserData(newData);
                                 setCurrentUser(newUser);
                                 setAuthStep('app');
-                                localStorage.setItem(AUTH_USER_KEY, newUser.username);
+                                setStorageItem(AUTH_USER_KEY, newUser.username, LEGACY_KEYS.authUser);
                             }
                         } else {
                             if (isServerMode) {
@@ -1825,10 +1872,10 @@ export default function App() {
                                         if (res.ok) {
                                             const data = await res.json();
                                             if (data.token) {
-                                                localStorage.setItem('lumina_token', data.token);
+                                                setStorageItem(TOKEN_STORAGE_KEY, data.token, LEGACY_KEYS.token);
                                                 setCurrentUser(data.user);
                                                 setAuthStep('app');
-                                                localStorage.setItem(AUTH_USER_KEY, data.user.username);
+                                                setStorageItem(AUTH_USER_KEY, data.user.username, LEGACY_KEYS.authUser);
 
                                                 // Trigger init fetch if server mode
                                                 setTimeout(() => {
@@ -1847,7 +1894,7 @@ export default function App() {
                                 if (user) {
                                     setCurrentUser(user);
                                     setAuthStep('app');
-                                    localStorage.setItem(AUTH_USER_KEY, user.username);
+                                    setStorageItem(AUTH_USER_KEY, user.username, LEGACY_KEYS.authUser);
                                 } else {
                                     setAuthError(t('invalid_credentials'));
                                 }
@@ -2025,7 +2072,7 @@ export default function App() {
                                         onItemClick={(item) => {
                                             if (item.mediaType === 'folder') {
                                                 setViewMode('folders');
-                                                localStorage.setItem(VIEW_MODE_KEY, 'folders');
+                                                setStorageItem(VIEW_MODE_KEY, 'folders', LEGACY_KEYS.viewMode);
                                                 handleFolderClick(item.path);
                                             } else if (item.mediaType === 'audio') {
                                                 // Create playlist from all audio files in effective list
@@ -2072,7 +2119,7 @@ export default function App() {
                                                         }}
                                                         onClick={(path) => {
                                                             setViewMode('folders');
-                                                            localStorage.setItem(VIEW_MODE_KEY, 'folders');
+                                                            setStorageItem(VIEW_MODE_KEY, 'folders', LEGACY_KEYS.viewMode);
                                                             handleFolderClick(path);
                                                         }}
                                                         isFavorite={true}

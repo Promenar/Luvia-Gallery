@@ -141,7 +141,7 @@ const SAFE_MODE_HTML = `
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>Lumina Gallery - Recovery Mode</title>
+    <title>Luvia Gallery - Recovery Mode</title>
     <style>
         body { font-family: monospace; background: #1a1a1a; color: #ff5555; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; }
         .box { border: 2px solid #ff5555; padding: 40px; border-radius: 8px; text-align: center; background: #2a2a2a; max-width: 600px; }
