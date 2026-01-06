@@ -17,6 +17,7 @@ interface MasonryGalleryProps {
     ListHeaderComponent?: any;
     ListEmptyComponent?: any;
     numColumns?: number;
+    onMomentumScrollBegin?: () => void;
 }
 
 export const MasonryGallery: React.FC<MasonryGalleryProps> = ({
@@ -29,6 +30,7 @@ export const MasonryGallery: React.FC<MasonryGalleryProps> = ({
     loadingMore,
     ListHeaderComponent,
     ListEmptyComponent,
+    onMomentumScrollBegin,
     onEndReachedThreshold = 0.5,
     numColumns = 2
 }) => {
@@ -69,6 +71,7 @@ export const MasonryGallery: React.FC<MasonryGalleryProps> = ({
                 contentContainerStyle={{ padding: 12, paddingBottom: 100 }}
                 refreshControl={onRefresh ? <RefreshControl refreshing={refreshing || false} onRefresh={onRefresh} /> : undefined}
                 onEndReached={onEndReached}
+                onMomentumScrollBegin={onMomentumScrollBegin}
                 onEndReachedThreshold={onEndReachedThreshold}
                 ListHeaderComponent={ListHeaderComponent}
                 ListEmptyComponent={ListEmptyComponent}
@@ -76,16 +79,7 @@ export const MasonryGallery: React.FC<MasonryGalleryProps> = ({
                     <View className="py-8 items-center h-24 justify-center w-full">
                         {loadingMore ? (
                             <ActivityIndicator size="small" color={isDark ? "#fff" : "#000"} />
-                        ) : (
-                            <View
-                                style={{ height: 20, width: '100%' }}
-                                onLayout={() => {
-                                    if (onEndReached && data.length > 0) {
-                                        onEndReached();
-                                    }
-                                }}
-                            />
-                        )}
+                        ) : null}
                     </View>
                 }
                 // @ts-ignore - overrideItemLayout exists but may not be in types

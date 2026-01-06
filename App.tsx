@@ -752,8 +752,18 @@ export default function App() {
                 isFavorite: file.isFavorite !== undefined ? file.isFavorite : (favIds.files.includes(file.path) || favIds.files.includes(file.id))
             }));
 
-            const newFiles = reset ? filesWithFavorites : [...(currentData[username]?.files || []), ...filesWithFavorites];
+            const prevFiles = currentData[username]?.files || [];
+            const existingIds = new Set(prevFiles.map(f => f.id));
+            const uniqueNew = filesWithFavorites.filter(f => !existingIds.has(f.id));
+            const newFiles = reset ? filesWithFavorites : [...prevFiles, ...uniqueNew];
             console.log('[DEBUG] Total files to set:', newFiles.length);
+
+            // Unlock load-more once user scrolls away from end
+            if (sortOption === 'random' && !reset && uniqueNew.length === 0) {
+                setHasMoreServer(false);
+            } else {
+                endReachedLockRef.current = false;
+            }
 
             setAllUserData({
                 ...currentData,
@@ -792,10 +802,16 @@ export default function App() {
         }
     };
 
+    const endReachedLockRef = useRef(false);
+
     const loadMoreServerFiles = async () => {
         if (!isServerMode || !currentUser || !hasMoreServer || isFetchingMore) return;
         const filter = viewMode === 'folders' ? currentPath : null;
         const favs = viewMode === 'favorites';
+
+        if (endReachedLockRef.current) return;
+        endReachedLockRef.current = true;
+
         await fetchServerFiles(currentUser.username, allUserData, serverOffset, false, filter, favs);
     };
 
