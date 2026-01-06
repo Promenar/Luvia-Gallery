@@ -48,6 +48,7 @@ const InnerTimeline: React.FC<{
     loadNextPage: (start: number, stop: number) => void;
 }> = ({ width, height, items, onItemClick, hasNextPage, isNextPageLoading, loadNextPage }) => {
     const listRef = useRef<any>(null);
+    const loadLockRef = useRef(false);
 
     // Critical Fix: Reset cached row measurements when width changes.
     // Without this, resizing (or mobile orientation change) keeps old row heights/offsets,
@@ -115,10 +116,13 @@ const InnerTimeline: React.FC<{
                 itemSize={getItemSize}
                 overscanCount={5}
                 onItemsRendered={({ visibleStopIndex }: { visibleStopIndex: number }) => {
-                    if (hasNextPage && !isNextPageLoading) {
-                        if (visibleStopIndex >= visualRows.length - 10) {
-                            loadNextPage(items.length, items.length + 50);
-                        }
+                    const nearEnd = visibleStopIndex >= visualRows.length - 10;
+                    if (nearEnd && hasNextPage && !isNextPageLoading && !loadLockRef.current) {
+                        loadLockRef.current = true;
+                        loadNextPage(items.length, items.length + 50);
+                    }
+                    if (!nearEnd) {
+                        loadLockRef.current = false;
                     }
                 }}
             >
@@ -194,6 +198,8 @@ export const VirtualGallery: React.FC<VirtualGalleryProps> = ({
     onDelete,
     onRegenerate
 }) => {
+
+    const loadLockRef = useRef(false);
 
     // -- MASONRY LAYOUT --
     const [columnCount, setColumnCount] = useState(3);
@@ -337,11 +343,16 @@ export const VirtualGallery: React.FC<VirtualGalleryProps> = ({
                             width={width}
                             overscanRowCount={5}
                             onItemsRendered={({ visibleRowStopIndex }: { visibleRowStopIndex: number }) => {
-                                if (hasNextPage && !isNextPageLoading) {
-                                    const visibleEndIndex = (visibleRowStopIndex + 1) * safeColumnCount;
-                                    if (visibleEndIndex >= items.length) {
-                                        loadNextPage(items.length, items.length + 50);
-                                    }
+                                const visibleEndIndex = (visibleRowStopIndex + 1) * safeColumnCount;
+                                const nearEnd = visibleEndIndex >= items.length - safeColumnCount;
+
+                                if (nearEnd && hasNextPage && !isNextPageLoading && !loadLockRef.current) {
+                                    loadLockRef.current = true;
+                                    loadNextPage(items.length, items.length + 50);
+                                }
+
+                                if (!nearEnd) {
+                                    loadLockRef.current = false;
                                 }
                             }}
                         >
