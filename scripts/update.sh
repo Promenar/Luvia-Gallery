@@ -47,7 +47,7 @@ if [ ! -d ".git" ]; then
     # Configure git to trust the current directory
     git config --global --add safe.directory /app
     # FIX: Use correct GitHub namespace (NarcisWL) based on SSH auth success
-    git remote add origin git@github.com:NarcisWL/lumina-gallery.git
+    git remote add origin git@github.com:NarcisWL/Luvia-Gallery.git
     # Fallback/Safety: Try HTTPS if SSH fails? No, we rely on SSH.
 fi
 
