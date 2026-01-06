@@ -696,11 +696,17 @@ app.get('/api/library/folders', (req, res) => {
                 }
             } catch (e) { }
 
+            let lastModified = 0;
+            try {
+                lastModified = fs.statSync(folderPath).mtimeMs;
+            } catch (e) { }
+
             return {
                 name: path.basename(folderPath),
                 path: folderPath,
                 mediaCount: mediaCount,
-                coverMedia: coverMedia
+                coverMedia: coverMedia,
+                lastModified
             };
         });
 
@@ -773,13 +779,16 @@ app.get('/api/library/folders', (req, res) => {
     const favoriteIds = database.getFavoriteIds(userId);
     const favoriteFolders = new Set(favoriteIds.folders || []);
 
-    const folders = subs.map(f => {
+    const folders = subs.map(sub => {
         let coverMedia = null;
+        let lastModified = 0;
+        try { lastModified = fs.statSync(sub).mtimeMs; } catch (e) { }
         try {
             const found = findCoverMedia(f);
             if (found) {
-                const b64Id = Buffer.from(found.path).toString('base64');
-                let url = `/api/thumb/${b64Id}`;
+            mediaCount: countMediaFilesInFolder(sub),
+            coverMedia: findCoverMedia(sub),
+            lastModified
                 try {
                     const thumbFilename = crypto.createHash('md5').update(b64Id).digest('hex') + '.webp';
                     const thumbPath = getCachedPath(thumbFilename);
@@ -1151,6 +1160,7 @@ app.get('/api/scan/results', (req, res) => {
     const favoritesOnly = req.query.favorites === 'true';
     const random = req.query.random === 'true';
     const recursive = req.query.recursive === 'true';
+    const sortOption = req.query.sort || 'dateDesc';
     const mediaType = req.query.mediaType;
     const excludeMediaType = req.query.excludeMediaType;
     let folderPath = req.query.folder;
@@ -1167,6 +1177,21 @@ app.get('/api/scan/results', (req, res) => {
     const isAdmin = req.user.role === 'admin';
 
     const userLibraryPaths = getUserLibraryPaths(req.user);
+
+    const sortArray = (arr) => {
+        if (!Array.isArray(arr)) return arr;
+        switch (sortOption) {
+            case 'dateAsc':
+                return [...arr].sort((a, b) => (a.lastModified || 0) - (b.lastModified || 0));
+            case 'nameAsc':
+                return [...arr].sort((a, b) => (a.name || '').localeCompare(b.name || '', undefined, { sensitivity: 'base' }));
+            case 'nameDesc':
+                return [...arr].sort((a, b) => (b.name || '').localeCompare(a.name || '', undefined, { sensitivity: 'base' }));
+            case 'dateDesc':
+            default:
+                return [...arr].sort((a, b) => (b.lastModified || 0) - (a.lastModified || 0));
+        }
+    };
 
     if (favoritesOnly) {
         // Query favorites from DB
@@ -1249,6 +1274,8 @@ app.get('/api/scan/results', (req, res) => {
                     const j = Math.floor(Math.random() * (i + 1));
                     [filteredFiles[i], filteredFiles[j]] = [filteredFiles[j], filteredFiles[i]];
                 }
+            } else {
+                filteredFiles = sortArray(filteredFiles);
             }
 
             // 6. Apply pagination
@@ -1303,7 +1330,7 @@ app.get('/api/scan/results', (req, res) => {
                     queryOptions.allowedPaths = userLibraryPaths;
                 }
 
-                files = database.queryFiles(queryOptions);
+                files = database.queryFiles({ ...queryOptions, sortOption });
                 total = database.countFiles({
                     folderPath: folderPath ? path.resolve(folderPath) : null,
                     recursive,

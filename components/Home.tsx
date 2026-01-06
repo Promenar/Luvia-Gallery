@@ -7,6 +7,7 @@ import { Icons } from './ui/Icon';
 import { useLanguage } from '../contexts/LanguageContext';
 
 interface HomeProps {
+    title: string;
     items: MediaItem[];
     onEnterLibrary: () => void;
     onJumpToFolder: (item: MediaItem) => void;
@@ -14,7 +15,7 @@ interface HomeProps {
     config?: HomeScreenConfig;
 }
 
-export const Home: React.FC<HomeProps> = React.memo(({ items, onEnterLibrary, onJumpToFolder, subtitle, config }) => {
+export const Home: React.FC<HomeProps> = React.memo(({ title, items, onEnterLibrary, onJumpToFolder, subtitle, config }) => {
     const { t } = useLanguage();
     const [currentIndex, setCurrentIndex] = useState(0);
     const [featured, setFeatured] = useState<MediaItem[]>([]);
@@ -32,7 +33,10 @@ export const Home: React.FC<HomeProps> = React.memo(({ items, onEnterLibrary, on
                 filteredItems = items.filter(i => i.name === config.path);
             }
         } else if (config?.mode === 'folder' && config.path) {
-            filteredItems = items.filter(i => i.folderPath === config.path || i.folderPath.endsWith(config.path!));
+            // Include subfolders by prefix to support recursive picks
+            filteredItems = items.filter(i => i.folderPath === config.path || i.folderPath.startsWith(config.path));
+        } else if (config?.mode === 'favorites') {
+            filteredItems = items.filter(i => i.isFavorite);
         }
 
         if (filteredItems.length > 0) {
@@ -95,7 +99,7 @@ export const Home: React.FC<HomeProps> = React.memo(({ items, onEnterLibrary, on
                     transition={{ delay: 0.5 }}
                 >
                     <h1 className="text-5xl md:text-7xl font-bold text-white mb-6 tracking-tight drop-shadow-2xl">
-                        Luvia Gallery
+                        {title || 'Luvia Gallery'}
                     </h1>
                     <p className="text-lg md:text-xl text-gray-200 mb-6 max-w-2xl mx-auto font-light drop-shadow-md">
                         {subtitle}
@@ -136,6 +140,7 @@ export const Home: React.FC<HomeProps> = React.memo(({ items, onEnterLibrary, on
 }, (prev, next) => {
     return (
         prev.items.length === next.items.length &&
+        prev.title === next.title &&
         prev.subtitle === next.subtitle &&
         prev.config?.mode === next.config?.mode &&
         prev.config?.path === next.config?.path
