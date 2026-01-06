@@ -110,6 +110,7 @@ const MainScreen = () => {
   const [loadingMore, setLoadingMore] = useState(false);
 
   const [sortMode, setSortMode] = useState<'dateDesc' | 'dateAsc' | 'nameAsc' | 'nameDesc' | 'random'>('dateDesc');
+  const endReachedLock = React.useRef(false);
 
   // Media Viewer State
   const [viewerContext, setViewerContext] = useState<{ items: MediaItem[], index: number } | null>(null);
@@ -389,6 +390,7 @@ const MainScreen = () => {
 
   const onRefreshSilent = useCallback(() => {
     setRefreshing(true);
+    endReachedLock.current = false;
     if (activeTab === 'home') loadHomeData(true);
     if (activeTab === 'library') loadLibraryData(0, false, true);
     if (activeTab === 'favorites') loadFavoritesData(0, false, true);
@@ -752,8 +754,11 @@ const MainScreen = () => {
                 keyExtractor={(item: MediaItem) => item.id}
                 contentContainerStyle={{ padding: 12, paddingBottom: 100 }}
                 refreshControl={<RefreshControl refreshing={refreshing || loading} onRefresh={onRefresh} />}
+                onMomentumScrollBegin={() => { endReachedLock.current = false; }}
                 onEndReached={() => {
+                  if (endReachedLock.current) return;
                   if (hasMoreLibrary && !loadingMore && !loading) {
+                    endReachedLock.current = true;
                     loadLibraryData(libraryOffset + 100, true);
                   }
                 }}
@@ -777,8 +782,11 @@ const MainScreen = () => {
                 onLongPress={handleManagePress}
                 onRefresh={onRefresh}
                 refreshing={refreshing || loading}
+                onMomentumScrollBegin={() => { endReachedLock.current = false; }}
                 onEndReached={() => {
+                  if (endReachedLock.current) return;
                   if (hasMoreLibrary && !loadingMore && !loading) {
+                    endReachedLock.current = true;
                     loadLibraryData(libraryOffset + 100, true);
                   }
                 }}
@@ -804,8 +812,11 @@ const MainScreen = () => {
                 keyExtractor={(item: MediaItem) => item.id}
                 contentContainerStyle={{ padding: 12, paddingBottom: 100 }}
                 refreshControl={<RefreshControl refreshing={refreshing || loading} onRefresh={onRefresh} />}
+                onMomentumScrollBegin={() => { endReachedLock.current = false; }}
                 onEndReached={() => {
+                  if (endReachedLock.current) return;
                   if (hasMoreFavorites && !loadingMore && !loading) {
+                    endReachedLock.current = true;
                     loadFavoritesData(favoriteOffset + 50, true);
                   }
                 }}
@@ -859,8 +870,11 @@ const MainScreen = () => {
                 onLongPress={handleManagePress}
                 onRefresh={onRefresh}
                 refreshing={refreshing || loading}
+                onMomentumScrollBegin={() => { endReachedLock.current = false; }}
                 onEndReached={() => {
+                  if (endReachedLock.current) return;
                   if (hasMoreFavorites && !loadingMore && !loading) {
+                    endReachedLock.current = true;
                     loadFavoritesData(favoriteOffset + 50, true);
                   }
                 }}
