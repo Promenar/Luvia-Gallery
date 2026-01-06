@@ -1371,15 +1371,11 @@ app.get('/api/scan/results', (req, res) => {
         aspectRatio: f.thumb_aspect_ratio // ✨ NEW
     }));
 
-    const isRandomRequest = random;
-    const responseTotal = isRandomRequest ? transformedFiles.length : total;
-    const responseHasMore = isRandomRequest ? false : offset + limit < total;
-
     res.json({
         files: transformedFiles,
-        total: responseTotal,
-        hasMore: responseHasMore,
-        sources: [{ id: 'local', name: 'Local Storage', count: responseTotal }]
+        total: total,
+        hasMore: offset + limit < total,
+        sources: [{ id: 'local', name: 'Local Storage', count: total }]
     });
 });
 

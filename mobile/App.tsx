@@ -255,9 +255,9 @@ const MainScreen = () => {
       const filesRes = await fetchFiles({ offset, limit, excludeMediaType: 'audio', refresh, sort: random ? undefined : sortMode, random });
       const newFiles = filesRes.files || [];
 
-      // In random mode, treat the first page as complete to avoid endless pagination requests.
-      if (random) {
-        setHasMoreLibrary(false);
+      // Respect server-side hasMore when provided; otherwise infer from page size and cache state.
+      if (typeof filesRes.hasMore === 'boolean') {
+        setHasMoreLibrary(filesRes.hasMore);
       } else if (!filesRes.fromCache && newFiles.length < limit) {
         // Critical Fix: Only stop infinite scroll if we hit the end of NETWORK data.
         // Partial cache hits shouldn't stop us.
