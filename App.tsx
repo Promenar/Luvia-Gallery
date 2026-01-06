@@ -797,6 +797,16 @@ export default function App() {
         await fetchServerFiles(currentUser.username, allUserData, serverOffset, false, filter, favs);
     };
 
+    // Re-fetch from server when sort changes to get globally ordered pages
+    useEffect(() => {
+        if (!isServerMode || !currentUser) return;
+        setServerOffset(0);
+        setHasMoreServer(true);
+        const filter = viewMode === 'folders' ? currentPath : null;
+        const favs = viewMode === 'favorites';
+        fetchServerFiles(currentUser.username, allUserData, 0, true, filter, favs);
+    }, [sortOption, isServerMode, currentUser, viewMode, currentPath]);
+
     const stopPolling = () => {
         if (scanTimeoutRef.current) {
             clearTimeout(scanTimeoutRef.current);
@@ -2057,7 +2067,7 @@ export default function App() {
                                 </div>
                             )}
 
-                            {(viewMode === 'all' || viewMode === 'favorites' || (viewMode === 'folders' && currentPath)) && (
+                            {(viewMode === 'all' || viewMode === 'favorites' || viewMode === 'folders') && (
                                 <button onClick={toggleLayoutMode} className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg text-gray-600 dark:text-gray-300" title="Toggle Layout">
                                     {layoutMode === 'masonry' ? <Icons.Masonry size={20} /> : (layoutMode === 'timeline' ? <Icons.List size={20} /> : <Icons.Grid size={20} />)}
                                 </button>
