@@ -109,7 +109,7 @@ const MainScreen = () => {
   const [refreshing, setRefreshing] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
 
-  const [sortMode, setSortMode] = useState<'dateDesc' | 'dateAsc' | 'nameAsc' | 'nameDesc'>('dateDesc');
+  const [sortMode, setSortMode] = useState<'dateDesc' | 'dateAsc' | 'nameAsc' | 'nameDesc' | 'random'>('dateDesc');
 
   // Media Viewer State
   const [viewerContext, setViewerContext] = useState<{ items: MediaItem[], index: number } | null>(null);
@@ -159,6 +159,8 @@ const MainScreen = () => {
     switch (sortMode) {
       case 'dateAsc':
         return '时间↑';
+      case 'random':
+        return '随机打乱';
       case 'nameAsc':
         return '名称A-Z';
       case 'nameDesc':
@@ -171,6 +173,13 @@ const MainScreen = () => {
   const applySort = React.useCallback((list: MediaItem[]) => {
     const sorted = [...list];
     switch (sortMode) {
+      case 'random': {
+        for (let i = sorted.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [sorted[i], sorted[j]] = [sorted[j], sorted[i]];
+        }
+        return sorted;
+      }
       case 'dateAsc':
         return sorted.sort((a, b) => (a.lastModified || 0) - (b.lastModified || 0));
       case 'nameAsc':
@@ -185,6 +194,13 @@ const MainScreen = () => {
   const sortFolders = React.useCallback((list: Folder[]) => {
     const sorted = [...list];
     switch (sortMode) {
+      case 'random': {
+        for (let i = sorted.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [sorted[i], sorted[j]] = [sorted[j], sorted[i]];
+        }
+        return sorted;
+      }
       case 'nameAsc':
         return sorted.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
       case 'nameDesc':
@@ -197,7 +213,7 @@ const MainScreen = () => {
   }, [sortMode]);
 
   const cycleSortMode = () => {
-    const order: Array<'dateDesc' | 'dateAsc' | 'nameAsc' | 'nameDesc'> = ['dateDesc', 'dateAsc', 'nameAsc', 'nameDesc'];
+    const order: Array<'dateDesc' | 'dateAsc' | 'nameAsc' | 'nameDesc' | 'random'> = ['dateDesc', 'dateAsc', 'nameAsc', 'nameDesc', 'random'];
     const idx = order.indexOf(sortMode);
     const next = order[(idx + 1) % order.length];
     setSortMode(next);
@@ -218,7 +234,8 @@ const MainScreen = () => {
 
     setLoading(true);
     try {
-      const filesRes = await fetchFiles({ limit: 10, excludeMediaType: 'audio', refresh, sort: sortMode });
+      const random = sortMode === 'random';
+      const filesRes = await fetchFiles({ limit: 10, excludeMediaType: 'audio', refresh, sort: random ? undefined : sortMode, random });
       setRecentMedia(filesRes.files || []);
     } catch (e) {
       handleApiError(e);
@@ -234,13 +251,20 @@ const MainScreen = () => {
 
     try {
       const limit = 100; // Increased limit for smoother scrolling
-      const filesRes = await fetchFiles({ offset, limit, excludeMediaType: 'audio', refresh, sort: sortMode });
+      const random = sortMode === 'random';
+      const filesRes = await fetchFiles({ offset, limit, excludeMediaType: 'audio', refresh, sort: random ? undefined : sortMode, random });
       const newFiles = filesRes.files || [];
 
-      // Critical Fix: Only stop infinite scroll if we hit the end of NETWORK data.
-      // Partial cache hits shouldn't stop us.
-      if (!filesRes.fromCache && newFiles.length < limit) setHasMoreLibrary(false);
-      else setHasMoreLibrary(true);
+      // In random mode, treat the first page as complete to avoid endless pagination requests.
+      if (random) {
+        setHasMoreLibrary(false);
+      } else if (!filesRes.fromCache && newFiles.length < limit) {
+        // Critical Fix: Only stop infinite scroll if we hit the end of NETWORK data.
+        // Partial cache hits shouldn't stop us.
+        setHasMoreLibrary(false);
+      } else {
+        setHasMoreLibrary(true);
+      }
 
       if (append) {
         setLibraryFiles(prev => {
@@ -269,7 +293,7 @@ const MainScreen = () => {
       console.log('Loading favorites...', { offset, append });
 
       const promises: any[] = [
-        fetchFiles({ favorite: true, offset, limit, refresh, sort: sortMode })
+        fetchFiles({ favorite: true, offset, limit, refresh, sort: sortMode === 'random' ? undefined : sortMode, random: sortMode === 'random' })
       ];
 
       // Only fetch folders on first page
@@ -324,7 +348,7 @@ const MainScreen = () => {
       const queryPath = path === 'root' ? undefined : (path || undefined);
 
       const promises: any[] = [
-        queryPath ? fetchFiles({ folderPath: queryPath, offset, limit, refresh, sort: sortMode }) : Promise.resolve({ files: [] })
+        queryPath ? fetchFiles({ folderPath: queryPath, offset, limit, refresh, sort: sortMode === 'random' ? undefined : sortMode, random: sortMode === 'random' }) : Promise.resolve({ files: [] })
       ];
 
       // Only fetch subfolders on first page
