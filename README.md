@@ -1,6 +1,6 @@
 <div align="center">
-  <img src="mobile/assets/icon.png" width="120" height="120" style="border-radius: 24px" alt="Lumina Gallery Logo">
-  <h1>Lumina Gallery</h1>
+  <img src="mobile/assets/icon.png" width="120" height="120" style="border-radius: 24px" alt="Luvia Gallery Logo">
+  <h1>Luvia Gallery</h1>
   <p><strong>一个极速、极简且强大的全栈个人媒体库方案</strong></p>
   <p><i>A blazing fast, minimal, and powerful full-stack personal media gallery solution.</i></p>
 </div>
@@ -9,7 +9,7 @@
 
 # 🇨🇳 中文说明 (Chinese)
 
-Lumina Gallery 是一个专为个人设计的私有云媒体管理系统。它集成了高性能的后端扫描引擎、响应式的 Web 前端以及基于 Expo 的移动端应用，旨在提供无缝的跨端媒体浏览体验。
+Luvia Gallery 是一个专为个人设计的私有云媒体管理系统。它集成了高性能的后端扫描引擎、响应式的 Web 前端以及基于 Expo 的移动端应用，旨在提供无缝的跨端媒体浏览体验。
 
 ## 🌟 核心特性
 
@@ -52,7 +52,7 @@ npx expo start
 
 # 🇺🇸 English Description
 
-Lumina Gallery is a private cloud media management system designed for enthusiasts. It integrates a high-performance scanning engine, a responsive web interface, and an Expo-powered mobile app to provide a seamless cross-platform experience.
+Luvia Gallery is a private cloud media management system designed for enthusiasts. It integrates a high-performance scanning engine, a responsive web interface, and an Expo-powered mobile app to provide a seamless cross-platform experience.
 
 ## 🌟 Key Features
 
