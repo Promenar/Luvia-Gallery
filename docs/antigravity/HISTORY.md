@@ -1,4 +1,4 @@
-# Lumina Gallery 完整开发历史记录 (Consolidated)
+# Luvia Gallery 完整开发历史记录 (Consolidated)
 
 本文档归档了自项目启动以来的核心技术决策、重构路径及 Bug 修复记录。作为项目的“长期记忆库”，旨在确保 AI 助手在任何环境下都能保持开发的连续性。
 
