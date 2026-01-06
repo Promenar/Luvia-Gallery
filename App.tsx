@@ -810,12 +810,16 @@ export default function App() {
     // Re-fetch from server when sort changes to get globally ordered pages
     useEffect(() => {
         if (!isServerMode || !currentUser) return;
+
+        // Home favorites mode relies on the dedicated recursive fetch; avoid overwriting it with a full-library fetch.
+        if (viewMode === 'home' && homeConfig.mode === 'favorites') return;
+
         setServerOffset(0);
         setHasMoreServer(true);
         const filter = viewMode === 'folders' ? currentPath : null;
         const favs = viewMode === 'favorites';
         fetchServerFiles(currentUser.username, allUserData, 0, true, filter, favs);
-    }, [sortOption, isServerMode, currentUser, viewMode, currentPath]);
+    }, [sortOption, isServerMode, currentUser, viewMode, currentPath, homeConfig.mode]);
 
     const stopPolling = () => {
         if (scanTimeoutRef.current) {
