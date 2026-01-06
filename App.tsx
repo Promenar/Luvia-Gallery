@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useRef } from 'react';
+import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { MediaItem, ViewMode, GridLayout, User, UserData, SortOption, FilterOption, AppConfig, FolderNode, SystemStatus, HomeScreenConfig, ExtendedSystemStatus, SettingsTab, ScanStatus } from './types';
 import { buildFolderTree, generateId, isVideo, isAudio, sortMedia, getImmediateSubfolders } from './utils/fileUtils';
@@ -700,6 +700,24 @@ export default function App() {
             setIsFetchingMore(true);
             const limit = 500;
             let url = `/api/scan/results?offset=${offset}&limit=${limit}`;
+
+            const mapSort = (opt: SortOption) => {
+                switch (opt) {
+                    case 'dateAsc': return 'dateAsc';
+                    case 'nameAsc': return 'nameAsc';
+                    case 'nameDesc': return 'nameDesc';
+                    case 'random': return null; // handled separately
+                    case 'dateDesc':
+                    default: return 'dateDesc';
+                }
+            };
+
+            if (sortOption === 'random') {
+                url += `&random=true`;
+            } else {
+                const sortParam = mapSort(sortOption);
+                if (sortParam) url += `&sort=${sortParam}`;
+            }
 
             if (favoritesOnly) {
                 url += `&favorites=true`;
@@ -1724,6 +1742,26 @@ export default function App() {
         return result;
     }, [files, viewMode, currentPath, filterOption, sortOption, isServerMode, serverFavoriteIds]);
 
+    const sortCombinedItems = useCallback((items: MediaItem[]) => {
+        if (sortOption === 'random') {
+            const shuffled = [...items];
+            for (let i = shuffled.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+            }
+            return shuffled;
+        }
+
+        return [...items].sort((a, b) => {
+            if (sortOption === 'nameAsc') return (a.name || '').localeCompare(b.name || '');
+            if (sortOption === 'nameDesc') return (b.name || '').localeCompare(a.name || '');
+            const aTime = a.lastModified || 0;
+            const bTime = b.lastModified || 0;
+            if (sortOption === 'dateAsc') return aTime - bTime;
+            return bTime - aTime; // default dateDesc
+        });
+    }, [sortOption]);
+
     // Client-side folder logic
     const folderTree = useMemo(() => {
         if (isServerMode || files.length === 0) return null;
@@ -1739,19 +1777,17 @@ export default function App() {
     const visibleFolders = isServerMode ? serverFolders : clientSubfolders;
 
     const mixedItems = useMemo(() => {
-        // Map folders to compatible MediaItem shape
         const folderItems: MediaItem[] = visibleFolders.map(f => ({
-            id: f.path, // Use path as ID for folders
+            id: f.path,
             name: f.name || f.path.split('/').pop() || 'Root',
             path: f.path,
             folderPath: f.path.split('/').slice(0, -1).join('/'),
-            url: '', // Folders don't have a direct URL
+            url: '',
             type: 'application/x-directory',
-            mediaType: 'folder', // Now valid in types
+            mediaType: 'folder',
             size: 0,
-            lastModified: 0,
+            lastModified: f.lastModified || 0,
             sourceId: 'system',
-            // Folder specific props
             mediaCount: f.mediaCount !== undefined ? f.mediaCount : (f as any).count,
             coverMedia: f.coverMedia || (f as any).coverItem,
             isFavorite: isServerMode
@@ -1759,9 +1795,8 @@ export default function App() {
                 : (allUserData[currentUser?.username || '']?.favoriteFolderPaths || []).includes(f.path)
         }));
 
-        // Folders always first
-        return [...folderItems, ...processedFiles];
-    }, [visibleFolders, processedFiles, isServerMode, serverFavoriteIds, allUserData, currentUser]);
+        return sortCombinedItems([...folderItems, ...processedFiles]);
+    }, [visibleFolders, processedFiles, isServerMode, serverFavoriteIds, allUserData, currentUser, sortCombinedItems]);
 
 
     // Auth/Setup Screens
@@ -2015,6 +2050,8 @@ export default function App() {
                                     <div className="absolute right-0 top-full mt-2 w-48 bg-white dark:bg-gray-800 rounded-xl shadow-xl border border-gray-100 dark:border-gray-700 p-1 hidden group-hover:block z-50">
                                         <button onClick={() => setSortOption('dateDesc')} className={`w-full text-left px-3 py-2 rounded-lg text-sm ${sortOption === 'dateDesc' ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600' : 'hover:bg-gray-100 dark:hover:bg-gray-700'}`}>{t('newest_first')}</button>
                                         <button onClick={() => setSortOption('dateAsc')} className={`w-full text-left px-3 py-2 rounded-lg text-sm ${sortOption === 'dateAsc' ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600' : 'hover:bg-gray-100 dark:hover:bg-gray-700'}`}>{t('oldest_first')}</button>
+                                        <button onClick={() => setSortOption('nameAsc')} className={`w-full text-left px-3 py-2 rounded-lg text-sm ${sortOption === 'nameAsc' ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600' : 'hover:bg-gray-100 dark:hover:bg-gray-700'}`}>{t('sort_by_name_asc') || 'Name A→Z'}</button>
+                                        <button onClick={() => setSortOption('nameDesc')} className={`w-full text-left px-3 py-2 rounded-lg text-sm ${sortOption === 'nameDesc' ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600' : 'hover:bg-gray-100 dark:hover:bg-gray-700'}`}>{t('sort_by_name_desc') || 'Name Z→A'}</button>
                                         <button onClick={() => setSortOption('random')} className={`w-full text-left px-3 py-2 rounded-lg text-sm ${sortOption === 'random' ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600' : 'hover:bg-gray-100 dark:hover:bg-gray-700'}`}>{t('shuffle_random')}</button>
                                     </div>
                                 </div>
@@ -2032,6 +2069,7 @@ export default function App() {
                 {/* Content Area */}
                 {viewMode === 'home' ? (
                     <Home
+                        title={appTitle}
                         items={files}
                         onEnterLibrary={() => handleSetViewMode('all')}
                         onJumpToFolder={handleJumpToFolder}
