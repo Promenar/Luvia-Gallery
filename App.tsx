@@ -804,8 +804,8 @@ export default function App() {
         if (!isServerMode || !currentUser) return;
         if (viewMode !== 'home') return;
         if (homeConfig.mode !== 'favorites') return;
-        fetchServerFiles(currentUser.username, allUserData, 0, true, null, true, undefined, true);
-    }, [isServerMode, currentUser, viewMode, homeConfig.mode, sortOption]);
+        fetchServerFiles(currentUser.username, allUserData, 0, true, null, true, serverFavoriteIds, true);
+    }, [isServerMode, currentUser, viewMode, homeConfig.mode, sortOption, serverFavoriteIds]);
 
     // Re-fetch from server when sort changes to get globally ordered pages
     useEffect(() => {

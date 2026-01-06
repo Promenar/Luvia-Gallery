@@ -182,6 +182,20 @@ const MainScreen = () => {
     }
   }, [sortMode]);
 
+  const sortFolders = React.useCallback((list: Folder[]) => {
+    const sorted = [...list];
+    switch (sortMode) {
+      case 'nameAsc':
+        return sorted.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+      case 'nameDesc':
+        return sorted.sort((a, b) => (b.name || '').localeCompare(a.name || ''));
+      case 'dateAsc':
+        return sorted.sort((a, b) => ((a as any).lastModified || 0) - ((b as any).lastModified || 0));
+      default:
+        return sorted.sort((a, b) => ((b as any).lastModified || 0) - ((a as any).lastModified || 0));
+    }
+  }, [sortMode]);
+
   const cycleSortMode = () => {
     const order: Array<'dateDesc' | 'dateAsc' | 'nameAsc' | 'nameDesc'> = ['dateDesc', 'dateAsc', 'nameAsc', 'nameDesc'];
     const idx = order.indexOf(sortMode);
@@ -272,9 +286,11 @@ const MainScreen = () => {
           name: f.name,
           path: f.path,
           mediaCount: f.mediaCount,
-          isFavorite: true
+          isFavorite: true,
+          // backend now includes lastModified
+          ...(f.lastModified ? { lastModified: f.lastModified } : {})
         }));
-        setFavoriteFolders(foldersData);
+        setFavoriteFolders(sortFolders(foldersData));
       }
 
       const newFiles = (filesRes.files || []).map((f: MediaItem) => ({ ...f, isFavorite: true }));
@@ -321,12 +337,13 @@ const MainScreen = () => {
       const [filesRes, foldersRes] = await Promise.all(promises);
 
       if (foldersRes) {
-        setFolders((foldersRes.folders || []).map((f: any) => ({
+        setFolders(sortFolders((foldersRes.folders || []).map((f: any) => ({
           name: f.name,
           path: f.path,
           mediaCount: f.mediaCount,
-          isFavorite: f.isFavorite
-        })));
+          isFavorite: f.isFavorite,
+          ...(f.lastModified ? { lastModified: f.lastModified } : {})
+        }))));
       }
 
       const newFiles = filesRes.files || [];
@@ -365,7 +382,17 @@ const MainScreen = () => {
     setLibraryFiles(prev => applySort(prev));
     setFavoriteFiles(prev => applySort(prev));
     setFolderFiles(prev => applySort(prev));
-  }, [sortMode, applySort]);
+    setFolders(prev => sortFolders(prev));
+    setFavoriteFolders(prev => sortFolders(prev));
+  }, [sortMode, applySort, sortFolders]);
+
+  // When sort changes, refetch lists to get server-ordered data
+  useEffect(() => {
+    if (!isLoggedIn) return;
+    if (activeTab === 'library') loadLibraryData(0, false, true);
+    if (activeTab === 'favorites') loadFavoritesData(0, false, true);
+    if (activeTab === 'folders') loadFolderData(currentPath, 0, false, true);
+  }, [sortMode]);
 
   // Initial Load
   useEffect(() => {
