@@ -781,14 +781,22 @@ app.get('/api/library/folders', (req, res) => {
 
     const folders = subs.map(sub => {
         let coverMedia = null;
+        let mediaCount = 0;
         let lastModified = 0;
-        try { lastModified = fs.statSync(sub).mtimeMs; } catch (e) { }
+
         try {
-            const found = findCoverMedia(f);
+            const stats = fs.statSync(sub);
+            lastModified = stats.mtimeMs;
+
+            // Count media files (non-recursive)
+            const items = fs.readdirSync(sub, { withFileTypes: true });
+            mediaCount = items.filter(i => i.isFile() && /(jpg|jpeg|png|webp|mp4|mov|webm)$/i.test(i.name)).length;
+
+            // Find cover media
+            const found = findCoverMedia(sub);
             if (found) {
-            mediaCount: countMediaFilesInFolder(sub),
-            coverMedia: findCoverMedia(sub),
-            lastModified
+                const b64Id = Buffer.from(found.path).toString('base64');
+                let url = `/api/thumb/${b64Id}`;
                 try {
                     const thumbFilename = crypto.createHash('md5').update(b64Id).digest('hex') + '.webp';
                     const thumbPath = getCachedPath(thumbFilename);
@@ -806,11 +814,12 @@ app.get('/api/library/folders', (req, res) => {
         } catch (e) { }
 
         return {
-            name: path.basename(f),
-            path: f,
-            mediaCount: 0, // Stub
-            coverMedia: coverMedia,
-            isFavorite: favoriteFolders.has(f)
+            name: path.basename(sub),
+            path: sub,
+            mediaCount,
+            coverMedia,
+            lastModified,
+            isFavorite: favoriteFolders.has(sub)
         };
     });
     res.json({ folders });
