@@ -52,7 +52,7 @@ export const Home: React.FC<HomeProps> = React.memo(({ title, items, onEnterLibr
             const shuffled = [...items].sort(() => 0.5 - Math.random());
             setFeatured(shuffled.slice(0, 10));
         }
-    }, [items.length, config]); // Re-run if items or config changes
+    }, [items, config]); // Re-run if items or config changes
 
     useEffect(() => {
         if (featured.length <= 1) return;
