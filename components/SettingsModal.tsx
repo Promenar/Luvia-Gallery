@@ -131,17 +131,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                 <div>
                                     <label className="block text-sm font-medium mb-2">{t('home_screen_conf')}</label>
                                     <div className="flex flex-wrap gap-2 mb-2">
-                                        {['random', 'folder', 'single'].map(m => (
+                                        {['random', 'favorites', 'folder', 'single'].map(m => (
                                             <button
                                                 key={m}
                                                 onClick={() => onUpdateHomeConfig({ ...homeConfig, mode: m as any })}
                                                 className={`px-4 py-2 rounded-lg text-sm font-medium capitalize border transition-colors ${homeConfig.mode === m ? 'bg-primary-50 dark:bg-primary-900/30 border-primary-500 text-primary-600' : 'bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300'}`}
                                             >
-                                                {t(m === 'random' ? 'random_all' : (m === 'folder' ? 'specific_folder' : 'single_item'))}
+                                                {m === 'favorites' ? t('favorites') : t(m === 'random' ? 'random_all' : (m === 'folder' ? 'specific_folder' : 'single_item'))}
                                             </button>
                                         ))}
                                     </div>
-                                    {homeConfig.mode !== 'random' && (
+                                    {(homeConfig.mode === 'folder' || homeConfig.mode === 'single') && (
                                         <input
                                             placeholder={t('enter_rel_path')}
                                             value={homeConfig.path || ''}

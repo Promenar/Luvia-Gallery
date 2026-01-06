@@ -59,7 +59,7 @@ export interface UserData {
 }
 
 export interface HomeScreenConfig {
-  mode: 'random' | 'folder' | 'single';
+  mode: 'random' | 'folder' | 'single' | 'favorites';
   path?: string; // Used for folder or single file mode
 }
 

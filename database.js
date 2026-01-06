@@ -68,6 +68,7 @@ function createSchema() {
     db.run(`CREATE INDEX IF NOT EXISTS idx_media_type ON files(media_type)`);
     db.run(`CREATE INDEX IF NOT EXISTS idx_source_id ON files(source_id)`);
     db.run(`CREATE INDEX IF NOT EXISTS idx_last_modified ON files(last_modified DESC)`);
+    db.run(`CREATE INDEX IF NOT EXISTS idx_name ON files(name COLLATE NOCASE)`);
 
     // Thumbnails table
     db.run(`
@@ -230,7 +231,8 @@ function queryFiles(options = {}) {
         userId = null,
         random = false,
         excludeMediaType = null,
-        allowedPaths = null // [NEW] Array of root paths the user is allowed to access
+        allowedPaths = null, // [NEW] Array of root paths the user is allowed to access
+        sortOption = 'dateDesc'
     } = options;
 
     let query = 'SELECT f.*, fav.id as is_fav FROM files f';
@@ -297,7 +299,20 @@ function queryFiles(options = {}) {
     if (random) {
         query += ' ORDER BY RANDOM() LIMIT ? OFFSET ?';
     } else {
-        query += ' ORDER BY f.last_modified DESC LIMIT ? OFFSET ?';
+        switch (sortOption) {
+            case 'dateAsc':
+                query += ' ORDER BY f.last_modified ASC LIMIT ? OFFSET ?';
+                break;
+            case 'nameAsc':
+                query += ' ORDER BY f.name COLLATE NOCASE ASC LIMIT ? OFFSET ?';
+                break;
+            case 'nameDesc':
+                query += ' ORDER BY f.name COLLATE NOCASE DESC LIMIT ? OFFSET ?';
+                break;
+            case 'dateDesc':
+            default:
+                query += ' ORDER BY f.last_modified DESC LIMIT ? OFFSET ?';
+        }
     }
 
     params.push(limit, offset);

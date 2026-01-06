@@ -202,6 +202,7 @@ interface FetchFilesOptions {
     excludeMediaType?: string | string[];
     refresh?: boolean; // New flag to force network
     recursive?: boolean;
+    sort?: 'dateDesc' | 'dateAsc' | 'nameAsc' | 'nameDesc';
 }
 
 export const fetchFiles = async (options: FetchFilesOptions = {}) => {
@@ -224,6 +225,8 @@ export const fetchFiles = async (options: FetchFilesOptions = {}) => {
         if (favorite) url += `&favorites=true`;
         if (random) url += `&random=true`;
         if (options.recursive) url += `&recursive=true`;
+
+        if (options.sort) url += `&sort=${options.sort}`;
 
         if (mediaType) {
             if (Array.isArray(mediaType)) {
