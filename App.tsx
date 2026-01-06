@@ -2050,7 +2050,7 @@ export default function App() {
                                 </div>
                             )}
 
-                            {viewMode !== 'folders' && (
+                            {viewMode !== 'home' && (
                                 <div className="relative group">
                                     <button className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg text-gray-600 dark:text-gray-300">
                                         <Icons.Sort size={20} />
@@ -2060,8 +2060,8 @@ export default function App() {
                                     <div className="absolute right-0 top-full mt-2 w-48 bg-white dark:bg-gray-800 rounded-xl shadow-xl border border-gray-100 dark:border-gray-700 p-1 hidden group-hover:block z-50">
                                         <button onClick={() => setSortOption('dateDesc')} className={`w-full text-left px-3 py-2 rounded-lg text-sm ${sortOption === 'dateDesc' ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600' : 'hover:bg-gray-100 dark:hover:bg-gray-700'}`}>{t('newest_first')}</button>
                                         <button onClick={() => setSortOption('dateAsc')} className={`w-full text-left px-3 py-2 rounded-lg text-sm ${sortOption === 'dateAsc' ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600' : 'hover:bg-gray-100 dark:hover:bg-gray-700'}`}>{t('oldest_first')}</button>
-                                        <button onClick={() => setSortOption('nameAsc')} className={`w-full text-left px-3 py-2 rounded-lg text-sm ${sortOption === 'nameAsc' ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600' : 'hover:bg-gray-100 dark:hover:bg-gray-700'}`}>{t('sort_by_name_asc') || 'Name A→Z'}</button>
-                                        <button onClick={() => setSortOption('nameDesc')} className={`w-full text-left px-3 py-2 rounded-lg text-sm ${sortOption === 'nameDesc' ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600' : 'hover:bg-gray-100 dark:hover:bg-gray-700'}`}>{t('sort_by_name_desc') || 'Name Z→A'}</button>
+                                        <button onClick={() => setSortOption('nameAsc')} className={`w-full text-left px-3 py-2 rounded-lg text-sm ${sortOption === 'nameAsc' ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600' : 'hover:bg-gray-100 dark:hover:bg-gray-700'}`}>{t('sort_by_name_asc') || '名称A-Z'}</button>
+                                        <button onClick={() => setSortOption('nameDesc')} className={`w-full text-left px-3 py-2 rounded-lg text-sm ${sortOption === 'nameDesc' ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600' : 'hover:bg-gray-100 dark:hover:bg-gray-700'}`}>{t('sort_by_name_desc') || '名称Z-A'}</button>
                                         <button onClick={() => setSortOption('random')} className={`w-full text-left px-3 py-2 rounded-lg text-sm ${sortOption === 'random' ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600' : 'hover:bg-gray-100 dark:hover:bg-gray-700'}`}>{t('shuffle_random')}</button>
                                     </div>
                                 </div>
