@@ -1277,6 +1277,9 @@ app.get('/api/scan/results', (req, res) => {
                 filteredFiles = filteredFiles.filter(f => !excludeTypes.includes(f.mediaType));
             }
 
+            // Ensure favorites are marked for downstream filters/clients
+            filteredFiles = filteredFiles.map(f => ({ ...f, isFavorite: true }));
+
             if (random) {
                 // Shuffle array using Fisher-Yates
                 for (let i = filteredFiles.length - 1; i > 0; i--) {
@@ -1368,11 +1371,15 @@ app.get('/api/scan/results', (req, res) => {
         aspectRatio: f.thumb_aspect_ratio // ✨ NEW
     }));
 
+    const isRandomRequest = random;
+    const responseTotal = isRandomRequest ? transformedFiles.length : total;
+    const responseHasMore = isRandomRequest ? false : offset + limit < total;
+
     res.json({
         files: transformedFiles,
-        total: total,
-        hasMore: offset + limit < total,
-        sources: [{ id: 'local', name: 'Local Storage', count: total }]
+        total: responseTotal,
+        hasMore: responseHasMore,
+        sources: [{ id: 'local', name: 'Local Storage', count: responseTotal }]
     });
 });
 
