@@ -109,6 +109,8 @@ const MainScreen = () => {
   const [refreshing, setRefreshing] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
 
+  const [sortMode, setSortMode] = useState<'dateDesc' | 'dateAsc' | 'nameAsc' | 'nameDesc'>('dateDesc');
+
   // Media Viewer State
   const [viewerContext, setViewerContext] = useState<{ items: MediaItem[], index: number } | null>(null);
 
@@ -153,6 +155,40 @@ const MainScreen = () => {
     setFavoriteFolders([]);
   };
 
+  const sortLabel = React.useMemo(() => {
+    switch (sortMode) {
+      case 'dateAsc':
+        return '时间↑';
+      case 'nameAsc':
+        return '名称A-Z';
+      case 'nameDesc':
+        return '名称Z-A';
+      default:
+        return '时间↓';
+    }
+  }, [sortMode]);
+
+  const applySort = React.useCallback((list: MediaItem[]) => {
+    const sorted = [...list];
+    switch (sortMode) {
+      case 'dateAsc':
+        return sorted.sort((a, b) => (a.lastModified || 0) - (b.lastModified || 0));
+      case 'nameAsc':
+        return sorted.sort((a, b) => a.name.localeCompare(b.name));
+      case 'nameDesc':
+        return sorted.sort((a, b) => b.name.localeCompare(a.name));
+      default:
+        return sorted.sort((a, b) => (b.lastModified || 0) - (a.lastModified || 0));
+    }
+  }, [sortMode]);
+
+  const cycleSortMode = () => {
+    const order: Array<'dateDesc' | 'dateAsc' | 'nameAsc' | 'nameDesc'> = ['dateDesc', 'dateAsc', 'nameAsc', 'nameDesc'];
+    const idx = order.indexOf(sortMode);
+    const next = order[(idx + 1) % order.length];
+    setSortMode(next);
+  };
+
   const loadHomeData = async (refresh = false) => {
     // 1. 尝试立即获取本地缓存以快速显示
     try {
@@ -168,7 +204,7 @@ const MainScreen = () => {
 
     setLoading(true);
     try {
-      const filesRes = await fetchFiles({ limit: 10, excludeMediaType: 'audio', refresh });
+      const filesRes = await fetchFiles({ limit: 10, excludeMediaType: 'audio', refresh, sort: sortMode });
       setRecentMedia(filesRes.files || []);
     } catch (e) {
       handleApiError(e);
@@ -184,7 +220,7 @@ const MainScreen = () => {
 
     try {
       const limit = 100; // Increased limit for smoother scrolling
-      const filesRes = await fetchFiles({ offset, limit, excludeMediaType: 'audio', refresh });
+      const filesRes = await fetchFiles({ offset, limit, excludeMediaType: 'audio', refresh, sort: sortMode });
       const newFiles = filesRes.files || [];
 
       // Critical Fix: Only stop infinite scroll if we hit the end of NETWORK data.
@@ -196,10 +232,10 @@ const MainScreen = () => {
         setLibraryFiles(prev => {
           const existingIds = new Set(prev.map(p => p.id));
           const uniqueNew = newFiles.filter((i: MediaItem) => !existingIds.has(i.id));
-          return [...prev, ...uniqueNew];
+          return applySort([...prev, ...uniqueNew]);
         });
       } else {
-        setLibraryFiles(newFiles);
+        setLibraryFiles(applySort(newFiles));
       }
       setLibraryOffset(offset);
 
@@ -219,7 +255,7 @@ const MainScreen = () => {
       console.log('Loading favorites...', { offset, append });
 
       const promises: any[] = [
-        fetchFiles({ favorite: true, offset, limit, refresh })
+        fetchFiles({ favorite: true, offset, limit, refresh, sort: sortMode })
       ];
 
       // Only fetch folders on first page
@@ -251,10 +287,10 @@ const MainScreen = () => {
         setFavoriteFiles(prev => {
           const existingIds = new Set(prev.map(p => p.id));
           const uniqueNew = newFiles.filter((i: MediaItem) => !existingIds.has(i.id));
-          return [...prev, ...uniqueNew];
+          return applySort([...prev, ...uniqueNew]);
         });
       } else {
-        setFavoriteFiles(newFiles);
+        setFavoriteFiles(applySort(newFiles));
       }
       setFavoriteOffset(offset);
     } catch (e) {
@@ -272,7 +308,7 @@ const MainScreen = () => {
       const queryPath = path === 'root' ? undefined : (path || undefined);
 
       const promises: any[] = [
-        queryPath ? fetchFiles({ folderPath: queryPath, offset, limit, refresh }) : Promise.resolve({ files: [] })
+        queryPath ? fetchFiles({ folderPath: queryPath, offset, limit, refresh, sort: sortMode }) : Promise.resolve({ files: [] })
       ];
 
       // Only fetch subfolders on first page
@@ -301,10 +337,10 @@ const MainScreen = () => {
         setFolderFiles(prev => {
           const existingIds = new Set(prev.map(p => p.id));
           const uniqueNew = newFiles.filter((i: MediaItem) => !existingIds.has(i.id));
-          return [...prev, ...uniqueNew];
+          return applySort([...prev, ...uniqueNew]);
         });
       } else {
-        setFolderFiles(newFiles);
+        setFolderFiles(applySort(newFiles));
       }
       setFolderOffset(offset);
     } catch (e) { handleApiError(e); } finally { setLoading(false); setLoadingMore(false); setRefreshing(false); }
@@ -324,6 +360,12 @@ const MainScreen = () => {
     }, 10);
     onRefreshSilent();
   }, [onRefreshSilent]);
+
+  useEffect(() => {
+    setLibraryFiles(prev => applySort(prev));
+    setFavoriteFiles(prev => applySort(prev));
+    setFolderFiles(prev => applySort(prev));
+  }, [sortMode, applySort]);
 
   // Initial Load
   useEffect(() => {
@@ -512,6 +554,27 @@ const MainScreen = () => {
     </TouchableOpacity>
   );
 
+  const SortToggle = () => (
+    <TouchableOpacity
+      onPress={() => {
+        setTimeout(() => {
+          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+        }, 10);
+        cycleSortMode();
+      }}
+      className="px-3 py-2 bg-gray-100 dark:bg-zinc-800 rounded-full mr-2"
+    >
+      <Text className="text-xs font-bold text-gray-700 dark:text-gray-100">{sortLabel}</Text>
+    </TouchableOpacity>
+  );
+
+  const HeaderActions = () => (
+    <View className="flex-row items-center">
+      <SortToggle />
+      <LayoutToggle />
+    </View>
+  );
+
 
   // Back Button Handling
   useEffect(() => {
@@ -627,7 +690,7 @@ const MainScreen = () => {
             <Header
               title={t('header.library')}
               subtitle={t('header.library.sub')}
-              rightAction={<LayoutToggle />}
+              rightAction={<HeaderActions />}
             />
             {galleryLayout === 'grid' ? (
               <FlashList
@@ -679,7 +742,7 @@ const MainScreen = () => {
             <Header
               title={t('header.favorites')}
               subtitle={t('header.favorites.sub')}
-              rightAction={<LayoutToggle />}
+              rightAction={<HeaderActions />}
             />
             {galleryLayout === 'grid' ? (
               <FlashList
@@ -793,7 +856,7 @@ const MainScreen = () => {
               subtitle={currentPath ? t('header.browse') : t('header.folders.sub')}
               showBack={!!currentPath}
               onBack={handleBack}
-              rightAction={<LayoutToggle />}
+              rightAction={<HeaderActions />}
             />
 
             <Animated.View
