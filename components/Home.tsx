@@ -48,9 +48,13 @@ export const Home: React.FC<HomeProps> = React.memo(({ title, items, onEnterLibr
                 setFeatured(shuffled.slice(0, 10)); // Take top 10 random
             }
         } else {
-            // Fallback to random if config matches nothing
-            const shuffled = [...items].sort(() => 0.5 - Math.random());
-            setFeatured(shuffled.slice(0, 10));
+            // In favorites mode, if没有收藏则保持空结果，不回退到全库
+            if (config?.mode === 'favorites') {
+                setFeatured([]);
+            } else {
+                const shuffled = [...items].sort(() => 0.5 - Math.random());
+                setFeatured(shuffled.slice(0, 10));
+            }
         }
     }, [items, config]); // Re-run if items or config changes
 
