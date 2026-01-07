@@ -27,13 +27,10 @@ interface TransformState {
 
 export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext, onPrev, onDelete, onRename, onJumpToFolder, onToggleFavorite }) => {
     const { t } = useLanguage();
-    const viewerRootRef = useRef<HTMLDivElement>(null);
     const [transform, setTransform] = useState<TransformState>({ scale: 1, x: 0, y: 0 });
     const containerRef = useRef<HTMLDivElement>(null);
     const videoRef = useRef<HTMLVideoElement>(null);
     const [dragConstraints, setDragConstraints] = useState<{ left: number, right: number, top: number, bottom: number } | null>(null);
-    const [isFullscreen, setIsFullscreen] = useState(false);
-    const [canFullscreen, setCanFullscreen] = useState(false);
 
     // Slideshow State
     const [isPlaying, setIsPlaying] = useState(false);
@@ -54,6 +51,36 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
     // Rename State
     const [isRenaming, setIsRenaming] = useState(false);
     const [renameValue, setRenameValue] = useState('');
+
+    // Fullscreen State
+    const [isFullScreen, setIsFullScreen] = useState(false);
+
+    const toggleFullScreen = () => {
+        if (!document.fullscreenElement) {
+            document.documentElement.requestFullscreen().then(() => {
+                setIsFullScreen(true);
+            }).catch(err => {
+                console.error(`Error attempting to enable full-screen mode: ${err.message} (${err.name})`);
+            });
+        } else {
+            if (document.exitFullscreen) {
+                document.exitFullscreen().then(() => {
+                   setIsFullScreen(false);
+                });
+            }
+        }
+    };
+
+    useEffect(() => {
+        const handleFullScreenChange = () => {
+            setIsFullScreen(!!document.fullscreenElement);
+        };
+
+        document.addEventListener('fullscreenchange', handleFullScreenChange);
+        return () => {
+            document.removeEventListener('fullscreenchange', handleFullScreenChange);
+        };
+    }, []);
 
     // Reset state when item changes
     useEffect(() => {
@@ -266,37 +293,6 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
         lastDist.current = null;
     };
 
-    const toggleFullscreen = (e?: React.MouseEvent) => {
-        if (e) e.stopPropagation();
-        if (!canFullscreen) return;
-        const el = viewerRootRef.current;
-        if (!el) return;
-
-        if (!document.fullscreenElement && el.requestFullscreen) {
-            el.requestFullscreen().catch(() => { /* ignore */ });
-        } else if (document.exitFullscreen) {
-            document.exitFullscreen().catch(() => { /* ignore */ });
-        }
-    };
-
-    useEffect(() => {
-        if (typeof document === 'undefined') return;
-        const supported = !!(document.fullscreenEnabled || document.documentElement?.requestFullscreen);
-        setCanFullscreen(supported);
-        if (!supported) return;
-
-        const handleFullscreenChange = () => {
-            const active = document.fullscreenElement === viewerRootRef.current;
-            setIsFullscreen(active);
-            if (!active) setIsPlaying(false);
-        };
-
-        document.addEventListener('fullscreenchange', handleFullscreenChange);
-        return () => {
-            document.removeEventListener('fullscreenchange', handleFullscreenChange);
-        };
-    }, []);
-
     const toggleZoom = (e: React.MouseEvent) => {
         e.stopPropagation();
         setIsPlaying(false);
@@ -369,7 +365,6 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
     return (
         <AnimatePresence>
             <motion.div
-                ref={viewerRootRef}
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
@@ -459,11 +454,11 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
                             </button>
                         )}
                         <button
-                            onClick={(e) => toggleFullscreen(e)}
-                            className={`p-2 rounded-full transition-colors ${isFullscreen ? 'bg-white/20' : 'hover:bg-white/10'}`}
-                            title={isFullscreen ? "Exit Fullscreen" : "Enter Fullscreen"}
+                            onClick={(e) => { e.stopPropagation(); toggleFullScreen(); }}
+                            className="p-2 hover:bg-white/10 rounded-full transition-colors"
+                            title={isFullScreen ? "Exit Full Screen" : "Full Screen"}
                         >
-                            {isFullscreen ? <Icons.Minimize size={24} /> : <Icons.Maximize size={24} />}
+                            {isFullScreen ? <Icons.Minimize size={24} /> : <Icons.Maximize size={24} />}
                         </button>
                         <button
                             onClick={(e) => { e.stopPropagation(); onClose(); }}
