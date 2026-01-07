@@ -18,3 +18,13 @@ logs/
 .DS_Store
 
 mobile/
+
+# Tests
+**/*.test.tsx
+**/*.test.ts
+**/*.spec.tsx
+**/*.spec.ts
+**/*.test.js
+**/*.spec.js
+**/__tests__
+**/coverage

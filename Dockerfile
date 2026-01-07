@@ -6,6 +6,9 @@ WORKDIR /app
 # Copy package definition
 COPY package*.json ./
 
+# Set NPM mirror for faster install
+RUN npm config set registry https://registry.npmmirror.com/
+
 # Install dependencies (including devDependencies for Vite)
 RUN npm install
 
@@ -28,6 +31,7 @@ RUN apk add --no-cache ffmpeg mesa-va-gallium intel-media-driver libva-intel-dri
 
 # Install production dependencies only (for server.js)
 COPY package*.json ./
+RUN npm config set registry https://registry.npmmirror.com/
 RUN npm install --production
 
 # Install Git & OpenSSH for Auto-Update Feature
