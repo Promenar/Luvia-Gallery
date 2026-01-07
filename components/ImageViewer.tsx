@@ -27,10 +27,12 @@ interface TransformState {
 
 export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext, onPrev, onDelete, onRename, onJumpToFolder, onToggleFavorite }) => {
     const { t } = useLanguage();
+    const viewerRootRef = useRef<HTMLDivElement>(null);
     const [transform, setTransform] = useState<TransformState>({ scale: 1, x: 0, y: 0 });
     const containerRef = useRef<HTMLDivElement>(null);
     const videoRef = useRef<HTMLVideoElement>(null);
     const [dragConstraints, setDragConstraints] = useState<{ left: number, right: number, top: number, bottom: number } | null>(null);
+    const [isFullscreen, setIsFullscreen] = useState(false);
 
     // Slideshow State
     const [isPlaying, setIsPlaying] = useState(false);
@@ -263,6 +265,34 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
         lastDist.current = null;
     };
 
+    const toggleFullscreen = (e?: React.MouseEvent) => {
+        if (e) e.stopPropagation();
+        const el = viewerRootRef.current;
+        if (!el) return;
+
+        if (!document.fullscreenElement) {
+            el.requestFullscreen().catch(() => { /* ignore */ });
+        } else if (document.exitFullscreen) {
+            document.exitFullscreen().catch(() => { /* ignore */ });
+        }
+    };
+
+    useEffect(() => {
+        const handleFullscreenChange = () => {
+            const active = document.fullscreenElement === viewerRootRef.current;
+            setIsFullscreen(active);
+            if (!active) setIsPlaying(false);
+        };
+
+        document.addEventListener('fullscreenchange', handleFullscreenChange);
+        return () => {
+            document.removeEventListener('fullscreenchange', handleFullscreenChange);
+            if (document.fullscreenElement === viewerRootRef.current && document.exitFullscreen) {
+                document.exitFullscreen().catch(() => { /* ignore */ });
+            }
+        };
+    }, []);
+
     const toggleZoom = (e: React.MouseEvent) => {
         e.stopPropagation();
         setIsPlaying(false);
@@ -335,6 +365,7 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
     return (
         <AnimatePresence>
             <motion.div
+                ref={viewerRootRef}
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
@@ -423,6 +454,13 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
                                 {transform.scale > 1 ? <Icons.ZoomOut size={24} /> : <Icons.ZoomIn size={24} />}
                             </button>
                         )}
+                        <button
+                            onClick={(e) => toggleFullscreen(e)}
+                            className={`p-2 rounded-full transition-colors ${isFullscreen ? 'bg-white/20' : 'hover:bg-white/10'}`}
+                            title={isFullscreen ? "Exit Fullscreen" : "Enter Fullscreen"}
+                        >
+                            {isFullscreen ? <Icons.Minimize size={24} /> : <Icons.Maximize size={24} />}
+                        </button>
                         <button
                             onClick={(e) => { e.stopPropagation(); onClose(); }}
                             className="p-2 hover:bg-white/10 rounded-full transition-colors"
