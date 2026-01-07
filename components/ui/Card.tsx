@@ -14,12 +14,12 @@ export const Card: React.FC<CardProps> = ({
     active = false,
     ...props
 }) => {
-    const baseStyles = "bg-surface-primary border border-border-default rounded-xl overflow-hidden transition-all duration-300";
+    const baseStyles = "glass-1 rounded-xl overflow-hidden transition-all duration-300 shadow-glow";
 
     // Conditional styles
-    const hoverStyles = hover ? "hover:shadow-lg dark:hover:shadow-none hover:border-gray-300 dark:hover:border-gray-600" : "";
-    const interactiveStyles = interactive ? "cursor-pointer active:scale-[0.98]" : "";
-    const activeStyles = active ? "ring-2 ring-primary-500 border-primary-500" : "shadow-sm";
+    const hoverStyles = hover ? "hover:-translate-y-0.5 hover:shadow-[0_14px_36px_rgba(0,0,0,0.25)] hover:border-border-glow" : "";
+    const interactiveStyles = interactive ? "cursor-pointer active:scale-[0.99]" : "";
+    const activeStyles = active ? "ring-2 ring-accent-500/50 border-border-glow" : "";
 
     return (
         <div

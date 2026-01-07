@@ -8,7 +8,8 @@ module.exports = {
     theme: {
         extend: {
             fontFamily: {
-                sans: ['Roboto', 'sans-serif'],
+                sans: ['"Space Grotesk"', 'Manrope', 'Inter', 'system-ui', 'sans-serif'],
+                display: ['"Space Grotesk"', 'Inter', 'system-ui', 'sans-serif'],
             },
             colors: {
                 primary: {
@@ -23,20 +24,42 @@ module.exports = {
                     800: '#3730a3',
                     900: '#312e81',
                 },
+                accent: {
+                    50: 'var(--accent-50)',
+                    100: 'var(--accent-100)',
+                    200: 'var(--accent-200)',
+                    300: 'var(--accent-300)',
+                    400: 'var(--accent-400)',
+                    500: 'var(--accent-500)',
+                    600: 'var(--accent-600)',
+                    700: 'var(--accent-700)',
+                },
                 surface: {
                     primary: 'var(--surface-primary)',
                     secondary: 'var(--surface-secondary)',
                     tertiary: 'var(--surface-tertiary)',
+                    deep: 'var(--surface-deep)',
+                    glass: 'var(--surface-glass)',
                 },
                 text: {
                     primary: 'var(--text-primary)',
                     secondary: 'var(--text-secondary)',
                     tertiary: 'var(--text-tertiary)',
+                    muted: 'var(--text-muted)',
                 },
                 border: {
                     default: 'var(--border-default)',
                     subtle: 'var(--border-subtle)',
+                    glow: 'var(--border-glow)',
+                },
+                overlay: {
+                    veil: 'var(--overlay-veil)',
+                    strong: 'var(--overlay-strong)',
                 }
+            },
+            boxShadow: {
+                glow: '0 10px 40px rgba(0, 0, 0, 0.35)',
+                'inner-glow': 'inset 0 1px 0 rgba(255, 255, 255, 0.12)',
             }
         },
     },

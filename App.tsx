@@ -78,6 +78,22 @@ const removeStorageItem = (key: string, legacyKey?: string) => {
 
 export default function App() {
     const { t, language, setLanguage } = useLanguage();
+    
+    // --- Visual Polish ---
+    // Inject noise texture globally
+    useEffect(() => {
+        // Force reset the body styling in case of overrides
+        document.body.style.backgroundColor = '';
+        
+        const noiseDiv = document.createElement('div');
+        noiseDiv.classList.add('bg-noise');
+        document.body.appendChild(noiseDiv);
+        return () => {
+             if(document.body.contains(noiseDiv)) {
+                 document.body.removeChild(noiseDiv);
+             }
+        };
+    }, []);
 
     // --- Authentication State ---
     const [users, setUsers] = useState<User[]>([]);
