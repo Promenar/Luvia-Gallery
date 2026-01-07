@@ -167,7 +167,7 @@ export const FolderCard: React.FC<FolderCardProps> = React.memo(({ folder, onCli
                     <div className="absolute inset-0 bg-gradient-to-t from-black/50 to-transparent opacity-60" />
 
                     {/* Count Badge */}
-                    <div className="absolute bottom-2 right-2 bg-black/40 backdrop-blur-sm text-white text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 border border-white/10">
+                    <div className="absolute bottom-2 right-2 glass-1 bg-overlay-veil text-white text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 border border-border-glow">
                         <Icons.Image size={10} />
                         {folder.mediaCount}
                     </div>
@@ -182,7 +182,7 @@ export const FolderCard: React.FC<FolderCardProps> = React.memo(({ folder, onCli
                     {/* Menu Button */}
                     <button
                         onClick={handleMenuClick}
-                        className={`absolute top-2 left-2 p-1.5 rounded-full bg-black/40 hover:bg-black/60 backdrop-blur-sm text-white opacity-0 group-hover:opacity-100 transition-opacity ${showMenu ? 'opacity-100' : ''}`}
+                        className={`absolute top-2 left-2 p-1.5 rounded-full glass-1 bg-overlay-veil hover:border-border-glow text-white opacity-0 group-hover:opacity-100 transition-opacity ${showMenu ? 'opacity-100' : ''}`}
                     >
                         <Icons.More size={16} />
                     </button>
@@ -194,7 +194,7 @@ export const FolderCard: React.FC<FolderCardProps> = React.memo(({ folder, onCli
                                 initial={{ opacity: 0, scale: 0.9, x: -10, y: -10 }}
                                 animate={{ opacity: 1, scale: 1, x: 0, y: 0 }}
                                 exit={{ opacity: 0, scale: 0.9 }}
-                                className="absolute top-10 left-2 bg-surface-primary rounded-lg shadow-xl border border-border-default py-1 min-w-[120px] z-50 overflow-hidden"
+                                className="absolute top-10 left-2 glass-2 rounded-lg shadow-xl border border-border-default py-1 min-w-[120px] z-50 overflow-hidden"
                                 onClick={(e) => e.stopPropagation()}
                             >
                                 <button onClick={(e) => handleAction('fav', e)} className="w-full text-left px-3 py-2 text-xs hover:bg-surface-secondary text-text-primary flex items-center gap-2">

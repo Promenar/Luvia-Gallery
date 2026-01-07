@@ -118,9 +118,8 @@ export const MediaCard: React.FC<MediaCardProps> = React.memo(({ item, onClick, 
 
   const isGrid = layout === 'grid' || isVirtual;
 
-  const containerClasses = isGrid
-    ? "relative group cursor-pointer overflow-hidden rounded-xl bg-gray-200 dark:bg-gray-800 shadow-sm hover:shadow-lg transition-all duration-300 w-full h-full aspect-square"
-    : "relative group cursor-pointer overflow-hidden rounded-xl bg-gray-200 dark:bg-gray-800 shadow-sm hover:shadow-lg transition-all duration-300 mb-4 break-inside-avoid w-full";
+  const containerClasses = `relative group cursor-pointer overflow-hidden rounded-2xl glass-1 glass-hover 
+    ${isGrid ? 'w-full h-full aspect-square ring-1 ring-white/10 dark:ring-white/5' : 'w-full mb-6 break-inside-avoid ring-1 ring-white/10 dark:ring-white/5'}`;
 
   return (
     <motion.div
@@ -135,7 +134,7 @@ export const MediaCard: React.FC<MediaCardProps> = React.memo(({ item, onClick, 
       onMouseLeave={handleMouseLeave}
     >
       {item.mediaType === 'video' ? (
-        <div className={`relative w-full ${isGrid ? 'h-full absolute inset-0' : 'aspect-video'} flex items-center justify-center bg-gray-900`}>
+        <div className={`relative w-full ${isGrid ? 'h-full absolute inset-0' : 'aspect-video'} flex items-center justify-center bg-surface-deep`}>
           {isHovered && !imgError && (
             <video
               ref={videoRef}
@@ -160,7 +159,7 @@ export const MediaCard: React.FC<MediaCardProps> = React.memo(({ item, onClick, 
               onError={() => setImgError(true)}
             />
           ) : (
-            <div className="w-full h-full bg-gray-800 relative overflow-hidden flex flex-col items-center justify-center text-gray-500 dark:text-gray-400">
+            <div className="w-full h-full bg-surface-tertiary relative overflow-hidden flex flex-col items-center justify-center text-text-tertiary">
               {imgError ? (
                 <>
                   <Icons.Video size={32} />
@@ -178,7 +177,7 @@ export const MediaCard: React.FC<MediaCardProps> = React.memo(({ item, onClick, 
             </div>
           </div>
 
-          <div className="absolute top-2 right-2 bg-black/60 backdrop-blur-sm px-2 py-0.5 rounded text-[10px] text-white font-medium flex items-center gap-1 z-20">
+          <div className="absolute top-2 right-2 glass-1 bg-overlay-veil px-2 py-0.5 rounded text-[10px] text-white font-medium flex items-center gap-1 z-20 border border-border-glow">
             <Icons.Video size={10} />
             <span>{t('video_badge')}</span>
           </div>
@@ -226,7 +225,7 @@ export const MediaCard: React.FC<MediaCardProps> = React.memo(({ item, onClick, 
               </button>
             </div>
           ) : (
-            <div className="w-full h-full flex flex-col items-center justify-center bg-gray-200 dark:bg-gray-800 text-gray-400">
+            <div className="w-full h-full flex flex-col items-center justify-center bg-surface-tertiary text-text-tertiary">
               <Icons.Image size={32} />
               <span className="text-[10px] mt-2 font-mono uppercase font-bold bg-black/10 dark:bg-white/10 px-1 rounded">{item.type.split('/')[1] || 'IMG'}</span>
             </div>
@@ -242,7 +241,7 @@ export const MediaCard: React.FC<MediaCardProps> = React.memo(({ item, onClick, 
       )}
 
       {/* Hover Info Overlay */}
-      <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-end p-4 z-30 pointer-events-none">
+      <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-end p-4 z-30 pointer-events-none">
         <div className="w-full overflow-hidden">
           <p className="text-white text-sm font-medium truncate w-full">{item.name}</p>
           <div className="flex justify-between items-center mt-1">
