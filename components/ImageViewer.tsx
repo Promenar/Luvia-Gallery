@@ -33,6 +33,7 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
     const videoRef = useRef<HTMLVideoElement>(null);
     const [dragConstraints, setDragConstraints] = useState<{ left: number, right: number, top: number, bottom: number } | null>(null);
     const [isFullscreen, setIsFullscreen] = useState(false);
+    const [canFullscreen, setCanFullscreen] = useState(false);
 
     // Slideshow State
     const [isPlaying, setIsPlaying] = useState(false);
@@ -267,10 +268,11 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
 
     const toggleFullscreen = (e?: React.MouseEvent) => {
         if (e) e.stopPropagation();
+        if (!canFullscreen) return;
         const el = viewerRootRef.current;
         if (!el) return;
 
-        if (!document.fullscreenElement) {
+        if (!document.fullscreenElement && el.requestFullscreen) {
             el.requestFullscreen().catch(() => { /* ignore */ });
         } else if (document.exitFullscreen) {
             document.exitFullscreen().catch(() => { /* ignore */ });
@@ -278,6 +280,11 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
     };
 
     useEffect(() => {
+        if (typeof document === 'undefined') return;
+        const supported = !!(document.fullscreenEnabled || document.documentElement?.requestFullscreen);
+        setCanFullscreen(supported);
+        if (!supported) return;
+
         const handleFullscreenChange = () => {
             const active = document.fullscreenElement === viewerRootRef.current;
             setIsFullscreen(active);
@@ -287,9 +294,6 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
         document.addEventListener('fullscreenchange', handleFullscreenChange);
         return () => {
             document.removeEventListener('fullscreenchange', handleFullscreenChange);
-            if (document.fullscreenElement === viewerRootRef.current && document.exitFullscreen) {
-                document.exitFullscreen().catch(() => { /* ignore */ });
-            }
         };
     }, []);
 
