@@ -43,6 +43,8 @@ COPY --from=builder /app/database.js ./database.js
 # Copy Runner & Scripts
 COPY --from=builder /app/runner.js ./runner.js
 COPY --from=builder /app/scripts ./scripts
+# FIX: Ensure shell scripts have LF line endings (for Windows builds)
+RUN sed -i 's/\r$//' ./scripts/*.sh && chmod +x ./scripts/*.sh
 
 ENV NODE_ENV=production
 EXPOSE 3001
