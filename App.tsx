@@ -29,6 +29,7 @@ const STORAGE_KEYS = {
     currentPath: 'luvia_current_path',
     cacheHome: 'luvia_cache_home',
     token: 'luvia_token',
+    isDesktopSidebarOpen: 'luvia_desktop_sidebar_open',
 };
 
 const LEGACY_KEYS = {
@@ -57,6 +58,7 @@ const AUTH_USER_KEY = STORAGE_KEYS.authUser;
 const CURRENT_PATH_KEY = STORAGE_KEYS.currentPath;
 const CACHE_HOME_KEY = STORAGE_KEYS.cacheHome;
 const TOKEN_STORAGE_KEY = STORAGE_KEYS.token;
+const IS_DESKTOP_SIDEBAR_OPEN_KEY = STORAGE_KEYS.isDesktopSidebarOpen;
 
 const getStorageItem = (key: string, legacyKey?: string) => {
     const value = localStorage.getItem(key);
@@ -171,6 +173,15 @@ export default function App() {
     const [layoutMode, setLayoutMode] = useState<GridLayout>('timeline'); // Default to timeline
     const [currentPath, setCurrentPath] = useState<string>('');
     const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+    const [isDesktopSidebarOpen, setIsDesktopSidebarOpen] = useState(() => {
+        const stored = localStorage.getItem(IS_DESKTOP_SIDEBAR_OPEN_KEY);
+        return stored !== 'false';
+    });
+    
+    useEffect(() => {
+        localStorage.setItem(IS_DESKTOP_SIDEBAR_OPEN_KEY, String(isDesktopSidebarOpen));
+    }, [isDesktopSidebarOpen]);
+
     const [selectedItem, setSelectedItem] = useState<MediaItem | null>(null);
 
     // --- REFS for Polling (Fixes Stale Closure) ---
@@ -2061,6 +2072,8 @@ export default function App() {
                 onUpload={handleUpload}
                 isSidebarOpen={isSidebarOpen}
                 toggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)}
+                isDesktopSidebarOpen={isDesktopSidebarOpen}
+                toggleDesktopSidebar={() => setIsDesktopSidebarOpen(!isDesktopSidebarOpen)}
                 totalPhotos={libraryTotalCount || files.length}
                 theme={theme}
                 toggleTheme={toggleTheme}
