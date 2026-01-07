@@ -359,6 +359,13 @@ function findCoverMedia(folderPath) {
         // 2. Try to find a video
         const video = items.find(i => i.isFile() && /\.(mp4|mov|webm)$/i.test(i.name));
         if (video) return { path: path.join(folderPath, video.name), type: 'video', name: video.name };
+
+        // 3. Recursive search in subdirectories
+        const subdirs = items.filter(i => i.isDirectory() && !i.name.startsWith('.'));
+        for (const subdir of subdirs) {
+            const found = findCoverMedia(path.join(folderPath, subdir.name));
+            if (found) return found;
+        }
     } catch (e) {
         console.error("findCoverMedia error:", e);
     }
