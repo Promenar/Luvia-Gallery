@@ -67,9 +67,16 @@ function getConfig() {
 }
 
 function updateConfig(newConfig) {
-    fs.writeFileSync(CONFIG_FILE, JSON.stringify(newConfig, null, 2));
-    configCache = newConfig;
-    lastConfigRead = Date.now();
+    try {
+        console.log(`[Config] Saving configuration to ${CONFIG_FILE}...`);
+        fs.writeFileSync(CONFIG_FILE, JSON.stringify(newConfig, null, 2));
+        configCache = newConfig;
+        lastConfigRead = Date.now();
+        console.log('[Config] Configuration saved successfully.');
+    } catch (e) {
+        console.error(`[Config] Generic Error: Failed to save config file at ${CONFIG_FILE}`, e);
+        throw e; // Re-throw to let API know
+    }
 }
 
 // --- Global Cache Stats (Performance) ---
@@ -285,7 +292,7 @@ function getUserLibraryPaths(user) {
 
     // Admin fallback to global libraryPaths
     if (user.isAdmin || user.role === 'admin' || (foundUser && foundUser.isAdmin)) {
-        return (config.libraryPaths && config.libraryPaths.length > 0) ? config.libraryPaths : [path.resolve(MEDIA_ROOT)];
+        return (config.libraryPaths && config.libraryPaths.length > 0) ? config.libraryPaths : [];
     }
 
     // Regular User fallback (JWT payload)
@@ -597,6 +604,7 @@ app.post('/api/config', adminOnly, (req, res) => {
     const oldPaths = currentConfig.libraryPaths || [];
     const newPaths = req.body.libraryPaths || [];
     const normalizedBody = { ...req.body };
+    console.log('[DEBUG] POST /api/config received libraryPaths:', newPaths);
 
     // CRITICAL FIX: The frontend sends users without passwords (sanitized).
     // We must merge with existing passwords to avoid wiping them.
@@ -621,7 +629,12 @@ app.post('/api/config', adminOnly, (req, res) => {
         ...normalizedBody,
     };
 
-    updateConfig(newConfig);
+    try {
+        updateConfig(newConfig);
+    } catch (e) {
+        console.error('[API] Config save failed:', e);
+        return res.status(500).json({ error: 'Failed to save configuration', details: e.message });
+    }
 
     // Detect and cleanup removed paths (Admin operation)
     const removedPaths = oldPaths.filter(p => !newPaths.includes(p));
@@ -730,17 +743,19 @@ app.get('/api/library/folders', (req, res) => {
     let subs = [];
 
     if (isRootRequest) {
+        console.log(`[DEBUG] Root folder request. User: ${req.user?.username}, Admin: ${isAdmin}`);
         if (userLibraryPaths.length > 0) {
             // If we have specific library paths configured, ONLY show those
             subs = userLibraryPaths;
-            console.log(`[DEBUG] Root request: Showing user library paths: ${subs.join(', ')}`);
+            console.log(`[DEBUG] Showing user library paths: ${JSON.stringify(subs)}`);
         } else if (isAdmin) {
             // Fallback to MEDIA_ROOT if no config AND is admin
             subs = getSubfolders(MEDIA_ROOT);
-            console.log(`[DEBUG] Root request: Admin/No User Config, showing MEDIA_ROOT subfolders: ${subs.join(', ')}`);
+            console.log(`[DEBUG] Admin fallback, showing subfolders of: ${MEDIA_ROOT} -> ${JSON.stringify(subs)}`);
         } else {
             // Non-admin with no config sees NOTHING
             subs = [];
+            console.log(`[DEBUG] No access/config, showing empty.`);
         }
     } else {
         // Not root, just get subfolders of the requested parent
