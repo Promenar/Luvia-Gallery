@@ -31,3 +31,4 @@ media/
 thumbs/
 lumina-config.json
 media_test/
+.env
