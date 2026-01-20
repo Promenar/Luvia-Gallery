@@ -288,14 +288,15 @@ function getUserLibraryPaths(user) {
     const config = getConfig();
     const foundUser = (config.users || []).find(u => u.username === user.username);
 
-    // Prioritize user-specific allowedPaths (even for admins)
-    if (foundUser && foundUser.allowedPaths && foundUser.allowedPaths.length > 0) {
-        return foundUser.allowedPaths;
-    }
-
     // Admin fallback to global libraryPaths
+    // FIX: Admin should always see global config prioritized over legacy 'allowedPaths'
     if (user.isAdmin || user.role === 'admin' || (foundUser && foundUser.isAdmin)) {
         return (config.libraryPaths && config.libraryPaths.length > 0) ? config.libraryPaths : MEDIA_ROOTS.map(p => path.resolve(p));
+    }
+
+    // Prioritize user-specific allowedPaths (only for non-admins)
+    if (foundUser && foundUser.allowedPaths && foundUser.allowedPaths.length > 0) {
+        return foundUser.allowedPaths;
     }
 
     // Regular User fallback (JWT payload)
@@ -644,19 +645,17 @@ app.post('/api/config', adminOnly, (req, res) => {
     if (removedPaths.length > 0) {
         console.log("Removing data for deleted paths:", removedPaths);
         try {
-            const deleteStmt = database.db.prepare("DELETE FROM files WHERE source_id = ?");
-            const txn = database.db.transaction((paths) => {
-                for (const p of paths) {
-                    // Normalize path string to match how it was stored
-                    let cleanSource = p.trim();
-                    if (cleanSource.length > 1 && cleanSource.endsWith('/')) cleanSource = cleanSource.slice(0, -1);
-                    if (cleanSource.length > 1 && cleanSource.endsWith('\\')) cleanSource = cleanSource.slice(0, -1);
+            // FIX: Removed direct db.prepare call since db is not exported
+            // Use simple iteration instead of transaction
+            for (const p of removedPaths) {
+                // Normalize path string to match how it was stored
+                let cleanSource = p.trim();
+                if (cleanSource.length > 1 && cleanSource.endsWith('/')) cleanSource = cleanSource.slice(0, -1);
+                if (cleanSource.length > 1 && cleanSource.endsWith('\\')) cleanSource = cleanSource.slice(0, -1);
 
-                    const sourceId = `nas-${Buffer.from(cleanSource).toString('base64')}`;
-                    deleteStmt.run(sourceId);
-                }
-            });
-            txn(removedPaths);
+                const sourceId = `nas-${Buffer.from(cleanSource).toString('base64')}`;
+                database.deleteFilesBySourceId(sourceId);
+            }
             rebuildFolderStats();
         } catch (e) {
             console.error("Failed to cleanup DB:", e);
