@@ -475,6 +475,16 @@ function deleteFilesByFolder(folderPath) {
 }
 
 /**
+ * Delete files by source ID
+ */
+function deleteFilesBySourceId(sourceId) {
+    const stmt = db.prepare('DELETE FROM files WHERE source_id = ?');
+    stmt.run([sourceId]);
+    stmt.free();
+    saveDatabase();
+}
+
+/**
  * Get file by path
  */
 function getFileByPath(filePath) {
@@ -759,6 +769,7 @@ module.exports = {
     countFiles,
     deleteFile,
     deleteFilesByFolder,
+    deleteFilesBySourceId, // NEW
     getFileByPath,
     clearAllFiles,
     getStats,
