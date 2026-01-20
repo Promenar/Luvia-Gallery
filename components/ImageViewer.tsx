@@ -37,7 +37,6 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
     const slideshowIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
     // Video Controls
-    const [playbackRate, setPlaybackRate] = useState(1.0);
     const [videoError, setVideoError] = useState(false);
 
     // Info Panel
@@ -65,7 +64,7 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
         } else {
             if (document.exitFullscreen) {
                 document.exitFullscreen().then(() => {
-                   setIsFullScreen(false);
+                    setIsFullScreen(false);
                 });
             }
         }
@@ -88,17 +87,11 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
         setDragConstraints(null);
         lastDist.current = null;
         setIsRenaming(false);
-        setPlaybackRate(1.0);
         setVideoError(false);
         setExifData(null);
     }, [item?.id]);
 
-    // Handle Video Speed Change
-    useEffect(() => {
-        if (videoRef.current) {
-            videoRef.current.playbackRate = playbackRate;
-        }
-    }, [playbackRate, item]);
+
 
     // EXIF Parsing Logic
     // EXIF Parsing Logic (Server-Side)
@@ -601,18 +594,7 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
                                         onError={() => setVideoError(true)}
                                         className="max-w-full max-h-full shadow-2xl rounded-sm focus:outline-none"
                                     />
-                                    <div className="absolute top-1/2 right-4 -translate-y-1/2 bg-black/60 rounded-lg backdrop-blur px-2 py-3 flex flex-col items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                                        <Icons.Clock size={16} className="text-white/70 mb-1" />
-                                        {[0.5, 1.0, 1.5, 2.0].map(speed => (
-                                            <button
-                                                key={speed}
-                                                onClick={() => setPlaybackRate(speed)}
-                                                className={`text-xs font-bold w-full text-center hover:text-primary-400 ${playbackRate === speed ? 'text-primary-400' : 'text-white/60'}`}
-                                            >
-                                                {speed}x
-                                            </button>
-                                        ))}
-                                    </div>
+                                    {/* Redundant speed control removed as native controls already support it */}
                                 </>
                             ) : (
                                 <div className="flex flex-col items-center justify-center p-8 bg-gray-900 rounded-xl border border-gray-700 text-center max-w-md">

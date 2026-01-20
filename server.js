@@ -14,7 +14,10 @@ const app = express();
 const port = process.env.PORT || 3001;
 
 // --- Constants ---
-const MEDIA_ROOT = process.env.MEDIA_ROOT || path.join(__dirname, 'media');
+const RAW_MEDIA_ROOT = process.env.MEDIA_ROOT || path.join(__dirname, 'media');
+// Support multiple roots via ';' delimiter (cross-platform friendly config)
+const MEDIA_ROOTS = RAW_MEDIA_ROOT.split(';').map(p => p.trim()).filter(p => p.length > 0 && p !== '');
+const PRIMARY_MEDIA_ROOT = MEDIA_ROOTS[0]; // Backward compatibility for single-path assumptions
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 const CACHE_DIR = process.env.CACHE_DIR || path.join(__dirname, 'cache');
 const CONFIG_FILE = path.join(DATA_DIR, 'lumina-config.json');
@@ -292,7 +295,7 @@ function getUserLibraryPaths(user) {
 
     // Admin fallback to global libraryPaths
     if (user.isAdmin || user.role === 'admin' || (foundUser && foundUser.isAdmin)) {
-        return (config.libraryPaths && config.libraryPaths.length > 0) ? config.libraryPaths : [];
+        return (config.libraryPaths && config.libraryPaths.length > 0) ? config.libraryPaths : MEDIA_ROOTS.map(p => path.resolve(p));
     }
 
     // Regular User fallback (JWT payload)
@@ -749,9 +752,9 @@ app.get('/api/library/folders', (req, res) => {
             subs = userLibraryPaths;
             console.log(`[DEBUG] Showing user library paths: ${JSON.stringify(subs)}`);
         } else if (isAdmin) {
-            // Fallback to MEDIA_ROOT if no config AND is admin
-            subs = getSubfolders(MEDIA_ROOT);
-            console.log(`[DEBUG] Admin fallback, showing subfolders of: ${MEDIA_ROOT} -> ${JSON.stringify(subs)}`);
+            // Fallback to MEDIA_ROOTS if no config AND is admin
+            subs = MEDIA_ROOTS;
+            console.log(`[DEBUG] Root request: Admin/No User Config, showing MEDIA_ROOTS: ${subs.join(', ')}`);
         } else {
             // Non-admin with no config sees NOTHING
             subs = [];
@@ -855,7 +858,7 @@ app.get('/api/fs/list', (req, res) => {
     if (queryPath === 'root') queryPath = '/';
 
     // If empty or null, default to MEDIA_ROOT for convenience, unless it's '/'
-    if (!queryPath) queryPath = MEDIA_ROOT;
+    if (!queryPath) queryPath = PRIMARY_MEDIA_ROOT;
 
     const dirs = getSubfolders(queryPath).map(p => path.basename(p));
     res.json({ dirs });
@@ -952,7 +955,7 @@ async function processScan() {
     scanState.status = 'scanning';
     scanState.shouldStop = false;
 
-    let libraryPaths = [MEDIA_ROOT];
+    let libraryPaths = MEDIA_ROOTS;
     const config = getConfig();
     if (config.libraryPaths && config.libraryPaths.length > 0) {
         libraryPaths = config.libraryPaths;
@@ -1199,7 +1202,7 @@ app.get('/api/scan/results', (req, res) => {
     // Handle root path mapping for folder filter
     if (req.query.folder !== undefined) {
         if (!folderPath || folderPath === 'root' || folderPath === '/') {
-            folderPath = MEDIA_ROOT;
+            folderPath = PRIMARY_MEDIA_ROOT;
         }
     }
 
@@ -2200,7 +2203,7 @@ app.post('/api/thumb/regenerate', async (req, res) => {
         else if (folderPath) {
             // Batch Folder
             let targetPath = folderPath;
-            if (targetPath === 'root') targetPath = MEDIA_ROOT;
+            if (targetPath === 'root') targetPath = PRIMARY_MEDIA_ROOT;
 
             // Recursively find files
             // ensure { recursive: true } is supported by database.queryFiles (it was added in V6)
@@ -2400,7 +2403,7 @@ app.post('/api/system/monitor', adminOnly, (req, res) => {
         stopAllMonitoring();
 
         let newMode = 'manual';
-        let paths = currentConfig.libraryPaths || [MEDIA_ROOT];
+        let paths = currentConfig.libraryPaths || MEDIA_ROOTS;
 
         if (mode === 'periodic') {
             console.log(`[Monitor] Switched to Periodic (Every ${interval}m)`);
@@ -2448,7 +2451,7 @@ app.get('/api/watcher/toggle', adminOnly, (req, res) => {
             currentConfig.watcherEnabled = false;
         } else {
             // Turn on
-            let libraryPaths = [MEDIA_ROOT];
+            let libraryPaths = MEDIA_ROOTS;
             if (currentConfig.libraryPaths && currentConfig.libraryPaths.length > 0) {
                 libraryPaths = currentConfig.libraryPaths;
             }
@@ -2764,7 +2767,7 @@ app.listen(port, () => {
 
             const libraryPaths = (config.libraryPaths && config.libraryPaths.length > 0)
                 ? config.libraryPaths
-                : [MEDIA_ROOT];
+                : MEDIA_ROOTS;
 
             // Determine mode
             if (config.monitorMode === 'periodic') {

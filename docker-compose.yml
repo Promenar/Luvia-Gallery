@@ -7,8 +7,10 @@ services:
     ports:
       - "3000:3001"
     volumes:
-      # Map your media folder
+      # Volumes: Map as many folders as you need
+      # Example:
       - ./media:/media
+      # - /mnt/external_drive:/mnt/ext
 
       # Persistence for configuration
       - ./data:/app/data
@@ -22,6 +24,8 @@ services:
       - ./ssh:/tmp/ssh_mount:ro
     environment:
       - NODE_ENV=production
+      # [MULTI-ROOT SUPPORT] Separate paths with ';' (semicolon)
+      # Example: MEDIA_ROOT=/media;/mnt/ext
       - MEDIA_ROOT=/media
       # [SECURITY] Set this to enable password protection for the Update API.
       # If provided, the web UI will prompt for this token when you click Update.
