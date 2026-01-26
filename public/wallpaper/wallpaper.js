@@ -1,9 +1,9 @@
 /**
- * Luvia Gallery - Standalone Wallpaper Renderer (Anti-Ghosting Version)
+ * Luvia Gallery - Standalone Wallpaper Renderer (Progressive Loading Version)
  */
 
 const CONFIG = {
-    interval: 30000, // Default 30s
+    interval: 30000,
     mode: 'random',
     path: '',
     apiEndpoint: '/api/scan/results',
@@ -21,11 +21,10 @@ const elements = {
 };
 
 async function init() {
-    console.log("[Luvia] Renderer Init");
+    console.log("[Luvia] Progressive Renderer Init");
     const urlParams = new URLSearchParams(window.location.search);
     CONFIG.token = urlParams.get('token');
 
-    // Support more params from URL
     const mode = urlParams.get('mode');
     if (mode) CONFIG.mode = mode;
 
@@ -82,7 +81,6 @@ async function fetchItems() {
 
         const data = await response.json();
         if (data && data.files && data.files.length > 0) {
-            // Shuffle on client side too for extra randomness
             CONFIG.items = data.files.sort(() => Math.random() - 0.5);
             CONFIG.currentIndex = 0;
             return true;
@@ -119,61 +117,72 @@ function next() {
 }
 
 /**
- * CORE RE-RENDER LOGIC (Anti-Ghosting)
+ * PROGRESSIVE RENDER LOGIC
  */
 function renderCurrent() {
     const item = CONFIG.items[CONFIG.currentIndex];
     if (!item) return;
 
-    // 1. CLEANUP PREVIOUS SLIDES (Hard Cleanup)
-    // We do this immediately to stop all video/audio playback
+    // 1. CLEANUP PREVIOUS SLIDES
     const oldSlides = elements.container.querySelectorAll('.slide');
     oldSlides.forEach(oldSlide => {
         const videos = oldSlide.querySelectorAll('video');
         videos.forEach(v => {
             v.pause();
-            v.src = ""; // Release memory/stream
+            v.src = "";
             v.load();
             v.remove();
         });
-        // We don't remove the slide yet to allow for a slight crossfade, 
-        // but we ensure its media is dead or fading.
         oldSlide.classList.remove('active');
         oldSlide.classList.add('exit');
     });
 
-    // 2. CREATE NEW SLIDE
+    // 2. PREPARE NEW SLIDE
     const slide = document.createElement('div');
     slide.className = 'slide';
 
-    const mediaUrl = `${item.url.startsWith('/') ? '' : '/'}${item.url}?token=${CONFIG.token}`;
+    const tokenSuffix = `token=${CONFIG.token}`;
+    const fullUrl = `${item.url.startsWith('/') ? '' : '/'}${item.url}${item.url.includes('?') ? '&' : '?'}${tokenSuffix}`;
+    const thumbUrl = `${item.thumbnailUrl.startsWith('/') ? '' : '/'}${item.thumbnailUrl}${item.thumbnailUrl.includes('?') ? '&' : '?'}${tokenSuffix}`;
 
+    // Create Blurred Thumbnail Placeholder
+    const thumb = document.createElement('img');
+    thumb.className = 'thumb-placeholder';
+    thumb.src = thumbUrl;
+    slide.appendChild(thumb);
+
+    // Create Main Content
     let media;
     if (item.mediaType === 'video') {
         media = document.createElement('video');
-        media.src = mediaUrl;
+        media.className = 'full-content';
+        media.src = fullUrl;
         media.autoplay = true;
         media.muted = true;
         media.loop = true;
         media.playsInline = true;
         media.setAttribute('webkit-playsinline', 'true');
+
+        // Use onprogress or oncanplaythrough
+        media.oncanplaythrough = () => handleMediaLoad(media, thumb);
     } else {
         media = document.createElement('img');
-        media.src = mediaUrl;
+        media.className = 'full-content';
+        media.src = fullUrl;
+        media.onload = () => handleMediaLoad(media, thumb);
     }
 
     slide.appendChild(media);
     elements.container.appendChild(slide);
 
-    // 3. TRIGGER ANIMATION
-    // Small delay to ensure browser registers the new element for transition
+    // 3. TRIGGER SLIDE ENTRY
     requestAnimationFrame(() => {
         requestAnimationFrame(() => {
             slide.classList.add('active');
         });
     });
 
-    // 4. FINAL CLEANUP (Remove Old DOM elements)
+    // 4. CLEANUP OLD ELEMENTS
     setTimeout(() => {
         const deadSlides = elements.container.querySelectorAll('.exit');
         deadSlides.forEach(s => {
@@ -181,8 +190,21 @@ function renderCurrent() {
                 elements.container.removeChild(s);
             }
         });
-        console.log("[Luvia] DOM Cleaned. Items in container:", elements.container.children.length);
     }, 2000);
+}
+
+function handleMediaLoad(media, thumb) {
+    if (media.classList.contains('loaded')) return; // Already handled
+
+    console.log("[Luvia] High-res content loaded.");
+    media.classList.add('loaded');
+
+    if (thumb) {
+        thumb.classList.add('fade-out');
+        setTimeout(() => {
+            if (thumb.parentNode) thumb.parentNode.removeChild(thumb);
+        }, 1200);
+    }
 }
 
 function pause() {
@@ -207,5 +229,4 @@ function hideOverlay() {
     elements.overlay.classList.add('hidden');
 }
 
-// Start everything
 init();
