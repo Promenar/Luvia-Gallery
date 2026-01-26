@@ -23,7 +23,8 @@ html {
     position: absolute;
     inset: 0;
     opacity: 0;
-    transition: opacity 1.5s ease-in-out, transform 10s linear;
+    transform: scale(1.1);
+    transition: opacity 1.5s ease-in-out, transform 1.5s ease-out;
     display: flex;
     align-items: center;
     justify-content: center;
