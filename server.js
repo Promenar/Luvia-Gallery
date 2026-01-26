@@ -265,7 +265,10 @@ app.post('/api/auth/login', (req, res) => {
 app.get('/api/auth/wallpaper-token', authenticateToken, (req, res) => {
     const config = getConfig();
     const user = config.users?.find(u => u.username === req.user.username);
-    res.json({ token: user?.wallpaperToken || '' });
+    res.json({
+        token: user?.wallpaperToken || '',
+        config: user?.wallpaperConfig || { mode: 'random', path: '', interval: 30 }
+    });
 });
 
 app.post('/api/auth/wallpaper-token', authenticateToken, (req, res) => {
@@ -282,14 +285,18 @@ app.post('/api/auth/wallpaper-token', authenticateToken, (req, res) => {
 
     // Persist to config.json
     try {
+        const { wallpaperConfig } = req.body;
         const config = getConfig();
         const userIndex = config.users?.findIndex(u => u.username === req.user.username);
         if (userIndex !== -1 && userIndex !== undefined) {
             config.users[userIndex].wallpaperToken = token;
+            if (wallpaperConfig) {
+                config.users[userIndex].wallpaperConfig = wallpaperConfig;
+            }
             updateConfig(config);
         }
     } catch (e) {
-        console.error("Failed to persist wallpaper token", e);
+        console.error("Failed to persist wallpaper token/config", e);
     }
 
     res.json({ token });

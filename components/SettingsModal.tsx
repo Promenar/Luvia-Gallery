@@ -52,8 +52,8 @@ interface SettingsModalProps {
     onTabChange?: (tab: SettingsTab) => void;
     theme?: string;
     onToggleTheme?: () => void;
-    onGenerateWallpaperToken?: () => Promise<string>;
-    onFetchWallpaperToken?: () => Promise<string>;
+    onGenerateWallpaperToken?: (config?: any) => Promise<string>;
+    onFetchWallpaperToken?: () => Promise<{ token: string, config: any }>;
     baseUrl?: string;
 }
 
@@ -98,8 +98,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
     // Fetch existing wallpaper token when account tab is opened
     useEffect(() => {
         if (isOpen && activeTab === 'account' && onFetchWallpaperToken) {
-            onFetchWallpaperToken().then(token => {
-                if (token) setWallpaperToken(token);
+            onFetchWallpaperToken().then(res => {
+                if (res.token) setWallpaperToken(res.token);
+                if (res.config) setWallpaperConfig(res.config);
             });
         }
     }, [isOpen, activeTab]);
@@ -114,8 +115,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
 
     const handleGenerateWallpaperToken = async () => {
         if (onGenerateWallpaperToken) {
-            const token = await onGenerateWallpaperToken();
+            const token = await onGenerateWallpaperToken(wallpaperConfig);
             setWallpaperToken(token);
+        }
+    };
+
+    const handleSaveWallpaperConfig = async () => {
+        if (onGenerateWallpaperToken) {
+            // Re-using the same POST endpoint to save config even without regenerating token
+            await onGenerateWallpaperToken(wallpaperConfig);
         }
     };
 
@@ -665,6 +673,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
 
                                                         const url = `${baseUrl || window.location.origin}/wallpaper/index.html?${params.toString()}`;
                                                         copyToClipboard(url);
+                                                        handleSaveWallpaperConfig();
                                                     }}
                                                     className="w-full py-3 bg-accent-600 hover:bg-accent-500 text-white rounded-xl text-xs font-bold transition-all shadow-glow flex items-center justify-center gap-2"
                                                 >
