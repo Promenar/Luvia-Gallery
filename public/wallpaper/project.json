@@ -1,0 +1,25 @@
+{
+    "title": "Luvia Gallery Wallpaper",
+    "description": "Dynamic web-based wallpaper powered by your Luvia Gallery instance.",
+    "file": "index.html",
+    "preview": "preview.jpg",
+    "type": "web",
+    "general": {
+        "properties": {
+            "token": {
+                "order": 1,
+                "text": "Wallpaper API Token",
+                "type": "text",
+                "value": ""
+            },
+            "interval": {
+                "order": 2,
+                "text": "Switch Interval (seconds)",
+                "type": "slider",
+                "min": 2,
+                "max": 60,
+                "value": 5
+            }
+        }
+    }
+}

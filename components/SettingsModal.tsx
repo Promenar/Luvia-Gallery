@@ -52,6 +52,8 @@ interface SettingsModalProps {
     onTabChange?: (tab: SettingsTab) => void;
     theme?: string;
     onToggleTheme?: () => void;
+    onGenerateWallpaperToken?: () => Promise<string>;
+    baseUrl?: string;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
@@ -67,7 +69,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
         onSmartScan, onSmartRepair, onExportConfig, onLogout, onAddUser,
         onRenameUser, onResetPassword, onDeleteUser, onSetDirPickerContext,
         onShowDirPicker, onUpdateThreadCount, onPruneCache, onClearCache, onFetchSmartResults, smartScanResults, thumbStatus,
-        activeTab: externalTab, onTabChange, theme, onToggleTheme
+        activeTab: externalTab, onTabChange, theme, onToggleTheme,
+        onGenerateWallpaperToken, baseUrl
     } = props;
 
     // Sync with external tab state
@@ -92,6 +95,22 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
     }, [isOpen, activeTab]);
 
     if (!isOpen) return null;
+
+    const [wallpaperToken, setWallpaperToken] = useState('');
+    const [justCopied, setJustCopied] = useState(false);
+
+    const handleGenerateWallpaperToken = async () => {
+        if (onGenerateWallpaperToken) {
+            const token = await onGenerateWallpaperToken();
+            setWallpaperToken(token);
+        }
+    };
+
+    const copyToClipboard = (text: string) => {
+        navigator.clipboard.writeText(text);
+        setJustCopied(true);
+        setTimeout(() => setJustCopied(false), 2000);
+    };
 
     const renderContent = () => {
         switch (activeTab) {
@@ -517,7 +536,74 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                 ))}
                             </div>
                         </section>
-                        <div className="flex justify-end">
+                        {isServerMode && currentUser && (
+                            <section className="mt-8 pt-6 border-t border-white/10">
+                                <div className="flex items-center gap-2 mb-4">
+                                    <div className="w-1.5 h-6 bg-accent-500 rounded-full shadow-[0_0_10px_var(--accent-500)]" />
+                                    <h4 className="text-sm font-bold uppercase text-text-tertiary tracking-wider">{t('wallpaper_token')}</h4>
+                                </div>
+                                <div className="glass-1 p-6 rounded-2xl border border-white/10 shadow-lg">
+                                    <p className="text-xs text-text-secondary mb-4">
+                                        {t('wallpaper_token_desc')}
+                                    </p>
+
+                                    {!wallpaperToken ? (
+                                        <button
+                                            onClick={handleGenerateWallpaperToken}
+                                            className="px-6 py-2 bg-accent-600 hover:bg-accent-500 text-white font-medium rounded-lg transition-colors shadow-glow flex items-center gap-2"
+                                        >
+                                            <Icons.Zap size={18} />
+                                            {t('generate_wallpaper_token')}
+                                        </button>
+                                    ) : (
+                                        <div className="space-y-4 animate-in fade-in zoom-in-95 duration-300">
+                                            <div className="p-3 bg-black/40 rounded-xl border border-accent-500/30 flex items-center justify-between gap-4">
+                                                <div className="flex-1 overflow-hidden">
+                                                    <span className="text-[10px] text-accent-400 font-bold uppercase block mb-1">{t('wallpaper_token')}</span>
+                                                    <code className="text-xs text-text-primary font-mono truncate block">
+                                                        {wallpaperToken}
+                                                    </code>
+                                                </div>
+                                                <button
+                                                    onClick={() => copyToClipboard(wallpaperToken)}
+                                                    className="p-2 hover:bg-white/10 rounded-lg text-accent-400 transition-colors shrink-0"
+                                                    title="Copy Token"
+                                                >
+                                                    {justCopied ? <Icons.Check size={18} /> : <Icons.Copy size={18} />}
+                                                </button>
+                                            </div>
+
+                                            <div className="flex items-center gap-2">
+                                                <button
+                                                    onClick={() => {
+                                                        const url = `${baseUrl || window.location.origin}/wallpaper/index.html?token=${wallpaperToken}`;
+                                                        copyToClipboard(url);
+                                                    }}
+                                                    className="flex-1 px-4 py-2 bg-white/5 hover:bg-white/10 text-text-primary border border-white/10 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2"
+                                                >
+                                                    <Icons.Link size={16} />
+                                                    {t('copy_wallpaper_url')}
+                                                </button>
+                                                <button
+                                                    onClick={handleGenerateWallpaperToken}
+                                                    className="p-2 text-text-tertiary hover:text-accent-400 transition-colors"
+                                                    title="Regenerate"
+                                                >
+                                                    <Icons.Refresh size={16} />
+                                                </button>
+                                            </div>
+
+                                            {justCopied && (
+                                                <p className="text-[10px] text-green-400 font-bold text-center animate-bounce">
+                                                    {t('token_generated')} & Copied!
+                                                </p>
+                                            )}
+                                        </div>
+                                    )}
+                                </div>
+                            </section>
+                        )}
+                        <div className="flex justify-end mt-8 border-t border-white/10 pt-6">
                             <button onClick={onLogout} className="px-4 py-2 bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 rounded-lg font-medium transition-colors flex items-center gap-2">
                                 <Icons.LogOut size={18} /> {t('sign_out')}
                             </button>

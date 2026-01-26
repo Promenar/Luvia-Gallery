@@ -217,6 +217,11 @@ const translations = {
     change_password: 'Change Password',
     save_changes: 'Save Changes',
     delete_user_confirm: 'Are you sure you want to delete this user?',
+    wallpaper_token: 'Wallpaper Token',
+    generate_wallpaper_token: 'Generate Wallpaper Token',
+    copy_wallpaper_url: 'Copy Wallpaper URL',
+    wallpaper_token_desc: 'Long-lived token for desktop backgrounds. Use this as your API token in Wallpaper Engine or Gnome Hanabi.',
+    token_generated: 'Token Generated',
 
     // Auth
     welcome: 'Welcome',
@@ -460,6 +465,11 @@ const translations = {
     change_password: '修改密码',
     save_changes: '保存更改',
     delete_user_confirm: '确定要删除该用户吗？',
+    wallpaper_token: '壁纸访问令牌',
+    generate_wallpaper_token: '生成壁纸专用令牌',
+    copy_wallpaper_url: '复制壁纸 URL',
+    wallpaper_token_desc: '用于桌面背景的长期访问令牌。在 Wallpaper Engine 或 Gnome Hanabi 设置中使用此令牌或生成的 URL。',
+    token_generated: '令牌已生成',
 
     // Auth
     welcome: '欢迎',
