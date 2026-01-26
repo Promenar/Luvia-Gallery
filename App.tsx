@@ -2346,6 +2346,17 @@ export default function App() {
                     } catch (e) { }
                     return '';
                 }}
+                onFetchWallpaperToken={async () => {
+                    if (!isServerMode) return '';
+                    try {
+                        const res = await apiFetch('/api/auth/wallpaper-token', { method: 'GET' });
+                        if (res.ok) {
+                            const data = await res.json();
+                            return data.token;
+                        }
+                    } catch (e) { }
+                    return '';
+                }}
                 baseUrl={window.location.origin}
             />
 
