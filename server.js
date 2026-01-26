@@ -262,6 +262,12 @@ app.post('/api/auth/login', (req, res) => {
     res.status(401).json({ error: 'Invalid credentials' });
 });
 
+app.get('/api/auth/wallpaper-token', authenticateToken, (req, res) => {
+    const config = getConfig();
+    const user = config.users?.find(u => u.username === req.user.username);
+    res.json({ token: user?.wallpaperToken || '' });
+});
+
 app.post('/api/auth/wallpaper-token', authenticateToken, (req, res) => {
     // Generate a long-lived token (approx 10 years) for wallpaper access
     const token = jwt.sign(
@@ -273,6 +279,19 @@ app.post('/api/auth/wallpaper-token', authenticateToken, (req, res) => {
         JWT_SECRET,
         { expiresIn: '3650d' }
     );
+
+    // Persist to config.json
+    try {
+        const config = getConfig();
+        const userIndex = config.users?.findIndex(u => u.username === req.user.username);
+        if (userIndex !== -1 && userIndex !== undefined) {
+            config.users[userIndex].wallpaperToken = token;
+            updateConfig(config);
+        }
+    } catch (e) {
+        console.error("Failed to persist wallpaper token", e);
+    }
+
     res.json({ token });
 });
 

@@ -53,6 +53,7 @@ interface SettingsModalProps {
     theme?: string;
     onToggleTheme?: () => void;
     onGenerateWallpaperToken?: () => Promise<string>;
+    onFetchWallpaperToken?: () => Promise<string>;
     baseUrl?: string;
 }
 
@@ -70,7 +71,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
         onRenameUser, onResetPassword, onDeleteUser, onSetDirPickerContext,
         onShowDirPicker, onUpdateThreadCount, onPruneCache, onClearCache, onFetchSmartResults, smartScanResults, thumbStatus,
         activeTab: externalTab, onTabChange, theme, onToggleTheme,
-        onGenerateWallpaperToken, baseUrl
+        onGenerateWallpaperToken, onFetchWallpaperToken, baseUrl
     } = props;
 
     // Sync with external tab state
@@ -91,6 +92,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
     useEffect(() => {
         if (isOpen && activeTab === 'system') {
             onFetchSmartResults();
+        }
+    }, [isOpen, activeTab]);
+
+    // Fetch existing wallpaper token when account tab is opened
+    useEffect(() => {
+        if (isOpen && activeTab === 'account' && onFetchWallpaperToken) {
+            onFetchWallpaperToken().then(token => {
+                if (token) setWallpaperToken(token);
+            });
         }
     }, [isOpen, activeTab]);
 
