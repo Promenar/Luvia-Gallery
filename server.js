@@ -197,6 +197,8 @@ app.use(express.json());
 
 // Serve static files from the 'dist' directory (Vite build output)
 app.use(express.static(path.join(__dirname, 'dist')));
+// Serve static files from the 'public' directory
+app.use(express.static(path.join(__dirname, 'public')));
 
 // --- Auth Middleware ---
 function authenticateToken(req, res, next) {
@@ -258,6 +260,20 @@ app.post('/api/auth/login', (req, res) => {
     // Default/Fallback Admin logic (if no config exists yet, maybe allow setup?)
     // But here we just reject.
     res.status(401).json({ error: 'Invalid credentials' });
+});
+
+app.post('/api/auth/wallpaper-token', authenticateToken, (req, res) => {
+    // Generate a long-lived token (approx 10 years) for wallpaper access
+    const token = jwt.sign(
+        {
+            username: req.user.username,
+            role: req.user.role,
+            isWallpaper: true
+        },
+        JWT_SECRET,
+        { expiresIn: '3650d' }
+    );
+    res.json({ token });
 });
 
 // Watcher State
