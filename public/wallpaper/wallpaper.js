@@ -1,5 +1,6 @@
 /**
- * Luvia Gallery - Standalone Wallpaper Renderer (Progressive Loading Version)
+ * Luvia Gallery - Standalone Wallpaper Renderer (Stabilized Version)
+ * Fixes: Video looping/ghosting and duplicate triggers.
  */
 
 const CONFIG = {
@@ -21,7 +22,7 @@ const elements = {
 };
 
 async function init() {
-    console.log("[Luvia] Progressive Renderer Init");
+    console.log("[Luvia] Stabilized Renderer Init");
     const urlParams = new URLSearchParams(window.location.search);
     CONFIG.token = urlParams.get('token');
 
@@ -93,7 +94,11 @@ async function fetchItems() {
 
 let carouselTimer = null;
 function setupCarousel() {
-    if (carouselTimer) clearInterval(carouselTimer);
+    // Clear any existing timer to prevent overlapping loops
+    if (carouselTimer) {
+        clearInterval(carouselTimer);
+        carouselTimer = null;
+    }
 
     renderCurrent();
 
@@ -117,17 +122,19 @@ function next() {
 }
 
 /**
- * PROGRESSIVE RENDER LOGIC
+ * CORE RENDER LOGIC
  */
 function renderCurrent() {
     const item = CONFIG.items[CONFIG.currentIndex];
     if (!item) return;
 
-    // 1. CLEANUP PREVIOUS SLIDES
+    // 1. HARD CLEANUP
     const oldSlides = elements.container.querySelectorAll('.slide');
     oldSlides.forEach(oldSlide => {
         const videos = oldSlide.querySelectorAll('video');
         videos.forEach(v => {
+            v.oncanplaythrough = null; // Remove listeners
+            v.onplay = null;
             v.pause();
             v.src = "";
             v.load();
@@ -145,14 +152,20 @@ function renderCurrent() {
     const fullUrl = `${item.url.startsWith('/') ? '' : '/'}${item.url}${item.url.includes('?') ? '&' : '?'}${tokenSuffix}`;
     const thumbUrl = `${item.thumbnailUrl.startsWith('/') ? '' : '/'}${item.thumbnailUrl}${item.thumbnailUrl.includes('?') ? '&' : '?'}${tokenSuffix}`;
 
-    // Create Blurred Thumbnail Placeholder
     const thumb = document.createElement('img');
     thumb.className = 'thumb-placeholder';
     thumb.src = thumbUrl;
     slide.appendChild(thumb);
 
-    // Create Main Content
     let media;
+    let hasTriggeredLoad = false;
+
+    const onMediaLoaded = () => {
+        if (hasTriggeredLoad) return;
+        hasTriggeredLoad = true;
+        handleMediaTransition(media, thumb);
+    };
+
     if (item.mediaType === 'video') {
         media = document.createElement('video');
         media.className = 'full-content';
@@ -163,26 +176,33 @@ function renderCurrent() {
         media.playsInline = true;
         media.setAttribute('webkit-playsinline', 'true');
 
-        // Use onprogress or oncanplaythrough
-        media.oncanplaythrough = () => handleMediaLoad(media, thumb);
+        // Use multiple events to ensure trigger in different browsers/kernels
+        media.oncanplaythrough = onMediaLoaded;
+        media.onplay = onMediaLoaded;
+
+        // Fallback for some Linux WebKit versions that struggle with canplaythrough
+        setTimeout(() => {
+            if (!hasTriggeredLoad && media && media.readyState >= 2) {
+                onMediaLoaded();
+            }
+        }, 2000);
     } else {
         media = document.createElement('img');
         media.className = 'full-content';
         media.src = fullUrl;
-        media.onload = () => handleMediaLoad(media, thumb);
+        media.onload = onMediaLoaded;
     }
 
     slide.appendChild(media);
     elements.container.appendChild(slide);
 
-    // 3. TRIGGER SLIDE ENTRY
     requestAnimationFrame(() => {
         requestAnimationFrame(() => {
             slide.classList.add('active');
         });
     });
 
-    // 4. CLEANUP OLD ELEMENTS
+    // Cleanup DOM
     setTimeout(() => {
         const deadSlides = elements.container.querySelectorAll('.exit');
         deadSlides.forEach(s => {
@@ -190,15 +210,13 @@ function renderCurrent() {
                 elements.container.removeChild(s);
             }
         });
-    }, 2000);
+    }, 2500);
 }
 
-function handleMediaLoad(media, thumb) {
-    if (media.classList.contains('loaded')) return; // Already handled
+function handleMediaTransition(media, thumb) {
+    if (media.classList.contains('loaded')) return;
 
-    console.log("[Luvia] High-res content loaded.");
     media.classList.add('loaded');
-
     if (thumb) {
         thumb.classList.add('fade-out');
         setTimeout(() => {
@@ -215,7 +233,9 @@ function pause() {
 function resume() {
     CONFIG.isPaused = false;
     document.querySelectorAll('video').forEach(v => {
-        if (v.closest('.slide.active')) v.play();
+        if (v.closest('.slide.active')) {
+            v.play().catch(e => console.warn("Play failed", e));
+        }
     });
 }
 
