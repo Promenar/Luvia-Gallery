@@ -94,8 +94,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
         }
     }, [isOpen, activeTab]);
 
-    if (!isOpen) return null;
-
     const [wallpaperToken, setWallpaperToken] = useState('');
     const [justCopied, setJustCopied] = useState(false);
 
@@ -111,6 +109,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
         setJustCopied(true);
         setTimeout(() => setJustCopied(false), 2000);
     };
+
+    if (!isOpen) return null;
 
     const renderContent = () => {
         switch (activeTab) {
