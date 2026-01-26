@@ -1,11 +1,11 @@
 /**
- * Luvia Gallery - Standalone Wallpaper Renderer (Optimized)
+ * Luvia Gallery - Standalone Wallpaper Renderer (Anti-Ghosting Version)
  */
 
 const CONFIG = {
-    interval: 5000,
-    mode: 'random', // 'random', 'folder', 'favorites'
-    path: '',       // folder path
+    interval: 30000, // Default 30s
+    mode: 'random',
+    path: '',
     apiEndpoint: '/api/scan/results',
     token: null,
     items: [],
@@ -21,6 +21,7 @@ const elements = {
 };
 
 async function init() {
+    console.log("[Luvia] Renderer Init");
     const urlParams = new URLSearchParams(window.location.search);
     CONFIG.token = urlParams.get('token');
 
@@ -38,17 +39,6 @@ async function init() {
         if (document.visibilityState === 'visible') resume();
         else pause();
     });
-
-    if (window.wallpaperPropertyListener) {
-        window.wallpaperPropertyListener.applyUserProperties = (properties) => {
-            if (properties.token) { CONFIG.token = properties.token.value; start(); }
-            if (properties.interval) {
-                CONFIG.interval = properties.interval.value * 1000;
-                if (carouselTimer) setupCarousel();
-            }
-            if (properties.mode) { CONFIG.mode = properties.mode.value; start(); }
-        };
-    }
 
     start();
 }
@@ -76,7 +66,7 @@ async function start() {
 
 async function fetchItems() {
     try {
-        let url = `${CONFIG.apiEndpoint}?random=true&limit=20&token=${CONFIG.token}`;
+        let url = `${CONFIG.apiEndpoint}?random=true&limit=50&token=${CONFIG.token}`;
 
         if (CONFIG.mode === 'favorites') {
             url += '&favorites=true&recursive=true';
@@ -89,7 +79,8 @@ async function fetchItems() {
 
         const data = await response.json();
         if (data && data.files && data.files.length > 0) {
-            CONFIG.items = data.files;
+            // Shuffle on client side too for extra randomness
+            CONFIG.items = data.files.sort(() => Math.random() - 0.5);
             CONFIG.currentIndex = 0;
             return true;
         }
@@ -116,7 +107,6 @@ function next() {
     CONFIG.currentIndex++;
 
     if (CONFIG.currentIndex >= CONFIG.items.length) {
-        // Refresh items when we reach the end
         fetchItems().then(() => {
             renderCurrent();
         });
@@ -125,10 +115,31 @@ function next() {
     }
 }
 
+/**
+ * CORE RE-RENDER LOGIC (Anti-Ghosting)
+ */
 function renderCurrent() {
     const item = CONFIG.items[CONFIG.currentIndex];
     if (!item) return;
 
+    // 1. CLEANUP PREVIOUS SLIDES (Hard Cleanup)
+    // We do this immediately to stop all video/audio playback
+    const oldSlides = elements.container.querySelectorAll('.slide');
+    oldSlides.forEach(oldSlide => {
+        const videos = oldSlide.querySelectorAll('video');
+        videos.forEach(v => {
+            v.pause();
+            v.src = ""; // Release memory/stream
+            v.load();
+            v.remove();
+        });
+        // We don't remove the slide yet to allow for a slight crossfade, 
+        // but we ensure its media is dead or fading.
+        oldSlide.classList.remove('active');
+        oldSlide.classList.add('exit');
+    });
+
+    // 2. CREATE NEW SLIDE
     const slide = document.createElement('div');
     slide.className = 'slide';
 
@@ -142,6 +153,7 @@ function renderCurrent() {
         media.muted = true;
         media.loop = true;
         media.playsInline = true;
+        media.setAttribute('webkit-playsinline', 'true');
     } else {
         media = document.createElement('img');
         media.src = mediaUrl;
@@ -150,25 +162,24 @@ function renderCurrent() {
     slide.appendChild(media);
     elements.container.appendChild(slide);
 
-    // GHOSTING FIX: Transition logic
-    const oldSlides = elements.container.querySelectorAll('.slide:not(.active)');
-    const currentActive = elements.container.querySelector('.slide.active');
+    // 3. TRIGGER ANIMATION
+    // Small delay to ensure browser registers the new element for transition
+    requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+            slide.classList.add('active');
+        });
+    });
 
+    // 4. FINAL CLEANUP (Remove Old DOM elements)
     setTimeout(() => {
-        if (currentActive) {
-            currentActive.classList.remove('active');
-            currentActive.classList.add('exit');
-        }
-        slide.classList.add('active');
-
-        // Cleanup DOM
-        setTimeout(() => {
-            const slidesToRemove = elements.container.querySelectorAll('.exit, .slide:not(.active)');
-            slidesToRemove.forEach(s => {
-                if (s !== slide) elements.container.removeChild(s);
-            });
-        }, 1600);
-    }, 50);
+        const deadSlides = elements.container.querySelectorAll('.exit');
+        deadSlides.forEach(s => {
+            if (elements.container.contains(s)) {
+                elements.container.removeChild(s);
+            }
+        });
+        console.log("[Luvia] DOM Cleaned. Items in container:", elements.container.children.length);
+    }, 2000);
 }
 
 function pause() {
@@ -178,7 +189,9 @@ function pause() {
 
 function resume() {
     CONFIG.isPaused = false;
-    document.querySelectorAll('video').forEach(v => v.play());
+    document.querySelectorAll('video').forEach(v => {
+        if (v.closest('.slide.active')) v.play();
+    });
 }
 
 function showOverlay(msg, showGuide = false) {
@@ -191,4 +204,5 @@ function hideOverlay() {
     elements.overlay.classList.add('hidden');
 }
 
+// Start everything
 init();
