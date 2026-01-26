@@ -2455,7 +2455,7 @@ export default function App() {
                     isOpen={showDirPicker}
                     onClose={() => setShowDirPicker(false)}
                     onSelect={(path) => {
-                        if (dirPickerContext === 'library') {
+                        if (dirPickerContext === 'library' || dirPickerContext === 'wallpaper') {
                             setNewPathInput(path);
                         } else {
                             // Append to allowed paths, ensuring newline separation
@@ -2468,7 +2468,7 @@ export default function App() {
                         }
                         setShowDirPicker(false);
                     }}
-                    initialPath={dirPickerContext === 'library' ? newPathInput : ''}
+                    initialPath={(dirPickerContext === 'library' || dirPickerContext === 'wallpaper') ? newPathInput : ''}
                 />
             )}
         </div >
