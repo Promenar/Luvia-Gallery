@@ -30,8 +30,8 @@ html {
 }
 
 .slide.active {
-    opacity: 1;
-    transform: scale(1.05);
+    opacity: 0.6;
+    transform: scale(1);
 }
 
 .slide img,
@@ -41,12 +41,12 @@ html {
     object-fit: cover;
 }
 
-/* Background gradient to darken slightly */
+/* Background gradient to match Home.tsx: from-black via-black/40 to-black/20 */
 #wallpaper-container::after {
     content: '';
     position: absolute;
     inset: 0;
-    background: linear-gradient(to top, rgba(0, 0, 0, 0.4), transparent 40%, rgba(0, 0, 0, 0.2));
+    background: linear-gradient(to top, #000 0%, rgba(0, 0, 0, 0.4) 50%, rgba(0, 0, 0, 0.2) 100%);
     pointer-events: none;
     z-index: 5;
 }
