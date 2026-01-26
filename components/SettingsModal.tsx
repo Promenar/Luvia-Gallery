@@ -106,6 +106,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
 
     const [wallpaperToken, setWallpaperToken] = useState('');
     const [justCopied, setJustCopied] = useState(false);
+    const [wallpaperConfig, setWallpaperConfig] = useState<{ mode: 'random' | 'folder' | 'favorites', path: string, interval: number }>({
+        mode: 'random',
+        path: '',
+        interval: 30
+    });
 
     const handleGenerateWallpaperToken = async () => {
         if (onGenerateWallpaperToken) {
@@ -546,6 +551,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                 ))}
                             </div>
                         </section>
+
                         {isServerMode && currentUser && (
                             <section className="mt-8 pt-6 border-t border-white/10">
                                 <div className="flex items-center gap-2 mb-4">
@@ -585,21 +591,85 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
 
                                             <div className="flex items-center gap-2">
                                                 <button
-                                                    onClick={() => {
-                                                        const url = `${baseUrl || window.location.origin}/wallpaper/index.html?token=${wallpaperToken}`;
-                                                        copyToClipboard(url);
-                                                    }}
-                                                    className="flex-1 px-4 py-2 bg-white/5 hover:bg-white/10 text-text-primary border border-white/10 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2"
-                                                >
-                                                    <Icons.Link size={16} />
-                                                    {t('copy_wallpaper_url')}
-                                                </button>
-                                                <button
                                                     onClick={handleGenerateWallpaperToken}
                                                     className="p-2 text-text-tertiary hover:text-accent-400 transition-colors"
                                                     title="Regenerate"
                                                 >
                                                     <Icons.Refresh size={16} />
+                                                </button>
+                                            </div>
+
+                                            <div className="mt-6 space-y-4 pt-4 border-t border-white/5">
+                                                <div className="flex items-center gap-2 mb-2">
+                                                    <Icons.Settings size={14} className="text-text-tertiary" />
+                                                    <span className="text-[10px] font-bold uppercase text-text-tertiary tracking-widest">{t('home_screen_conf')}</span>
+                                                </div>
+
+                                                <div className="grid grid-cols-3 gap-2">
+                                                    {(['random', 'folder', 'favorites'] as const).map(m => (
+                                                        <button
+                                                            key={m}
+                                                            onClick={() => setWallpaperConfig(prev => ({ ...prev, mode: m }))}
+                                                            className={`px-2 py-2 rounded-xl text-[10px] font-bold transition-all border ${wallpaperConfig.mode === m
+                                                                ? 'bg-accent-500/20 border-accent-500/50 text-accent-400'
+                                                                : 'bg-white/5 border-white/10 text-text-tertiary hover:bg-white/10'
+                                                                }`}
+                                                        >
+                                                            {t(m === 'random' ? 'random_all' : (m === 'folder' ? 'specific_folder' : 'favorites'))}
+                                                        </button>
+                                                    ))}
+                                                </div>
+
+                                                {wallpaperConfig.mode === 'folder' && (
+                                                    <div className="flex gap-2">
+                                                        <input
+                                                            type="text"
+                                                            value={wallpaperConfig.path}
+                                                            onChange={(e) => setWallpaperConfig(prev => ({ ...prev, path: e.target.value }))}
+                                                            placeholder={t('enter_rel_path')}
+                                                            className="flex-1 bg-black/40 border border-white/10 rounded-xl px-3 py-2 text-xs text-text-primary focus:border-accent-500/50 outline-none"
+                                                        />
+                                                        <button
+                                                            onClick={() => {
+                                                                onSetDirPickerContext('library');
+                                                                onShowDirPicker(true);
+                                                            }}
+                                                            className="p-2 bg-white/5 border border-white/10 rounded-xl text-text-tertiary hover:text-text-primary"
+                                                        >
+                                                            <Icons.Folder size={16} />
+                                                        </button>
+                                                    </div>
+                                                )}
+
+                                                <div className="flex items-center justify-between gap-4">
+                                                    <span className="text-[10px] font-bold text-text-tertiary uppercase">{t('scan_every')}</span>
+                                                    <div className="flex items-center gap-2">
+                                                        <input
+                                                            type="number"
+                                                            value={wallpaperConfig.interval}
+                                                            onChange={(e) => setWallpaperConfig(prev => ({ ...prev, interval: parseInt(e.target.value) || 5 }))}
+                                                            className="w-16 bg-black/40 border border-white/10 rounded-lg px-2 py-1 text-xs text-center text-text-primary"
+                                                            min="5"
+                                                        />
+                                                        <span className="text-[10px] text-text-tertiary">Secs</span>
+                                                    </div>
+                                                </div>
+
+                                                <button
+                                                    onClick={() => {
+                                                        const params = new URLSearchParams();
+                                                        params.set('token', wallpaperToken);
+                                                        params.set('mode', wallpaperConfig.mode);
+                                                        if (wallpaperConfig.mode === 'folder' && wallpaperConfig.path) params.set('path', wallpaperConfig.path);
+                                                        params.set('interval', wallpaperConfig.interval.toString());
+
+                                                        const url = `${baseUrl || window.location.origin}/wallpaper/index.html?${params.toString()}`;
+                                                        copyToClipboard(url);
+                                                    }}
+                                                    className="w-full py-3 bg-accent-600 hover:bg-accent-500 text-white rounded-xl text-xs font-bold transition-all shadow-glow flex items-center justify-center gap-2"
+                                                >
+                                                    <Icons.Link size={16} />
+                                                    {t('copy_wallpaper_url')}
                                                 </button>
                                             </div>
 
@@ -613,6 +683,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                 </div>
                             </section>
                         )}
+
                         <div className="flex justify-end mt-8 border-t border-white/10 pt-6">
                             <button onClick={onLogout} className="px-4 py-2 bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 rounded-lg font-medium transition-colors flex items-center gap-2">
                                 <Icons.LogOut size={18} /> {t('sign_out')}

@@ -28,11 +28,19 @@ html {
     display: flex;
     align-items: center;
     justify-content: center;
+    background: #000;
+    /* Pre-fill background to avoid transparent blending */
 }
 
 .slide.active {
     opacity: 0.6;
     transform: scale(1);
+}
+
+.slide.exit {
+    opacity: 0;
+    transform: scale(0.95);
+    transition: opacity 1.5s ease-in-out, transform 1.5s ease-in;
 }
 
 .slide img,
