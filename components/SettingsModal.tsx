@@ -40,7 +40,7 @@ interface SettingsModalProps {
     onRenameUser: (user: User) => void;
     onResetPassword: (user: User) => void;
     onDeleteUser: (user: User) => void;
-    onSetDirPickerContext: (ctx: 'library' | 'userAllowedPaths') => void;
+    onSetDirPickerContext: (ctx: 'library' | 'userAllowedPaths' | 'wallpaper') => void;
     onShowDirPicker: (val: boolean) => void;
     onUpdateThreadCount: (count: number) => void;
     onPruneCache: () => void;
@@ -113,6 +113,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
         interval: 30
     });
 
+    useEffect(() => {
+        if (props.newPathInput && props.activeTab === 'account') {
+            setWallpaperConfig(prev => ({ ...prev, path: props.newPathInput }));
+        }
+    }, [props.newPathInput, props.activeTab]);
+
     const handleGenerateWallpaperToken = async () => {
         if (onGenerateWallpaperToken) {
             const token = await onGenerateWallpaperToken(wallpaperConfig);
@@ -122,8 +128,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
 
     const handleSaveWallpaperConfig = async () => {
         if (onGenerateWallpaperToken) {
-            // Re-using the same POST endpoint to save config even without regenerating token
-            await onGenerateWallpaperToken(wallpaperConfig);
+            // Re-using the same POST endpoint to save config
+            // The server will return a new token which we should sync to stay consistent
+            const newToken = await onGenerateWallpaperToken(wallpaperConfig);
+            if (newToken) setWallpaperToken(newToken);
         }
     };
 
@@ -639,7 +647,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                                         />
                                                         <button
                                                             onClick={() => {
-                                                                onSetDirPickerContext('library');
+                                                                onSetDirPickerContext('wallpaper');
                                                                 onShowDirPicker(true);
                                                             }}
                                                             className="p-2 bg-white/5 border border-white/10 rounded-xl text-text-tertiary hover:text-text-primary"

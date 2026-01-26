@@ -155,7 +155,7 @@ export default function App() {
     const [homeSubtitle, setHomeSubtitle] = useState('Your memories, beautifully organized. Rediscover your collection.');
     const [homeConfig, setHomeConfig] = useState<HomeScreenConfig>({ mode: 'random' });
     const [showDirPicker, setShowDirPicker] = useState(false);
-    const [dirPickerContext, setDirPickerContext] = useState<'library' | 'userAllowedPaths'>('library');
+    const [dirPickerContext, setDirPickerContext] = useState<'library' | 'userAllowedPaths' | 'wallpaper'>('library');
 
     // Derived state for current user
     const files = useMemo(() =>
@@ -2338,6 +2338,7 @@ export default function App() {
                     try {
                         const res = await apiFetch('/api/auth/wallpaper-token', {
                             method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ wallpaperConfig: config })
                         });
                         if (res.ok) {
