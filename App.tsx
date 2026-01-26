@@ -2333,10 +2333,13 @@ export default function App() {
                 thumbStatus={thumbStatus}
                 theme={theme}
                 onToggleTheme={toggleTheme}
-                onGenerateWallpaperToken={async () => {
+                onGenerateWallpaperToken={async (config) => {
                     if (!isServerMode) return '';
                     try {
-                        const res = await apiFetch('/api/auth/wallpaper-token', { method: 'POST' });
+                        const res = await apiFetch('/api/auth/wallpaper-token', {
+                            method: 'POST',
+                            body: JSON.stringify({ wallpaperConfig: config })
+                        });
                         if (res.ok) {
                             const data = await res.json();
                             return data.token;
@@ -2345,15 +2348,15 @@ export default function App() {
                     return '';
                 }}
                 onFetchWallpaperToken={async () => {
-                    if (!isServerMode) return '';
+                    if (!isServerMode) return { token: '', config: null };
                     try {
                         const res = await apiFetch('/api/auth/wallpaper-token', { method: 'GET' });
                         if (res.ok) {
                             const data = await res.json();
-                            return data.token;
+                            return { token: data.token, config: data.config };
                         }
                     } catch (e) { }
-                    return '';
+                    return { token: '', config: null };
                 }}
                 baseUrl={window.location.origin}
             />
