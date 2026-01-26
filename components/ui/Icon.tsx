@@ -60,7 +60,9 @@ import {
   Volume2,
   Search,
   FolderOpen,
-  ArrowUp
+  ArrowUp,
+  Copy,
+  Link
 } from 'lucide-react';
 
 export const Icons = {
@@ -126,6 +128,8 @@ export const Icons = {
   Volume2,
   Search,
   FolderOpen,
-  ArrowUp
+  ArrowUp,
+  Copy,
+  Link
 };
 
