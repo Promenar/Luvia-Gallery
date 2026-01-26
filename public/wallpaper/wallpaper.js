@@ -33,7 +33,10 @@ async function init() {
     if (pathParam) CONFIG.path = pathParam;
 
     const intervalParam = urlParams.get('interval');
-    if (intervalParam) CONFIG.interval = parseInt(intervalParam) * 1000;
+    if (intervalParam) {
+        const val = parseInt(intervalParam);
+        if (!isNaN(val) && val > 0) CONFIG.interval = val * 1000;
+    }
 
     document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'visible') resume();
