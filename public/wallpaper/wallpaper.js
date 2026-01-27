@@ -164,6 +164,10 @@ async function init() {
     if (pServer) {
         console.log("[Luvia] Config: Server found in URL");
         CONFIG.serverUrl = pServer;
+    } else if (window.location.protocol.startsWith('http')) {
+        // HIDAMARI AUTO-DETECT: If no server param, use current origin
+        console.log("[Luvia] Config: Path fallback to origin -", window.location.origin);
+        CONFIG.serverUrl = window.location.origin;
     }
 
     // Optional params
@@ -316,6 +320,7 @@ function renderCurrent() {
         media.appendChild(source);
 
         media.oncanplaythrough = onMediaLoaded;
+        media.onplaying = onMediaLoaded;
         media.onplay = onMediaLoaded;
         media.onerror = (e) => {
             console.error("[Luvia] Video error:", item.url);
@@ -350,8 +355,8 @@ function renderCurrent() {
         media = document.createElement('img');
         media.className = 'full-content';
         media.src = getMediaUrl(item.url);
-        media.onload = onMediaLoaded;
-        media.onerror = onMediaLoaded;
+        media.onload = triggerLoaded;
+        media.onerror = triggerLoaded;
     }
 
     slide.appendChild(media);
