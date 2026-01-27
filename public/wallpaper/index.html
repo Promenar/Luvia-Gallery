@@ -1,30 +1,31 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Luvia Wallpaper</title>
-    <link rel="stylesheet" href="style.css?v=1.1.0">
+    <title>Luvia Gallery Wallpaper</title>
+    <link rel="stylesheet" href="style.css">
 </head>
-
 <body>
-    <div id="wallpaper-container">
-        <!-- Slides will be injected here -->
+    <div id="wallpaper-container"></div>
+
+    <div id="info-overlay" class="hidden">
+        <div class="meta-box">
+            <span id="item-name" class="item-name"></span>
+            <span id="item-folder" class="item-folder"></span>
+        </div>
     </div>
 
     <div id="overlay" class="hidden">
         <div class="glass-box">
-            <h1>Luvia Gallery</h1>
+            <h1 id="status-title">Luvia Gallery</h1>
             <p id="status-msg">Initializing...</p>
             <div id="setup-guide" class="hidden">
-                <p>Please provide a valid Wallpaper Token in the properties or URL.</p>
-                <div class="code-box">?token=YOUR_TOKEN</div>
+                <div class="code-box">Set "API Token" in Wallpaper Engine properties</div>
             </div>
         </div>
     </div>
 
-    <script src="wallpaper.js?v=1.1.0"></script>
+    <script src="wallpaper.js"></script>
 </body>
-
 </html>

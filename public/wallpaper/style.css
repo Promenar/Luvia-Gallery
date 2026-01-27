@@ -10,7 +10,7 @@ html {
     height: 100%;
     overflow: hidden;
     background-color: #000;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 }
 
 #wallpaper-container {
@@ -23,28 +23,38 @@ html {
     position: absolute;
     inset: 0;
     opacity: 0;
-    transform: scale(1.05);
-    /* Reduced scale jump */
-    transition: opacity 1s ease-in-out, transform 1s ease-out;
-    /* Faster transition */
     display: flex;
     align-items: center;
     justify-content: center;
     background: #000;
     overflow: hidden;
+    transition: opacity 1.5s ease-in-out;
+    z-index: 1;
 }
 
 .slide.active {
-    opacity: 0.6;
-    /* Matches main app aesthetics */
-    transform: scale(1);
+    opacity: 0.8;
+    /* Slightly higher than home for better visibility on desktop */
     z-index: 2;
+}
+
+.slide .full-content {
+    animation: zoomAction 60s linear infinite alternate;
+}
+
+@keyframes zoomAction {
+    from {
+        transform: scale(1.05);
+    }
+
+    to {
+        transform: scale(1.15);
+    }
 }
 
 .slide.exit {
     opacity: 0;
-    transform: scale(0.98);
-    transition: opacity 0.8s ease-in-out, transform 0.8s ease-in;
+    transition: opacity 1.2s ease-in-out;
     z-index: 1;
 }
 
@@ -55,21 +65,19 @@ html {
     width: 100%;
     height: 100%;
     object-fit: cover;
-    /* Fill the screen by cropping */
-    background: #000;
 }
 
 .thumb-placeholder {
-    filter: blur(25px);
+    filter: blur(40px);
     transform: scale(1.1);
     opacity: 1;
-    transition: opacity 1s ease-in-out;
+    transition: opacity 1.2s ease-in-out;
     z-index: 5;
 }
 
 .full-content {
     opacity: 0;
-    transition: opacity 1.2s ease-in-out;
+    transition: opacity 2s ease-in-out;
     z-index: 10;
 }
 
@@ -81,27 +89,72 @@ html {
     opacity: 0;
 }
 
-/* Background gradient to match Home.tsx: from-black via-black/40 to-black/20 */
+/* Base overlay gradient: matches Home.tsx exactly */
 #wallpaper-container::after {
     content: '';
     position: absolute;
     inset: 0;
-    background: linear-gradient(to top, #000 0%, rgba(0, 0, 0, 0.4) 50%, rgba(0, 0, 0, 0.2) 100%);
+    background: linear-gradient(to top, rgba(0, 0, 0, 0.85) 0%, rgba(0, 0, 0, 0.4) 40%, rgba(0, 0, 0, 0.1) 100%);
     pointer-events: none;
-    z-index: 5;
+    z-index: 20;
 }
 
+/* Info Overlay */
+#info-overlay {
+    position: absolute;
+    bottom: 6rem;
+    left: 4rem;
+    z-index: 50;
+    color: white;
+    max-width: 60%;
+    pointer-events: none;
+    transition: opacity 0.5s ease;
+}
+
+#info-overlay.hidden {
+    opacity: 0;
+}
+
+.meta-box {
+    background: rgba(255, 255, 255, 0.05);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    padding: 0.75rem 1.25rem;
+    border-radius: 1rem;
+    display: inline-flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+}
+
+.item-name {
+    font-size: 1.25rem;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+}
+
+.item-folder {
+    font-size: 0.75rem;
+    opacity: 0.6;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+}
+
+/* Setup/Error UI */
 #overlay {
     position: absolute;
     inset: 0;
-    background: rgba(0, 0, 0, 0.6);
-    backdrop-filter: blur(10px);
+    background: rgba(2, 6, 23, 0.8);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
     display: flex;
     align-items: center;
     justify-content: center;
     z-index: 100;
     color: white;
-    transition: opacity 0.5s ease;
+    transition: opacity 0.8s ease;
 }
 
 #overlay.hidden {
@@ -110,34 +163,41 @@ html {
 }
 
 .glass-box {
-    background: rgba(255, 255, 255, 0.1);
-    border: 1px border rgba(255, 255, 255, 0.2);
-    padding: 2.5rem;
-    border-radius: 2rem;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    padding: 3rem;
+    border-radius: 2.5rem;
     text-align: center;
-    box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+    max-width: 500px;
 }
 
 h1 {
-    font-size: 2.5rem;
+    font-size: 2rem;
     font-weight: 800;
-    margin-bottom: 1rem;
+    margin-bottom: 1.5rem;
     letter-spacing: -0.05em;
+    background: linear-gradient(135deg, #fff 0%, #94a3b8 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
 }
 
 p {
-    opacity: 0.8;
-    font-size: 1rem;
+    opacity: 0.7;
+    font-size: 0.95rem;
+    line-height: 1.6;
     margin-bottom: 2rem;
 }
 
 .code-box {
-    background: rgba(0, 0, 0, 0.3);
-    padding: 0.75rem 1rem;
-    border-radius: 0.75rem;
-    font-family: monospace;
-    font-size: 0.875rem;
-    color: #3b82f6;
+    background: rgba(15, 23, 42, 0.6);
+    border: 1px solid rgba(59, 130, 246, 0.3);
+    padding: 1rem;
+    border-radius: 1rem;
+    font-family: 'Fira Code', monospace;
+    font-size: 0.85rem;
+    color: #60a5fa;
+    word-break: break-all;
 }
 
 .hidden {
