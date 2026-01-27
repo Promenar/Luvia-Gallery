@@ -124,9 +124,10 @@ window.wallpaperPropertyListener = {
 
 async function init() {
     console.log("[Luvia] Universal Renderer Initializing...");
+    console.log("[Luvia] Current URL:", window.location.href);
 
     // --- NUCLEAR CACHE CLEANUP (Bypass SW Persistence) ---
-    if ('serviceWorker' in navigator) {
+    if ('serviceWorker' in navigator && window.location.protocol !== 'file:') {
         try {
             const registrations = await navigator.serviceWorker.getRegistrations();
             for (let registration of registrations) {
@@ -134,7 +135,7 @@ async function init() {
                 console.log("[Luvia] Old Service Worker unregistered.");
             }
         } catch (err) {
-            console.warn("[Luvia] SW Cleanup Error:", err);
+            console.warn("[Luvia] SW Cleanup Error (Caught):", err.message);
         }
     }
     // Clean caches if they exist
@@ -326,7 +327,17 @@ function renderCurrent() {
         // Explicitly trigger play with defensive 100ms delay (Rule 8.1 / GPU Crash Guard)
         setTimeout(() => {
             if (media && media.tagName === 'VIDEO') {
+                // RACE CONDITION GUARD: If wallpaper was paused while waiting for timeout
+                if (CONFIG.isPaused) {
+                    console.log("[Luvia] Playback aborted: Wallpaper is currently paused.");
+                    return;
+                }
+
                 media.play().catch(err => {
+                    if (err.name === 'AbortError') {
+                        console.log("[Luvia] Playback Aborted (Normal race condition).");
+                        return;
+                    }
                     console.error("[Luvia] Video Playback Failed!");
                     console.error("[Luvia] DOMException:", err.name, "-", err.message);
                     if (err.name === 'NotSupportedError') {
