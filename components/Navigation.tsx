@@ -122,9 +122,9 @@ export const Navigation: React.FC<NavigationProps> = React.memo(({
           <div className="w-9 h-9 glass-3 rounded-xl flex items-center justify-center shadow-glow shrink-0">
             <div className="w-4 h-4 bg-accent-500 rounded-full shadow-[0_0_12px_rgba(104,197,255,0.8)]" />
           </div>
-          
+
           {isDesktopSidebarOpen && (
-             <span className="font-display font-semibold text-lg tracking-tight truncate text-text-primary drop-shadow-sm ml-3 flex-1" title={appTitle}>{appTitle}</span>
+            <span className="font-display font-semibold text-lg tracking-tight truncate text-text-primary drop-shadow-sm ml-3 flex-1" title={appTitle}>{appTitle}</span>
           )}
 
           <button onClick={toggleSidebar} className="md:hidden ml-auto p-1 text-text-tertiary hover:text-text-primary transition-colors">
@@ -132,13 +132,13 @@ export const Navigation: React.FC<NavigationProps> = React.memo(({
           </button>
 
           {toggleDesktopSidebar && (
-             <button 
-                onClick={toggleDesktopSidebar} 
-                className={`hidden md:flex p-1 text-text-tertiary hover:text-text-primary transition-colors ml-auto ${!isDesktopSidebarOpen ? 'absolute right-[-12px] top-6 bg-gray-200 dark:bg-gray-700 rounded-full border border-white/10 shadow-md p-1 z-50 hover:bg-gray-300 dark:hover:bg-gray-600' : ''}`}
-                title={isDesktopSidebarOpen ? 'Collapse' : 'Expand'}
-             >
-                {isDesktopSidebarOpen ? <Icons.Menu size={18} /> : <Icons.ChevronRight size={14} />}
-             </button>
+            <button
+              onClick={toggleDesktopSidebar}
+              className={`hidden md:flex p-1 text-text-tertiary hover:text-text-primary transition-colors ml-auto ${!isDesktopSidebarOpen ? 'absolute right-[-12px] top-6 bg-gray-200 dark:bg-gray-700 rounded-full border border-white/10 shadow-md p-1 z-50 hover:bg-gray-300 dark:hover:bg-gray-600' : ''}`}
+              title={isDesktopSidebarOpen ? 'Collapse' : 'Expand'}
+            >
+              {isDesktopSidebarOpen ? <Icons.Menu size={18} /> : <Icons.ChevronRight size={14} />}
+            </button>
           )}
         </div>
 
@@ -147,7 +147,7 @@ export const Navigation: React.FC<NavigationProps> = React.memo(({
 
             <div>
               {isDesktopSidebarOpen && (
-                 <p className={`px-4 text-xs font-semibold uppercase tracking-wider mb-2 ${sectionTitleClass}`}>{t('menu')}</p>
+                <p className={`px-4 text-xs font-semibold uppercase tracking-wider mb-2 ${sectionTitleClass}`}>{t('menu')}</p>
               )}
               <button
                 onClick={() => handleNavClick('home')}
@@ -159,7 +159,7 @@ export const Navigation: React.FC<NavigationProps> = React.memo(({
               </button>
               <button
                 onClick={() => handleNavClick('favorites')}
-                 title={!isDesktopSidebarOpen ? t('favorites') : undefined}
+                title={!isDesktopSidebarOpen ? t('favorites') : undefined}
                 className={`w-full flex items-center gap-3 py-3 rounded-xl transition-all mb-2 ${navItemClass(viewMode === 'favorites')}`}
               >
                 <Icons.Heart size={20} className={viewMode === 'favorites' ? 'text-red-500' : (isHome ? 'text-gray-500' : 'text-text-tertiary')} fill={viewMode === 'favorites' ? "currentColor" : "none"} />
@@ -168,29 +168,29 @@ export const Navigation: React.FC<NavigationProps> = React.memo(({
             </div>
 
             <div>
-               {isDesktopSidebarOpen && (
-                 <p className={`px-4 text-xs font-semibold uppercase tracking-wider mb-2 ${sectionTitleClass}`}>{t('library')}</p>
-               )}
+              {isDesktopSidebarOpen && (
+                <p className={`px-4 text-xs font-semibold uppercase tracking-wider mb-2 ${sectionTitleClass}`}>{t('library')}</p>
+              )}
               <button
                 onClick={() => handleNavClick('all')}
-                 title={!isDesktopSidebarOpen ? t('all_photos') : undefined}
+                title={!isDesktopSidebarOpen ? t('all_photos') : undefined}
                 className={`w-full flex items-center gap-3 py-3 rounded-xl transition-all mb-2 ${navItemClass(viewMode === 'all')}`}
               >
                 <Icons.Image size={20} className={iconColorClass(viewMode === 'all')} />
                 {isDesktopSidebarOpen && (
-                    <>
+                  <>
                     <span>{t('all_photos')}</span>
                     <span className={`ml-auto text-xs px-2 py-0.5 rounded-full border transition-colors ${viewMode === 'all'
-                    ? 'bg-accent-500/15 text-text-primary border-border-glow'
-                    : 'bg-surface-tertiary/60 text-text-secondary border-border-subtle'
-                    }`}>{totalPhotos}</span>
-                    </>
+                      ? 'bg-accent-500/15 text-text-primary border-border-glow'
+                      : 'bg-white/5 text-text-muted border-white/5'
+                      }`}>{totalPhotos}</span>
+                  </>
                 )}
               </button>
 
               <button
                 onClick={() => handleNavClick('folders')}
-                 title={!isDesktopSidebarOpen ? t('folders') : undefined}
+                title={!isDesktopSidebarOpen ? t('folders') : undefined}
                 className={`w-full flex items-center gap-3 py-3 rounded-xl transition-all ${navItemClass(viewMode === 'folders')}`}
               >
                 <Icons.Folder size={20} className={iconColorClass(viewMode === 'folders')} />
@@ -200,11 +200,11 @@ export const Navigation: React.FC<NavigationProps> = React.memo(({
 
             <div>
               {isDesktopSidebarOpen && (
-                  <p className={`px-4 text-xs font-semibold uppercase tracking-wider mb-2 ${sectionTitleClass}`}>{t('system')}</p>
+                <p className={`px-4 text-xs font-semibold uppercase tracking-wider mb-2 ${sectionTitleClass}`}>{t('system')}</p>
               )}
               <button
                 onClick={toggleTheme}
-                 title={!isDesktopSidebarOpen ? (theme === 'system' ? t('follow_system') : (theme === 'dark' ? t('dark_mode') : t('light_mode'))) : undefined}
+                title={!isDesktopSidebarOpen ? (theme === 'system' ? t('follow_system') : (theme === 'dark' ? t('dark_mode') : t('light_mode'))) : undefined}
                 className={`w-full flex items-center gap-3 py-3 rounded-xl transition-colors mb-2 ${navItemClass(false)}`}
               >
                 {theme === 'system' ? <Icons.Monitor size={20} /> : (theme === 'dark' ? <Icons.Moon size={20} /> : <Icons.Sun size={20} />)}
@@ -212,7 +212,7 @@ export const Navigation: React.FC<NavigationProps> = React.memo(({
               </button>
               <button
                 onClick={handleSettingsClick}
-                 title={!isDesktopSidebarOpen ? t('settings') : undefined}
+                title={!isDesktopSidebarOpen ? t('settings') : undefined}
                 className={`w-full flex items-center gap-3 py-3 rounded-xl transition-colors ${navItemClass(false)}`}
               >
                 <Icons.Settings size={20} />

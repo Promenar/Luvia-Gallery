@@ -89,8 +89,8 @@ export const Home: React.FC<HomeProps> = React.memo(({ title, items, onEnterLibr
                         <div className="absolute inset-0 bg-gradient-to-t from-black via-black/40 to-black/20" />
                     </motion.div>
                 ) : (
-                    <div className="absolute inset-0 bg-gray-900 z-0 flex items-center justify-center">
-                        <Icons.Image className="text-gray-800 w-64 h-64 opacity-20" />
+                    <div className="absolute inset-0 bg-surface-primary z-0 flex items-center justify-center">
+                        <Icons.Image className="text-white/5 w-64 h-64" />
                     </div>
                 )}
             </AnimatePresence>
