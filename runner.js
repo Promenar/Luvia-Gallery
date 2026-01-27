@@ -1,5 +1,5 @@
 const http = require('http');
-const { spawn } = require('child_process');
+const { spawn, exec } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 
@@ -9,6 +9,9 @@ const INTERNAL_PORT = 3002;
 const MAX_RETRIES = 3;
 const RETRY_WINDOW = 60000; // 1 minute
 const SERVER_SCRIPT = 'server.js';
+
+const CONFIG_FILE = path.join(__dirname, 'data', 'update_config.json');
+if (!fs.existsSync(path.join(__dirname, 'data'))) fs.mkdirSync(path.join(__dirname, 'data'), { recursive: true });
 
 // State
 let childProcess = null;
@@ -20,6 +23,15 @@ let updateInProgress = false;
 // Helper: Log with timestamp
 function log(msg) {
     console.log(`[Supervisor] ${new Date().toISOString()} - ${msg}`);
+}
+
+function getUpdateConfig() {
+    try {
+        if (fs.existsSync(CONFIG_FILE)) {
+            return JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+        }
+    } catch (e) { }
+    return { repoUrl: 'git@github.com:NarcisWL/Luvia-Gallery.git', branch: 'main' };
 }
 
 // Function to start the main application
@@ -109,8 +121,12 @@ function performUpdate(res) {
         childProcess.kill();
     }
 
+    const config = getUpdateConfig();
     const updateScript = path.join(__dirname, 'scripts', 'update.sh');
-    const updateCmd = spawn('sh', [updateScript], { stdio: 'inherit' });
+    const updateCmd = spawn('sh', [updateScript], {
+        stdio: 'inherit',
+        env: { ...process.env, REPO_URL: config.repoUrl, BRANCH: config.branch }
+    });
 
     updateCmd.on('close', (code) => {
         updateInProgress = false;
@@ -255,6 +271,57 @@ const server = http.createServer((req, res) => {
             }
         }
         return performUpdate(res);
+    }
+
+    // 1.1 Handle Update Status Check
+    if (req.url === '/api/admin/system/update/status' && req.method === 'GET') {
+        const config = getUpdateConfig();
+        const branch = config.branch || 'main';
+
+        log(`Checking update status for ${branch}...`);
+        // We use exec here because git commands are short-lived and we need output
+        exec(`git fetch origin ${branch} && git rev-parse HEAD && git rev-parse origin/${branch}`, (error, stdout, stderr) => {
+            if (error) {
+                log(`Status check failed: ${stderr || error.message}`);
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: "Failed to check update status", details: stderr }));
+                return;
+            }
+            const lines = stdout.trim().split('\n');
+            const localHash = lines[0];
+            const remoteHash = lines[1];
+
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                updatable: localHash !== remoteHash,
+                local: localHash,
+                remote: remoteHash,
+                config: config
+            }));
+        });
+        return;
+    }
+
+    // 1.2 Handle Update Config Update
+    if (req.url === '/api/admin/system/update/config' && req.method === 'POST') {
+        let body = '';
+        req.on('data', chunk => body += chunk);
+        req.on('end', () => {
+            try {
+                const newConfig = JSON.parse(body);
+                if (!newConfig.repoUrl) throw new Error("Missing repoUrl");
+
+                fs.writeFileSync(CONFIG_FILE, JSON.stringify(newConfig, null, 2));
+                log(`Update config saved: ${newConfig.repoUrl} (${newConfig.branch})`);
+
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ message: "Configuration saved successfully" }));
+            } catch (e) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: e.message }));
+            }
+        });
+        return;
     }
 
     // 2. Safe Mode Fallback

@@ -143,6 +143,21 @@ const translations = {
     switch_to_server: 'Switch to Server',
     language: 'Language',
 
+    // System Update
+    system_update: 'System Update',
+    current_version: 'Current Version',
+    update_description: 'This will pull the latest code from the remote repository and rebuild the application. The service will be unavailable for a few minutes.',
+    update_restart: 'Update & Restart',
+    updating: 'Updating...',
+    check_update: 'Check for Updates',
+    checking: 'Checking...',
+    repo_url: 'Repository URL',
+    update_available: 'New version available!',
+    already_latest: 'Already on the latest version',
+    update_error: 'Update check failed',
+    save_config: 'Save Configuration',
+    config_saved: 'Configuration Saved',
+
     // Settings - Storage
     storage_database: 'Storage & Database',
     server_persistence: 'Server Persistence Active',
@@ -395,6 +410,21 @@ const translations = {
     switch_to_client: '切到客户端',
     switch_to_server: '切到服务器',
     language: '语言 / Language',
+
+    // System Update
+    system_update: '系统更新',
+    current_version: '当前版本',
+    update_description: '这将从远程仓库拉取最新代码并重新构建应用。在此期间，服务将暂时不可用（需几分钟）。',
+    update_restart: '更新并重启',
+    updating: '正在更新...',
+    check_update: '检查更新',
+    checking: '正在检查...',
+    repo_url: '仓库追踪地址',
+    update_available: '发现新版本可用！',
+    already_latest: '当前已是最新版本',
+    update_error: '检查更新失败',
+    save_config: '保存配置',
+    config_saved: '配置已保存',
 
     // Settings - Storage
     storage_database: '存储管理',
