@@ -158,7 +158,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                     <input
                                         value={appTitle}
                                         onChange={e => onUpdateTitle(e.target.value)}
-                                        className="w-full px-4 py-2 rounded-xl border border-white/10 bg-white/5 text-text-primary placeholder-text-muted outline-none focus:ring-1 focus:ring-accent-500/50 focus:border-accent-500/50 transition-all font-medium"
+                                        className="w-full px-4 py-2 rounded-xl border border-white/5 bg-black/20 text-text-primary placeholder-text-muted outline-none focus:ring-1 focus:ring-accent-500/30 focus:border-accent-500/30 transition-all font-medium"
                                     />
                                 </div>
                                 <div>
@@ -166,7 +166,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                     <input
                                         value={homeSubtitle}
                                         onChange={e => onUpdateSubtitle(e.target.value)}
-                                        className="w-full px-4 py-2 rounded-xl border border-white/10 bg-white/5 text-text-primary placeholder-text-muted outline-none focus:ring-1 focus:ring-accent-500/50 focus:border-accent-500/50 transition-all font-medium"
+                                        className="w-full px-4 py-2 rounded-xl border border-white/5 bg-black/20 text-text-primary placeholder-text-muted outline-none focus:ring-1 focus:ring-accent-500/30 focus:border-accent-500/30 transition-all font-medium"
                                     />
                                 </div>
                                 <div>
@@ -174,7 +174,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                     <select
                                         value={language}
                                         onChange={(e) => setLanguage(e.target.value as 'en' | 'zh')}
-                                        className="w-full px-4 py-2 rounded-xl border border-white/10 bg-white/5 text-text-primary outline-none focus:ring-1 focus:ring-accent-500/50 focus:border-accent-500/50 transition-all font-medium [&>option]:text-black"
+                                        className="w-full px-4 py-2 rounded-xl border border-white/5 bg-black/20 text-text-primary outline-none focus:ring-1 focus:ring-accent-500/30 focus:border-accent-500/30 transition-all font-medium [&>option]:text-black"
                                     >
                                         <option value="en">English</option>
                                         <option value="zh">中文 (Chinese)</option>
@@ -187,7 +187,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                             <button
                                                 key={m}
                                                 onClick={() => onUpdateHomeConfig({ ...homeConfig, mode: m as any })}
-                                                className={`px-4 py-2 rounded-lg text-sm font-medium capitalize border transition-all ${homeConfig.mode === m ? 'bg-accent-500/20 border-accent-500/50 text-accent-500 shadow-glow' : 'bg-white/5 border-white/10 text-text-secondary hover:bg-white/10'}`}
+                                                className={`px-4 py-2 rounded-lg text-sm font-medium capitalize border transition-all ${homeConfig.mode === m ? 'bg-accent-500/20 border-accent-500/30 text-accent-500 shadow-glow' : 'bg-white/5 border-transparent text-text-secondary hover:bg-white/10'}`}
                                             >
                                                 {m === 'favorites' ? t('favorites') : t(m === 'random' ? 'random_all' : (m === 'folder' ? 'specific_folder' : 'single_item'))}
                                             </button>
@@ -232,7 +232,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                         <div className="w-1.5 h-6 bg-accent-500 rounded-full shadow-[0_0_10px_var(--accent-500)]" />
                                         <h4 className="text-lg font-bold text-text-primary">{t('library_stats')}</h4>
                                     </div>
-                                    <div className="glass-1 rounded-2xl overflow-hidden shadow-lg border border-white/10">
+                                    <div className="glass-1 rounded-2xl overflow-hidden shadow-lg border border-white/5">
                                         <div className="p-6 border-b border-white/10">
                                             <div className="flex items-center justify-between mb-2">
                                                 <h5 className="font-bold text-lg text-text-primary">{t('library_scan_paths')}</h5>
@@ -250,7 +250,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                                         value={newPathInput}
                                                         onChange={(e) => setNewPathInput(e.target.value)}
                                                         placeholder="/media"
-                                                        className="w-full px-4 py-2 pr-12 rounded-lg border border-white/10 bg-white/5 text-text-primary focus:ring-1 focus:ring-accent-500/50 outline-none placeholder-text-muted"
+                                                        className="w-full px-4 py-2 pr-12 rounded-lg border border-white/5 bg-black/20 text-text-primary focus:ring-1 focus:ring-accent-500/30 outline-none placeholder-text-muted"
                                                     />
                                                     <button
                                                         type="button"
@@ -505,7 +505,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                                 { label: t('videos'), value: systemStatus.mediaStats?.videos || 0, icon: Icons.Play, color: 'text-blue-400', bg: 'bg-blue-500/20' },
                                                 { label: t('audio'), value: systemStatus.mediaStats?.audio || 0, icon: Icons.Music, color: 'text-purple-400', bg: 'bg-purple-500/20' }
                                             ].map((stat, i) => (
-                                                <div key={i} className="flex items-center justify-between p-3.5 bg-black/20 rounded-xl border border-white/5 hover:bg-white/5 transition-colors">
+                                                <div key={i} className="flex items-center justify-between p-3.5 bg-black/20 rounded-xl border border-white/3 hover:bg-white/5 transition-colors">
                                                     <div className="flex items-center gap-4">
                                                         <div className={`p-2 rounded-lg ${stat.bg} ${stat.color} border border-white/5`}>
                                                             <stat.icon size={20} />
@@ -546,9 +546,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                 {users.filter(u => currentUser?.isAdmin || u.username === currentUser?.username).map((u, idx, arr) => (
                                     <div key={u.username} className={`p-4 flex items-center justify-between ${idx !== arr.length - 1 ? 'border-b border-white/5' : ''} hover:bg-white/5 transition-colors`}>
                                         <div className="flex items-center gap-3">
-                                            <div className="w-10 h-10 rounded-full bg-accent-500/20 text-accent-500 flex items-center justify-center font-bold border border-accent-500/30 shadow-glow">{u.username[0].toUpperCase()}</div>
+                                            <div className="w-10 h-10 rounded-full bg-accent-500/10 text-accent-500 flex items-center justify-center font-bold border border-accent-500/20 shadow-glow">{u.username[0].toUpperCase()}</div>
                                             <div>
-                                                <div className="font-bold flex items-center gap-2 text-text-primary">{u.username} {u.username === currentUser?.username && <span className="text-[10px] bg-green-500/20 text-green-400 border border-green-500/30 px-1.5 py-0.5 rounded font-bold uppercase">You</span>}</div>
+                                                <div className="font-bold flex items-center gap-2 text-text-primary">{u.username} {u.username === currentUser?.username && <span className="text-[10px] bg-green-500/20 text-green-400 border border-green-500/20 px-1.5 py-0.5 rounded font-bold uppercase">You</span>}</div>
                                                 <div className="text-xs text-text-secondary">{u.isAdmin ? 'Administrator' : 'User'}</div>
                                             </div>
                                         </div>
@@ -591,7 +591,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                         </button>
                                     ) : (
                                         <div className="space-y-4 animate-in fade-in zoom-in-95 duration-300">
-                                            <div className="p-3 bg-black/40 rounded-xl border border-accent-500/30 flex items-center justify-between gap-4">
+                                            <div className="p-3 bg-black/40 rounded-xl border border-accent-500/20 flex items-center justify-between gap-4">
                                                 <div className="flex-1 overflow-hidden">
                                                     <span className="text-[10px] text-accent-400 font-bold uppercase block mb-1">{t('wallpaper_token')}</span>
                                                     <code className="text-xs text-text-primary font-mono truncate block">
@@ -629,8 +629,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                                             key={m}
                                                             onClick={() => setWallpaperConfig(prev => ({ ...prev, mode: m }))}
                                                             className={`px-2 py-2 rounded-xl text-[10px] font-bold transition-all border ${wallpaperConfig.mode === m
-                                                                ? 'bg-accent-500/20 border-accent-500/50 text-accent-400'
-                                                                : 'bg-white/5 border-white/10 text-text-tertiary hover:bg-white/10'
+                                                                ? 'bg-accent-500/20 border-accent-500/30 text-accent-400 shadow-glow'
+                                                                : 'bg-white/5 border-transparent text-text-tertiary hover:bg-white/10'
                                                                 }`}
                                                         >
                                                             {t(m === 'random' ? 'random_all' : (m === 'folder' ? 'specific_folder' : 'favorites'))}
@@ -645,14 +645,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                                             value={wallpaperConfig.path}
                                                             onChange={(e) => setWallpaperConfig(prev => ({ ...prev, path: e.target.value }))}
                                                             placeholder={t('enter_rel_path')}
-                                                            className="flex-1 bg-black/40 border border-white/10 rounded-xl px-3 py-2 text-xs text-text-primary focus:border-accent-500/50 outline-none"
+                                                            className="flex-1 bg-black/40 border border-white/5 rounded-xl px-3 py-2 text-xs text-text-primary focus:border-accent-500/30 outline-none"
                                                         />
                                                         <button
                                                             onClick={() => {
                                                                 onSetDirPickerContext('wallpaper');
                                                                 onShowDirPicker(true);
                                                             }}
-                                                            className="p-2 bg-white/5 border border-white/10 rounded-xl text-text-tertiary hover:text-text-primary"
+                                                            className="p-2 bg-white/5 border border-white/5 rounded-xl text-text-tertiary hover:text-text-primary"
                                                         >
                                                             <Icons.Folder size={16} />
                                                         </button>
@@ -666,7 +666,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                                             type="number"
                                                             value={wallpaperConfig.interval}
                                                             onChange={(e) => setWallpaperConfig(prev => ({ ...prev, interval: parseInt(e.target.value) || 5 }))}
-                                                            className="w-16 bg-black/40 border border-white/10 rounded-lg px-2 py-1 text-xs text-center text-text-primary"
+                                                            className="w-16 bg-black/40 border border-white/5 rounded-lg px-2 py-1 text-xs text-center text-text-primary"
                                                             min="5"
                                                         />
                                                         <span className="text-[10px] text-text-tertiary">Secs</span>
