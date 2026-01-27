@@ -195,10 +195,7 @@ database.initDatabase().then(() => {
 app.use(cors());
 app.use(express.json());
 
-// Serve static files from the 'dist' directory (Vite build output)
-app.use(express.static(path.join(__dirname, 'dist')));
-// Serve static files from the 'public' directory
-app.use(express.static(path.join(__dirname, 'public')));
+// (Static files middleware moved down after API routes)
 
 // --- Auth Middleware ---
 function authenticateToken(req, res, next) {
@@ -2351,9 +2348,11 @@ app.get('/api/file/:id/exif', async (req, res) => {
 
 // Serve Media Files
 app.get('/api/file/*', (req, res) => {
+    console.log(`\x1b[33m[DEBUG] Media Hit: ${req.url}\x1b[0m`);
     try {
         const fullId = decodeURIComponent(req.params[0] || '');
         const filePath = Buffer.from(fullId, 'base64').toString('utf8');
+        console.log(`\x1b[36m[DEBUG] Resolved Path: ${filePath}\x1b[0m`);
 
         if (!fs.existsSync(filePath)) {
             console.error(`[API] File 404: ${filePath}`);
@@ -2775,6 +2774,11 @@ app.delete('/api/users/:targetUser', adminOnly, (req, res) => {
         res.status(500).json({ error: 'Internal server error' });
     }
 });
+
+// Serve static files from the 'dist' directory (Vite build output)
+app.use(express.static(path.join(__dirname, 'dist')));
+// Serve static files from the 'public' directory
+app.use(express.static(path.join(__dirname, 'public')));
 
 // Catch-all route to serve index.html for client-side routing (MUST be last)
 app.get('*', (req, res) => {
