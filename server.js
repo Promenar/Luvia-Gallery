@@ -2366,6 +2366,7 @@ app.get('/api/file/:id', (req, res) => {
             const head = {
                 'Content-Length': fileSize,
                 'Content-Type': contentType,
+                'Accept-Ranges': 'bytes',
                 'Cache-Control': 'public, max-age=300', // 5 minutes cache
             };
             res.writeHead(200, head);
