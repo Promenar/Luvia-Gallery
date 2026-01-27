@@ -36,13 +36,13 @@ function getFullUrl(relativePath) {
     // Fallback: If serverUrl is empty, try to get from localStorage (last resort)
     if (!base) base = (localStorage.getItem('l_server') || '').trim();
 
-    if (base) {
+    if (base && base !== '') {
         if (!base.startsWith('http')) base = 'http://' + base;
         if (base.endsWith('/')) base = base.slice(0, -1);
     } else {
-        // [CRITICAL] If no server is defined, we cannot make API calls
-        console.warn("[Luvia] No server URL configured. Path will resolve to local disk which may fail.");
-        return relativePath;
+        // Return blank to avoid resolving relative to file:// on local disk
+        console.warn("[Luvia] No server URL configured.");
+        return '';
     }
 
     const cleanRelative = relativePath.startsWith('/') ? relativePath : '/' + relativePath;
@@ -122,17 +122,20 @@ window.wallpaperPropertyListener = {
 async function init() {
     console.log("[Luvia] Universal Renderer (Auto-Detect) Initialized");
 
-    // Support URL Search Params (Hidamari)
+    // Support URL Search Params (Hidamari) - but don't overwrite with empty
     const urlParams = new URLSearchParams(window.location.search);
-    if (urlParams.get('token')) CONFIG.token = urlParams.get('token');
-    if (urlParams.get('server')) CONFIG.serverUrl = urlParams.get('server');
+    const pToken = urlParams.get('token');
+    const pServer = urlParams.get('server');
+    if (pToken) CONFIG.token = pToken;
+    if (pServer) CONFIG.serverUrl = pServer;
     if (urlParams.get('mode')) CONFIG.mode = urlParams.get('mode');
     if (urlParams.get('path')) CONFIG.path = urlParams.get('path');
 
-    if (CONFIG.token && CONFIG.token !== "" && CONFIG.token !== "YOUR_TOKEN") {
+    if (CONFIG.token && CONFIG.token !== "" && CONFIG.token !== "YOUR_TOKEN" && CONFIG.serverUrl && CONFIG.serverUrl !== "") {
         start();
     } else {
-        showOverlay("Ready. Set API Token in Wallpaper Engine.", true);
+        showOverlay("Welcome to Luvia. Please set Server Address & Token in Wallpaper Engine.", true);
+        console.warn("[Luvia] Config incomplete. Waiting for Properties...");
     }
 
     document.addEventListener('visibilitychange', () => {
@@ -267,17 +270,17 @@ function renderCurrent() {
             onMediaLoaded();
         };
 
-        // Explicitly trigger play with defensive 10ms delay (Rule 8.1 / GPU Crash Guard)
+        // Explicitly trigger play with defensive 100ms delay (Rule 8.1 / GPU Crash Guard)
         setTimeout(() => {
             if (media && media.tagName === 'VIDEO') {
                 console.log("[Luvia] Defensive play trigger for:", media.src.split('/').pop());
                 media.play().catch(err => {
                     console.error("[Luvia] Video Playback Failed!");
                     console.error("[Luvia] DOMException:", err.name, "-", err.message);
-                    console.warn("[Luvia] This is often due to server range/mime issues or autoplay restrictions.");
+                    console.warn("[Luvia] Tips: Check if your server supports HTTPS or if the codec is supported by WE.");
                 });
             }
-        }, 10);
+        }, 100);
     } else {
         media = document.createElement('img');
         media.className = 'full-content';
