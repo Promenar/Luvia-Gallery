@@ -34,6 +34,40 @@ function getUpdateConfig() {
     return { repoUrl: 'git@github.com:NarcisWL/Luvia-Gallery.git', branch: 'main' };
 }
 
+// Helper: Setup SSH keys for remote operations (Sync version for API)
+function prepareSSHSync() {
+    try {
+        const sshDir = path.join(process.env.HOME || '/root', '.ssh');
+        if (!fs.existsSync(sshDir)) fs.mkdirSync(sshDir, { recursive: true, mode: 0o700 });
+
+        // Import keys from mount if available
+        const mountDir = '/tmp/ssh_mount';
+        if (fs.existsSync(mountDir)) {
+            const files = fs.readdirSync(mountDir);
+            for (const file of files) {
+                const src = path.join(mountDir, file);
+                const dest = path.join(sshDir, file);
+                fs.copyFileSync(src, dest);
+                fs.chmodSync(dest, 0o600);
+            }
+        }
+
+        // Add GitHub to known_hosts
+        const hostsPath = path.join(sshDir, 'known_hosts');
+        if (!fs.existsSync(hostsPath)) {
+            // We use a simple echo if we can't scan, but usually keyscan is better.
+            // For now, assume update.sh does the heavy scanning, but let's try a safe approach
+            try {
+                exec(`ssh-keyscan github.com >> ${hostsPath}`);
+            } catch (e) { }
+        }
+        return true;
+    } catch (e) {
+        log(`SSH Prep Error: ${e.message}`);
+        return false;
+    }
+}
+
 // Function to start the main application
 function startApp() {
     if (isSafeMode) return;
@@ -290,10 +324,29 @@ const server = http.createServer((req, res) => {
 
         const config = getUpdateConfig();
         const branch = config.branch || 'main';
+        let repoUrl = config.repoUrl;
 
-        log(`Checking update status for ${branch}...`);
-        // We use git fetch -q to minimize stdout distraction
-        exec(`git fetch -q origin ${branch} && git rev-parse HEAD && git rev-parse origin/${branch}`, (error, stdout, stderr) => {
+        // Normalize URL: Ensure it ends with .git for better compatibility
+        if (repoUrl.includes('github.com') && !repoUrl.endsWith('.git')) {
+            repoUrl += '.git';
+        }
+
+        log(`Checking update status for ${branch} on ${repoUrl}...`);
+
+        // Prepare SSH environment before checking
+        if (repoUrl.startsWith('git@')) prepareSSHSync();
+
+        // Preparation sequence:
+        // 1. Ensure safe directory
+        // 2. Ensure .git exists
+        // 3. Force update remote 'origin'
+        const prepCmd = `
+            git config --global --add safe.directory "${path.resolve(__dirname)}" &&
+            ( [ -d .git ] || git init ) &&
+            ( git remote add origin "${repoUrl}" 2>/dev/null || git remote set-url origin "${repoUrl}" )
+        `.replace(/\n/g, '').trim();
+
+        exec(`${prepCmd} && git fetch -q origin ${branch} && git rev-parse HEAD && git rev-parse origin/${branch}`, (error, stdout, stderr) => {
             if (error) {
                 log(`Status check failed: ${stderr || error.message}`);
                 res.writeHead(500, { 'Content-Type': 'application/json' });

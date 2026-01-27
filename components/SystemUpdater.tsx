@@ -8,7 +8,7 @@ const SystemUpdater: React.FC = () => {
     const [statusMsg, setStatusMsg] = useState('');
     const [errorMsg, setErrorMsg] = useState('');
     const [checking, setChecking] = useState(false);
-    const [config, setConfig] = useState({ repoUrl: '', branch: 'main' });
+    const [config, setConfig] = useState({ repoUrl: 'git@github.com:NarcisWL/Luvia-Gallery.git', branch: 'main' });
     const [updateStatus, setUpdateStatus] = useState<{ updatable: boolean, local: string, remote: string } | null>(null);
     const [saveStatus, setSaveStatus] = useState('');
 
@@ -28,7 +28,8 @@ const SystemUpdater: React.FC = () => {
                     setConfig(data.config);
                 }
             } else {
-                throw new Error(t('update_error'));
+                const data = await res.json().catch(() => ({}));
+                throw new Error(data.error || data.details || t('update_error'));
             }
         } catch (e: any) {
             setErrorMsg(e.message);
@@ -148,7 +149,7 @@ const SystemUpdater: React.FC = () => {
                             <input
                                 value={config.repoUrl}
                                 onChange={e => setConfig(prev => ({ ...prev, repoUrl: e.target.value }))}
-                                placeholder="git@github.com:..."
+                                placeholder="git@github.com:user/repo.git or https://github.com/user/repo.git"
                                 className="flex-1 px-3 py-2 bg-black/20 border border-white/10 rounded-xl text-sm font-mono text-text-secondary outline-none focus:border-accent-500/50"
                             />
                         </div>
