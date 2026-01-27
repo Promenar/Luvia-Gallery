@@ -177,12 +177,20 @@ async function init() {
     }
 
     // Optional params
-    const pMode = urlParams.get('mode') || urlParams.get('mode'); // Case sensitivity guard?
-    if (pMode) CONFIG.mode = pMode;
     const pPath = urlParams.get('path') || urlParams.get('folder');
     if (pPath) CONFIG.path = pPath;
+    const pInterval = urlParams.get('interval');
+    if (pInterval) {
+        CONFIG.interval = parseInt(pInterval) * 1000;
+        console.log("[Luvia] Config: Interval set from URL -", CONFIG.interval, "ms");
+    }
+    const pInfo = urlParams.get('info');
+    if (pInfo) {
+        CONFIG.showInfo = pInfo !== 'false';
+        elements.infoOverlay.classList.toggle('hidden', !CONFIG.showInfo);
+    }
 
-    console.log("[Luvia] Final Init Config:", { server: CONFIG.serverUrl ? "SET" : "EMPTY", token: CONFIG.token ? "SET" : "EMPTY", mode: CONFIG.mode });
+    console.log("[Luvia] Final Init Config:", { server: CONFIG.serverUrl ? "SET" : "EMPTY", token: CONFIG.token ? "SET" : "EMPTY", mode: CONFIG.mode, interval: CONFIG.interval });
 
     if (CONFIG.token && CONFIG.token !== "" && CONFIG.token !== "YOUR_TOKEN" && CONFIG.serverUrl && CONFIG.serverUrl !== "") {
         start();
