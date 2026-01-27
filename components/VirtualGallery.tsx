@@ -363,8 +363,8 @@ export const VirtualGallery: React.FC<VirtualGalleryProps> = ({
                                 if (index >= itemCount) return null;
                                 if (!isItemLoaded(index)) {
                                     return (
-                                        <div style={itemStyle} className="bg-gray-200 dark:bg-gray-800 rounded-xl animate-pulse flex items-center justify-center">
-                                            <Icons.Image className="text-gray-300 dark:text-gray-700" />
+                                        <div style={itemStyle} className="bg-white/3 rounded-xl animate-pulse flex items-center justify-center border border-white/5">
+                                            <Icons.Image className="text-white/10" />
                                         </div>
                                     );
                                 }

@@ -58,7 +58,7 @@ export const ScanProgressModal: React.FC<ScanProgressModalProps> = ({
                     initial={{ y: 100, opacity: 0 }}
                     animate={{ y: 0, opacity: 1 }}
                     exit={{ y: 100, opacity: 0 }}
-                    className="fixed bottom-6 right-6 z-[60] bg-white dark:bg-gray-800 rounded-xl shadow-2xl border border-gray-200 dark:border-gray-700 p-4 w-72 flex flex-col gap-3"
+                    className="fixed bottom-6 right-6 z-[60] bg-surface-secondary backdrop-blur-3xl rounded-xl shadow-2xl border border-white/5 p-4 w-72 flex flex-col gap-3"
                 >
                     <div className="flex items-center justify-between">
                         <div className="flex items-center gap-2">
@@ -97,7 +97,7 @@ export const ScanProgressModal: React.FC<ScanProgressModalProps> = ({
                         initial={{ scale: 0.9, y: 20 }}
                         animate={{ scale: 1, y: 0 }}
                         exit={{ scale: 0.9, y: 20 }}
-                        className="bg-white dark:bg-gray-800 rounded-2xl w-full max-w-md shadow-2xl overflow-hidden border border-gray-100 dark:border-gray-700 relative"
+                        className="bg-surface-secondary backdrop-blur-3xl rounded-2xl w-full max-w-md shadow-2xl overflow-hidden border border-white/5 relative"
                     >
                         <div className="absolute top-4 right-4 flex items-center gap-2">
                             <button onClick={() => setIsMinimized(true)} className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-full transition-colors" title="Minimize to background">
@@ -126,7 +126,7 @@ export const ScanProgressModal: React.FC<ScanProgressModalProps> = ({
                                 </div>
                             </div>
 
-                            <div className="bg-gray-50 dark:bg-gray-900/50 rounded-xl p-4 mb-6 border border-gray-100 dark:border-gray-800">
+                            <div className="bg-black/20 rounded-xl p-4 mb-6 border border-white/5">
                                 <div className="flex justify-between items-end mb-2">
                                     <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">{isThumb ? t('processed') : t('found')}</span>
                                     <span className="text-2xl font-bold text-primary-600 dark:text-primary-400">{count}</span>
@@ -165,7 +165,7 @@ export const ScanProgressModal: React.FC<ScanProgressModalProps> = ({
                                 )}
 
                                 {(status === 'completed' || status === 'cancelled' || status === 'error' || status === 'idle') && (
-                                    <button onClick={onClose} className="w-full py-2.5 bg-primary-600 hover:bg-primary-700 text-white rounded-xl font-medium transition-colors">{t('close')}</button>
+                                    <button onClick={onClose} className="w-full py-2.5 bg-accent-500 hover:bg-accent-600 text-black rounded-xl font-bold transition-all shadow-lg shadow-accent-500/10 border border-white/5">{t('close')}</button>
                                 )}
                             </div>
                         </div>
