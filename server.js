@@ -2388,6 +2388,10 @@ app.get('/api/file/*', (req, res) => {
             console.log(`[API] Serving ${filePath} as ${contentType}`);
         }
 
+        if (req.headers.range) {
+            console.log(`\x1b[32m[DEBUG] Range Requested: ${req.headers.range}\x1b[0m`);
+        }
+
         res.sendFile(filePath, {
             acceptRanges: true,
             cacheControl: true,
@@ -2399,9 +2403,13 @@ app.get('/api/file/*', (req, res) => {
                 'Accept-Ranges': 'bytes'
             }
         }, (err) => {
-            if (err && !res.headersSent) {
-                console.error('[API] SendFile error:', err);
-                if (!res.headersSent) res.status(500).send('Error serving file');
+            if (err) {
+                if (!res.headersSent) {
+                    console.error('\x1b[31m[API] SendFile error:\x1b[0m', err.message);
+                    res.status(500).send('Error');
+                }
+            } else {
+                console.log(`\x1b[32m[DEBUG] Served: ${path.basename(filePath)} (${contentType})\x1b[0m`);
             }
         });
     } catch (error) {
