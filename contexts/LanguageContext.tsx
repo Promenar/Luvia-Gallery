@@ -224,6 +224,8 @@ const translations = {
     copy_wallpaper_url: 'Copy Wallpaper URL',
     wallpaper_token_desc: 'Long-lived token for desktop backgrounds. Use this as your API token in Wallpaper Engine or Gnome Hanabi.',
     token_generated: 'Token Generated',
+    show_media_info: 'Show Media Info',
+    show_videos_wallpaper: 'Show Video Files',
 
     // Auth
     welcome: 'Welcome',
@@ -474,6 +476,8 @@ const translations = {
     copy_wallpaper_url: '复制壁纸 URL',
     wallpaper_token_desc: '用于桌面背景的长期访问令牌。在 Wallpaper Engine 或 Gnome Hanabi 设置中使用此令牌或生成的 URL。',
     token_generated: '令牌已生成',
+    show_media_info: '显示媒体信息',
+    show_videos_wallpaper: '显示视频文件',
 
     // Auth
     welcome: '欢迎',
