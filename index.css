@@ -88,6 +88,7 @@
     --overlay-strong: rgba(4, 6, 18, 0.55);
 
     --accent-glow: rgba(69, 181, 255, 0.4);
+    --accent-rgb: 69, 181, 255;
   }
 
   .dark {
@@ -119,6 +120,8 @@
     --accent-600: #45b5ff;
     --accent-700: #7cd8c9;
 
+    --accent-rgb: 38, 131, 211;
+    /* Default accent RGB */
     --accent-glow: rgba(56, 189, 248, 0.2);
     --overlay-veil: rgba(5, 8, 22, 0.55);
     --overlay-strong: rgba(5, 8, 22, 0.85);
@@ -209,10 +212,12 @@
 }
 
 .input-premium:focus {
-  @apply border-accent-500/30 ring-4 ring-accent-500/5 bg-black/40;
+  outline: none;
+  border-color: rgba(var(--accent-rgb), 0.3);
   box-shadow:
     inset 0 2px 4px rgba(0, 0, 0, 0.2),
-    0 0 20px rgba(69, 181, 255, 0.05);
+    0 0 20px rgba(var(--accent-rgb), 0.05),
+    0 0 0 4px rgba(var(--accent-rgb), 0.05);
 }
 
 .button-premium-ghost {
@@ -220,8 +225,12 @@
 }
 
 .button-premium-active {
-  @apply bg-accent-500/10 border-accent-500/20 text-accent-400 shadow-[0_0_20px_rgba(38, 131, 211, 0.1)];
+  color: var(--accent-400);
+  background-color: rgba(var(--accent-rgb), 0.1);
+  border-color: rgba(var(--accent-rgb), 0.2);
+  box-shadow: 0 0 20px rgba(var(--accent-rgb), 0.1);
 }
+
 
 .card-stat-premium {
   @apply bg-black/20 hover:bg-white/3 border border-white/5 hover:border-white/10 transition-all duration-500;
