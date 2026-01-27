@@ -16,6 +16,25 @@
                 "type": "text",
                 "value": "your_token_here"
             },
+            "mode": {
+                "text": "Playback Mode",
+                "type": "combo",
+                "value": "random",
+                "options": [
+                    {
+                        "label": "Random",
+                        "value": "random"
+                    },
+                    {
+                        "label": "Favorites",
+                        "value": "favorites"
+                    },
+                    {
+                        "label": "Specific Folder",
+                        "value": "folder"
+                    }
+                ]
+            },
             "path": {
                 "text": "Folder Path",
                 "type": "text",
