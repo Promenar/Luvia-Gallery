@@ -1,5 +1,5 @@
 # Build Stage
-FROM node:20-alpine as builder
+FROM node:20-bookworm as builder
 
 WORKDIR /app
 
@@ -9,7 +9,7 @@ COPY package*.json ./
 # Set NPM mirror for faster install
 RUN npm config set registry https://registry.npmmirror.com/
 
-# Install dependencies (including devDependencies for Vite)
+# Install dependencies
 RUN npm install
 
 # Copy source code
@@ -18,24 +18,37 @@ COPY . .
 # Build the frontend (Vite)
 RUN npm run build
 
-# Production Stage
-FROM node:20-alpine
+# Production Stage: Switch to NVIDIA CUDA Base for guaranteed driver compatibility
+# Using runtime-ubuntu22.04 matches verified working environment logic
+FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
 
 WORKDIR /app
 
-# Install ffmpeg and hardware acceleration drivers
-# intel-media-driver: for Intel Broadwell+ (iHD)
-# libva-intel-driver: for older Intel (i965)
-# mesa-va-gallium: for AMD
-RUN apk add --no-cache ffmpeg mesa-va-gallium intel-media-driver libva-intel-driver
+# Prevent interactive prompts during apt install
+ENV DEBIAN_FRONTEND=noninteractive
 
-# Install production dependencies only (for server.js)
+# 1. Install Utilities and Node.js 20 Setup
+RUN apt-get update && apt-get install -y \
+    curl \
+    gnupg \
+    ca-certificates \
+    && mkdir -p /etc/apt/keyrings \
+    && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
+    && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main" | tee /etc/apt/sources.list.d/nodesource.list
+
+# 2. Install Node.js, FFmpeg, and other runtime Deps
+RUN apt-get update && apt-get install -y \
+    nodejs \
+    ffmpeg \
+    git \
+    openssh-client \
+    procps \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy package definition for production install
 COPY package*.json ./
 RUN npm config set registry https://registry.npmmirror.com/
 RUN npm install --production
-
-# Install Git & OpenSSH for Auto-Update Feature
-RUN apk add --no-cache git openssh
 
 # Copy built frontend assets
 COPY --from=builder /app/dist ./dist
@@ -47,10 +60,14 @@ COPY --from=builder /app/database.js ./database.js
 # Copy Runner & Scripts
 COPY --from=builder /app/runner.js ./runner.js
 COPY --from=builder /app/scripts ./scripts
-# FIX: Ensure shell scripts have LF line endings (for Windows builds)
+# Ensure shell scripts are executable and have LF endings
 RUN sed -i 's/\r$//' ./scripts/*.sh && chmod +x ./scripts/*.sh
 
 ENV NODE_ENV=production
+# Force NVIDIA driver capabilities env vars (redundant but safe)
+ENV NVIDIA_DRIVER_CAPABILITIES=compute,video,utility
+ENV NVIDIA_VISIBLE_DEVICES=all
+
 EXPOSE 3001
 
 CMD ["node", "runner.js"]
