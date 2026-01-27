@@ -84,10 +84,10 @@ export const UnifiedProgressModal: React.FC<UnifiedProgressModalProps> = ({
                                 initial={{ opacity: 0, scale: 0.95 }}
                                 animate={{ opacity: 1, scale: 1 }}
                                 exit={{ opacity: 0, scale: 0.95 }}
-                                className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl w-full max-w-lg overflow-hidden border border-gray-100 dark:border-gray-700 max-h-[80vh] flex flex-col"
+                                className="bg-surface-secondary backdrop-blur-3xl rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden border border-white/5 max-h-[80vh] flex flex-col"
                             >
                                 {/* Header */}
-                                <div className="p-4 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between shrink-0">
+                                <div className="p-4 border-b border-white/5 flex items-center justify-between shrink-0">
                                     <h3 className="font-semibold text-gray-800 dark:text-gray-200 flex items-center gap-2">
                                         <Icons.Refresh className={`animate-spin ${!isScanActive && !isThumbActive ? 'hidden' : ''}`} size={18} />
                                         {t('background_tasks')}
@@ -149,7 +149,7 @@ export const UnifiedProgressModal: React.FC<UnifiedProgressModalProps> = ({
 
                                     {/* Separator - only if both are shown */}
                                     {showScan && (showThumb || showQueue) && (
-                                        <div className="h-px bg-gray-100 dark:bg-gray-700" />
+                                        <div className="h-px bg-white/5" />
                                     )}
 
                                     {/* Thumbnail Gen Section */}
@@ -235,12 +235,12 @@ export const UnifiedProgressModal: React.FC<UnifiedProgressModalProps> = ({
                                     {/* Pending Queue Section */}
                                     {showQueue && (
                                         <>
-                                            <div className="h-px bg-gray-100 dark:bg-gray-700" />
+                                            <div className="h-px bg-white/5" />
                                             <div className="space-y-3">
                                                 <h4 className="text-xs font-semibold uppercase text-gray-500 dark:text-gray-400 tracking-wider">Pending Tasks ({thumbQueue.length})</h4>
                                                 <div className="space-y-2">
                                                     {thumbQueue.map((task) => (
-                                                        <div key={task.id} className="flex items-center justify-between p-2 rounded-lg bg-gray-50 dark:bg-gray-700/30 border border-gray-100 dark:border-gray-700">
+                                                        <div key={task.id} className="flex items-center justify-between p-2 rounded-lg bg-black/20 border border-white/5">
                                                             <div className="min-w-0">
                                                                 <p className="text-sm font-medium text-gray-700 dark:text-gray-300 truncate">{task.name}</p>
                                                                 <p className="text-xs text-gray-400">{task.total} files</p>
@@ -283,7 +283,7 @@ export const UnifiedProgressModal: React.FC<UnifiedProgressModalProps> = ({
                             initial={{ y: 100, opacity: 0 }}
                             animate={{ y: 0, opacity: 1 }}
                             exit={{ y: 100, opacity: 0 }}
-                            className="fixed bottom-6 right-6 z-50 bg-white dark:bg-gray-800 rounded-xl shadow-lg border border-gray-100 dark:border-gray-700 p-4 flex items-center gap-4 max-w-sm"
+                            className="fixed bottom-6 right-6 z-50 bg-surface-secondary backdrop-blur-3xl rounded-xl shadow-2xl border border-white/5 p-4 flex items-center gap-4 max-w-sm"
                         >
                             <div className="relative">
                                 {isScanActive ? (
