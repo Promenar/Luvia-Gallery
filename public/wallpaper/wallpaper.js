@@ -151,14 +151,27 @@ async function init() {
     // Check browser video capabilities
     checkCapabilities();
 
-    // Support URL Search Params (Hidamari) - but don't overwrite with empty
+    // Support URL Search Params (Hidamari / Manual Call)
     const urlParams = new URLSearchParams(window.location.search);
-    const pToken = urlParams.get('token');
-    const pServer = urlParams.get('server');
-    if (pToken) CONFIG.token = pToken;
-    if (pServer) CONFIG.serverUrl = pServer;
-    if (urlParams.get('mode')) CONFIG.mode = urlParams.get('mode');
-    if (urlParams.get('path')) CONFIG.path = urlParams.get('path');
+    const pToken = urlParams.get('token') || urlParams.get('API_TOKEN') || urlParams.get('l_token');
+    const pServer = urlParams.get('server') || urlParams.get('serverUrl') || urlParams.get('ServerAddress') || urlParams.get('l_server');
+
+    if (pToken) {
+        console.log("[Luvia] Config: Token found in URL");
+        CONFIG.token = pToken;
+    }
+    if (pServer) {
+        console.log("[Luvia] Config: Server found in URL");
+        CONFIG.serverUrl = pServer;
+    }
+
+    // Optional params
+    const pMode = urlParams.get('mode') || urlParams.get('mode'); // Case sensitivity guard?
+    if (pMode) CONFIG.mode = pMode;
+    const pPath = urlParams.get('path') || urlParams.get('folder');
+    if (pPath) CONFIG.path = pPath;
+
+    console.log("[Luvia] Final Init Config:", { server: CONFIG.serverUrl ? "SET" : "EMPTY", token: CONFIG.token ? "SET" : "EMPTY", mode: CONFIG.mode });
 
     if (CONFIG.token && CONFIG.token !== "" && CONFIG.token !== "YOUR_TOKEN" && CONFIG.serverUrl && CONFIG.serverUrl !== "") {
         start();
