@@ -1879,8 +1879,8 @@ export default function App() {
     // Auth/Setup Screens
     if (authStep === 'loading') {
         return (
-            <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center">
-                <Icons.Loader className="animate-spin text-primary-500" size={32} />
+            <div className="min-h-screen bg-surface-primary flex items-center justify-center">
+                <Icons.Loader className="animate-spin text-accent-500" size={32} />
             </div>
         );
     }
@@ -1888,8 +1888,9 @@ export default function App() {
     if (authStep === 'setup' || authStep === 'login') {
         // Basic Auth UI
         return (
-            <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex flex-col items-center justify-center p-4">
-                <div className="w-full max-w-md bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-8">
+            <div className="min-h-screen bg-surface-primary flex flex-col items-center justify-center p-4">
+                <div className="w-full max-w-md bg-surface-secondary backdrop-blur-2xl rounded-3xl shadow-2xl p-8 border border-white/5 relative overflow-hidden">
+                    <div className="absolute inset-0 bg-gradient-to-tr from-accent-500/5 via-transparent to-transparent pointer-events-none" />
                     <div className="flex justify-center mb-6">
                         <div className="w-16 h-16 bg-primary-600 rounded-2xl flex items-center justify-center shadow-lg shadow-primary-500/30">
                             <div className="w-8 h-8 bg-white/30 rounded-full" />
@@ -2018,7 +2019,7 @@ export default function App() {
                             <input
                                 required
                                 type="text"
-                                className="w-full px-4 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-500 outline-none"
+                                className="w-full px-4 py-2 rounded-xl border border-white/10 bg-black/20 text-text-primary focus:border-accent-500/50 outline-none transition-all"
                                 value={authStep === 'setup' ? setupForm.username : loginForm.username}
                                 onChange={e => authStep === 'setup' ? setSetupForm({ ...setupForm, username: e.target.value }) : setLoginForm({ ...loginForm, username: e.target.value })}
                             />
@@ -2028,7 +2029,7 @@ export default function App() {
                             <input
                                 required
                                 type="password"
-                                className="w-full px-4 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-500 outline-none"
+                                className="w-full px-4 py-2 rounded-xl border border-white/10 bg-black/20 text-text-primary focus:border-accent-500/50 outline-none transition-all"
                                 value={authStep === 'setup' ? setupForm.password : loginForm.password}
                                 onChange={e => authStep === 'setup' ? setSetupForm({ ...setupForm, password: e.target.value }) : setLoginForm({ ...loginForm, password: e.target.value })}
                             />
@@ -2064,7 +2065,7 @@ export default function App() {
 
     // Main App Render
     return (
-        <div className={`flex h-screen w-full bg-gray-50 dark:bg-gray-900 overflow-hidden text-gray-900 dark:text-gray-100 font-sans transition-colors duration-200 ${isServerMode ? 'server-mode' : ''}`}>
+        <div className={`flex h-screen w-full bg-surface-primary overflow-hidden text-text-primary font-sans transition-colors duration-200 ${isServerMode ? 'server-mode' : ''}`}>
             <Navigation
                 appTitle={appTitle}
                 viewMode={viewMode}
@@ -2084,7 +2085,7 @@ export default function App() {
             <main className="flex-1 flex flex-col min-w-0 relative h-full pt-16 md:pt-0">
                 {/* Toolbar */}
                 {viewMode !== 'home' && (
-                    <header className="h-16 flex items-center justify-between px-4 md:px-8 border-b border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-900 z-20 shrink-0 absolute md:relative top-0 left-0 right-0 md:top-auto md:left-auto md:right-auto">
+                    <header className="h-16 flex items-center justify-between px-4 md:px-8 border-b border-white/5 bg-surface-primary z-20 shrink-0 absolute md:relative top-0 left-0 right-0 md:top-auto md:left-auto md:right-auto">
                         <div className="flex items-center gap-3 md:hidden">
                             <button onClick={() => setIsSidebarOpen(true)} className="p-2 -ml-2 text-gray-600 dark:text-gray-300">
                                 <Icons.Menu size={24} />
@@ -2112,10 +2113,10 @@ export default function App() {
                         <div className="flex items-center gap-2">
                             {/* View/Sort Controls */}
                             {viewMode !== 'folders' && (
-                                <div className="flex items-center bg-gray-100 dark:bg-gray-800 rounded-lg p-1">
-                                    <button onClick={() => setFilterOption('all')} className={`p-1.5 rounded-md ${filterOption === 'all' ? 'bg-white dark:bg-gray-700 shadow-sm' : 'text-gray-500'}`} title={t('all_types')}><Icons.Grid size={16} /></button>
-                                    <button onClick={() => setFilterOption('video')} className={`p-1.5 rounded-md ${filterOption === 'video' ? 'bg-white dark:bg-gray-700 shadow-sm' : 'text-gray-500'}`} title={t('videos_only')}><Icons.Video size={16} /></button>
-                                    <button onClick={() => setFilterOption('audio')} className={`p-1.5 rounded-md ${filterOption === 'audio' ? 'bg-white dark:bg-gray-700 shadow-sm' : 'text-gray-500'}`} title={t('audio_only')}><Icons.Music size={16} /></button>
+                                <div className="flex items-center bg-white/5 rounded-lg p-1 border border-white/5">
+                                    <button onClick={() => setFilterOption('all')} className={`p-1.5 rounded-md ${filterOption === 'all' ? 'bg-white/10 shadow-sm' : 'text-text-tertiary'}`} title={t('all_types')}><Icons.Grid size={16} /></button>
+                                    <button onClick={() => setFilterOption('video')} className={`p-1.5 rounded-md ${filterOption === 'video' ? 'bg-white/10 shadow-sm' : 'text-text-tertiary'}`} title={t('videos_only')}><Icons.Video size={16} /></button>
+                                    <button onClick={() => setFilterOption('audio')} className={`p-1.5 rounded-md ${filterOption === 'audio' ? 'bg-white/10 shadow-sm' : 'text-text-tertiary'}`} title={t('audio_only')}><Icons.Music size={16} /></button>
                                 </div>
                             )}
 
@@ -2125,12 +2126,12 @@ export default function App() {
                                 </button>
                                 {/* Invisible bridge to prevent menu closing */}
                                 <div className="absolute left-0 right-0 top-full h-2 bg-transparent" />
-                                <div className="absolute right-0 top-full mt-2 w-48 bg-white dark:bg-gray-800 rounded-xl shadow-xl border border-gray-100 dark:border-gray-700 p-1 hidden group-hover:block z-50">
-                                    <button onClick={() => setSortOption('dateDesc')} className={`w-full text-left px-3 py-2 rounded-lg text-sm ${sortOption === 'dateDesc' ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600' : 'hover:bg-gray-100 dark:hover:bg-gray-700'}`}>{t('newest_first')}</button>
-                                    <button onClick={() => setSortOption('dateAsc')} className={`w-full text-left px-3 py-2 rounded-lg text-sm ${sortOption === 'dateAsc' ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600' : 'hover:bg-gray-100 dark:hover:bg-gray-700'}`}>{t('oldest_first')}</button>
-                                    <button onClick={() => setSortOption('nameAsc')} className={`w-full text-left px-3 py-2 rounded-lg text-sm ${sortOption === 'nameAsc' ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600' : 'hover:bg-gray-100 dark:hover:bg-gray-700'}`}>{nameAscLabel}</button>
-                                    <button onClick={() => setSortOption('nameDesc')} className={`w-full text-left px-3 py-2 rounded-lg text-sm ${sortOption === 'nameDesc' ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600' : 'hover:bg-gray-100 dark:hover:bg-gray-700'}`}>{nameDescLabel}</button>
-                                    <button onClick={() => setSortOption('random')} className={`w-full text-left px-3 py-2 rounded-lg text-sm ${sortOption === 'random' ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600' : 'hover:bg-gray-100 dark:hover:bg-gray-700'}`}>{t('shuffle_random')}</button>
+                                <div className="absolute right-0 top-full mt-2 w-48 bg-surface-secondary backdrop-blur-xl rounded-xl shadow-2xl border border-white/10 p-1 hidden group-hover:block z-50">
+                                    <button onClick={() => setSortOption('dateDesc')} className={`w-full text-left px-3 py-2 rounded-lg text-sm ${sortOption === 'dateDesc' ? 'bg-accent-500/10 text-accent-400' : 'text-text-secondary hover:bg-white/5'}`}>{t('newest_first')}</button>
+                                    <button onClick={() => setSortOption('dateAsc')} className={`w-full text-left px-3 py-2 rounded-lg text-sm ${sortOption === 'dateAsc' ? 'bg-accent-500/10 text-accent-400' : 'text-text-secondary hover:bg-white/5'}`}>{t('oldest_first')}</button>
+                                    <button onClick={() => setSortOption('nameAsc')} className={`w-full text-left px-3 py-2 rounded-lg text-sm ${sortOption === 'nameAsc' ? 'bg-accent-500/10 text-accent-400' : 'text-text-secondary hover:bg-white/5'}`}>{nameAscLabel}</button>
+                                    <button onClick={() => setSortOption('nameDesc')} className={`w-full text-left px-3 py-2 rounded-lg text-sm ${sortOption === 'nameDesc' ? 'bg-accent-500/10 text-accent-400' : 'text-text-secondary hover:bg-white/5'}`}>{nameDescLabel}</button>
+                                    <button onClick={() => setSortOption('random')} className={`w-full text-left px-3 py-2 rounded-lg text-sm ${sortOption === 'random' ? 'bg-accent-500/10 text-accent-400' : 'text-text-secondary hover:bg-white/5'}`}>{t('shuffle_random')}</button>
                                 </div>
                             </div>
 
@@ -2157,9 +2158,9 @@ export default function App() {
                     <div className="flex-1 overflow-hidden relative">
                         {/* Empty State */}
                         {!isServerMode && files.length === 0 && (
-                            <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-400">
-                                <div className="w-24 h-24 bg-gray-100 dark:bg-gray-800 rounded-full flex items-center justify-center mb-4">
-                                    <Icons.Image size={40} className="opacity-50" />
+                            <div className="absolute inset-0 flex flex-col items-center justify-center text-text-tertiary">
+                                <div className="w-24 h-24 bg-white/5 rounded-full flex items-center justify-center mb-4 border border-white/5">
+                                    <Icons.Image size={40} className="opacity-30" />
                                 </div>
                                 <h3 className="text-xl font-bold text-gray-600 dark:text-gray-300 mb-2">{t('empty_library')}</h3>
                                 <p className="max-w-xs text-center text-sm">{t('import_local')}</p>
