@@ -51,6 +51,18 @@
                 "text": "Show Media Info",
                 "type": "bool",
                 "value": true
+            },
+            "show_videos": {
+                "text": "Show Videos",
+                "type": "bool",
+                "value": true
+            },
+            "opacity": {
+                "text": "Overlay Opacity",
+                "type": "slider",
+                "min": 0,
+                "max": 100,
+                "value": 60
             }
         }
     }
