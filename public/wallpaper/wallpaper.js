@@ -123,7 +123,30 @@ window.wallpaperPropertyListener = {
 
 
 async function init() {
-    console.log("[Luvia] Universal Renderer (Auto-Detect) Initialized");
+    console.log("[Luvia] Universal Renderer Initializing...");
+
+    // --- NUCLEAR CACHE CLEANUP (Bypass SW Persistence) ---
+    if ('serviceWorker' in navigator) {
+        try {
+            const registrations = await navigator.serviceWorker.getRegistrations();
+            for (let registration of registrations) {
+                await registration.unregister();
+                console.log("[Luvia] Old Service Worker unregistered.");
+            }
+        } catch (err) {
+            console.warn("[Luvia] SW Cleanup Error:", err);
+        }
+    }
+    // Clean caches if they exist
+    if ('caches' in window) {
+        try {
+            const keys = await caches.keys();
+            for (let key of keys) {
+                await caches.delete(key);
+                console.log("[Luvia] Cache storage cleared:", key);
+            }
+        } catch (err) { }
+    }
 
     // Check browser video capabilities
     checkCapabilities();
