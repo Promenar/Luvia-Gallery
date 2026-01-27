@@ -221,7 +221,8 @@
 }
 
 .button-premium-ghost {
-  @apply bg-white/3 border border-white/5 text-text-secondary hover:text-text-primary hover:bg-white/10 transition-all duration-300;
+  background-color: rgba(255, 255, 255, 0.03);
+  @apply border border-white/5 text-text-secondary hover:text-text-primary hover:bg-white/10 transition-all duration-300;
 }
 
 .button-premium-active {
@@ -233,11 +234,14 @@
 
 
 .card-stat-premium {
-  @apply bg-black/20 hover:bg-white/3 border border-white/5 hover:border-white/10 transition-all duration-500;
+  @apply bg-black/20 border border-white/5 transition-all duration-500;
+  background-color: rgba(0, 0, 0, 0.2);
   box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.02);
 }
 
 .card-stat-premium:hover {
+  background-color: rgba(255, 255, 255, 0.03);
+  @apply border-white/10;
   transform: translateY(-2px);
   box-shadow:
     inset 0 1px 1px rgba(255, 255, 255, 0.05),
