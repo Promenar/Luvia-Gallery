@@ -546,7 +546,12 @@ app.use((req, res, next) => {
     // 1. Soft Authenticate (Try to set req.user if token is present)
     const authHeader = req.headers['authorization'];
     let token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
-    if (!token && req.query.token) token = req.query.token;
+
+    // Fallback: Check query parameter
+    if (!token && req.query.token) {
+        const qToken = req.query.token;
+        token = Array.isArray(qToken) ? qToken[qToken.length - 1] : qToken;
+    }
 
     if (token) {
         jwt.verify(token, JWT_SECRET, (err, user) => {
@@ -2315,10 +2320,15 @@ app.get('/api/file/:id*', (req, res) => {
         const filePath = Buffer.from(fullId, 'base64').toString('utf8');
 
         if (!fs.existsSync(filePath)) {
+            console.error(`[API] File not found: ${filePath} (from ID: ${fullId})`);
             return res.status(404).send('File not found');
         }
 
         // [Security] User Access Check
+        if (!req.user) {
+            console.warn(`[Security] Anonymous access blocked to: ${filePath}`);
+            return res.status(401).send('Auth Required');
+        }
         if (!checkFileAccess(req.user, filePath)) {
             console.log(`[Security] Blocked access to file: ${filePath} for user ${req.user?.username}`);
             return res.status(403).send('Access Denied');
