@@ -1485,16 +1485,39 @@ async function detectHardwareAcceleration() {
 
             // 1. Check for NVIDIA CUDA
             if (output.includes('cuda')) {
-                // Try a simple test to verify it actually works
-                exec('ffmpeg -init_hw_device cuda=cuda:0 -f null -', (testErr) => {
-                    if (!testErr) {
-                        console.log('Hardware Acceleration: NVIDIA CUDA detected and verified.');
-                        hwAccel.type = 'cuda';
-                        hwAccel.flags = ['-hwaccel', 'cuda'];
-                    } else {
-                        console.warn('Hardware Acceleration: NVIDIA CUDA supported but initialization failed (drivers might be missing or container not privileged).');
-                    }
-                    resolve();
+                // Check for 'scale_cuda' filter as a secondary confirmation of functional support
+                exec('ffmpeg -filters', (filterErr, filterStdout) => {
+                    const hasCudaFilter = filterStdout && filterStdout.includes('scale_cuda');
+                    console.log(`FFmpeg CUDA filters: ${hasCudaFilter ? 'Available (scale_cuda found)' : 'Not found'}`);
+
+                    const testCmd = 'ffmpeg -init_hw_device cuda=cuda:0 -f null -';
+                    exec(testCmd, (testErr, testStdout, testStderr) => {
+                        const stderrOutput = testStderr || '';
+                        // If it says "no stream", it usually means it finished command processing AFTER initializing the device successfully
+                        const initializedSuccess = !testErr || stderrOutput.includes('Output file #0 does not contain any stream');
+
+                        if (initializedSuccess) {
+                            console.log('Hardware Acceleration: NVIDIA CUDA detected and verified.');
+                            hwAccel.type = 'cuda';
+                            hwAccel.flags = ['-hwaccel', 'cuda'];
+                            resolve();
+                        } else {
+                            console.warn(`Hardware Acceleration: NVIDIA CUDA initialization (cuda:0) failed: ${stderrOutput || testErr.message}`);
+
+                            // Try generic device as fallback
+                            exec('ffmpeg -init_hw_device cuda -f null -', (retryErr, retryStdout, retryStderr) => {
+                                const retryStderrOutput = retryStderr || '';
+                                if (!retryErr || retryStderrOutput.includes('Output file #0 does not contain any stream')) {
+                                    console.log('Hardware Acceleration: NVIDIA CUDA detected and verified (via generic device).');
+                                    hwAccel.type = 'cuda';
+                                    hwAccel.flags = ['-hwaccel', 'cuda'];
+                                } else {
+                                    console.error(`Hardware Acceleration: NVIDIA CUDA critical failure. Stderr: ${retryStderrOutput}`);
+                                }
+                                resolve();
+                            });
+                        }
+                    });
                 });
             }
             // 2. Check for VAAPI (Intel/AMD)
@@ -2452,7 +2475,11 @@ app.get('/api/system/status', (req, res) => {
             sharp: false,
             imageProcessor: 'ffmpeg',
             platform: process.platform,
-            ffmpegHwAccels: [],
+            ffmpegHwAccels: hwAccel.type !== 'none' ? [hwAccel.type.toUpperCase()] : [],
+            hardwareAcceleration: {
+                type: hwAccel.type,
+                device: hwAccel.device
+            },
             cacheCount: cacheCount,
             totalItems: dbStats.totalFiles,
             dbStatus: dbReady ? 'connected' : 'initializing',

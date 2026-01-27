@@ -35,15 +35,16 @@ services:
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,video,utility
     # Hardware Acceleration Configuration
-    # Uncomment the following section to enable NVIDIA GPU support.
-    # Requires NVIDIA Container Toolkit installed on host.
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: all
-    #           capabilities: [gpu]
+    # NVIDIA GPU Support enabled for Fnos/Linux hosts
+    privileged: true
+    runtime: nvidia
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
 
     # For Intel/AMD VAAPI (Linux/WSL2), uncomment:
     # devices:

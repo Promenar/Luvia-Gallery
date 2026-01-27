@@ -344,30 +344,31 @@ const server = http.createServer((req, res) => {
             ( git remote add origin "${repoUrl}" 2>/dev/null || git remote set-url origin "${repoUrl}" )
         `.replace(/\n/g, '').trim();
 
-        exec(`${prepCmd} && git fetch -q origin ${branch} && git rev-parse HEAD && git rev-parse origin/${branch}`, (error, stdout, stderr) => {
+        exec(`${prepCmd} && git fetch -q origin ${branch} && (git rev-parse HEAD 2>/dev/null || echo "0000000000000000000000000000000000000000") && git rev-parse origin/${branch}`, (error, stdout, stderr) => {
             if (error) {
-                log(`Status check failed: ${stderr || error.message}`);
-                res.writeHead(500, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: "Failed to check update status", details: stderr }));
-                return;
+                // If it's a specific "HEAD" error but we got a remote hash, we can proceed
+                log(`Status check encountered issue (possibly harmless): ${stderr || error.message}`);
+                // Don't exit yet, check if we have output
             }
 
-            const lines = stdout.trim().split('\n').filter(l => l.length === 40); // Commit hashes are 40 chars
+            const lines = stdout.trim().split('\n').filter(l => l.length === 40 || l === "0000000000000000000000000000000000000000");
             if (lines.length < 2) {
+                log(`Status parse failed. Output: ${stdout}`);
                 res.writeHead(500, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: "Failed to parse commit hashes", output: stdout }));
+                res.end(JSON.stringify({ error: "Failed to parse commit hashes", output: stdout, stderr: stderr }));
                 return;
             }
 
             const localHash = lines[0];
-            const remoteHash = lines[lines.length - 1]; // Use last line as remote if there are extras
+            const remoteHash = lines[lines.length - 1];
 
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({
                 updatable: localHash !== remoteHash,
                 local: localHash,
                 remote: remoteHash,
-                config: config
+                config: config,
+                isUninitialized: localHash === "0000000000000000000000000000000000000000"
             }));
         });
         return;
