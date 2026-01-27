@@ -52,6 +52,7 @@ function getFullUrl(relativePath) {
 function getMediaUrl(itemUrl) {
     if (!itemUrl) return '';
     const baseUrl = getFullUrl(itemUrl);
+    if (!baseUrl || baseUrl === '') return ''; // BLOCK Relative fallback
     // Avoid double tokens by cleaning up first
     const cleanBase = baseUrl.split('?token=')[0].split('&token=')[0];
     const connector = cleanBase.includes('?') ? '&' : '?';
