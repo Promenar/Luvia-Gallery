@@ -31,12 +31,20 @@ const elements = {
  * HELPER: URL Construction
  */
 function getFullUrl(relativePath) {
-    let base = CONFIG.serverUrl || '';
-    if (base && base !== '') {
-        base = base.trim();
+    let base = (CONFIG.serverUrl || '').trim();
+
+    // Fallback: If serverUrl is empty, try to get from localStorage (last resort)
+    if (!base) base = (localStorage.getItem('l_server') || '').trim();
+
+    if (base) {
         if (!base.startsWith('http')) base = 'http://' + base;
         if (base.endsWith('/')) base = base.slice(0, -1);
+    } else {
+        // [CRITICAL] If no server is defined, we cannot make API calls
+        console.warn("[Luvia] No server URL configured. Path will resolve to local disk which may fail.");
+        return relativePath;
     }
+
     const cleanRelative = relativePath.startsWith('/') ? relativePath : '/' + relativePath;
     return `${base}${cleanRelative}`;
 }

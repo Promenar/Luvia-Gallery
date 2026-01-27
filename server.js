@@ -2308,10 +2308,11 @@ app.get('/api/thumb/:id', async (req, res) => {
     }
 });
 
-// Serve Media Files (with range request support for video streaming)
-app.get('/api/file/:id', (req, res) => {
+// Serve Media Files (with wildcard support for potential slashes in base64 IDs)
+app.get('/api/file/:id*', (req, res) => {
     try {
-        const filePath = Buffer.from(req.params.id, 'base64').toString('utf8');
+        const fullId = req.params.id + (req.params[0] || '');
+        const filePath = Buffer.from(fullId, 'base64').toString('utf8');
 
         if (!fs.existsSync(filePath)) {
             return res.status(404).send('File not found');
