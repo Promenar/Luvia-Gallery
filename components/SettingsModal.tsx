@@ -107,10 +107,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
 
     const [wallpaperToken, setWallpaperToken] = useState('');
     const [justCopied, setJustCopied] = useState(false);
-    const [wallpaperConfig, setWallpaperConfig] = useState<{ mode: 'random' | 'folder' | 'favorites', path: string, interval: number }>({
+    const [wallpaperConfig, setWallpaperConfig] = useState<{ mode: 'random' | 'folder' | 'favorites', path: string, interval: number, showInfo: boolean, showVideos: boolean }>({
         mode: 'random',
         path: '',
-        interval: 30
+        interval: 30,
+        showInfo: true,
+        showVideos: true
     });
 
     useEffect(() => {
@@ -671,6 +673,27 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                                     </div>
                                                 </div>
 
+                                                <div className="pt-2 space-y-2">
+                                                    <div className="flex items-center justify-between gap-4">
+                                                        <span className="text-[10px] font-bold text-text-tertiary uppercase">{t('show_media_info')}</span>
+                                                        <button
+                                                            onClick={() => setWallpaperConfig(prev => ({ ...prev, showInfo: !prev.showInfo }))}
+                                                            className={`w-10 h-5 rounded-full relative transition-all ${wallpaperConfig.showInfo ? 'bg-accent-500' : 'bg-white/10'}`}
+                                                        >
+                                                            <div className={`absolute top-1 w-3 h-3 rounded-full bg-white transition-all ${wallpaperConfig.showInfo ? 'right-1' : 'left-1'}`} />
+                                                        </button>
+                                                    </div>
+                                                    <div className="flex items-center justify-between gap-4">
+                                                        <span className="text-[10px] font-bold text-text-tertiary uppercase">{t('show_videos_wallpaper')}</span>
+                                                        <button
+                                                            onClick={() => setWallpaperConfig(prev => ({ ...prev, showVideos: !prev.showVideos }))}
+                                                            className={`w-10 h-5 rounded-full relative transition-all ${wallpaperConfig.showVideos ? 'bg-accent-500' : 'bg-white/10'}`}
+                                                        >
+                                                            <div className={`absolute top-1 w-3 h-3 rounded-full bg-white transition-all ${wallpaperConfig.showVideos ? 'right-1' : 'left-1'}`} />
+                                                        </button>
+                                                    </div>
+                                                </div>
+
                                                 <button
                                                     onClick={() => {
                                                         const params = new URLSearchParams();
@@ -678,6 +701,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                                         params.set('mode', wallpaperConfig.mode);
                                                         if (wallpaperConfig.mode === 'folder' && wallpaperConfig.path) params.set('path', wallpaperConfig.path);
                                                         params.set('interval', wallpaperConfig.interval.toString());
+                                                        params.set('info', wallpaperConfig.showInfo.toString());
+                                                        params.set('videos', wallpaperConfig.showVideos.toString());
 
                                                         const url = `${baseUrl || window.location.origin}/wallpaper/index.html?${params.toString()}`;
                                                         copyToClipboard(url);

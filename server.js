@@ -264,7 +264,7 @@ app.get('/api/auth/wallpaper-token', authenticateToken, (req, res) => {
     const user = config.users?.find(u => u.username === req.user.username);
     res.json({
         token: user?.wallpaperToken || '',
-        config: user?.wallpaperConfig || { mode: 'random', path: '', interval: 30 }
+        config: user?.wallpaperConfig || { mode: 'random', path: '', interval: 30, showInfo: true, showVideos: true }
     });
 });
 
