@@ -1,83 +1,165 @@
 /**
- * Luvia Gallery - Standalone Wallpaper Renderer (Stabilized Version)
- * Fixes: Video looping/ghosting and duplicate triggers.
+ * Luvia Gallery - Advanced Wallpaper Engine Renderer (Universal + Auto-Detection)
+ * Fixes: Text property rendering, generic property matching, storage fallback.
  */
 
 const CONFIG = {
-    interval: 30000,
-    mode: 'random',
-    path: '',
+    serverUrl: localStorage.getItem('l_server') || '',
+    token: localStorage.getItem('l_token') || '',
+    mode: localStorage.getItem('l_mode') || 'random',
+    path: localStorage.getItem('l_path') || '',
+    interval: parseInt(localStorage.getItem('l_interval')) || 30000,
+    showInfo: localStorage.getItem('l_info') !== 'false',
+    overlayOpacity: parseInt(localStorage.getItem('l_opacity')) || 60,
     apiEndpoint: '/api/scan/results',
-    token: null,
+    isPaused: false,
     items: [],
-    currentIndex: 0,
-    isPaused: false
+    currentIndex: 0
 };
 
 const elements = {
     container: document.getElementById('wallpaper-container'),
     overlay: document.getElementById('overlay'),
+    infoOverlay: document.getElementById('info-overlay'),
+    itemName: document.getElementById('item-name'),
+    itemFolder: document.getElementById('item-folder'),
     status: document.getElementById('status-msg'),
     guide: document.getElementById('setup-guide')
 };
 
+/**
+ * HELPER: URL Construction
+ */
+function getFullUrl(relativePath) {
+    let base = CONFIG.serverUrl || '';
+    if (base && base !== '') {
+        base = base.trim();
+        if (!base.startsWith('http')) base = 'http://' + base;
+        if (base.endsWith('/')) base = base.slice(0, -1);
+    }
+    const cleanRelative = relativePath.startsWith('/') ? relativePath : '/' + relativePath;
+    return `${base}${cleanRelative}`;
+}
+
+function getMediaUrl(itemUrl) {
+    const baseUrl = getFullUrl(itemUrl);
+    const connector = baseUrl.includes('?') ? '&' : '?';
+    return `${baseUrl}${connector}token=${CONFIG.token}`;
+}
+
+/**
+ * WALLPAPER ENGINE PROPERTY LISTENER (GENERIC MATCHING)
+ */
+window.wallpaperPropertyListener = {
+    applyUserProperties: function (properties) {
+        console.log("[Luvia] Properties Received:", Object.keys(properties));
+        let needsRestart = false;
+
+        // Generic Key-Value Matching (Doesn't care about ID names)
+        for (const key in properties) {
+            const val = properties[key].value;
+            const lowKey = key.toLowerCase();
+
+            if (lowKey.includes('server')) {
+                if (CONFIG.serverUrl !== val) {
+                    CONFIG.serverUrl = val;
+                    localStorage.setItem('l_server', val);
+                    needsRestart = true;
+                }
+            } else if (lowKey.includes('token')) {
+                if (CONFIG.token !== val) {
+                    CONFIG.token = val;
+                    localStorage.setItem('l_token', val);
+                    needsRestart = true;
+                }
+            } else if (lowKey.includes('path')) {
+                if (CONFIG.path !== val) {
+                    CONFIG.path = val;
+                    localStorage.setItem('l_path', val);
+                    if (CONFIG.mode === 'folder') needsRestart = true;
+                }
+            } else if (lowKey.includes('mode')) {
+                if (CONFIG.mode !== val) {
+                    CONFIG.mode = val;
+                    localStorage.setItem('l_mode', val);
+                    needsRestart = true;
+                }
+            } else if (lowKey.includes('interval')) {
+                const ms = val * 1000;
+                if (CONFIG.interval !== ms) {
+                    CONFIG.interval = ms;
+                    localStorage.setItem('l_interval', ms);
+                    if (carouselTimer) { clearInterval(carouselTimer); startCarousel(); }
+                }
+            } else if (lowKey.includes('info')) {
+                CONFIG.showInfo = val;
+                localStorage.setItem('l_info', val);
+                elements.infoOverlay.classList.toggle('hidden', !val);
+            } else if (lowKey.includes('opacity')) {
+                CONFIG.overlayOpacity = val;
+                localStorage.setItem('l_opacity', val);
+                document.body.style.setProperty('--overlay-opacity', val / 100);
+            }
+        }
+
+        if (needsRestart && CONFIG.token && CONFIG.token !== "YOUR_TOKEN" && CONFIG.token !== "") {
+            start();
+        }
+    }
+};
+
 async function init() {
-    console.log("[Luvia] Stabilized Renderer Init");
+    console.log("[Luvia] Universal Renderer (Auto-Detect) Initialized");
+
+    // Support URL Search Params (Hidamari)
     const urlParams = new URLSearchParams(window.location.search);
-    CONFIG.token = urlParams.get('token');
+    if (urlParams.get('token')) CONFIG.token = urlParams.get('token');
+    if (urlParams.get('server')) CONFIG.serverUrl = urlParams.get('server');
+    if (urlParams.get('mode')) CONFIG.mode = urlParams.get('mode');
+    if (urlParams.get('path')) CONFIG.path = urlParams.get('path');
 
-    const mode = urlParams.get('mode');
-    if (mode) CONFIG.mode = mode;
-
-    const pathParam = urlParams.get('path');
-    if (pathParam) CONFIG.path = pathParam;
-
-    const intervalParam = urlParams.get('interval');
-    if (intervalParam) {
-        const val = parseInt(intervalParam);
-        if (!isNaN(val) && val > 0) CONFIG.interval = val * 1000;
+    if (CONFIG.token && CONFIG.token !== "" && CONFIG.token !== "YOUR_TOKEN") {
+        start();
+    } else {
+        showOverlay("Ready. Set API Token in Wallpaper Engine.", true);
     }
 
     document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'visible') resume();
         else pause();
     });
-
-    start();
 }
 
 async function start() {
-    if (!CONFIG.token) {
-        showOverlay("Token Missing", true);
+    if (!CONFIG.token || CONFIG.token === "" || CONFIG.token === "YOUR_TOKEN") {
+        showOverlay("Waiting for API Token...", true);
         return;
     }
 
-    showOverlay("Fetching Media...");
+    showOverlay(`Loading from: ${CONFIG.serverUrl || 'Default'}`);
 
     try {
         const success = await fetchItems();
         if (success) {
             hideOverlay();
-            setupCarousel();
+            startCarousel();
         } else {
-            showOverlay("No media found for this config", true);
+            showOverlay("Fetch failed. Token/Server check?", true);
         }
     } catch (e) {
-        showOverlay("Server Connection Failed", true);
+        console.error("[Luvia] Connection Error:", e);
+        showOverlay("Connection Error. Check Server Address.", true);
     }
 }
 
 async function fetchItems() {
     try {
-        let url = `${CONFIG.apiEndpoint}?random=true&limit=50&token=${CONFIG.token}`;
+        let apiUrl = `${CONFIG.apiEndpoint}?random=true&limit=100&token=${CONFIG.token}`;
+        if (CONFIG.mode === 'favorites') apiUrl += '&favorites=true&recursive=true';
+        else if (CONFIG.mode === 'folder' && CONFIG.path) apiUrl += `&folder=${encodeURIComponent(CONFIG.path)}&recursive=true`;
 
-        if (CONFIG.mode === 'favorites') {
-            url += '&favorites=true&recursive=true';
-        } else if (CONFIG.mode === 'folder' && CONFIG.path) {
-            url += `&folder=${encodeURIComponent(CONFIG.path)}&recursive=true`;
-        }
-
-        const response = await fetch(url);
+        const fullApiUrl = getFullUrl(apiUrl);
+        const response = await fetch(fullApiUrl);
         if (!response.ok) return false;
 
         const data = await response.json();
@@ -87,156 +169,116 @@ async function fetchItems() {
             return true;
         }
         return false;
-    } catch (e) {
-        return false;
-    }
+    } catch (e) { throw e; }
 }
 
 let carouselTimer = null;
-function setupCarousel() {
-    // Clear any existing timer to prevent overlapping loops
-    if (carouselTimer) {
-        clearInterval(carouselTimer);
-        carouselTimer = null;
-    }
-
+function startCarousel() {
+    if (carouselTimer) clearInterval(carouselTimer);
     renderCurrent();
-
-    carouselTimer = setInterval(() => {
-        if (!CONFIG.isPaused) {
-            next();
-        }
-    }, CONFIG.interval);
+    carouselTimer = setInterval(() => { if (!CONFIG.isPaused) next(); }, CONFIG.interval);
 }
 
 function next() {
     CONFIG.currentIndex++;
-
     if (CONFIG.currentIndex >= CONFIG.items.length) {
-        fetchItems().then(() => {
-            renderCurrent();
-        });
+        fetchItems().then(success => { if (success) renderCurrent(); });
     } else {
         renderCurrent();
     }
 }
 
-/**
- * CORE RENDER LOGIC
- */
 function renderCurrent() {
     const item = CONFIG.items[CONFIG.currentIndex];
     if (!item) return;
 
-    // 1. HARD CLEANUP
+    if (CONFIG.showInfo) {
+        elements.itemName.textContent = item.name;
+        elements.itemFolder.textContent = item.folderPath || 'Library Root';
+        elements.infoOverlay.classList.remove('hidden');
+    }
+
     const oldSlides = elements.container.querySelectorAll('.slide');
     oldSlides.forEach(oldSlide => {
-        const videos = oldSlide.querySelectorAll('video');
-        videos.forEach(v => {
-            v.oncanplaythrough = null; // Remove listeners
-            v.onplay = null;
-            v.pause();
-            v.src = "";
-            v.load();
-            v.remove();
-        });
         oldSlide.classList.remove('active');
         oldSlide.classList.add('exit');
+        const v = oldSlide.querySelector('video');
+        if (v) setTimeout(() => { v.pause(); v.src = ""; v.load(); v.remove(); }, 1600);
     });
 
-    // 2. PREPARE NEW SLIDE
     const slide = document.createElement('div');
     slide.className = 'slide';
 
-    const tokenSuffix = `token=${CONFIG.token}`;
-    const fullUrl = `${item.url.startsWith('/') ? '' : '/'}${item.url}${item.url.includes('?') ? '&' : '?'}${tokenSuffix}`;
-    const thumbUrl = `${item.thumbnailUrl.startsWith('/') ? '' : '/'}${item.thumbnailUrl}${item.thumbnailUrl.includes('?') ? '&' : '?'}${tokenSuffix}`;
-
     const thumb = document.createElement('img');
     thumb.className = 'thumb-placeholder';
-    thumb.src = thumbUrl;
+    thumb.src = getMediaUrl(item.thumbnailUrl);
     slide.appendChild(thumb);
 
     let media;
     let hasTriggeredLoad = false;
 
+    // Safety timeout: If media takes > 5s to load, force show it anyway to prevent "stuck at thumb"
+    const loadTimeout = setTimeout(() => {
+        if (!hasTriggeredLoad) {
+            console.warn("[Luvia] Media load timeout, forcing display...");
+            onMediaLoaded();
+        }
+    }, 5000);
+
     const onMediaLoaded = () => {
         if (hasTriggeredLoad) return;
         hasTriggeredLoad = true;
-        handleMediaTransition(media, thumb);
+        clearTimeout(loadTimeout);
+
+        console.log("[Luvia] Media loaded successfully");
+        media.classList.add('loaded');
+        thumb.classList.add('fade-out');
+        setTimeout(() => { if (slide.contains(thumb)) slide.removeChild(thumb); }, 1600);
     };
 
     if (item.mediaType === 'video') {
         media = document.createElement('video');
         media.className = 'full-content';
-        media.src = fullUrl;
+        media.src = getMediaUrl(item.url);
         media.autoplay = true;
         media.muted = true;
         media.loop = true;
         media.playsInline = true;
-        media.setAttribute('webkit-playsinline', 'true');
+        media.setAttribute('preload', 'auto');
 
-        // Use multiple events to ensure trigger in different browsers/kernels
         media.oncanplaythrough = onMediaLoaded;
         media.onplay = onMediaLoaded;
+        media.onerror = (e) => {
+            console.error("[Luvia] Video failed to load:", item.url, e);
+            onMediaLoaded(); // Try to show anyway (might show broken icon or nothing)
+        };
 
-        // Fallback for some Linux WebKit versions that struggle with canplaythrough
-        setTimeout(() => {
-            if (!hasTriggeredLoad && media && media.readyState >= 2) {
-                onMediaLoaded();
-            }
-        }, 2000);
+        // Explicitly trigger play for CEF compatibility
+        media.play().catch(err => {
+            console.warn("[Luvia] Video auto-play blocked or failed, retrying on interaction...", err);
+        });
     } else {
         media = document.createElement('img');
         media.className = 'full-content';
-        media.src = fullUrl;
+        media.src = getMediaUrl(item.url);
         media.onload = onMediaLoaded;
+        media.onerror = onMediaLoaded;
     }
 
     slide.appendChild(media);
     elements.container.appendChild(slide);
 
-    requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-            slide.classList.add('active');
-        });
-    });
-
-    // Cleanup DOM
+    requestAnimationFrame(() => { requestAnimationFrame(() => { slide.classList.add('active'); }); });
     setTimeout(() => {
         const deadSlides = elements.container.querySelectorAll('.exit');
-        deadSlides.forEach(s => {
-            if (elements.container.contains(s)) {
-                elements.container.removeChild(s);
-            }
-        });
+        deadSlides.forEach(s => { if (elements.container.contains(s)) elements.container.removeChild(s); });
     }, 2500);
 }
 
-function handleMediaTransition(media, thumb) {
-    if (media.classList.contains('loaded')) return;
-
-    media.classList.add('loaded');
-    if (thumb) {
-        thumb.classList.add('fade-out');
-        setTimeout(() => {
-            if (thumb.parentNode) thumb.parentNode.removeChild(thumb);
-        }, 1200);
-    }
-}
-
-function pause() {
-    CONFIG.isPaused = true;
-    document.querySelectorAll('video').forEach(v => v.pause());
-}
-
+function pause() { CONFIG.isPaused = true; document.querySelectorAll('video').forEach(v => v.pause()); }
 function resume() {
     CONFIG.isPaused = false;
-    document.querySelectorAll('video').forEach(v => {
-        if (v.closest('.slide.active')) {
-            v.play().catch(e => console.warn("Play failed", e));
-        }
-    });
+    document.querySelectorAll('video').forEach(v => { if (v.closest('.slide.active')) v.play().catch(() => { }); });
 }
 
 function showOverlay(msg, showGuide = false) {
@@ -245,8 +287,6 @@ function showOverlay(msg, showGuide = false) {
     if (showGuide) elements.guide.classList.remove('hidden');
 }
 
-function hideOverlay() {
-    elements.overlay.classList.add('hidden');
-}
+function hideOverlay() { elements.overlay.classList.add('hidden'); }
 
 init();
