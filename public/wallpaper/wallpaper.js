@@ -253,10 +253,15 @@ function renderCurrent() {
             onMediaLoaded(); // Try to show anyway (might show broken icon or nothing)
         };
 
-        // Explicitly trigger play for CEF compatibility
-        media.play().catch(err => {
-            console.warn("[Luvia] Video auto-play blocked or failed, retrying on interaction...", err);
-        });
+        // Explicitly trigger play with defensive 10ms delay (Rule 8.1 / GPU Crash Guard)
+        setTimeout(() => {
+            if (media && media.tagName === 'VIDEO') {
+                console.log("[Luvia] Defensive play trigger...");
+                media.play().catch(err => {
+                    console.warn("[Luvia] Video play deferred or failed:", err);
+                });
+            }
+        }, 10);
     } else {
         media = document.createElement('img');
         media.className = 'full-content';
@@ -269,11 +274,43 @@ function renderCurrent() {
     elements.container.appendChild(slide);
 
     requestAnimationFrame(() => { requestAnimationFrame(() => { slide.classList.add('active'); }); });
+
+    // Clean up registry to prevent DOM bloating and memory leaks
     setTimeout(() => {
         const deadSlides = elements.container.querySelectorAll('.exit');
-        deadSlides.forEach(s => { if (elements.container.contains(s)) elements.container.removeChild(s); });
+        deadSlides.forEach(s => {
+            if (elements.container.contains(s)) {
+                // Explicitly stop all media before removal
+                const mediaElems = s.querySelectorAll('video, img');
+                mediaElems.forEach(m => {
+                    if (m.tagName === 'VIDEO') {
+                        m.pause();
+                        m.src = "";
+                        // m.load(); // REMOVED: causes decoder reallocation crash on some CEF builds
+                    }
+                    m.remove();
+                });
+                elements.container.removeChild(s);
+            }
+        });
+
+        // Final sanity check: if container has too many slides, force flush
+        if (elements.container.children.length > 5) {
+            console.warn("[Luvia] Slide accumulation detected, flushing container...");
+            while (elements.container.children.length > 2) {
+                elements.container.removeChild(elements.container.firstChild);
+            }
+        }
     }, 2500);
 }
+
+// Global Crash Guard
+window.onerror = function (message, source, lineno, colno, error) {
+    console.error(`[Luvia] Runtime Crash Caught: ${message} at ${lineno}:${colno}`);
+    // Optional: auto-reload on crash if critical?
+    // location.reload();
+    return false;
+};
 
 function pause() { CONFIG.isPaused = true; document.querySelectorAll('video').forEach(v => v.pause()); }
 function resume() {
