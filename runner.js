@@ -320,8 +320,6 @@ const server = http.createServer((req, res) => {
 
     // 1.1 Handle Update Status Check
     if (req.url === '/api/admin/system/update/status' && req.method === 'GET') {
-        if (!checkAuth(req, res)) return;
-
         const config = getUpdateConfig();
         const branch = config.branch || 'main';
         let repoUrl = config.repoUrl;

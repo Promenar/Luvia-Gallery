@@ -200,10 +200,10 @@ const SystemUpdater: React.FC = () => {
                             <button
                                 onClick={() => handleSaveConfig()}
                                 disabled={saveStatus === 'saving'}
-                                className={`px-4 py-2 rounded-xl border flex items-center gap-2 transition-all active:scale-95 ${saveStatus === 'success' ? 'bg-green-500/20 border-green-500/30 text-green-400' : 'bg-white/5 border-white/10 text-text-secondary hover:bg-white/10'}`}
+                                className={`h-[38px] px-4 rounded-xl border flex items-center justify-center gap-2 transition-all active:scale-95 shrink-0 ${saveStatus === 'success' ? 'bg-green-500/20 border-green-500/30 text-green-400' : 'bg-white/5 border-white/10 text-text-secondary hover:bg-white/10'}`}
                             >
                                 {saveStatus === 'success' ? <CheckCircle size={18} /> : <Save size={18} />}
-                                <span className="text-sm font-medium">{saveStatus === 'success' ? t('config_saved') : t('save_config')}</span>
+                                <span className="text-sm font-medium whitespace-nowrap">{saveStatus === 'success' ? t('config_saved') : t('save_config')}</span>
                             </button>
                         </div>
                     </div>
@@ -242,10 +242,10 @@ const SystemUpdater: React.FC = () => {
                 <button
                     onClick={() => checkUpdate()}
                     disabled={checking || updating}
-                    className="p-3 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl text-text-secondary transition-all active:scale-95"
+                    className="p-3 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl text-text-secondary transition-all active:scale-95 flex items-center justify-center min-w-[48px]"
                     title={t('check_update')}
                 >
-                    <Search size={22} className={checking ? "animate-spin" : ""} />
+                    <Search size={22} className={`transition-all duration-500 ${checking ? "opacity-40 scale-90" : "opacity-100 scale-100"}`} />
                 </button>
             </div>
         </div>
