@@ -261,16 +261,20 @@ function renderCurrent() {
         media.oncanplaythrough = onMediaLoaded;
         media.onplay = onMediaLoaded;
         media.onerror = (e) => {
-            console.error("[Luvia] Video failed to load:", item.url, e);
-            onMediaLoaded(); // Try to show anyway (might show broken icon or nothing)
+            console.error("[Luvia] Video error:", item.url);
+            console.error("[Luvia] Full Request URL:", media.src);
+            console.error("[Luvia] Error details:", e);
+            onMediaLoaded();
         };
 
         // Explicitly trigger play with defensive 10ms delay (Rule 8.1 / GPU Crash Guard)
         setTimeout(() => {
             if (media && media.tagName === 'VIDEO') {
-                console.log("[Luvia] Defensive play trigger...");
+                console.log("[Luvia] Defensive play trigger for:", media.src.split('/').pop());
                 media.play().catch(err => {
-                    console.warn("[Luvia] Video play deferred or failed:", err);
+                    console.error("[Luvia] Video Playback Failed!");
+                    console.error("[Luvia] DOMException:", err.name, "-", err.message);
+                    console.warn("[Luvia] This is often due to server range/mime issues or autoplay restrictions.");
                 });
             }
         }, 10);
