@@ -187,7 +187,7 @@ export const DirectoryPicker: React.FC<DirectoryPickerProps> = ({
                             </button>
                             <button
                                 onClick={() => { onSelect(currentPath); onClose(); }}
-                                className="px-6 py-2.5 bg-accent-500 hover:bg-accent-600 text-black rounded-xl text-sm font-bold shadow-lg shadow-accent-500/10 transition-all active:scale-95 hover:-translate-y-0.5 border border-white/5"
+                                className="px-6 py-2.5 bg-accent-500 hover:bg-accent-600 text-black rounded-xl text-sm font-bold shadow-lg shadow-accent-500/10 transition-all active:scale-95 hover:-translate-y-0.5"
                             >
                                 {t('select_this_folder')}
                             </button>
