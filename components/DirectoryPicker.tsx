@@ -88,7 +88,7 @@ export const DirectoryPicker: React.FC<DirectoryPickerProps> = ({
                         animate={{ opacity: 1, scale: 1, y: 0 }}
                         exit={{ opacity: 0, scale: 0.95, y: 20 }}
                         transition={{ duration: 0.2 }}
-                        className="bg-white dark:bg-gray-800 w-full max-w-2xl rounded-2xl shadow-2xl border border-white/20 dark:border-gray-700 overflow-hidden flex flex-col max-h-[80vh] transform translate-z-0"
+                        className="glass-3 w-full max-w-2xl rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[80vh] transform translate-z-0 border border-white/5"
                     >
                         {/* Header */}
                         <div className="p-4 border-b border-gray-100 dark:border-gray-700 flex items-center gap-3 bg-gray-50/50 dark:bg-gray-900/50">
@@ -97,7 +97,7 @@ export const DirectoryPicker: React.FC<DirectoryPickerProps> = ({
                             </div>
                             <div className="flex-1 min-w-0">
                                 <h3 className="font-bold text-lg text-gray-900 dark:text-gray-100">{t('select_folder')}</h3>
-                                <div className="text-xs text-gray-500 dark:text-gray-400 font-mono truncate bg-white/50 dark:bg-black/20 px-2 py-1 rounded border border-gray-200/50 dark:border-gray-700/50 mt-1 flex items-center gap-2">
+                                <div className="text-xs text-gray-500 dark:text-gray-400 font-mono truncate bg-black/20 px-2 py-1.5 rounded-lg border border-white/5 mt-1 flex items-center gap-2">
                                     <Icons.Database size={12} />
                                     <span className="truncate" title={currentPath}>{currentPath || '/'}</span>
                                 </div>
@@ -108,24 +108,24 @@ export const DirectoryPicker: React.FC<DirectoryPickerProps> = ({
                         </div>
 
                         {/* Toolbar */}
-                        <div className="px-4 py-3 border-b border-gray-100 dark:border-gray-700 flex items-center gap-2 bg-white dark:bg-gray-800">
+                        <div className="px-4 py-3 border-b border-white/5 flex items-center gap-2 bg-transparent">
                             <button
                                 onClick={handleUp}
                                 disabled={isRoot}
                                 className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-all duration-200 ${isRoot
-                                    ? 'text-gray-300 dark:text-gray-600 cursor-not-allowed bg-gray-50 dark:bg-gray-900'
-                                    : 'text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 shadow-sm border border-gray-200 dark:border-gray-600'
+                                    ? 'text-gray-400 dark:text-gray-600 cursor-not-allowed bg-white/5'
+                                    : 'text-text-primary hover:bg-white/10 shadow-sm border border-white/5'
                                     }`}
                             >
                                 <Icons.ArrowUp size={16} />
                                 {t('go_up')}
                             </button>
-                            <div className="w-px h-6 bg-gray-200 dark:bg-gray-700 mx-1" />
+                            <div className="w-px h-6 bg-white/5 mx-1" />
                             <button
                                 onClick={() => setCurrentPath('/')}
                                 className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-all duration-200 ${isRoot
-                                    ? 'text-primary-600 bg-primary-50 dark:bg-primary-900/20 border border-primary-100 dark:border-primary-900/50'
-                                    : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700'
+                                    ? 'text-accent-500 bg-accent-500/10 border border-accent-500/20'
+                                    : 'text-text-secondary hover:bg-white/10'
                                     }`}
                             >
                                 <Icons.Server size={14} />
@@ -164,13 +164,13 @@ export const DirectoryPicker: React.FC<DirectoryPickerProps> = ({
                                         <button
                                             key={folder}
                                             onClick={() => handleNavigate(folder)}
-                                            className="flex items-center gap-3 p-3 bg-white dark:bg-gray-800 hover:bg-primary-50 dark:hover:bg-primary-900/20 rounded-xl text-left transition-colors duration-150 group border border-gray-100 dark:border-gray-700 hover:border-primary-200 dark:hover:border-primary-800"
+                                            className="flex items-center gap-3 p-3 bg-white/3 hover:bg-accent-500/10 rounded-xl text-left transition-all duration-300 group border border-transparent hover:border-accent-500/20"
                                         >
-                                            <div className="p-2 bg-blue-50 dark:bg-blue-900/20 text-blue-500 dark:text-blue-400 rounded-lg group-hover:scale-110 transition-transform duration-300">
+                                            <div className="p-2 bg-accent-500/10 text-accent-500 rounded-lg group-hover:scale-110 transition-transform duration-300">
                                                 <Icons.Folder size={20} fill="currentColor" className="opacity-90" />
                                             </div>
-                                            <span className="font-medium text-gray-700 dark:text-gray-200 truncate flex-1 text-sm">{folder}</span>
-                                            <Icons.ChevronRight size={16} className="text-gray-300 group-hover:text-primary-400 transition-colors" />
+                                            <span className="font-medium text-text-primary truncate flex-1 text-sm">{folder}</span>
+                                            <Icons.ChevronRight size={16} className="text-text-muted group-hover:text-accent-400 transition-colors" />
                                         </button>
                                     ))}
                                 </div>
@@ -178,16 +178,16 @@ export const DirectoryPicker: React.FC<DirectoryPickerProps> = ({
                         </div>
 
                         {/* Footer */}
-                        <div className="p-4 border-t border-gray-100 dark:border-gray-700 bg-white dark:bg-gray-800 flex justify-end gap-3 rounded-b-2xl">
+                        <div className="p-4 border-t border-white/5 bg-transparent flex justify-end gap-3 rounded-b-2xl">
                             <button
                                 onClick={onClose}
-                                className="px-5 py-2.5 bg-gray-50 dark:bg-gray-700/50 hover:bg-gray-100 dark:hover:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-xl text-sm font-medium transition-all text-gray-700 dark:text-gray-200"
+                                className="px-5 py-2.5 bg-white/5 hover:bg-white/10 border border-transparent rounded-xl text-sm font-medium transition-all text-text-secondary"
                             >
                                 {t('cancel')}
                             </button>
                             <button
                                 onClick={() => { onSelect(currentPath); onClose(); }}
-                                className="px-6 py-2.5 bg-gradient-to-r from-primary-600 to-primary-500 hover:from-primary-700 hover:to-primary-600 text-white rounded-xl text-sm font-bold shadow-lg shadow-primary-500/25 transition-all active:scale-95 hover:-translate-y-0.5"
+                                className="px-6 py-2.5 bg-accent-600 hover:bg-accent-500 text-white rounded-xl text-sm font-bold shadow-glow transition-all active:scale-95 hover:-translate-y-0.5"
                             >
                                 {t('select_this_folder')}
                             </button>

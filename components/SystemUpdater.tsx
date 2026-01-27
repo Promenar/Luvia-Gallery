@@ -158,7 +158,7 @@ const SystemUpdater: React.FC = () => {
     };
 
     return (
-        <div className="p-6 rounded-2xl bg-white/5 border border-white/10 space-y-6">
+        <div className="p-6 rounded-2xl bg-white/5 border border-white/5 space-y-6">
             <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
                     <Package className="text-accent-500" size={24} />
@@ -184,7 +184,7 @@ const SystemUpdater: React.FC = () => {
                                 value={config.repoUrl}
                                 onChange={e => setConfig(prev => ({ ...prev, repoUrl: e.target.value }))}
                                 placeholder="git@github.com:user/repo.git or https://github.com/user/repo.git"
-                                className="flex-1 px-3 py-2 bg-black/20 border border-white/10 rounded-xl text-sm font-mono text-text-secondary outline-none focus:border-accent-500/50"
+                                className="flex-1 px-3 py-2 bg-black/20 border border-white/5 rounded-xl text-sm font-mono text-text-secondary outline-none focus:border-accent-500/30"
                             />
                         </div>
                     </div>
@@ -195,12 +195,12 @@ const SystemUpdater: React.FC = () => {
                                 value={config.branch}
                                 onChange={e => setConfig(prev => ({ ...prev, branch: e.target.value }))}
                                 placeholder="main"
-                                className="flex-1 px-3 py-2 bg-black/20 border border-white/10 rounded-xl text-sm font-mono text-text-secondary outline-none focus:border-accent-500/50"
+                                className="flex-1 px-3 py-2 bg-black/20 border border-white/5 rounded-xl text-sm font-mono text-text-secondary outline-none focus:border-accent-500/30"
                             />
                             <button
                                 onClick={() => handleSaveConfig()}
                                 disabled={saveStatus === 'saving'}
-                                className={`h-[38px] px-4 rounded-xl border flex items-center justify-center gap-2 transition-all active:scale-95 shrink-0 ${saveStatus === 'success' ? 'bg-green-500/20 border-green-500/30 text-green-400' : 'bg-white/5 border-white/10 text-text-secondary hover:bg-white/10'}`}
+                                className={`h-[38px] px-4 rounded-xl border flex items-center justify-center gap-2 transition-all active:scale-95 shrink-0 ${saveStatus === 'success' ? 'bg-green-500/20 border-green-500/30 text-green-400 shadow-glow' : 'bg-white/5 border-transparent text-text-secondary hover:bg-white/10'}`}
                             >
                                 {saveStatus === 'success' ? <CheckCircle size={18} /> : <Save size={18} />}
                                 <span className="text-sm font-medium whitespace-nowrap">{saveStatus === 'success' ? t('config_saved') : t('save_config')}</span>
@@ -242,7 +242,7 @@ const SystemUpdater: React.FC = () => {
                 <button
                     onClick={() => checkUpdate()}
                     disabled={checking || updating}
-                    className="p-3 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl text-text-secondary transition-all active:scale-95 flex items-center justify-center min-w-[48px]"
+                    className="p-3 bg-white/5 hover:bg-white/10 border border-transparent rounded-xl text-text-secondary transition-all active:scale-95 flex items-center justify-center min-w-[48px]"
                     title={t('check_update')}
                 >
                     <Search size={22} className={`transition-all duration-500 ${checking ? "opacity-40 scale-90" : "opacity-100 scale-100"}`} />
