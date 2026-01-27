@@ -238,7 +238,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                                 <h5 className="font-bold text-lg text-text-primary">{t('library_scan_paths')}</h5>
                                                 <button
                                                     onClick={onStartScan}
-                                                    className="flex items-center gap-2 px-3 py-1.5 bg-accent-500/10 text-accent-400 hover:bg-accent-500/20 rounded-lg text-xs font-bold transition-all border border-transparent shadow-inner"
+                                                    className="flex items-center gap-2 px-3 py-1.5 bg-accent-500/10 text-accent-400 hover:bg-accent-500/20 rounded-lg text-xs font-bold transition-all"
                                                 >
                                                     <Icons.Scan size={14} /> {t('scan_library')}
                                                 </button>
@@ -261,7 +261,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                                         <Icons.FolderOpen size={16} />
                                                     </button>
                                                 </div>
-                                                <button type="submit" className="px-4 py-2 bg-accent-500 hover:bg-accent-600 text-black font-bold rounded-lg transition-all hover:scale-105 active:scale-95 flex items-center gap-2 shadow-lg shadow-accent-500/20 border border-transparent">
+                                                <button type="submit" className="px-4 py-2 bg-accent-500 hover:bg-accent-600 text-black font-bold rounded-lg transition-all hover:scale-105 active:scale-95 flex items-center gap-2 shadow-lg shadow-accent-500/20">
                                                     <Icons.Plus size={18} /> {t('add_path')}
                                                 </button>
                                             </form>
