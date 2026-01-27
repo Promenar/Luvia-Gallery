@@ -198,7 +198,7 @@ const SystemUpdater: React.FC = () => {
                                 className="flex-1 px-3 py-2 bg-black/20 border border-white/10 rounded-xl text-sm font-mono text-text-secondary outline-none focus:border-accent-500/50"
                             />
                             <button
-                                onClick={handleSaveConfig}
+                                onClick={() => handleSaveConfig()}
                                 disabled={saveStatus === 'saving'}
                                 className={`px-4 py-2 rounded-xl border flex items-center gap-2 transition-all active:scale-95 ${saveStatus === 'success' ? 'bg-green-500/20 border-green-500/30 text-green-400' : 'bg-white/5 border-white/10 text-text-secondary hover:bg-white/10'}`}
                             >
@@ -240,7 +240,7 @@ const SystemUpdater: React.FC = () => {
                     {updating ? t('updating') : t('update_restart')}
                 </button>
                 <button
-                    onClick={checkUpdate}
+                    onClick={() => checkUpdate()}
                     disabled={checking || updating}
                     className="p-3 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl text-text-secondary transition-all active:scale-95"
                     title={t('check_update')}
