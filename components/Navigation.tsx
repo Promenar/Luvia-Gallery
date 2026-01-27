@@ -55,7 +55,7 @@ export const Navigation: React.FC<NavigationProps> = React.memo(({
   const navItemClass = (active: boolean) => {
     const base = isDesktopSidebarOpen ? 'px-4' : 'justify-center px-0';
     if (active) {
-      return `${base} glass-1 border border-white/20 text-accent-500 shadow-glow bg-white/10 dark:bg-white/5 font-semibold`;
+      return `${base} glass-1 border border-white/5 text-accent-500 shadow-glow bg-white/10 dark:bg-white/5 font-semibold`;
     }
     return `${base} text-text-secondary hover:text-text-primary hover:bg-white/20 dark:hover:bg-white/10 hover:backdrop-blur-sm border border-transparent transition-all duration-300 transform hover:scale-105`;
   };
