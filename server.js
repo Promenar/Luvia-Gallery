@@ -2320,37 +2320,56 @@ app.get('/api/file/:id*', (req, res) => {
         const filePath = Buffer.from(fullId, 'base64').toString('utf8');
 
         if (!fs.existsSync(filePath)) {
-            console.error(`[API] File not found: ${filePath} (from ID: ${fullId})`);
+            console.error(`[API] File 404: ${filePath}`);
             return res.status(404).send('File not found');
         }
 
-        // [Security] User Access Check
         if (!req.user) {
-            console.warn(`[Security] Anonymous access blocked to: ${filePath}`);
+            console.warn(`[Security] 401: No user for media request to ${filePath}`);
             return res.status(401).send('Auth Required');
         }
+
         if (!checkFileAccess(req.user, filePath)) {
-            console.log(`[Security] Blocked access to file: ${filePath} for user ${req.user?.username}`);
+            console.warn(`[Security] 403: Access Denied for ${req.user.username} to ${filePath}`);
             return res.status(403).send('Access Denied');
         }
 
-        // Use Express native sendFile - it handles Range, Cache, ETag and MIME far better than manual streams
+        // Determine MIME Type manually to avoid 'no supported source' error in CEF
+        const ext = path.extname(filePath).toLowerCase();
+        const mimeMap = {
+            '.mp4': 'video/mp4',
+            '.webm': 'video/webm',
+            '.mov': 'video/quicktime',
+            '.m4v': 'video/x-m4v',
+            '.jpg': 'image/jpeg',
+            '.jpeg': 'image/jpeg',
+            '.png': 'image/png',
+            '.webp': 'image/webp',
+            '.gif': 'image/gif'
+        };
+        const contentType = mimeMap[ext] || 'application/octet-stream';
+
+        if (process.env.DEBUG === 'true') {
+            console.log(`[API] Serving ${filePath} as ${contentType}`);
+        }
+
         res.sendFile(filePath, {
             acceptRanges: true,
             cacheControl: true,
             maxAge: '5m',
             headers: {
+                'Content-Type': contentType,
                 'X-Content-Type-Options': 'nosniff'
             }
         }, (err) => {
             if (err && !res.headersSent) {
                 console.error('[API] SendFile error:', err);
-                res.status(500).send('Error serving file');
+                if (!res.headersSent) res.status(500).send('Error serving file');
             }
         });
     } catch (error) {
-        console.error('Error serving file:', error);
-        res.status(500).send('Error serving file');
+        console.error('[API] Error in /api/file:', error);
+        if (!res.headersSent) res.status(500).send('Error');
     }
 });
 
