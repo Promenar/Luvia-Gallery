@@ -68,7 +68,7 @@ export const UserModal: React.FC<UserModalProps> = ({
                     initial={{ scale: 0.95, y: 20 }}
                     animate={{ scale: 1, y: 0 }}
                     exit={{ scale: 0.95, y: 20 }}
-                    className="bg-surface-secondary backdrop-blur-3xl w-full max-w-md rounded-2xl shadow-2xl p-6 border border-white/[0.03]"
+                    className="bg-surface-secondary backdrop-blur-3xl w-full max-w-md rounded-2xl shadow-2xl p-6 border border-transparent"
                     onClick={e => e.stopPropagation()}
                 >
                     <h3 className="text-xl font-bold mb-4 flex items-center gap-2">
