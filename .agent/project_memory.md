@@ -7,7 +7,10 @@
 - **Modal Stability**: Hoist complex dialogs (e.g., `ConfirmDialogComponent`) to the top level of the screen component. This prevents recreation on every render, resolving UI flicker and animation glitches.
 - **Grid Layout**: Precision pixel-based calculations for standard 8px gaps.
     - **Standard sizes**: Media items ~110px, Folder items ~160px. Use `useWindowDimensions` for responsiveness.
-- **Elite UI & Interaction Standards** (Updated 2025-12-19):
+- **Elite UI & Interaction Standards** (Updated 2026-01-27):
+    - **Soft-Border Aesthetic (软化边框)**：废弃高对比度的 `border-white/10`，改用极细的 `border-white/5` 或透明边框。利用背景色差（如 `bg-black/20` 对比 `bg-white/5`）和内阴影（Inset Shadow）营造层次感，避免界面被“白线”切割。
+    - **下沉式输入设计 (Inset Input)**：输入框背景应使用比容器更深的色调（如 `bg-black/20`），配合微弱的外投影或内高光，营造视觉上的稳定感。
+    - **含义明确的反馈动画**：避免使用可能引起歧义的动画（如旋转放大镜图标）。对后台非阻塞任务，优先使用淡入淡出（Opacity）或呼吸感（Pulse）动画；仅对重建/重启等阻塞任务使用强制旋转。
     - **Haptic Lock**: High-frequency updates (e.g., download progress) MUST use a `useRef` based lock to filtering vibrations. Only crucial state changes trigger haptics.
     - **Portal First**: All global overlays (Toasts, Dialogs) MUST use `Portal` to bypass z-index stacking context completely.
     - **Theme Namespace**: The global theme hook is strictly renamed to `useAppTheme` to avoid conflict with `react-native-paper`'s `useTheme`.
@@ -15,6 +18,8 @@
     - **Anti-Jitter**: Dynamic text (percentages) in notifications must be wrapped in fixed-width containers to preserve layout stability.
     - **Permission Consistency**: In `server.js`, always check for both `user.isAdmin` (direct object property) and `user.role === 'admin'` (from JWT payload) to ensure consistent access control across all middleware and helpers (e.g., `checkFileAccess`).
     - **Scanner State Sync**: When starting background tasks (like `processScan`), the `status` flag must be updated * synchronously* before returning the HTTP response. This prevents race conditions where the frontend's first status poll hits an `idle` state before the async task has technically started.
+- **System Self-Healing Update System**: `runner.js` 具备环境自愈能力。在执行 Git 更新前，会自动执行 `git init`、`remote set-url` 及 `safe.directory` 补全。同时通过 `prepareSSHSync` 机制在 Linux 容器内动态挂载并修正宿主机 Windows 的 SSH 密钥权限。
+- **Admin Auth Decoupling (鉴权分离)**：系统级操作遵循“查询宽容、执行严谨”策略。`GET /update/status` 等只读接口开放免鉴权以实现 UI 端的无缝版本检测；而 `POST` 类涉及敏感配置或系统重启的操作必须严格校验 `Authorization: Bearer` 令牌。
 - **Config Caching**: `server.js` implements an in-memory TTL cache for `lumina-config.json` to minimize disk I/O. API endpoints and middleware should always use `getConfig()` helper.
 - **Frontend Debounce**: UI configuration inputs (Title, Subtitle) in `App.tsx` MUST use the debounced `persistData` call to prevent excessive server syncs during typing.
 - **Phoenix Protocol (Refactoring)**: For components with inexplicable freezes (like the original `SettingsScreen`), use a "burn and rebuild" approach. Create a V2 version from scratch, prioritize stability (no complex animations), and migrate features incrementally.
@@ -52,6 +57,7 @@
 - **Authenticated Media**: Direct `<img>` or `<Image>` tags will fail if `?token=<jwt>` is not appended to the URL query parameters.
 - **Animation Overload**: Avoid bouncy/spring animations for system-level dialogs; prefer subtle Fade+Scale for a premium, non-distracting feel.
 - **Native Bridge Deadlock (Haptics Trap)**: During massive UI recalculations (e.g., Theme switching via NativeWind 4 or complex Tab switching), AVOID synchronous Native-Bridge calls like `expo-haptics`. These calls can block the JS thread while the Native UI thread is also busy rendering, leading to an unrecoverable system freeze.
+- **Hard-Line Dividers (生硬分割线)**：严禁在深色模式下使用纯白色或高透明度边框（如 `border-white/10`）作为列表分割线。优先使用边距（Padding/Gap）或微弱的背景灰度差（如 `bg-white/3`）进行逻辑分区，以保持界面的沉浸感。
 
 - **Development Workflows**: 
     - **Performance**: Heavy UI components (VirtualGallery, ImageViewer) must be loaded using `React.lazy`.
