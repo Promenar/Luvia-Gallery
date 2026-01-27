@@ -32,8 +32,8 @@ export const AudioCard: React.FC<AudioCardProps> = React.memo(({ item, onClick, 
 
             {/* Play Button Overlay */}
             <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-200 bg-black/40 backdrop-blur-sm">
-                <div className="w-16 h-16 rounded-full bg-white/90 dark:bg-gray-800/90 flex items-center justify-center shadow-lg">
-                    <Icons.Play size={28} className="text-purple-600 dark:text-purple-400 ml-1" />
+                <div className="w-16 h-16 rounded-full bg-surface-secondary backdrop-blur-md flex items-center justify-center shadow-lg border border-white/5">
+                    <Icons.Play size={28} className="text-purple-600 dark:text-accent-500 ml-1" />
                 </div>
             </div>
 

@@ -68,7 +68,7 @@ export const UserModal: React.FC<UserModalProps> = ({
                     initial={{ scale: 0.95, y: 20 }}
                     animate={{ scale: 1, y: 0 }}
                     exit={{ scale: 0.95, y: 20 }}
-                    className="bg-white dark:bg-gray-800 w-full max-w-md rounded-2xl shadow-xl p-6"
+                    className="bg-surface-secondary backdrop-blur-3xl w-full max-w-md rounded-2xl shadow-2xl p-6 border border-white/5"
                     onClick={e => e.stopPropagation()}
                 >
                     <h3 className="text-xl font-bold mb-4 flex items-center gap-2">
@@ -88,7 +88,7 @@ export const UserModal: React.FC<UserModalProps> = ({
                                 <input
                                     type="text"
                                     required
-                                    className="w-full px-4 py-2 rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 outline-none focus:ring-2 focus:ring-primary-500"
+                                    className="w-full px-4 py-2 rounded-xl border border-white/10 bg-black/20 text-text-primary outline-none focus:border-accent-500/50 transition-all"
                                     value={form.username}
                                     onChange={e => setForm({ ...form, username: e.target.value })}
                                 />
@@ -100,7 +100,7 @@ export const UserModal: React.FC<UserModalProps> = ({
                                 <input
                                     type="password"
                                     required
-                                    className="w-full px-4 py-2 rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 outline-none focus:ring-2 focus:ring-primary-500"
+                                    className="w-full px-4 py-2 rounded-xl border border-white/10 bg-black/20 text-text-primary outline-none focus:border-accent-500/50 transition-all"
                                     value={form.password}
                                     onChange={e => setForm({ ...form, password: e.target.value })}
                                 />
@@ -133,7 +133,7 @@ export const UserModal: React.FC<UserModalProps> = ({
                                 </div>
                                 <p className="text-xs text-gray-500 mb-2">Separate multiple paths with new lines. Leave empty to deny all access.</p>
                                 <textarea
-                                    className="w-full px-4 py-2 rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 outline-none focus:ring-2 focus:ring-primary-500 min-h-[100px] text-sm font-mono"
+                                    className="w-full px-4 py-2 rounded-xl border border-white/10 bg-black/20 text-text-primary outline-none focus:border-accent-500/50 min-h-[100px] text-sm font-mono transition-all"
                                     placeholder="/data/media/user1&#10;/data/media/shared"
                                     value={form.allowedPaths}
                                     onChange={e => setForm({ ...form, allowedPaths: e.target.value })}
@@ -141,8 +141,8 @@ export const UserModal: React.FC<UserModalProps> = ({
                             </div>
                         )}
                         <div className="flex justify-end gap-3 pt-4">
-                            <button type="button" onClick={onClose} className="px-4 py-2 text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors">{t('cancel')}</button>
-                            <button type="submit" className="px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded-lg font-bold transition-colors">{t('save_changes') || t('save')}</button>
+                            <button type="button" onClick={onClose} className="px-4 py-2 text-text-tertiary hover:bg-white/5 rounded-lg transition-colors">{t('cancel')}</button>
+                            <button type="submit" className="px-6 py-2 bg-accent-500 hover:bg-accent-600 text-black font-bold rounded-lg transition-all hover:scale-105 active:scale-95 shadow-lg shadow-accent-500/10 border border-white/5">{t('save_changes') || t('save')}</button>
                         </div>
                     </form>
                 </motion.div>

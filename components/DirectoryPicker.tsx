@@ -91,7 +91,7 @@ export const DirectoryPicker: React.FC<DirectoryPickerProps> = ({
                         className="glass-3 w-full max-w-2xl rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[80vh] transform translate-z-0 border border-white/5"
                     >
                         {/* Header */}
-                        <div className="p-4 border-b border-gray-100 dark:border-gray-700 flex items-center gap-3 bg-gray-50/50 dark:bg-gray-900/50">
+                        <div className="p-4 border-b border-white/5 flex items-center gap-3 bg-black/20">
                             <div className="p-2 bg-primary-100 dark:bg-primary-900/30 rounded-full text-primary-600 dark:text-primary-400">
                                 <Icons.FolderOpen size={20} />
                             </div>
@@ -187,7 +187,7 @@ export const DirectoryPicker: React.FC<DirectoryPickerProps> = ({
                             </button>
                             <button
                                 onClick={() => { onSelect(currentPath); onClose(); }}
-                                className="px-6 py-2.5 bg-accent-600 hover:bg-accent-500 text-white rounded-xl text-sm font-bold shadow-glow transition-all active:scale-95 hover:-translate-y-0.5"
+                                className="px-6 py-2.5 bg-accent-500 hover:bg-accent-600 text-black rounded-xl text-sm font-bold shadow-lg shadow-accent-500/10 transition-all active:scale-95 hover:-translate-y-0.5 border border-white/5"
                             >
                                 {t('select_this_folder')}
                             </button>
