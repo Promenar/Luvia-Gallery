@@ -341,7 +341,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                         <h4 className="text-lg font-bold text-text-primary">{t('maintenance')}</h4>
                                     </div>
                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                        <div className="glass-1 p-6 rounded-2xl border border-white/5 shadow-2xl flex flex-col h-full glass-hover">
+                                        <div className="glass-1 p-6 rounded-2xl shadow-2xl flex flex-col h-full glass-hover">
                                             <h5 className="flex items-center gap-2 font-bold text-text-primary mb-4">
                                                 <Icons.Database size={18} className="text-blue-400" /> {t('cache_management')}
                                             </h5>
@@ -354,7 +354,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                             </div>
                                         </div>
 
-                                        <div className="glass-1 p-6 rounded-2xl border border-white/5 shadow-2xl flex flex-col h-full glass-hover">
+                                        <div className="glass-1 p-6 rounded-2xl shadow-2xl flex flex-col h-full glass-hover">
                                             <h5 className="flex items-center gap-2 font-bold text-text-primary mb-4">
                                                 <Icons.Zap size={18} className="text-yellow-400" /> {t('smart_repair')}
                                             </h5>
@@ -403,7 +403,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                             <div className="w-1.5 h-6 bg-orange-500 rounded-full shadow-[0_0_10px_var(--orange-500)]" />
                                             <h4 className="text-lg font-bold text-text-primary">{t('performance_settings')}</h4>
                                         </div>
-                                        <div className="glass-1 p-6 rounded-2xl border border-white/5 shadow-2xl">
+                                        <div className="glass-1 p-6 rounded-2xl shadow-2xl">
                                             <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                                                 <div className="flex-1">
                                                     <h5 className="font-bold text-text-primary mb-1">{t('thumbnail_threads')}</h5>
@@ -507,7 +507,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                             ].map((stat, i) => (
                                                 <div key={i} className="flex items-center justify-between p-3.5 card-stat-premium rounded-xl">
                                                     <div className="flex items-center gap-4">
-                                                        <div className={`p-2 rounded-lg ${stat.bg} ${stat.color} border border-white/5`}>
+                                                        <div className={`p-2 rounded-lg ${stat.bg} ${stat.color}`}>
                                                             <stat.icon size={20} />
                                                         </div>
                                                         <span className="text-sm font-bold text-text-secondary">{stat.label}</span>
@@ -546,12 +546,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                 {users.filter(u => currentUser?.isAdmin || u.username === currentUser?.username).map((u, idx, arr) => (
                                     <div key={u.username} className={`p-4 flex items-center justify-between ${idx !== arr.length - 1 ? 'border-b border-white/5' : ''} hover:bg-white/5 transition-colors`}>
                                         <div className="flex items-center gap-3">
-                                            <div className="w-10 h-10 rounded-full bg-accent-500/10 text-accent-400 flex items-center justify-center font-bold border border-white/5 shadow-glow overflow-hidden relative group/avatar">
+                                            <div className="w-10 h-10 rounded-full bg-accent-500/10 text-accent-400 flex items-center justify-center font-bold shadow-glow overflow-hidden relative group/avatar">
                                                 <span className="relative z-10">{u.username[0].toUpperCase()}</span>
                                                 <div className="absolute inset-0 bg-gradient-to-tr from-accent-500/20 to-transparent opacity-0 group-hover/avatar:opacity-100 transition-opacity" />
                                             </div>
                                             <div>
-                                                <div className="font-bold flex items-center gap-2 text-text-primary">{u.username} {u.username === currentUser?.username && <span className="text-[10px] bg-green-500/20 text-green-400 border border-green-500/20 px-1.5 py-0.5 rounded font-bold uppercase">You</span>}</div>
+                                                <div className="font-bold flex items-center gap-2 text-text-primary">{u.username} {u.username === currentUser?.username && <span className="text-[10px] bg-green-500/20 text-green-400 px-1.5 py-0.5 rounded font-bold uppercase">You</span>}</div>
                                                 <div className="text-xs text-text-secondary">{u.isAdmin ? 'Administrator' : 'User'}</div>
                                             </div>
                                         </div>
@@ -579,7 +579,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                     <div className="w-1.5 h-6 bg-accent-500 rounded-full shadow-[0_0_10px_var(--accent-500)]" />
                                     <h4 className="text-sm font-bold uppercase text-text-tertiary tracking-wider">{t('wallpaper_token')}</h4>
                                 </div>
-                                <div className="glass-1 p-6 rounded-2xl border border-white/5 shadow-2xl">
+                                <div className="glass-1 p-6 rounded-2xl shadow-2xl">
                                     <p className="text-xs text-text-secondary mb-4">
                                         {t('wallpaper_token_desc')}
                                     </p>
@@ -594,7 +594,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                         </button>
                                     ) : (
                                         <div className="space-y-4 animate-in fade-in slide-in-from-top-2 duration-500">
-                                            <div className="p-3 bg-black/40 rounded-xl border border-white/5 flex items-center justify-between gap-4 shadow-inner">
+                                            <div className="p-3 bg-black/40 rounded-xl flex items-center justify-between gap-4 shadow-inner">
                                                 <div className="flex-1 overflow-hidden">
                                                     <span className="text-[10px] text-text-tertiary font-bold uppercase block mb-1">{t('wallpaper_token')}</span>
                                                     <code className="text-xs text-text-primary font-mono truncate block opacity-90">
