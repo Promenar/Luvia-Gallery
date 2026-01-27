@@ -2323,55 +2323,20 @@ app.get('/api/file/:id', (req, res) => {
             return res.status(403).send('Access Denied');
         }
 
-        const stat = fs.statSync(filePath);
-        const fileSize = stat.size;
-        const range = req.headers.range;
-
-        // Determine MIME type based on file extension
-        const ext = path.extname(filePath).toLowerCase();
-        let contentType = 'application/octet-stream';
-        if (ext === '.mp4') {
-            contentType = 'video/mp4';
-        } else if (ext === '.webm') {
-            contentType = 'video/webm';
-        } else if (ext === '.mov') {
-            contentType = 'video/quicktime';
-        } else if (['.jpg', '.jpeg'].includes(ext)) {
-            contentType = 'image/jpeg';
-        } else if (ext === '.png') {
-            contentType = 'image/png';
-        } else if (ext === '.webp') {
-            contentType = 'image/webp';
-        } else if (ext === '.gif') {
-            contentType = 'image/gif';
-        }
-
-        // Handle range requests for video streaming
-        if (range) {
-            const parts = range.replace(/bytes=/, "").split("-");
-            const start = parseInt(parts[0], 10);
-            const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
-            const chunksize = (end - start) + 1;
-            const file = fs.createReadStream(filePath, { start, end });
-            const head = {
-                'Content-Range': `bytes ${start}-${end}/${fileSize}`,
-                'Accept-Ranges': 'bytes',
-                'Content-Length': chunksize,
-                'Content-Type': contentType,
-            };
-            res.writeHead(206, head);
-            file.pipe(res);
-        } else {
-            // Serve entire file
-            const head = {
-                'Content-Length': fileSize,
-                'Content-Type': contentType,
-                'Accept-Ranges': 'bytes',
-                'Cache-Control': 'public, max-age=300', // 5 minutes cache
-            };
-            res.writeHead(200, head);
-            fs.createReadStream(filePath).pipe(res);
-        }
+        // Use Express native sendFile - it handles Range, Cache, ETag and MIME far better than manual streams
+        res.sendFile(filePath, {
+            acceptRanges: true,
+            cacheControl: true,
+            maxAge: '5m',
+            headers: {
+                'X-Content-Type-Options': 'nosniff'
+            }
+        }, (err) => {
+            if (err && !res.headersSent) {
+                console.error('[API] SendFile error:', err);
+                res.status(500).send('Error serving file');
+            }
+        });
     } catch (error) {
         console.error('Error serving file:', error);
         res.status(500).send('Error serving file');

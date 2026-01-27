@@ -42,9 +42,12 @@ function getFullUrl(relativePath) {
 }
 
 function getMediaUrl(itemUrl) {
+    if (!itemUrl) return '';
     const baseUrl = getFullUrl(itemUrl);
-    const connector = baseUrl.includes('?') ? '&' : '?';
-    return `${baseUrl}${connector}token=${CONFIG.token}`;
+    // Avoid double tokens by cleaning up first
+    const cleanBase = baseUrl.split('?token=')[0].split('&token=')[0];
+    const connector = cleanBase.includes('?') ? '&' : '?';
+    return `${cleanBase}${connector}token=${encodeURIComponent(CONFIG.token)}`;
 }
 
 /**
@@ -239,12 +242,13 @@ function renderCurrent() {
     if (item.mediaType === 'video') {
         media = document.createElement('video');
         media.className = 'full-content';
-        media.src = getMediaUrl(item.url);
-        media.autoplay = true;
         media.muted = true;
+        media.autoplay = true;
+        media.src = getMediaUrl(item.url);
         media.loop = true;
         media.playsInline = true;
         media.setAttribute('preload', 'auto');
+        media.crossOrigin = "anonymous";
 
         media.oncanplaythrough = onMediaLoaded;
         media.onplay = onMediaLoaded;
