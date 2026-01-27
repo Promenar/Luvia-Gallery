@@ -120,8 +120,13 @@ window.wallpaperPropertyListener = {
     }
 };
 
+
+
 async function init() {
     console.log("[Luvia] Universal Renderer (Auto-Detect) Initialized");
+
+    // Check browser video capabilities
+    checkCapabilities();
 
     // Support URL Search Params (Hidamari) - but don't overwrite with empty
     const urlParams = new URLSearchParams(window.location.search);
@@ -252,33 +257,45 @@ function renderCurrent() {
     };
 
     if (item.mediaType === 'video') {
+        const videoUrl = getMediaUrl(item.url);
         media = document.createElement('video');
         media.className = 'full-content';
         media.muted = true;
         media.autoplay = true;
-        media.src = getMediaUrl(item.url);
         media.loop = true;
         media.playsInline = true;
         media.setAttribute('preload', 'auto');
         media.crossOrigin = "anonymous";
 
+        // Use source tag for better MIME/Codec hint to WE
+        const source = document.createElement('source');
+        source.src = videoUrl;
+
+        // Map common extensions to types
+        const ext = (item.url || '').split('.').pop().toLowerCase();
+        const typeMap = { 'mp4': 'video/mp4', 'webm': 'video/webm', 'mov': 'video/quicktime', 'm4v': 'video/x-m4v' };
+        source.type = typeMap[ext] || 'video/mp4';
+
+        media.appendChild(source);
+
         media.oncanplaythrough = onMediaLoaded;
         media.onplay = onMediaLoaded;
         media.onerror = (e) => {
             console.error("[Luvia] Video error:", item.url);
-            console.error("[Luvia] Full Request URL:", media.src);
-            console.error("[Luvia] Error details:", e);
+            console.error("[Luvia] Full Request URL:", videoUrl);
+            console.warn("[Luvia] Possible Cause: Unsecured HTTPS (Self-signed), Missing Codec (H.265 in WE), or Network Block.");
             onMediaLoaded();
         };
 
         // Explicitly trigger play with defensive 100ms delay (Rule 8.1 / GPU Crash Guard)
         setTimeout(() => {
             if (media && media.tagName === 'VIDEO') {
-                console.log("[Luvia] Defensive play trigger for:", media.src.split('/').pop());
                 media.play().catch(err => {
                     console.error("[Luvia] Video Playback Failed!");
                     console.error("[Luvia] DOMException:", err.name, "-", err.message);
-                    console.warn("[Luvia] Tips: Check if your server supports HTTPS or if the codec is supported by WE.");
+                    if (err.name === 'NotSupportedError') {
+                        console.error("[Luvia] CRITICAL: The browser claims it cannot play this video. This almost certainly means it's H.265/HEVC which Wallpaper Engine (CEF) doesn't support.");
+                    }
                 });
             }
         }, 100);
@@ -331,6 +348,21 @@ window.onerror = function (message, source, lineno, colno, error) {
     // location.reload();
     return false;
 };
+
+function checkCapabilities() {
+    const v = document.createElement('video');
+    const caps = {
+        'H.264 (mp4)': v.canPlayType('video/mp4; codecs="avc1.42E01E"'),
+        'H.265 (hevc)': v.canPlayType('video/mp4; codecs="hvc1"'),
+        'WebM (vp8)': v.canPlayType('video/webm; codecs="vp8, vorbis"'),
+        'WebM (vp9)': v.canPlayType('video/webm; codecs="vp9"')
+    };
+    console.log("[Luvia] Environment Capabilities:", caps);
+
+    if (caps['H.265 (hevc)'] === '') {
+        console.warn("[Luvia] ALERT: This environment DOES NOT support H.265 (HEVC). Videos in this format will fail.");
+    }
+}
 
 function pause() { CONFIG.isPaused = true; document.querySelectorAll('video').forEach(v => v.pause()); }
 function resume() {
