@@ -6,19 +6,65 @@
     "type": "web",
     "general": {
         "properties": {
-            "token": {
+            "l_server": {
                 "order": 1,
-                "text": "Wallpaper API Token",
+                "text": "Server_Address",
+                "type": "text",
+                "value": "http://127.0.0.1:3000"
+            },
+            "l_token": {
+                "order": 2,
+                "text": "API_Token",
+                "type": "text",
+                "value": "YOUR_TOKEN"
+            },
+            "l_path": {
+                "order": 3,
+                "text": "Specific_Folder",
                 "type": "text",
                 "value": ""
             },
-            "interval": {
-                "order": 2,
-                "text": "Switch Interval (seconds)",
+            "l_mode": {
+                "order": 4,
+                "text": "Display_Mode",
+                "type": "combo",
+                "options": [
+                    {
+                        "label": "Random",
+                        "value": "random"
+                    },
+                    {
+                        "label": "Favorites",
+                        "value": "favorites"
+                    },
+                    {
+                        "label": "Specific Folder",
+                        "value": "folder"
+                    }
+                ],
+                "value": "random"
+            },
+            "l_interval": {
+                "order": 5,
+                "text": "Interval_Seconds",
                 "type": "slider",
-                "min": 2,
-                "max": 60,
-                "value": 5
+                "min": 5,
+                "max": 300,
+                "value": 30
+            },
+            "l_show_info": {
+                "order": 6,
+                "text": "Show_Info",
+                "type": "bool",
+                "value": true
+            },
+            "l_opacity": {
+                "order": 7,
+                "text": "Background_Dim",
+                "type": "slider",
+                "min": 0,
+                "max": 100,
+                "value": 60
             }
         }
     }

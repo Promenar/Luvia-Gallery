@@ -969,19 +969,7 @@ app.post('/api/folder/rename', (req, res) => {
 });
 
 // --- Media Serving ---
-
-app.get('/api/file/:id', (req, res) => {
-    try {
-        const filePath = Buffer.from(req.params.id, 'base64').toString('utf8');
-        if (fs.existsSync(filePath)) {
-            res.sendFile(filePath);
-        } else {
-            res.status(404).send('File not found');
-        }
-    } catch (e) {
-        res.status(500).send('Error');
-    }
-});
+// (Moved to bottom with Range request support and Security checks)
 
 // Old thumb endpoint removed - handled below
 
