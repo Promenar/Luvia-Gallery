@@ -10,6 +10,7 @@ const CONFIG = {
     path: localStorage.getItem('l_path') || '',
     interval: parseInt(localStorage.getItem('l_interval')) || 30000,
     showInfo: localStorage.getItem('l_info') !== 'false',
+    showVideos: localStorage.getItem('l_videos') !== 'false',
     overlayOpacity: parseInt(localStorage.getItem('l_opacity')) || 60,
     apiEndpoint: '/api/scan/results',
     isPaused: false,
@@ -107,6 +108,12 @@ window.wallpaperPropertyListener = {
                 CONFIG.showInfo = val;
                 localStorage.setItem('l_info', val);
                 elements.infoOverlay.classList.toggle('hidden', !val);
+            } else if (lowKey.includes('videos')) {
+                if (CONFIG.showVideos !== val) {
+                    CONFIG.showVideos = val;
+                    localStorage.setItem('l_videos', val);
+                    needsRestart = true;
+                }
             } else if (lowKey.includes('opacity')) {
                 CONFIG.overlayOpacity = val;
                 localStorage.setItem('l_opacity', val);
@@ -189,8 +196,13 @@ async function init() {
         CONFIG.showInfo = pInfo !== 'false';
         elements.infoOverlay.classList.toggle('hidden', !CONFIG.showInfo);
     }
+    const pVideos = urlParams.get('videos');
+    if (pVideos) {
+        CONFIG.showVideos = pVideos !== 'false';
+        console.log("[Luvia] Config: Video visibility set from URL -", CONFIG.showVideos);
+    }
 
-    console.log("[Luvia] Final Init Config:", { server: CONFIG.serverUrl ? "SET" : "EMPTY", token: CONFIG.token ? "SET" : "EMPTY", mode: CONFIG.mode, interval: CONFIG.interval });
+    console.log("[Luvia] Final Init Config:", { server: CONFIG.serverUrl ? "SET" : "EMPTY", token: CONFIG.token ? "SET" : "EMPTY", mode: CONFIG.mode, interval: CONFIG.interval, videos: CONFIG.showVideos });
 
     if (CONFIG.token && CONFIG.token !== "" && CONFIG.token !== "YOUR_TOKEN" && CONFIG.serverUrl && CONFIG.serverUrl !== "") {
         start();
@@ -239,7 +251,12 @@ async function fetchItems() {
 
         const data = await response.json();
         if (data && data.files && data.files.length > 0) {
-            CONFIG.items = data.files.sort(() => Math.random() - 0.5);
+            let filtered = data.files;
+            if (CONFIG.showVideos === false) {
+                filtered = data.files.filter(f => f.mediaType !== 'video');
+                console.log("[Luvia] Video filtering ACTIVE, kept", filtered.length, "images");
+            }
+            CONFIG.items = filtered.sort(() => Math.random() - 0.5);
             CONFIG.currentIndex = 0;
             return true;
         }
