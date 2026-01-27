@@ -4,6 +4,7 @@ import { useLanguage } from '../contexts/LanguageContext';
 
 const SystemUpdater: React.FC = () => {
     const { t } = useLanguage();
+    const [authToken, setAuthToken] = useState<string>(localStorage.getItem('update_token') || '');
     const [updating, setUpdating] = useState(false);
     const [statusMsg, setStatusMsg] = useState('');
     const [errorMsg, setErrorMsg] = useState('');
@@ -16,11 +17,33 @@ const SystemUpdater: React.FC = () => {
         checkUpdate();
     }, []);
 
-    const checkUpdate = async () => {
+    const getHeaders = (token?: string) => {
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        const activeToken = token || authToken;
+        if (activeToken) {
+            headers['Authorization'] = `Bearer ${activeToken}`;
+        }
+        return headers;
+    };
+
+    const checkUpdate = async (token?: string) => {
         setChecking(true);
         setErrorMsg('');
         try {
-            const res = await fetch('/api/admin/system/update/status');
+            const res = await fetch('/api/admin/system/update/status', {
+                headers: getHeaders(token)
+            });
+
+            if (res.status === 401) {
+                const userInput = window.prompt("Security Check: Please enter the Update Token to check status.");
+                if (userInput) {
+                    setAuthToken(userInput);
+                    localStorage.setItem('update_token', userInput);
+                    return checkUpdate(userInput);
+                }
+                throw new Error("Unauthorized");
+            }
+
             if (res.ok) {
                 const data = await res.json();
                 setUpdateStatus(data);
@@ -38,20 +61,33 @@ const SystemUpdater: React.FC = () => {
         }
     };
 
-    const handleSaveConfig = async () => {
+    const handleSaveConfig = async (token?: string) => {
         setSaveStatus('saving');
+        setErrorMsg('');
         try {
             const res = await fetch('/api/admin/system/update/config', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: getHeaders(token),
                 body: JSON.stringify(config)
             });
+
+            if (res.status === 401) {
+                const userInput = window.prompt("Security Check: Please enter the Update Token to save config.");
+                if (userInput) {
+                    setAuthToken(userInput);
+                    localStorage.setItem('update_token', userInput);
+                    return handleSaveConfig(userInput);
+                }
+                throw new Error("Unauthorized");
+            }
+
             if (res.ok) {
                 setSaveStatus('success');
                 setTimeout(() => setSaveStatus(''), 2000);
-                checkUpdate(); // Refresh status with new config
+                checkUpdate(token || authToken);
             } else {
-                throw new Error('Failed to save');
+                const data = await res.json().catch(() => ({}));
+                throw new Error(data.error || 'Failed to save');
             }
         } catch (e: any) {
             setErrorMsg(e.message);
@@ -67,14 +103,9 @@ const SystemUpdater: React.FC = () => {
         setErrorMsg('');
 
         try {
-            const headers: Record<string, string> = {};
-            if (token) {
-                headers['Authorization'] = `Bearer ${token}`;
-            }
-
             const res = await fetch('/api/admin/system/update', {
                 method: 'POST',
-                headers: headers
+                headers: getHeaders(token)
             });
 
             if (!res.ok) {
@@ -82,12 +113,15 @@ const SystemUpdater: React.FC = () => {
                 if (res.status === 401) {
                     const userInput = window.prompt("Security Check: Please enter the Update Token to proceed.");
                     if (userInput) {
+                        setAuthToken(userInput);
+                        localStorage.setItem('update_token', userInput);
                         return handleUpdate(userInput);
                     } else {
                         throw new Error('Update cancelled (Token required).');
                     }
                 }
-                throw new Error('Update request failed');
+                const data = await res.json().catch(() => ({}));
+                throw new Error(data.error || 'Update request failed');
             }
 
             const data = await res.json();
