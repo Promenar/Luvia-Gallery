@@ -11,6 +11,7 @@ const CONFIG = {
     interval: parseInt(localStorage.getItem('l_interval')) || 30000,
     showInfo: localStorage.getItem('l_info') !== 'false',
     showVideos: localStorage.getItem('l_videos') !== 'false',
+    scalingMode: localStorage.getItem('l_scaling') || 'cover',
     overlayOpacity: parseInt(localStorage.getItem('l_opacity')) || 60,
     apiEndpoint: '/api/scan/results',
     isPaused: false,
@@ -118,6 +119,10 @@ window.wallpaperPropertyListener = {
                 CONFIG.overlayOpacity = val;
                 localStorage.setItem('l_opacity', val);
                 document.body.style.setProperty('--overlay-opacity', val / 100);
+            } else if (lowKey.includes('scaling')) {
+                CONFIG.scalingMode = val;
+                localStorage.setItem('l_scaling', val);
+                document.body.style.setProperty('--media-fit', val);
             }
         }
 
@@ -201,6 +206,15 @@ async function init() {
         CONFIG.showVideos = pVideos !== 'false';
         console.log("[Luvia] Config: Video visibility set from URL -", CONFIG.showVideos);
     }
+    const pScaling = urlParams.get('scaling');
+    if (pScaling) {
+        CONFIG.scalingMode = pScaling;
+        document.body.style.setProperty('--media-fit', pScaling);
+    }
+
+    // Apply styles
+    document.body.style.setProperty('--media-fit', CONFIG.scalingMode);
+    document.body.style.setProperty('--overlay-opacity', CONFIG.overlayOpacity / 100);
 
     console.log("[Luvia] Final Init Config:", { server: CONFIG.serverUrl ? "SET" : "EMPTY", token: CONFIG.token ? "SET" : "EMPTY", mode: CONFIG.mode, interval: CONFIG.interval, videos: CONFIG.showVideos });
 

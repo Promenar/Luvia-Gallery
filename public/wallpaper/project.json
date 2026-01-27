@@ -63,6 +63,25 @@
                 "min": 0,
                 "max": 100,
                 "value": 60
+            },
+            "scaling_mode": {
+                "text": "Scaling Mode",
+                "type": "combo",
+                "value": "cover",
+                "options": [
+                    {
+                        "label": "Cover (Fill & Crop)",
+                        "value": "cover"
+                    },
+                    {
+                        "label": "Contain (Fit & Black bars)",
+                        "value": "contain"
+                    },
+                    {
+                        "label": "Fill (Stretch)",
+                        "value": "fill"
+                    }
+                ]
             }
         }
     }

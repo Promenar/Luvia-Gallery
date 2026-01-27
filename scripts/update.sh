@@ -2,6 +2,13 @@
 
 echo "[Update] Starting update process..."
 
+# Get dynamic config from environment (injected by runner.js)
+REPO_URL=${REPO_URL:-"git@github.com:NarcisWL/Luvia-Gallery.git"}
+BRANCH=${BRANCH:-"main"}
+
+echo "[Update] Tracking Address: $REPO_URL"
+echo "[Update] Tracking Branch: $BRANCH"
+
 # --- 0. Setup SSH (Fix Permissions for Windows Mounts) ---
 echo "[Update] Setting up Secure SSH..."
 mkdir -p /root/.ssh
@@ -46,25 +53,27 @@ if [ ! -d ".git" ]; then
     git init
     # Configure git to trust the current directory
     git config --global --add safe.directory /app
-    # FIX: Use correct GitHub namespace (NarcisWL) based on SSH auth success
-    git remote add origin git@github.com:NarcisWL/Luvia-Gallery.git
-    # Fallback/Safety: Try HTTPS if SSH fails? No, we rely on SSH.
+    git remote add origin "$REPO_URL"
+else
+    # Ensure remote URL matches our current config
+    echo "[Update] Synchronizing remote URL..."
+    git remote set-url origin "$REPO_URL"
 fi
 
 echo "[Update] Configuring git safe directory..."
 git config --global --add safe.directory /app
 
 # 1. Pull latest code
-echo "[Update] Fetching from git..."
+echo "[Update] Fetching from origin/$BRANCH..."
 # Ensure we are on the right branch/remote
-git fetch origin main
+git fetch origin "$BRANCH"
 if [ $? -ne 0 ]; then
     echo "[Update] Git fetch failed! Check SSH keys."
     exit 1
 fi
 
-echo "[Update] Resetting to origin/main..."
-git reset --hard origin/main
+echo "[Update] Resetting to origin/$BRANCH..."
+git reset --hard "origin/$BRANCH"
 if [ $? -ne 0 ]; then
     echo "[Update] Git reset failed!"
     exit 1
