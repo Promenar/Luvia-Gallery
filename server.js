@@ -2359,7 +2359,9 @@ app.get('/api/file/:id*', (req, res) => {
             maxAge: '5m',
             headers: {
                 'Content-Type': contentType,
-                'X-Content-Type-Options': 'nosniff'
+                'X-Content-Type-Options': 'nosniff',
+                'Access-Control-Allow-Origin': '*',
+                'Accept-Ranges': 'bytes'
             }
         }, (err) => {
             if (err && !res.headersSent) {
