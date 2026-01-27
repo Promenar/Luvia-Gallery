@@ -98,8 +98,9 @@ log(`Supervisor initialized. Hash: ${initialHash}`);
 
 // Log Security Status
 const hasEnvToken = !!process.env.UPDATE_TOKEN;
-const hasFileToken = fs.existsSync(path.join('/app/data', 'update_secret.txt'));
-log(`Update Token Protection: ${hasEnvToken || hasFileToken ? 'ENABLED 🔒' : 'DISABLED ⚠️'}`);
+const hasLocalToken = fs.existsSync(path.join(__dirname, 'data', 'update_secret.txt'));
+const hasVolumeToken = fs.existsSync(path.join('/app/data', 'update_secret.txt'));
+log(`Update Token Protection: ${hasEnvToken || hasLocalToken || hasVolumeToken ? 'ENABLED 🔒' : 'DISABLED ⚠️'}`);
 
 // Function to handle updates (Git Pull + Rebuild)
 function performUpdate(res) {
@@ -243,53 +244,72 @@ function proxyRequest(req, res) {
     req.pipe(proxy, { end: true });
 }
 
+// Helper: Check for Admin Token
+function checkAuth(req, res) {
+    let requiredToken = process.env.UPDATE_TOKEN;
+    if (!requiredToken) {
+        try {
+            const tokenPath = path.join(__dirname, 'data', 'update_secret.txt');
+            if (fs.existsSync(tokenPath)) {
+                requiredToken = fs.readFileSync(tokenPath, 'utf8').trim();
+            } else {
+                // Also check /app/data for Docker volume compatibility
+                const altPath = path.join('/app/data', 'update_secret.txt');
+                if (fs.existsSync(altPath)) {
+                    requiredToken = fs.readFileSync(altPath, 'utf8').trim();
+                }
+            }
+        } catch (e) { }
+    }
+
+    if (!requiredToken) return true; // No token set = open access
+
+    const authHeader = req.headers['authorization'];
+    const providedToken = authHeader && authHeader.split(' ')[1];
+
+    if (providedToken !== requiredToken) {
+        log(`Blocked unauthorized access attempt to ${req.url} from ${req.socket.remoteAddress}`);
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: "Unauthorized: Invalid or missing Update Token." }));
+        return false;
+    }
+    return true;
+}
+
 // Main Supervisor Server
 const server = http.createServer((req, res) => {
     // 1. Handle Update Endpoint (Always available)
     if (req.url === '/api/admin/system/update' && req.method === 'POST') {
-        let requiredToken = process.env.UPDATE_TOKEN;
-
-        // Fallback: Check for file-based token in persistent data volume
-        if (!requiredToken) {
-            try {
-                const tokenPath = path.join('/app/data', 'update_secret.txt');
-                if (fs.existsSync(tokenPath)) {
-                    requiredToken = fs.readFileSync(tokenPath, 'utf8').trim();
-                }
-            } catch (e) { /* Ignore file errors */ }
-        }
-
-        if (requiredToken) {
-            const authHeader = req.headers['authorization'];
-            const providedToken = authHeader && authHeader.split(' ')[1]; // Bearer <token>
-
-            if (providedToken !== requiredToken) {
-                log(`Blocked unauthorized update attempt from ${req.socket.remoteAddress}`);
-                res.writeHead(401, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: "Unauthorized: Invalid or missing Update Token." }));
-                return;
-            }
-        }
+        if (!checkAuth(req, res)) return;
         return performUpdate(res);
     }
 
     // 1.1 Handle Update Status Check
     if (req.url === '/api/admin/system/update/status' && req.method === 'GET') {
+        if (!checkAuth(req, res)) return;
+
         const config = getUpdateConfig();
         const branch = config.branch || 'main';
 
         log(`Checking update status for ${branch}...`);
-        // We use exec here because git commands are short-lived and we need output
-        exec(`git fetch origin ${branch} && git rev-parse HEAD && git rev-parse origin/${branch}`, (error, stdout, stderr) => {
+        // We use git fetch -q to minimize stdout distraction
+        exec(`git fetch -q origin ${branch} && git rev-parse HEAD && git rev-parse origin/${branch}`, (error, stdout, stderr) => {
             if (error) {
                 log(`Status check failed: ${stderr || error.message}`);
                 res.writeHead(500, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ error: "Failed to check update status", details: stderr }));
                 return;
             }
-            const lines = stdout.trim().split('\n');
+
+            const lines = stdout.trim().split('\n').filter(l => l.length === 40); // Commit hashes are 40 chars
+            if (lines.length < 2) {
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: "Failed to parse commit hashes", output: stdout }));
+                return;
+            }
+
             const localHash = lines[0];
-            const remoteHash = lines[1];
+            const remoteHash = lines[lines.length - 1]; // Use last line as remote if there are extras
 
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({
@@ -304,6 +324,8 @@ const server = http.createServer((req, res) => {
 
     // 1.2 Handle Update Config Update
     if (req.url === '/api/admin/system/update/config' && req.method === 'POST') {
+        if (!checkAuth(req, res)) return;
+
         let body = '';
         req.on('data', chunk => body += chunk);
         req.on('end', () => {
@@ -317,8 +339,10 @@ const server = http.createServer((req, res) => {
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ message: "Configuration saved successfully" }));
             } catch (e) {
-                res.writeHead(400, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: e.message }));
+                if (!res.headersSent) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ error: e.message }));
+                }
             }
         });
         return;
