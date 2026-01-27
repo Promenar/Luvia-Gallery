@@ -127,7 +127,8 @@ async function init() {
     console.log("[Luvia] Current URL:", window.location.href);
 
     // --- NUCLEAR CACHE CLEANUP (Bypass SW Persistence) ---
-    if ('serviceWorker' in navigator && window.location.protocol !== 'file:') {
+    // NO PROTOCOL RESTRICTION: Even on file://, we must try to unregister leftover SWs from previous Luvia sessions
+    if ('serviceWorker' in navigator) {
         try {
             const registrations = await navigator.serviceWorker.getRegistrations();
             for (let registration of registrations) {
@@ -164,10 +165,15 @@ async function init() {
     if (pServer) {
         console.log("[Luvia] Config: Server found in URL");
         CONFIG.serverUrl = pServer;
-    } else if (window.location.protocol.startsWith('http')) {
-        // HIDAMARI AUTO-DETECT: If no server param, use current origin
-        console.log("[Luvia] Config: Path fallback to origin -", window.location.origin);
-        CONFIG.serverUrl = window.location.origin;
+    } else {
+        // HIDAMARI / WEB AUTO-DETECT: If no server param, use current origin or relative base
+        if (window.location.protocol.startsWith('http')) {
+            console.log("[Luvia] Config: Path fallback to origin -", window.location.origin);
+            CONFIG.serverUrl = window.location.origin;
+        } else {
+            // WE Fallback check: if already set by localStorage, don't clear it
+            console.log("[Luvia] Config: No server in URL, keeping current:", CONFIG.serverUrl || 'EMPTY');
+        }
     }
 
     // Optional params
