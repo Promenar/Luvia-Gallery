@@ -361,8 +361,8 @@ function renderCurrent() {
         media = document.createElement('img');
         media.className = 'full-content';
         media.src = getMediaUrl(item.url);
-        media.onload = triggerLoaded;
-        media.onerror = triggerLoaded;
+        media.onload = onMediaLoaded;
+        media.onerror = onMediaLoaded;
     }
 
     slide.appendChild(media);
