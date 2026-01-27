@@ -149,12 +149,12 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
                     initial={{ x: -100, opacity: 0 }}
                     animate={{ x: 0, opacity: 1 }}
                     exit={{ x: -100, opacity: 0 }}
-                    className="fixed bottom-4 left-4 w-80 max-w-[calc(100vw-2rem)] bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl shadow-2xl z-50 overflow-hidden"
+                    className="fixed bottom-4 left-4 w-80 max-w-[calc(100vw-2rem)] bg-surface-secondary backdrop-blur-3xl border border-white/5 rounded-2xl shadow-2xl z-50 overflow-hidden"
                 >
                     {/* Progress bar */}
-                    <div className="h-1 bg-gray-200 dark:bg-gray-700">
+                    <div className="h-1 bg-white/5">
                         <div
-                            className="h-full bg-purple-600 dark:bg-purple-500 transition-all duration-100"
+                            className="h-full bg-accent-500 transition-all duration-100 shadow-[0_0_8px_rgba(var(--accent-rgb),0.5)]"
                             style={{ width: `${progress}%` }}
                         />
                     </div>
@@ -166,10 +166,10 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
                                 <Icons.Music size={24} className="text-purple-600 dark:text-purple-400" />
                             </div>
                             <div className="flex-1 min-w-0">
-                                <p className="text-sm font-medium text-gray-900 dark:text-white truncate">
+                                <p className="text-sm font-medium text-text-primary truncate">
                                     {audio.name}
                                 </p>
-                                <p className="text-xs text-gray-500 dark:text-gray-400">
+                                <p className="text-xs text-text-tertiary">
                                     {formatTime(currentTime)} / {formatTime(duration)}
                                 </p>
                             </div>
@@ -178,7 +178,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
                                 className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors flex-shrink-0"
                                 title="Close"
                             >
-                                <Icons.X size={18} className="text-gray-500 dark:text-gray-400" />
+                                <Icons.X size={18} className="text-text-tertiary" />
                             </button>
                         </div>
 
@@ -189,7 +189,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
                                     className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
                                     title="Previous"
                                 >
-                                    <Icons.SkipBack size={18} className="text-gray-700 dark:text-gray-300" />
+                                    <Icons.SkipBack size={18} className="text-text-secondary" />
                                 </button>
                             )}
                             <button
@@ -209,7 +209,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
                                     className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
                                     title="Next"
                                 >
-                                    <Icons.SkipForward size={18} className="text-gray-700 dark:text-gray-300" />
+                                    <Icons.SkipForward size={18} className="text-text-secondary" />
                                 </button>
                             )}
                             <button
@@ -217,7 +217,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
                                 className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
                                 title="Expand"
                             >
-                                <Icons.ChevronUp size={18} className="text-gray-700 dark:text-gray-300" />
+                                <Icons.ChevronUp size={18} className="text-text-secondary" />
                             </button>
                         </div>
                     </div>
@@ -247,7 +247,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
                         initial={{ scale: 0.9, opacity: 0 }}
                         animate={{ scale: 1, opacity: 1 }}
                         exit={{ scale: 0.9, opacity: 0 }}
-                        className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl w-full max-w-md p-8 relative"
+                        className="bg-surface-secondary backdrop-blur-3xl border border-white/5 rounded-3xl shadow-2xl w-full max-w-md p-8 relative"
                         onClick={(e) => e.stopPropagation()}
                     >
                         {/* Header */}
@@ -259,14 +259,14 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
                                     className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
                                     title="Minimize"
                                 >
-                                    <Icons.ChevronDown size={20} className="text-gray-700 dark:text-gray-300" />
+                                    <Icons.ChevronDown size={20} className="text-text-secondary" />
                                 </button>
                                 <button
                                     onClick={onClose}
                                     className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
                                     title="Close"
                                 >
-                                    <Icons.X size={20} className="text-gray-700 dark:text-gray-300" />
+                                    <Icons.X size={20} className="text-text-secondary" />
                                 </button>
                             </div>
                         </div>
@@ -283,7 +283,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
                             <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-2">
                                 {audio.name}
                             </h2>
-                            <p className="text-sm text-gray-500 dark:text-gray-400">
+                            <p className="text-sm text-text-tertiary">
                                 {(audio.size / (1024 * 1024)).toFixed(1)} MB
                             </p>
                         </div>
@@ -298,7 +298,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
                                 onChange={handleSeek}
                                 onMouseDown={() => setIsSeeking(true)}
                                 onMouseUp={() => setIsSeeking(false)}
-                                className="w-full h-2 bg-gray-200 dark:bg-gray-700 rounded-lg appearance-none cursor-pointer accent-purple-600"
+                                className="w-full h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer accent-accent-500"
                             />
                         </div>
                         <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mb-8">
@@ -314,7 +314,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
                                     className="p-3 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-full transition-colors"
                                     title="Previous"
                                 >
-                                    <Icons.SkipBack size={24} className="text-gray-700 dark:text-gray-300" />
+                                    <Icons.SkipBack size={24} className="text-text-primary" />
                                 </button>
                             )}
                             <button
@@ -334,7 +334,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
                                     className="p-3 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-full transition-colors"
                                     title="Next"
                                 >
-                                    <Icons.SkipForward size={24} className="text-gray-700 dark:text-gray-300" />
+                                    <Icons.SkipForward size={24} className="text-text-primary" />
                                 </button>
                             )}
                         </div>
@@ -349,7 +349,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
                                 step="0.01"
                                 value={volume}
                                 onChange={handleVolumeChange}
-                                className="flex-1 h-2 bg-gray-200 dark:bg-gray-700 rounded-lg appearance-none cursor-pointer accent-purple-600"
+                                className="flex-1 h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer accent-accent-500"
                             />
                             <span className="text-sm text-gray-500 dark:text-gray-400 w-12 text-right">
                                 {Math.round(volume * 100)}%
