@@ -43,6 +43,10 @@ export default defineConfig(({ mode }) => {
               purpose: 'any maskable'
             }
           ]
+        },
+        workbox: {
+          // Prevent Service Worker from intercepting API calls and redirecting to index.html
+          navigateFallbackDenylist: [/^\/api/]
         }
       })
     ],
