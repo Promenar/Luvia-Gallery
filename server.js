@@ -2316,7 +2316,7 @@ app.get('/api/thumb/:id', async (req, res) => {
 // Serve Media Files (with wildcard support for potential slashes in base64 IDs)
 app.get('/api/file/:id*', (req, res) => {
     try {
-        const fullId = req.params.id + (req.params[0] || '');
+        const fullId = decodeURIComponent(req.params.id + (req.params[0] || ''));
         const filePath = Buffer.from(fullId, 'base64').toString('utf8');
 
         if (!fs.existsSync(filePath)) {
@@ -2667,11 +2667,7 @@ app.get('/api/file/:id/exif', async (req, res) => {
 // Favorites Logic (Legacy JSON) - REMOVED to use Database
 
 
-// Catch-all route to serve index.html for client-side routing
-app.get('*', (req, res) => {
-    res.sendFile(path.join(__dirname, 'dist', 'index.html'));
-});
-
+// (Moved catch-all route to bottom)
 // --- User Management Endpoints ---
 app.post('/api/users', adminOnly, (req, res) => {
     const { username, password, isAdmin, allowedPaths } = req.body;
@@ -2780,6 +2776,11 @@ app.delete('/api/users/:targetUser', adminOnly, (req, res) => {
         console.error("User deletion error", e);
         res.status(500).json({ error: 'Internal server error' });
     }
+});
+
+// Catch-all route to serve index.html for client-side routing (MUST be last)
+app.get('*', (req, res) => {
+    res.sendFile(path.join(__dirname, 'dist', 'index.html'));
 });
 
 app.listen(port, () => {
