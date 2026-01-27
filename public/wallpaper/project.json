@@ -6,65 +6,32 @@
     "type": "web",
     "general": {
         "properties": {
-            "l_server": {
-                "order": 1,
-                "text": "Server_Address",
+            "server": {
+                "text": "Server Address",
                 "type": "text",
-                "value": "http://127.0.0.1:3000"
+                "value": "http://your-server-ip:3000"
             },
-            "l_token": {
-                "order": 2,
-                "text": "API_Token",
+            "token": {
+                "text": "API Token",
                 "type": "text",
-                "value": "YOUR_TOKEN"
+                "value": "your_token_here"
             },
-            "l_path": {
-                "order": 3,
-                "text": "Specific_Folder",
+            "path": {
+                "text": "Folder Path",
                 "type": "text",
-                "value": ""
+                "value": "/"
             },
-            "l_mode": {
-                "order": 4,
-                "text": "Display_Mode",
-                "type": "combo",
-                "options": [
-                    {
-                        "label": "Random",
-                        "value": "random"
-                    },
-                    {
-                        "label": "Favorites",
-                        "value": "favorites"
-                    },
-                    {
-                        "label": "Specific Folder",
-                        "value": "folder"
-                    }
-                ],
-                "value": "random"
-            },
-            "l_interval": {
-                "order": 5,
-                "text": "Interval_Seconds",
+            "freq": {
+                "text": "Switch Frequency (seconds)",
                 "type": "slider",
-                "min": 5,
-                "max": 300,
-                "value": 30
+                "min": 10,
+                "max": 3600,
+                "value": 60
             },
-            "l_show_info": {
-                "order": 6,
-                "text": "Show_Info",
+            "show_info": {
+                "text": "Show Media Info",
                 "type": "bool",
                 "value": true
-            },
-            "l_opacity": {
-                "order": 7,
-                "text": "Background_Dim",
-                "type": "slider",
-                "min": 0,
-                "max": 100,
-                "value": 60
             }
         }
     }
