@@ -1624,31 +1624,23 @@ async function generateThumbnail(file, force = false) {
             seekTime = 0;
         }
 
-        // Build FFmpeg command with HW acceleration if available
-        let inputFlags = [];
-        // Default filter chain: scale -> smart thumbnail selection
-        // 'thumbnail=n=50': Pick representave frame from 50 frames (~2s)
-        let filterChain = 'scale=300:-1,thumbnail=n=50';
+        // Build FFmpeg command with HW acceleration if available (Videos only)
+        let inputFlags = ['-probesize', '10M', '-analyzeduration', '5M'];
+        let filterChain = 'scale=300:-1';
 
-        // Apply HW Acceleration Flags
-        if (hwAccel.type === 'cuda') {
-            inputFlags = [...hwAccel.flags];
-            // CUDA: decode(gpu). We need to download for 'thumbnail' filter (CPU) usually.
-            // Simplified: let ffmpeg handle transfer.
-            // If we keep it simple, software filtering after HW decode works fine.
-        } else if (hwAccel.type === 'vaapi') {
-            inputFlags = [...hwAccel.flags];
-            // VAAPI: explicit pipeline often needed.
-            // decode(gpu) -> scale_vaapi(gpu) -> hwdownload -> thumbnail(cpu)
-            filterChain = 'scale_vaapi=w=300:h=-2,hwdownload,format=nv12,thumbnail=n=50';
+        if (file.mediaType === 'video') {
+            filterChain += ',thumbnail=n=50';
+
+            // Apply HW Acceleration Flags
+            if (hwAccel.type === 'cuda') {
+                inputFlags = [...inputFlags, ...hwAccel.flags];
+            } else if (hwAccel.type === 'vaapi') {
+                inputFlags = [...inputFlags, ...hwAccel.flags];
+                filterChain = 'scale_vaapi=w=300:h=-2,hwdownload,format=nv12,thumbnail=n=50';
+            }
         }
 
-        // Construct command
-        // Note: For VAAPI, input flags must be BEFORE -i
-        // Add -ss (seek) to input flags to apply before -i
         const flagsStr = inputFlags.join(' ');
-
-        // Base command
         let seekPart = file.mediaType === 'video' ? `-ss ${seekTime}` : '';
         let cmd = `ffmpeg -y ${flagsStr} ${seekPart} -i "${file.path}" -vf "${filterChain}" -vcodec libwebp -q:v 50 -frames:v 1 "${thumbPath}"`;
 
@@ -1662,8 +1654,9 @@ async function generateThumbnail(file, force = false) {
                 // If HW accel failed, retry with software only
                 if (hwAccel.type !== 'none') {
                     console.warn(`[Thumb] Retrying with software fallback...`);
-                    // Fallback also uses smart selection
-                    const swCmd = `ffmpeg -y ${seekPart} -i "${file.path}" -vf "scale=300:-1,thumbnail=n=50" -vcodec libwebp -q:v 50 -frames:v 1 "${thumbPath}"`;
+                    // Fallback also uses smart selection only for videos
+                    const swFilterChain = file.mediaType === 'video' ? 'scale=300:-1,thumbnail=n=50' : 'scale=300:-1';
+                    const swCmd = `ffmpeg -y -probesize 10M -analyzeduration 5M ${seekPart} -i "${file.path}" -vf "${swFilterChain}" -vcodec libwebp -q:v 50 -frames:v 1 "${thumbPath}"`;
                     exec(swCmd, { timeout: 20000 }, (retryErr, swStdout, swStderr) => {
                         if (retryErr) {
                             console.error(`[Thumb] Software fallback failed for ${file.path}`);
