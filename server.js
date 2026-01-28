@@ -1642,7 +1642,9 @@ async function generateThumbnail(file, force = false) {
 
         const flagsStr = inputFlags.join(' ');
         let seekPart = file.mediaType === 'video' ? `-ss ${seekTime}` : '';
-        let cmd = `ffmpeg -y ${flagsStr} ${seekPart} -i "${file.path}" -vf "${filterChain}" -vcodec libwebp -q:v 50 -frames:v 1 "${thumbPath}"`;
+        // Robustness: For videos, use "Output Seeking" (place -ss after -i) to ensure bitstream headers
+        // are parsed correctly from the start. Fixes AV1 temporal unit errors in older FFmpeg.
+        let cmd = `ffmpeg -y ${flagsStr} -i "${file.path}" ${seekPart} -vf "${filterChain}" -vcodec libwebp -q:v 50 -frames:v 1 "${thumbPath}"`;
 
         exec(cmd, { timeout: 15000 }, (err, stdout, stderr) => {
             if (err) {
@@ -1656,7 +1658,7 @@ async function generateThumbnail(file, force = false) {
                     console.warn(`[Thumb] Retrying with software fallback...`);
                     // Fallback also uses smart selection only for videos
                     const swFilterChain = file.mediaType === 'video' ? 'scale=300:-1,thumbnail=n=50' : 'scale=300:-1';
-                    const swCmd = `ffmpeg -y -probesize 10M -analyzeduration 5M ${seekPart} -i "${file.path}" -vf "${swFilterChain}" -vcodec libwebp -q:v 50 -frames:v 1 "${thumbPath}"`;
+                    const swCmd = `ffmpeg -y -probesize 10M -analyzeduration 5M -i "${file.path}" ${seekPart} -vf "${swFilterChain}" -vcodec libwebp -q:v 50 -frames:v 1 "${thumbPath}"`;
                     exec(swCmd, { timeout: 20000 }, (retryErr, swStdout, swStderr) => {
                         if (retryErr) {
                             console.error(`[Thumb] Software fallback failed for ${file.path}`);
