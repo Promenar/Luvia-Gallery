@@ -9,6 +9,7 @@ interface ScanReportModalProps {
     smartResults: { missing: any[], error: any[] };
     onRepair: (selectedIds: string[]) => void;
     onDelete: (selectedIds: string[]) => Promise<void>;
+    onNavigate?: (item: any) => void;
 }
 
 export const ScanReportModal: React.FC<ScanReportModalProps> = ({
@@ -16,7 +17,8 @@ export const ScanReportModal: React.FC<ScanReportModalProps> = ({
     onClose,
     smartResults,
     onRepair,
-    onDelete
+    onDelete,
+    onNavigate
 }) => {
     const { t } = useLanguage();
     const [activeTab, setActiveTab] = useState<'error' | 'missing'>('error');
@@ -175,7 +177,18 @@ export const ScanReportModal: React.FC<ScanReportModalProps> = ({
                                             <div className="font-medium text-sm text-text-primary truncate max-w-[200px]" title={item.name}>{item.name}</div>
                                         </td>
                                         <td className="p-4 py-3">
-                                            <div className="text-xs font-mono text-text-secondary truncate max-w-[300px]" title={item.path}>{item.path}</div>
+                                            <div
+                                                className={`text-xs font-mono truncate max-w-[300px] ${onNavigate ? 'text-blue-400 hover:text-blue-300 hover:underline cursor-pointer' : 'text-text-secondary'}`}
+                                                title={item.path}
+                                                onClick={(e) => {
+                                                    if (onNavigate) {
+                                                        e.stopPropagation();
+                                                        onNavigate(item);
+                                                    }
+                                                }}
+                                            >
+                                                {item.path}
+                                            </div>
                                         </td>
                                         <td className="p-4 py-3">
                                             <span className="text-xs text-text-tertiary font-mono">{(item.size / 1024 / 1024).toFixed(2)} MB</span>

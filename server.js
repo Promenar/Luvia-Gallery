@@ -2105,6 +2105,10 @@ app.get('/api/thumb-gen/status', (req, res) => {
     });
 });
 
+// Initialize
+loadSmartResults();
+
+// Start Server
 app.post('/api/thumb-gen/start', (req, res) => {
     // Start System Scan
     processThumbnails(); // This now queues
