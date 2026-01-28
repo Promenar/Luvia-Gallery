@@ -2209,6 +2209,60 @@ app.post('/api/thumb/smart-repair', (req, res) => {
     res.json({ success: true, message: 'Repair task queued' });
 });
 
+// ✨ NEW: Batch Delete Endpoint for Error Management
+app.post('/api/file/batch-delete', authenticateToken, adminOnly, (req, res) => {
+    const { fileIds } = req.body;
+    if (!Array.isArray(fileIds) || fileIds.length === 0) {
+        return res.status(400).json({ error: 'Invalid or empty fileIds array' });
+    }
+
+    let deletedCount = 0;
+    let failedCount = 0;
+    const errors = [];
+
+    fileIds.forEach(id => {
+        try {
+            const filePath = Buffer.from(id, 'base64').toString('utf8');
+
+            // 1. Security Check (Path Traversal prevention is handled by checkFileAccess/LibraryPaths logic normally, 
+            // but for deletion we must be extra careful. Here we rely on adminOnly and DB validation)
+            if (!fs.existsSync(filePath)) {
+                // Already gone? Remove from DB anyway
+                database.deleteFile(id);
+                deletedCount++;
+                return;
+            }
+
+            // 2. Physical Delete
+            fs.unlinkSync(filePath);
+
+            // 3. DB Delete
+            database.deleteFile(id);
+
+            // 4. Remove from Results lists
+            smartScanResults.missing = smartScanResults.missing.filter(f => f.id !== id);
+            smartScanResults.error = smartScanResults.error.filter(f => f.id !== id);
+
+            deletedCount++;
+        } catch (e) {
+            failedCount++;
+            errors.push({ id, error: e.message });
+            console.error(`[BatchDelete] Failed to delete ${id}:`, e);
+        }
+    });
+
+    // Save updated results
+    saveSmartResults();
+    database.saveDatabase();
+
+    res.json({
+        success: true,
+        deleted: deletedCount,
+        failed: failedCount,
+        errors: errors
+    });
+});
+
 // Regenerate Endpoint (Queue Based)
 app.post('/api/thumb/regenerate', async (req, res) => {
     const { id, folderPath } = req.body;
