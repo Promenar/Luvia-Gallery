@@ -13,6 +13,7 @@ const CONFIG = {
     showVideos: localStorage.getItem('l_videos') !== 'false',
     scalingMode: localStorage.getItem('l_scaling') || 'cover',
     overlayOpacity: parseInt(localStorage.getItem('l_opacity')) || 60,
+    blurAmount: parseInt(localStorage.getItem('l_blur')) || 0,
     apiEndpoint: '/api/scan/results',
     isPaused: false,
     items: [],
@@ -69,10 +70,10 @@ window.wallpaperPropertyListener = {
         console.log("[Luvia] Properties Received:", Object.keys(properties));
         let needsRestart = false;
 
-        // Generic Key-Value Matching (Doesn't care about ID names)
         for (const key in properties) {
             const val = properties[key].value;
             const lowKey = key.toLowerCase();
+            console.log(`[Luvia] Property: ${key} = ${val}`);
 
             if (lowKey.includes('server')) {
                 if (CONFIG.serverUrl !== val) {
@@ -98,7 +99,7 @@ window.wallpaperPropertyListener = {
                     localStorage.setItem('l_mode', val);
                     needsRestart = true;
                 }
-            } else if (lowKey.includes('interval')) {
+            } else if (lowKey.includes('freq')) {
                 const ms = val * 1000;
                 if (CONFIG.interval !== ms) {
                     CONFIG.interval = ms;
@@ -116,6 +117,7 @@ window.wallpaperPropertyListener = {
                     needsRestart = true;
                 }
             } else if (lowKey.includes('opacity')) {
+                console.log("[Luvia] Opacity update detected:", val);
                 CONFIG.overlayOpacity = val;
                 localStorage.setItem('l_opacity', val);
                 document.body.style.setProperty('--overlay-opacity', val / 100);
@@ -123,6 +125,13 @@ window.wallpaperPropertyListener = {
                 CONFIG.scalingMode = val;
                 localStorage.setItem('l_scaling', val);
                 document.body.style.setProperty('--media-fit', val);
+            } else if (lowKey.includes('blur')) {
+                console.log("[Luvia] Blur update detected:", val);
+                CONFIG.blurAmount = val;
+                localStorage.setItem('l_blur', val);
+                const thumbBlurVal = val > 0 ? val : 40;
+                document.body.style.setProperty('--blur-amount', `${val}px`);
+                document.body.style.setProperty('--thumb-blur', `${thumbBlurVal}px`);
             }
         }
 
@@ -215,6 +224,9 @@ async function init() {
     // Apply styles
     document.body.style.setProperty('--media-fit', CONFIG.scalingMode);
     document.body.style.setProperty('--overlay-opacity', CONFIG.overlayOpacity / 100);
+    const thumbBlurVal = CONFIG.blurAmount > 0 ? CONFIG.blurAmount : 40;
+    document.body.style.setProperty('--blur-amount', `${CONFIG.blurAmount}px`);
+    document.body.style.setProperty('--thumb-blur', `${thumbBlurVal}px`);
 
     console.log("[Luvia] Final Init Config:", { server: CONFIG.serverUrl ? "SET" : "EMPTY", token: CONFIG.token ? "SET" : "EMPTY", mode: CONFIG.mode, interval: CONFIG.interval, videos: CONFIG.showVideos });
 
@@ -224,6 +236,15 @@ async function init() {
         showOverlay("Welcome to Luvia. Please set Server Address & Token in Wallpaper Engine.", true);
         console.warn("[Luvia] Config incomplete. Waiting for Properties...");
     }
+
+    // --- NETWORK RECOVERY HANDLING ---
+    window.addEventListener('online', () => {
+        console.log("[Luvia] Network restored. Checking if reload is needed...");
+        if (CONFIG.items.length === 0 && CONFIG.token && CONFIG.serverUrl) {
+            console.log("[Luvia] No items loaded, triggering auto-reload...");
+            start();
+        }
+    });
 
     document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'visible') resume();
@@ -245,11 +266,19 @@ async function start() {
             hideOverlay();
             startCarousel();
         } else {
-            showOverlay("Fetch failed. Token/Server check?", true);
+            showOverlay("Fetch failed. No items found or invalid response.", true);
         }
     } catch (e) {
         console.error("[Luvia] Connection Error:", e);
-        showOverlay("Connection Error. Check Server Address.", true);
+        showOverlay("Connection Error. Checking network...", true);
+
+        // Optional: Simple retry after 5s if still offline or connection failed
+        setTimeout(() => {
+            if (CONFIG.items.length === 0) {
+                console.log("[Luvia] Retrying initial load...");
+                start();
+            }
+        }, 10000);
     }
 }
 
@@ -260,8 +289,13 @@ async function fetchItems() {
         else if (CONFIG.mode === 'folder' && CONFIG.path) apiUrl += `&folder=${encodeURIComponent(CONFIG.path)}&recursive=true`;
 
         const fullApiUrl = getFullUrl(apiUrl);
+        if (!fullApiUrl) return false;
+
         const response = await fetch(fullApiUrl);
-        if (!response.ok) return false;
+        if (!response.ok) {
+            console.error("[Luvia] API Response Error:", response.status);
+            return false;
+        }
 
         const data = await response.json();
         if (data && data.files && data.files.length > 0) {
@@ -275,7 +309,10 @@ async function fetchItems() {
             return true;
         }
         return false;
-    } catch (e) { throw e; }
+    } catch (e) {
+        console.error("[Luvia] Fetch Exception:", e.message);
+        throw e;
+    }
 }
 
 let carouselTimer = null;
@@ -288,7 +325,17 @@ function startCarousel() {
 function next() {
     CONFIG.currentIndex++;
     if (CONFIG.currentIndex >= CONFIG.items.length) {
-        fetchItems().then(success => { if (success) renderCurrent(); });
+        fetchItems().then(success => {
+            if (success) renderCurrent();
+            else {
+                console.warn("[Luvia] Failed to refresh item list, will retry on next interval.");
+                // Keep currentIndex at the end so it tries again next time
+                CONFIG.currentIndex = CONFIG.items.length;
+            }
+        }).catch(err => {
+            console.error("[Luvia] Error refreshing items in next():", err.message);
+            CONFIG.currentIndex = CONFIG.items.length;
+        });
     } else {
         renderCurrent();
     }
