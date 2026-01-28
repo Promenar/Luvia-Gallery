@@ -64,6 +64,42 @@ const ErrorManager = (() => {
         .em-btn.primary { background: #246; }
         .em-btn.primary:hover { background: #358; }
         .em-stats { margin-right: auto; color: #888; }
+        
+        /* Floating Launcher */
+        #em-launcher {
+            position: fixed;
+            bottom: 2rem;
+            right: 2rem;
+            width: 50px;
+            height: 50px;
+            background: #822;
+            color: white;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+            z-index: 9999;
+            font-size: 24px;
+            transition: transform 0.2s;
+        }
+        #em-launcher:hover { transform: scale(1.1); }
+        #em-launcher.hidden { display: none; }
+        #em-launcher .badge {
+            position: absolute;
+            top: -5px;
+            right: -5px;
+            background: red;
+            font-size: 12px;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border: 2px solid #111;
+        }
     `;
 
     function injectStyles() {
@@ -77,13 +113,37 @@ const ErrorManager = (() => {
 
     async function fetchData() {
         try {
+            console.log("[EM] Fetching smart-results...");
             const res = await fetch(`${CONFIG.serverUrl}/api/thumb/smart-results?token=${CONFIG.token}`);
             if (res.ok) {
                 _data = await res.json();
+                console.log(`[EM] Data received: Missing=${_data.missing.length}, Error=${_data.error.length}`);
+                updateLauncher();
                 return (_data.missing.length > 0 || _data.error.length > 0);
+            } else {
+                console.error("[EM] API Error:", res.status);
             }
         } catch (e) { console.error("EM Fetch Error:", e); }
         return false;
+    }
+
+    function updateLauncher() {
+        let btn = document.getElementById('em-launcher');
+        if (!btn) {
+            btn = document.createElement('div');
+            btn.id = 'em-launcher';
+            btn.innerHTML = '<span>⚠️</span><div class="badge">!</div>';
+            btn.onclick = () => ErrorManager.checkAndOpen(true);
+            document.body.appendChild(btn);
+        }
+
+        const count = _data.missing.length + _data.error.length;
+        if (count > 0) {
+            btn.classList.remove('hidden');
+            btn.querySelector('.badge').textContent = count > 99 ? '99+' : count;
+        } else {
+            btn.classList.add('hidden');
+        }
     }
 
     function renderRow(file, type) {
