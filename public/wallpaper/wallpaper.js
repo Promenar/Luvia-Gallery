@@ -153,7 +153,7 @@ window.wallpaperPropertyListener = {
                 const thumbBlurVal = val > 0 ? val : 40;
                 document.body.style.setProperty('--blur-amount', `${val}px`);
                 document.body.style.setProperty('--thumb-blur', `${thumbBlurVal}px`);
-            } else if (lowKey.includes('local_folder')) {
+            } else if (lowKey.includes('album_directory')) {
                 if (val && Array.isArray(val)) {
                     console.log("[Luvia] Local folder files received:", val.length);
                     // Convert WE file list to Luvia item format
