@@ -15,6 +15,7 @@ import { useLanguage } from './contexts/LanguageContext';
 import { AudioPlayer } from './components/AudioPlayer';
 import { UserModal } from './components/UserModal';
 import { SettingsModal } from './components/SettingsModal';
+import { ScanReportModal } from './components/ScanReportModal';
 
 const STORAGE_KEYS = {
     configFile: 'lumina-config.json', // keep filename stable for server compatibility
@@ -1158,6 +1159,47 @@ export default function App() {
             stopPolling();
         };
     }, [isServerMode, currentUser]);
+
+    const [isScanReportOpen, setIsScanReportOpen] = useState(false);
+
+    const handleBatchDelete = async (ids: string[]) => {
+        try {
+            const res = await apiFetch('/api/file/batch-delete', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ fileIds: ids })
+            });
+            if (res.ok) {
+                const data = await res.json();
+                // Refresh scan results
+                handleFetchSmartResults();
+                // Optionally refresh file list if we want to be perfect, 
+                // but smart scan result update is most important for the modal.
+                // And refreshing file list might be heavy.
+                // But deleted files should disappear.
+                // Let's filter them out locally for immediate feedback if possible, 
+                // but a re-fetch is safer.
+                if (isServerMode && currentUser) {
+                    // trigger background refresh
+                    loadMoreServerFiles();
+                }
+            }
+        } catch (e) {
+            console.error(e);
+            throw e;
+        }
+    };
+
+    // --- Effects for Auto-Open Report ---
+    // Monitor scan status to auto-open report if errors found
+    useEffect(() => {
+        if (scanStatus === 'idle' && isServerMode) {
+            // If we just finished a scan and have errors, maybe prompt? 
+            // But valid "smartResults" might be old. 
+            // Ideally we check if timestamp is very recent. 
+            // For now, let's just rely on manual button or user intent.
+        }
+    }, [scanStatus, isServerMode]);
 
     const handleUnifiedClose = () => {
         // If both idle, we can close
@@ -2331,6 +2373,7 @@ export default function App() {
                 onPruneCache={pruneCache}
                 onClearCache={clearCache}
                 smartScanResults={smartScanResults}
+                onOpenScanReport={() => setIsScanReportOpen(true)}
                 thumbStatus={thumbStatus}
                 theme={theme}
                 onToggleTheme={toggleTheme}
@@ -2472,6 +2515,18 @@ export default function App() {
                     initialPath={(dirPickerContext === 'library' || dirPickerContext === 'wallpaper') ? newPathInput : ''}
                 />
             )}
+
+            <ScanReportModal
+                isOpen={isScanReportOpen}
+                onClose={() => setIsScanReportOpen(false)}
+                smartResults={smartScanResults}
+                onRepair={(ids) => {
+                    // Trigger generic repair for now
+                    handleSmartRepair();
+                    // In future, pass ids to backend if supported
+                }}
+                onDelete={handleBatchDelete}
+            />
         </div >
     );
 }
