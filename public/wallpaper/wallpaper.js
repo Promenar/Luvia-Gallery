@@ -17,13 +17,21 @@ const CONFIG = {
     apiEndpoint: '/api/scan/results',
     isPaused: false,
     items: [],
-    currentIndex: 0
+    currentIndex: 0,
+    isDemo: false
 };
+
+const DEMO_ITEMS = [
+    { name: 'Bioluminescent Forest', folderPath: 'Luvia Demo', url: 'assets/demo/forest.png', thumbnailUrl: 'assets/demo/forest.png', mediaType: 'image' },
+    { name: 'Zen Garden', folderPath: 'Luvia Demo', url: 'assets/demo/garden.png', thumbnailUrl: 'assets/demo/garden.png', mediaType: 'image' },
+    { name: 'Cosmic Nebula', folderPath: 'Luvia Demo', url: 'assets/demo/nebula.png', thumbnailUrl: 'assets/demo/nebula.png', mediaType: 'image' }
+];
 
 const elements = {
     container: document.getElementById('wallpaper-container'),
     overlay: document.getElementById('overlay'),
     infoOverlay: document.getElementById('info-overlay'),
+    demoTag: document.getElementById('demo-tag'),
     itemName: document.getElementById('item-name'),
     itemFolder: document.getElementById('item-folder'),
     status: document.getElementById('status-msg'),
@@ -54,6 +62,12 @@ function getFullUrl(relativePath) {
 
 function getMediaUrl(itemUrl) {
     if (!itemUrl) return '';
+
+    // If it's a local asset, don't prepend server URL or token
+    if (itemUrl.startsWith('assets/')) {
+        return itemUrl;
+    }
+
     const baseUrl = getFullUrl(itemUrl);
     if (!baseUrl || baseUrl === '') return ''; // BLOCK Relative fallback
     // Avoid double tokens by cleaning up first
@@ -231,12 +245,8 @@ async function init() {
 
     console.log("[Luvia] Final Init Config:", { server: CONFIG.serverUrl ? "SET" : "EMPTY", token: CONFIG.token ? "SET" : "EMPTY", mode: CONFIG.mode, interval: CONFIG.interval, videos: CONFIG.showVideos });
 
-    if (CONFIG.token && CONFIG.token !== "" && CONFIG.token !== "YOUR_TOKEN" && CONFIG.serverUrl && CONFIG.serverUrl !== "") {
-        start();
-    } else {
-        showOverlay("Welcome to Luvia. Please set Server Address & Token in Wallpaper Engine.", true);
-        console.warn("[Luvia] Config incomplete. Waiting for Properties...");
-    }
+    // Always start. If config is missing, start() handles falling back to DEMO items.
+    start();
 
     // --- NETWORK RECOVERY HANDLING ---
     window.addEventListener('online', () => {
@@ -254,12 +264,7 @@ async function init() {
 }
 
 async function start() {
-    if (!CONFIG.token || CONFIG.token === "" || CONFIG.token === "YOUR_TOKEN") {
-        showOverlay("Waiting for API Token...", true);
-        return;
-    }
-
-    showOverlay(`Loading from: ${CONFIG.serverUrl || 'Default'}`);
+    showOverlay(`Loading...`);
 
     try {
         const success = await fetchItems();
@@ -285,17 +290,21 @@ async function start() {
 
 async function fetchItems() {
     try {
+        if (!CONFIG.token || !CONFIG.serverUrl) {
+            throw new Error("Missing configuration for remote fetch.");
+        }
+
         let apiUrl = `${CONFIG.apiEndpoint}?random=true&limit=100&token=${CONFIG.token}`;
         if (CONFIG.mode === 'favorites') apiUrl += '&favorites=true&recursive=true';
         else if (CONFIG.mode === 'folder' && CONFIG.path) apiUrl += `&folder=${encodeURIComponent(CONFIG.path)}&recursive=true`;
 
         const fullApiUrl = getFullUrl(apiUrl);
-        if (!fullApiUrl) return false;
+        if (!fullApiUrl) throw new Error("Could not resolve API URL.");
 
         const response = await fetch(fullApiUrl);
         if (!response.ok) {
             console.error("[Luvia] API Response Error:", response.status);
-            return false;
+            throw new Error(`API error ${response.status}`);
         }
 
         const data = await response.json();
@@ -307,12 +316,18 @@ async function fetchItems() {
             }
             CONFIG.items = filtered.sort(() => Math.random() - 0.5);
             CONFIG.currentIndex = 0;
+            CONFIG.isDemo = false;
+            elements.demoTag.classList.add('hidden');
             return true;
         }
-        return false;
+        throw new Error("No files returned from API.");
     } catch (e) {
-        console.error("[Luvia] Fetch Exception:", e.message);
-        throw e;
+        console.warn("[Luvia] Remote fetch failed, falling back to LOCAL DEMO:", e.message);
+        CONFIG.items = [...DEMO_ITEMS].sort(() => Math.random() - 0.5);
+        CONFIG.currentIndex = 0;
+        CONFIG.isDemo = true;
+        elements.demoTag.classList.remove('hidden');
+        return true; // We return "success" because we successfully fell back to demo
     }
 }
 
