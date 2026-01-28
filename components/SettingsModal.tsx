@@ -55,6 +55,7 @@ interface SettingsModalProps {
     onGenerateWallpaperToken?: (config?: any) => Promise<string>;
     onFetchWallpaperToken?: () => Promise<{ token: string, config: any }>;
     baseUrl?: string;
+    onOpenScanReport?: () => void;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
@@ -71,7 +72,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
         onRenameUser, onResetPassword, onDeleteUser, onSetDirPickerContext,
         onShowDirPicker, onUpdateThreadCount, onPruneCache, onClearCache, onFetchSmartResults, smartScanResults, thumbStatus,
         activeTab: externalTab, onTabChange, theme, onToggleTheme,
-        onGenerateWallpaperToken, onFetchWallpaperToken, baseUrl
+        onGenerateWallpaperToken, onFetchWallpaperToken, baseUrl, onOpenScanReport
     } = props;
 
     // Sync with external tab state
@@ -373,7 +374,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                                         </div>
                                                         <div className="flex gap-2">
                                                             <button onClick={onSmartRepair} className="flex-1 py-2 bg-yellow-500 hover:bg-yellow-400 text-black rounded-lg text-xs font-bold transition-colors shadow-glow">{t('repair_now')}</button>
-                                                            <button onClick={onSmartScan} className="px-4 py-2 bg-white/5 hover:bg-white/10 rounded-lg text-xs font-medium transition-colors text-text-primary border border-white/5">{t('rescan')}</button>
+                                                            <button onClick={onSmartScan} className="px-3 py-2 bg-white/5 hover:bg-white/10 rounded-lg text-xs font-medium transition-colors text-text-primary border border-white/5">{t('rescan')}</button>
+                                                            {onOpenScanReport && (
+                                                                <button onClick={onOpenScanReport} className="px-3 py-2 bg-white/5 hover:bg-white/10 rounded-lg text-xs font-medium transition-colors text-text-primary border border-white/5">
+                                                                    <Icons.List size={14} />
+                                                                </button>
+                                                            )}
                                                         </div>
                                                     </div>
                                                 ) : (

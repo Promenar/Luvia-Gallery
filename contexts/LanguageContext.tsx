@@ -241,6 +241,8 @@ const translations = {
     token_generated: 'Token Generated',
     show_media_info: 'Show Media Info',
     show_videos_wallpaper: 'Show Video Files',
+    copied_to_clipboard: 'Copied to clipboard',
+    batch_delete_confirm: 'Permanently delete {count} files?',
 
     // Auth
     welcome: 'Welcome',
@@ -508,6 +510,8 @@ const translations = {
     token_generated: '令牌已生成',
     show_media_info: '显示媒体信息',
     show_videos_wallpaper: '显示视频文件',
+    copied_to_clipboard: '已复制到剪贴板',
+    batch_delete_confirm: '确定永久删除 {count} 个文件吗？',
 
     // Auth
     welcome: '欢迎',
