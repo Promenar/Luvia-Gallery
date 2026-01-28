@@ -58,8 +58,8 @@
                         "value": "folder"
                     },
                     {
-                        "label": "Local Album (No Server)",
-                        "value": "local"
+                        "label": "Demo Mode",
+                        "value": "demo"
                     }
                 ],
                 "order": 104,
@@ -97,14 +97,9 @@
             },
             "show_videos": {
                 "order": 109,
-                "text": "Show Videos (Experimental / CEF Limited)",
+                "text": "Show Videos",
                 "type": "bool",
                 "value": false
-            },
-            "album_directory": {
-                "order": 110,
-                "text": "Local Folder (For Local mode)",
-                "type": "directory"
             },
             "schemecolor": {
                 "order": 0,
