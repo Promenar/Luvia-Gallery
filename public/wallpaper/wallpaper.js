@@ -145,29 +145,6 @@ window.wallpaperPropertyListener = {
 
 
 async function init() {
-    // ✨ Load Error Manager Module
-    const script = document.createElement('script');
-    script.src = 'error-manager.js';
-    script.onload = () => {
-        console.log("[Luvia] Error Manager Loaded");
-        window.ErrorManager.init();
-
-        // Auto-check on load (Show report if errors exist from previous scan)
-        window.ErrorManager.checkAndOpen();
-
-        // Manual Trigger: Shift + E
-        document.addEventListener('keydown', (e) => {
-            if (e.shiftKey && (e.key === 'E' || e.key === 'e')) {
-                console.log("[Luvia] Manual trigger: Error Manager");
-                window.ErrorManager.checkAndOpen().then(shown => {
-                    if (!shown) showOverlay("No errors found in last scan.", true);
-                    else hideOverlay();
-                });
-            }
-        });
-    };
-    document.head.appendChild(script);
-
     console.log("[Luvia] Universal Renderer Initializing...");
     console.log("[Luvia] Current URL:", window.location.href);
 
@@ -274,34 +251,6 @@ async function init() {
         if (document.visibilityState === 'visible') resume();
         else pause();
     }); // End event listener
-
-    // ✨ Scan Status Monitoring (Auto-Show Reports)
-    monitorScanStatus();
-}
-
-let _isScanning = false;
-async function monitorScanStatus() {
-    setInterval(async () => {
-        if (!CONFIG.serverUrl || !CONFIG.token) return;
-        try {
-            const res = await fetch(`${CONFIG.serverUrl}/api/scan/status?token=${CONFIG.token}`);
-            if (res.ok) {
-                const data = await res.json();
-                const status = data.status || 'idle';
-
-                if (status === 'scanning' || status === 'processing') {
-                    _isScanning = true;
-                    // Optional: Update some UI indicator?
-                } else if (status === 'idle' && _isScanning) {
-                    _isScanning = false;
-                    console.log("[Luvia] Scan finished. Checking for errors...");
-                    if (window.ErrorManager) {
-                        window.ErrorManager.checkAndOpen();
-                    }
-                }
-            }
-        } catch (e) { /* quiet failure */ }
-    }, 2000);
 }
 
 async function start() {
