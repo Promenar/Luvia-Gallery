@@ -18,8 +18,7 @@ const CONFIG = {
     isPaused: false,
     items: [],
     currentIndex: 0,
-    isDemo: false,
-    localItems: []
+    isDemo: false
 };
 
 const DEMO_ITEMS = [
@@ -43,9 +42,6 @@ const elements = {
  * HELPER: URL Construction
  */
 function getFullUrl(relativePath) {
-    if (!relativePath) return '';
-    if (relativePath.startsWith('http')) return relativePath; // Already full
-
     let base = (CONFIG.serverUrl || '').trim();
 
     // Fallback: If serverUrl is empty, try to get from localStorage (last resort)
@@ -67,32 +63,17 @@ function getFullUrl(relativePath) {
 function getMediaUrl(itemUrl) {
     if (!itemUrl) return '';
 
-    // 1. Built-in assets (Hidamari & WE & Web)
+    // If it's a local asset, don't prepend server URL or token
     if (itemUrl.startsWith('assets/')) {
         return itemUrl;
     }
 
-    // 2. Direct local file path (Absolute or file://)
-    if (itemUrl.startsWith('file://')) {
-        return itemUrl;
-    }
-
-    // 3. Remote Luvia API Resources (Starts with /api/)
-    if (itemUrl.startsWith('/api/') || itemUrl.startsWith('http')) {
-        const baseUrl = getFullUrl(itemUrl);
-        if (!baseUrl || baseUrl === '') return '';
-        const cleanBase = baseUrl.split('?token=')[0].split('&token=')[0];
-        const connector = cleanBase.includes('?') ? '&' : '?';
-        return `${cleanBase}${connector}token=${encodeURIComponent(CONFIG.token)}`;
-    }
-
-    // 4. Local Album fallback (For relative paths from WE directory property)
-    if (CONFIG.mode === 'local' && (!itemUrl.includes('://') || itemUrl.includes(':'))) {
-        return itemUrl;
-    }
-
-    // Conservative default
-    return getFullUrl(itemUrl);
+    const baseUrl = getFullUrl(itemUrl);
+    if (!baseUrl || baseUrl === '') return ''; // BLOCK Relative fallback
+    // Avoid double tokens by cleaning up first
+    const cleanBase = baseUrl.split('?token=')[0].split('&token=')[0];
+    const connector = cleanBase.includes('?') ? '&' : '?';
+    return `${cleanBase}${connector}token=${encodeURIComponent(CONFIG.token)}`;
 }
 
 /**
@@ -165,23 +146,10 @@ window.wallpaperPropertyListener = {
                 const thumbBlurVal = val > 0 ? val : 40;
                 document.body.style.setProperty('--blur-amount', `${val}px`);
                 document.body.style.setProperty('--thumb-blur', `${thumbBlurVal}px`);
-            } else if (lowKey.includes('album_directory')) {
-                if (val && Array.isArray(val)) {
-                    console.log("[Luvia] Local folder files received:", val.length);
-                    // Convert WE file list to Luvia item format
-                    CONFIG.localItems = val.map(file => ({
-                        name: file.split('/').pop(),
-                        folderPath: 'Local Folder',
-                        url: file,
-                        thumbnailUrl: file,
-                        mediaType: (file.endsWith('.mp4') || file.endsWith('.webm')) ? 'video' : 'image'
-                    }));
-                    if (CONFIG.mode === 'local') needsRestart = true;
-                }
             }
         }
 
-        if (needsRestart) {
+        if (needsRestart && CONFIG.token && CONFIG.token !== "YOUR_TOKEN" && CONFIG.token !== "") {
             start();
         }
     }
@@ -322,30 +290,6 @@ async function start() {
 
 async function fetchItems() {
     try {
-        // PRIORITY 1: Explicit Demo Mode
-        if (CONFIG.mode === 'demo') {
-            console.log("[Luvia] Explicit Demo mode selected.");
-            throw new Error("User selected Demo mode.");
-        }
-
-        // PRIORITY 2: Local Album Mode
-        if (CONFIG.mode === 'local') {
-            if (CONFIG.localItems && CONFIG.localItems.length > 0) {
-                console.log("[Luvia] Using LOCAL items:", CONFIG.localItems.length);
-                CONFIG.items = [...CONFIG.localItems].sort(() => Math.random() - 0.5);
-                CONFIG.currentIndex = 0;
-                CONFIG.isDemo = false;
-                elements.demoTag.classList.remove('hidden');
-                elements.demoTag.textContent = 'LOCAL ALBUM';
-                elements.demoTag.style.background = 'linear-gradient(to right, #10b981, #059669)';
-                return true;
-            } else {
-                console.warn("[Luvia] Local mode selected but no folder picked.");
-                throw new Error("No local folder selected.");
-            }
-        }
-
-        // PRIORITY 2: Remote Server Mode
         if (!CONFIG.token || !CONFIG.serverUrl) {
             throw new Error("Missing configuration for remote fetch.");
         }
@@ -378,14 +322,12 @@ async function fetchItems() {
         }
         throw new Error("No files returned from API.");
     } catch (e) {
-        console.warn("[Luvia] Remote/Local fetch failed, falling back to LOCAL DEMO:", e.message);
+        console.warn("[Luvia] Remote fetch failed, falling back to LOCAL DEMO:", e.message);
         CONFIG.items = [...DEMO_ITEMS].sort(() => Math.random() - 0.5);
         CONFIG.currentIndex = 0;
         CONFIG.isDemo = true;
         elements.demoTag.classList.remove('hidden');
-        elements.demoTag.textContent = 'DEMO MODE';
-        elements.demoTag.style.background = ''; // Use CSS default
-        return true;
+        return true; // We return "success" because we successfully fell back to demo
     }
 }
 
