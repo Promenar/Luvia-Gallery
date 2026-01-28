@@ -63,18 +63,11 @@
                 "value": ""
             },
             "local_folder": {
-                "filefilter": [
-                    "*.jpg",
-                    "*.png",
-                    "*.jpeg",
-                    "*.webp",
-                    "*.mp4",
-                    "*.webm"
-                ],
                 "index": 10,
                 "order": 110,
                 "text": "Local Folder (No Server Mode)",
-                "type": "directory"
+                "type": "directory",
+                "value": null
             },
             "scaling_mode": {
                 "index": 3,
