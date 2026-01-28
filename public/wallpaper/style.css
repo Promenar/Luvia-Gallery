@@ -135,6 +135,19 @@ html {
     box-shadow: none;
 }
 
+.demo-tag {
+    font-size: 0.6rem;
+    font-weight: 900;
+    background: linear-gradient(to right, #3b82f6, #6366f1);
+    color: white;
+    padding: 0.2rem 0.5rem;
+    border-radius: 4px;
+    margin-bottom: 0.5rem;
+    letter-spacing: 0.1rem;
+    width: fit-content;
+    box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4);
+}
+
 .item-name {
     font-size: 0.85rem;
     font-weight: 800;

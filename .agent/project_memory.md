@@ -87,3 +87,8 @@
 - **Production Dependency Build**:
     - When `NODE_ENV=production`, `npm install` skips `devDependencies`. If your build process (e.g., `vite build`) relies on dev tools, you MUST explicitly run `npm install --include=dev` in your update/build scripts.
 
+- **Steam Workshop Compliance (创意工坊合规性)**:
+    - **Zero-Broken Policy**: 为避免被 Steam 标记为失效组件，壁纸端 (`public/wallpaper`) 必须具备离线回退能力。
+    - **Demo Mode**: 当无法连接到 Luvia 服务端或配置缺失时，前端自动切换至演示模式，使用 `assets/demo/` 下内置的高清素材进行循环展播。
+    - **Visual Feedback**: 在演示模式下，UI 必须显式展示 `DEMO MODE` 标签，引导用户进行正确配置。
+
