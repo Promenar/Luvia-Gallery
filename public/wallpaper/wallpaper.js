@@ -152,8 +152,19 @@ async function init() {
         console.log("[Luvia] Error Manager Loaded");
         window.ErrorManager.init();
 
-        // Auto-check on load (if previous scan left errors)
-        // window.ErrorManager.checkAndOpen(); 
+        // Auto-check on load (Show report if errors exist from previous scan)
+        window.ErrorManager.checkAndOpen();
+
+        // Manual Trigger: Shift + E
+        document.addEventListener('keydown', (e) => {
+            if (e.shiftKey && (e.key === 'E' || e.key === 'e')) {
+                console.log("[Luvia] Manual trigger: Error Manager");
+                window.ErrorManager.checkAndOpen().then(shown => {
+                    if (!shown) showOverlay("No errors found in last scan.", true);
+                    else hideOverlay();
+                });
+            }
+        });
     };
     document.head.appendChild(script);
 
