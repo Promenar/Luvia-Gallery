@@ -43,6 +43,9 @@ const elements = {
  * HELPER: URL Construction
  */
 function getFullUrl(relativePath) {
+    if (!relativePath) return '';
+    if (relativePath.startsWith('http')) return relativePath; // Already full
+
     let base = (CONFIG.serverUrl || '').trim();
 
     // Fallback: If serverUrl is empty, try to get from localStorage (last resort)
@@ -64,23 +67,32 @@ function getFullUrl(relativePath) {
 function getMediaUrl(itemUrl) {
     if (!itemUrl) return '';
 
-    // If it's a local asset (packaged with wallpaper)
+    // 1. Built-in assets (Hidamari & WE & Web)
     if (itemUrl.startsWith('assets/')) {
         return itemUrl;
     }
 
-    // If it's a direct local file path (from WE directory property)
-    if (itemUrl.startsWith('file://') || !itemUrl.includes('://')) {
-        // WE allows direct relative access for files in selected directory
+    // 2. Direct local file path (Absolute or file://)
+    if (itemUrl.startsWith('file://')) {
         return itemUrl;
     }
 
-    const baseUrl = getFullUrl(itemUrl);
-    if (!baseUrl || baseUrl === '') return ''; // BLOCK Relative fallback
-    // Avoid double tokens by cleaning up first
-    const cleanBase = baseUrl.split('?token=')[0].split('&token=')[0];
-    const connector = cleanBase.includes('?') ? '&' : '?';
-    return `${cleanBase}${connector}token=${encodeURIComponent(CONFIG.token)}`;
+    // 3. Remote Luvia API Resources (Starts with /api/)
+    if (itemUrl.startsWith('/api/') || itemUrl.startsWith('http')) {
+        const baseUrl = getFullUrl(itemUrl);
+        if (!baseUrl || baseUrl === '') return '';
+        const cleanBase = baseUrl.split('?token=')[0].split('&token=')[0];
+        const connector = cleanBase.includes('?') ? '&' : '?';
+        return `${cleanBase}${connector}token=${encodeURIComponent(CONFIG.token)}`;
+    }
+
+    // 4. Local Album fallback (For relative paths from WE directory property)
+    if (CONFIG.mode === 'local' && (!itemUrl.includes('://') || itemUrl.includes(':'))) {
+        return itemUrl;
+    }
+
+    // Conservative default
+    return getFullUrl(itemUrl);
 }
 
 /**
@@ -310,7 +322,13 @@ async function start() {
 
 async function fetchItems() {
     try {
-        // PRIORITY 1: Local Album Mode
+        // PRIORITY 1: Explicit Demo Mode
+        if (CONFIG.mode === 'demo') {
+            console.log("[Luvia] Explicit Demo mode selected.");
+            throw new Error("User selected Demo mode.");
+        }
+
+        // PRIORITY 2: Local Album Mode
         if (CONFIG.mode === 'local') {
             if (CONFIG.localItems && CONFIG.localItems.length > 0) {
                 console.log("[Luvia] Using LOCAL items:", CONFIG.localItems.length);
