@@ -154,16 +154,18 @@ window.wallpaperPropertyListener = {
                 document.body.style.setProperty('--blur-amount', `${val}px`);
                 document.body.style.setProperty('--thumb-blur', `${thumbBlurVal}px`);
             } else if (lowKey.includes('local_folder')) {
-                console.log("[Luvia] Local folder files received:", val.length);
-                // Convert WE file list to Luvia item format
-                CONFIG.localItems = val.map(file => ({
-                    name: file.split('/').pop(),
-                    folderPath: 'Local Folder',
-                    url: file,
-                    thumbnailUrl: file,
-                    mediaType: (file.endsWith('.mp4') || file.endsWith('.webm')) ? 'video' : 'image'
-                }));
-                if (CONFIG.mode === 'local') needsRestart = true;
+                if (val && Array.isArray(val)) {
+                    console.log("[Luvia] Local folder files received:", val.length);
+                    // Convert WE file list to Luvia item format
+                    CONFIG.localItems = val.map(file => ({
+                        name: file.split('/').pop(),
+                        folderPath: 'Local Folder',
+                        url: file,
+                        thumbnailUrl: file,
+                        mediaType: (file.endsWith('.mp4') || file.endsWith('.webm')) ? 'video' : 'image'
+                    }));
+                    if (CONFIG.mode === 'local') needsRestart = true;
+                }
             }
         }
 
