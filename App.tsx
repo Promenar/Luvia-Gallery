@@ -2526,6 +2526,11 @@ export default function App() {
                     // In future, pass ids to backend if supported
                 }}
                 onDelete={handleBatchDelete}
+                onNavigate={(item) => {
+                    setIsScanReportOpen(false);
+                    setIsSettingsOpen(false);
+                    handleJumpToFolder(item);
+                }}
             />
         </div >
     );
