@@ -1625,7 +1625,8 @@ async function generateThumbnail(file, force = false) {
         }
 
         // Build FFmpeg command with HW acceleration if available (Videos only)
-        let inputFlags = ['-probesize', '10M', '-analyzeduration', '5M'];
+        // ✨ INCREASED robustness: larger probe size and ignore errors
+        let inputFlags = ['-probesize', '32M', '-analyzeduration', '16M', '-err_detect', 'ignore_err'];
         let filterChain = 'scale=300:-1';
 
         if (file.mediaType === 'video') {
@@ -1642,100 +1643,77 @@ async function generateThumbnail(file, force = false) {
 
         const flagsStr = inputFlags.join(' ');
         let seekPart = file.mediaType === 'video' ? `-ss ${seekTime}` : '';
+
         // Robustness: For videos, use "Output Seeking" (place -ss after -i) to ensure bitstream headers
         // are parsed correctly from the start. Fixes AV1 temporal unit errors in older FFmpeg.
         let cmd = `ffmpeg -y ${flagsStr} -i "${file.path}" ${seekPart} -vf "${filterChain}" -vcodec libwebp -q:v 50 -frames:v 1 "${thumbPath}"`;
 
-        exec(cmd, { timeout: 15000 }, (err, stdout, stderr) => {
-            if (err) {
-                console.error(`[Thumb] Primary FFmpeg command failed for ${file.path}`);
-                console.error(`[Thumb] Command: ${cmd}`);
-                console.error(`[Thumb] Error: ${err.message}`);
-                console.error(`[Thumb] Stderr: ${stderr}`);
+        const runFfmpeg = (command, timeoutMs) => {
+            return new Promise((resolveExec) => {
+                exec(command, { timeout: timeoutMs }, (err, stdout, stderr) => {
+                    resolveExec({ err, stdout, stderr });
+                });
+            });
+        };
 
-                // If HW accel failed, retry with software only
-                if (hwAccel.type !== 'none') {
-                    console.warn(`[Thumb] Retrying with software fallback...`);
-                    // Fallback also uses smart selection only for videos
-                    const swFilterChain = file.mediaType === 'video' ? 'scale=300:-1,thumbnail=n=50' : 'scale=300:-1';
-                    const swCmd = `ffmpeg -y -probesize 10M -analyzeduration 5M -i "${file.path}" ${seekPart} -vf "${swFilterChain}" -vcodec libwebp -q:v 50 -frames:v 1 "${thumbPath}"`;
-                    exec(swCmd, { timeout: 20000 }, (retryErr, swStdout, swStderr) => {
-                        if (retryErr) {
-                            console.error(`[Thumb] Software fallback failed for ${file.path}`);
-                            console.error(`[Thumb] Command: ${swCmd}`);
-                            console.error(`[Thumb] Error: ${retryErr.message}`);
-                            console.error(`[Thumb] Stderr: ${swStderr}`);
-                            resolve(false);
-                        } else {
-                            if (fs.existsSync(thumbPath) && fs.statSync(thumbPath).size > 0) {
-                                // ✨ Extract dimensions and update database (software fallback)
-                                try {
-                                    const dimensions = extractThumbnailDimensions(thumbPath);
-                                    if (dimensions) {
-                                        database.upsertFile({
-                                            id: file.id,
-                                            path: file.path,
-                                            name: file.name,
-                                            folderPath: file.folderPath,
-                                            size: file.size,
-                                            type: file.type,
-                                            mediaType: file.mediaType,
-                                            lastModified: file.lastModified,
-                                            sourceId: file.sourceId,
-                                            thumb_width: dimensions.width,
-                                            thumb_height: dimensions.height,
-                                            thumb_aspect_ratio: dimensions.aspectRatio
-                                        });
-                                        console.log(`[Thumb] Extracted dimensions (SW fallback) for ${file.name}: ${dimensions.width}x${dimensions.height}`);
-                                    }
-                                } catch (dbErr) {
-                                    console.error(`[Thumb] Failed to update dimensions in DB:`, dbErr);
-                                }
-
-                                resolve(true);
-                            } else {
-                                console.error(`[Thumb] Software fallback success but empty file: ${thumbPath}`);
-                                resolve(false);
-                            }
-                        }
+        const updateDbWithDimensions = (thumbFilePath, filePayload) => {
+            try {
+                const dimensions = extractThumbnailDimensions(thumbFilePath);
+                if (dimensions) {
+                    database.upsertFile({
+                        id: filePayload.id,
+                        path: filePayload.path,
+                        name: filePayload.name,
+                        folderPath: filePayload.folderPath,
+                        size: filePayload.size,
+                        type: filePayload.type,
+                        mediaType: filePayload.mediaType,
+                        lastModified: filePayload.lastModified,
+                        sourceId: filePayload.sourceId,
+                        thumb_width: dimensions.width,
+                        thumb_height: dimensions.height,
+                        thumb_aspect_ratio: dimensions.aspectRatio
                     });
-                } else {
-                    resolve(false);
+                    return dimensions;
                 }
-            } else {
-                if (fs.existsSync(thumbPath) && fs.statSync(thumbPath).size > 0) {
-                    // ✨ Extract dimensions and update database
-                    try {
-                        const dimensions = extractThumbnailDimensions(thumbPath);
-                        if (dimensions) {
-                            database.upsertFile({
-                                id: file.id,
-                                path: file.path,
-                                name: file.name,
-                                folderPath: file.folderPath,
-                                size: file.size,
-                                type: file.type,
-                                mediaType: file.mediaType,
-                                lastModified: file.lastModified,
-                                sourceId: file.sourceId,
-                                thumb_width: dimensions.width,
-                                thumb_height: dimensions.height,
-                                thumb_aspect_ratio: dimensions.aspectRatio
-                            });
-                            console.log(`[Thumb] Extracted dimensions for ${file.name}: ${dimensions.width}x${dimensions.height}`);
-                        }
-                    } catch (dbErr) {
-                        console.error(`[Thumb] Failed to update dimensions in DB:`, dbErr);
-                    }
-
-                    resolve(true);
-                } else {
-                    console.error(`[Thumb] Primary success but empty file: ${thumbPath}`);
-                    console.error(`[Thumb] Stderr: ${stderr}`);
-                    resolve(false);
-                }
+            } catch (e) {
+                console.error(`[Thumb] DB update error:`, e);
             }
-        });
+            return null;
+        };
+
+        // Execution Logic with Fallbacks
+        let result = await runFfmpeg(cmd, 15000);
+
+        if (result.err) {
+            console.error(`[Thumb] Primary FFmpeg command failed for ${file.path}`);
+            // Fallback 1: Try software-only at original seek point
+            if (hwAccel.type !== 'none' || file.mediaType === 'video') {
+                console.warn(`[Thumb] Retrying with software fallback (seeking)...`);
+                const swFilterChain = file.mediaType === 'video' ? 'scale=300:-1,thumbnail=n=50' : 'scale=300:-1';
+                const swCmd = `ffmpeg -y -probesize 32M -analyzeduration 16M -err_detect ignore_err -i "${file.path}" ${seekPart} -vf "${swFilterChain}" -vcodec libwebp -q:v 50 -frames:v 1 "${thumbPath}"`;
+                result = await runFfmpeg(swCmd, 20000);
+            }
+
+            // Fallback 2: If video seek point failed, try seeking to 0 (Ultra safe)
+            if (result.err && file.mediaType === 'video') {
+                console.warn(`[Thumb] Retrying with software fallback (frame 0)...`);
+                const safeCmd = `ffmpeg -y -probesize 32M -analyzeduration 16M -err_detect ignore_err -i "${file.path}" -vf "scale=300:-1" -vcodec libwebp -q:v 50 -frames:v 1 "${thumbPath}"`;
+                result = await runFfmpeg(safeCmd, 10000);
+            }
+        }
+
+        // Check final result
+        if (!result.err && fs.existsSync(thumbPath) && fs.statSync(thumbPath).size > 0) {
+            const dims = updateDbWithDimensions(thumbPath, file);
+            if (dims) {
+                console.log(`[Thumb] Success: ${file.name} (${dims.width}x${dims.height})`);
+            }
+            resolve(true);
+        } else {
+            if (result.err) console.error(`[Thumb] All fallbacks failed for ${file.path}. Stderr: ${result.stderr}`);
+            resolve(false);
+        }
     });
 }
 
