@@ -29,9 +29,23 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
         setShowServerConfig(!showServerConfig);
     };
 
+    const validateUrl = (url: string): boolean => {
+        try {
+            const parsed = new URL(url);
+            return ['http:', 'https:'].includes(parsed.protocol);
+        } catch {
+            return false;
+        }
+    };
+
     const handleLogin = async () => {
         if (!username || !password) {
             showToast(t('login.error_missing'), 'error');
+            return;
+        }
+
+        if (!validateUrl(serverUrl)) {
+            showToast('Invalid server URL', 'error');
             return;
         }
 

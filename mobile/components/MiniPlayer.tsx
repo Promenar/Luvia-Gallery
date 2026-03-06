@@ -19,7 +19,7 @@ export const MiniPlayer = ({ onMaximize }: MiniPlayerProps) => {
         if (onMaximize) onMaximize();
     };
 
-    const progress = duration > 0 ? position / duration : 0;
+    const progress = duration > 0 ? Math.min(1, Math.max(0, position / duration)) : 0;
 
     return (
         <Animated.View
@@ -29,7 +29,7 @@ export const MiniPlayer = ({ onMaximize }: MiniPlayerProps) => {
             style={{ maxWidth: 220 }}
         >
             <View className="absolute bottom-0 left-0 right-0 h-[2px]">
-                <View style={{ width: `${progress * 100}%` }} className="h-full bg-indigo-500/50" />
+                <View style={{ width: `${Math.round(progress * 100)}%` }} className="h-full bg-indigo-500/50" />
             </View>
 
             <TouchableOpacity
@@ -52,7 +52,7 @@ export const MiniPlayer = ({ onMaximize }: MiniPlayerProps) => {
                 {/* Controls */}
                 <View className="flex-row items-center">
                     <TouchableOpacity
-                        onPress={(e) => { e.stopPropagation(); togglePlayPause(); }}
+                        onPress={(e: any) => { e.stopPropagation(); togglePlayPause(); }}
                         className="p-1.5"
                     >
                         {isPlaying ?
@@ -62,7 +62,7 @@ export const MiniPlayer = ({ onMaximize }: MiniPlayerProps) => {
                     </TouchableOpacity>
 
                     <TouchableOpacity
-                        onPress={(e) => { e.stopPropagation(); closePlayer(); }}
+                        onPress={(e: any) => { e.stopPropagation(); closePlayer(); }}
                         className="p-1.5"
                     >
                         <X size={18} className="text-gray-400" />

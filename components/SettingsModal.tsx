@@ -41,6 +41,7 @@ interface SettingsModalProps {
     onResetPassword: (user: User) => void;
     onDeleteUser: (user: User) => void;
     onSetDirPickerContext: (ctx: 'library' | 'userAllowedPaths' | 'wallpaper') => void;
+    dirPickerContext?: 'library' | 'userAllowedPaths' | 'wallpaper';
     onShowDirPicker: (val: boolean) => void;
     onUpdateThreadCount: (count: number) => void;
     onPruneCache: () => void;
@@ -70,6 +71,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
         onRemoveLibraryPath, onMonitorUpdate, onStartScan, onStartThumbGen,
         onSmartScan, onSmartRepair, onExportConfig, onLogout, onAddUser,
         onRenameUser, onResetPassword, onDeleteUser, onSetDirPickerContext,
+        dirPickerContext,
         onShowDirPicker, onUpdateThreadCount, onPruneCache, onClearCache, onFetchSmartResults, smartScanResults, thumbStatus,
         activeTab: externalTab, onTabChange, theme, onToggleTheme,
         onGenerateWallpaperToken, onFetchWallpaperToken, baseUrl, onOpenScanReport
@@ -117,10 +119,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
     });
 
     useEffect(() => {
-        if (props.newPathInput && props.activeTab === 'account') {
+        // 仅在明确是壁纸路径选择时更新
+        if (props.newPathInput && props.activeTab === 'account' && dirPickerContext === 'wallpaper') {
             setWallpaperConfig(prev => ({ ...prev, path: props.newPathInput }));
         }
-    }, [props.newPathInput, props.activeTab]);
+    }, [props.newPathInput, props.activeTab, dirPickerContext]);
 
     const handleGenerateWallpaperToken = async () => {
         if (onGenerateWallpaperToken) {

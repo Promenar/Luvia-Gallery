@@ -125,12 +125,23 @@ export const groupMediaByDate = (items: MediaItem[]): Record<string, MediaItem[]
   return groups;
 };
 
+export const cleanTokenFromUrl = (url: string): string => {
+  return url
+    .replace(/[?&]token=[^&]*/g, '')
+    .replace(/[?&]$/, '')
+    .replace(/\?$/, '');
+};
+
 export const getAuthUrl = (url: string): string => {
   if (!url) return '';
   if (url.startsWith('blob:') || url.startsWith('data:')) return url;
+
+  // 移除已存在的 token 参数（防止双重追加）
+  const cleanUrl = cleanTokenFromUrl(url);
+
   const token = localStorage.getItem('luvia_token') || localStorage.getItem('lumina_token');
-  if (!token) return url;
-  if (url.includes('token=')) return url; // Prevent double token
-  const separator = url.includes('?') ? '&' : '?';
-  return `${url}${separator}token=${token}`;
+  if (!token) return cleanUrl;
+
+  const separator = cleanUrl.includes('?') ? '&' : '?';
+  return `${cleanUrl}${separator}token=${token}`;
 };

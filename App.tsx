@@ -2369,6 +2369,7 @@ export default function App() {
                 onResetPassword={handleResetPassword}
                 onDeleteUser={handleDeleteUser}
                 onSetDirPickerContext={setDirPickerContext}
+                dirPickerContext={dirPickerContext}
                 onShowDirPicker={setShowDirPicker}
                 onPruneCache={pruneCache}
                 onClearCache={clearCache}
