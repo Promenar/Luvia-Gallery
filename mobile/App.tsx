@@ -282,6 +282,7 @@ const MainScreen = () => {
       setLoading(false);
       setLoadingMore(false);
       setRefreshing(false);
+      endReachedLock.current = false;
     }
   };
 
@@ -337,7 +338,12 @@ const MainScreen = () => {
     } catch (e) {
       console.error('Load Favorites Error:', e);
       handleApiError(e);
-    } finally { setLoading(false); setLoadingMore(false); setRefreshing(false); }
+    } finally {
+      setLoading(false);
+      setLoadingMore(false);
+      setRefreshing(false);
+      endReachedLock.current = false;
+    }
   };
 
   const loadFolderData = async (path: string | null, offset: number, append = false, refresh = false) => {
@@ -385,7 +391,12 @@ const MainScreen = () => {
         setFolderFiles(applySort(newFiles));
       }
       setFolderOffset(offset);
-    } catch (e) { handleApiError(e); } finally { setLoading(false); setLoadingMore(false); setRefreshing(false); }
+    } catch (e) { handleApiError(e); } finally {
+      setLoading(false);
+      setLoadingMore(false);
+      setRefreshing(false);
+      endReachedLock.current = false;
+    }
   };
 
   const onRefreshSilent = useCallback(() => {
@@ -1115,6 +1126,16 @@ const MainScreen = () => {
             initialIndex={viewerContext.index}
             onClose={() => setViewerContext(null)}
             onToggleFavorite={async (id, isFavorite) => {
+              // 1. 创建状态快照 (Snapshot)
+              const snapshot = {
+                viewerItems: viewerContext?.items || [],
+                recent: recentMedia,
+                library: libraryFiles,
+                favorites: favoriteFiles,
+                folder: folderFiles
+              };
+
+              // 2. 乐观更新 (Optimistic Update)
               const updateItem = (item: MediaItem) => item.id === id ? { ...item, isFavorite } : item;
               if (viewerContext) {
                 setViewerContext(prev => prev ? { ...prev, items: prev.items.map(updateItem) } : null);
@@ -1129,7 +1150,23 @@ const MainScreen = () => {
                 }
               });
               setFolderFiles(prev => prev.map(updateItem));
-              await toggleFavorite(id, isFavorite);
+
+              // 3. 异步同步与回滚 (Sync & Rollback)
+              try {
+                const res = await toggleFavorite(id, isFavorite);
+                if (!res || res.error) {
+                  throw new Error('API Sync Failed');
+                }
+              } catch (e) {
+                console.error('[App] Toggle favorite failed, rolling back:', e);
+                if (viewerContext) {
+                  setViewerContext(prev => prev ? { ...prev, items: snapshot.viewerItems } : null);
+                }
+                setRecentMedia(snapshot.recent);
+                setLibraryFiles(snapshot.library);
+                setFavoriteFiles(snapshot.favorites);
+                setFolderFiles(snapshot.folder);
+              }
             }}
           />
         </Animated.View>

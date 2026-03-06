@@ -157,14 +157,23 @@ export const logout = async (isManual = false) => {
     }
 };
 
-// Use encodeURIComponent for IDs (paths)
+export const cleanTokenFromUrl = (url: string): string => {
+    return url
+        .replace(/[?&]token=[^&]*/g, '')
+        .replace(/[?&]$/, '')
+        .replace(/\?$/, '');
+};
+
 // Use encodeURIComponent for IDs (paths)
 export const getFileUrl = (id: string) => {
-    const url = `${API_URL}/api/file/${encodeURIComponent(id)}`;
+    const cleanId = id.split('?')[0]; // 移除可能的查询参数
+    const url = `${API_URL}/api/file/${encodeURIComponent(cleanId)}`;
     return authToken ? `${url}?token=${authToken}` : url;
 };
+
 export const getThumbnailUrl = (id: string) => {
-    return `${API_URL}/api/thumb/${encodeURIComponent(id)}`;
+    const cleanId = id.split('?')[0];
+    return `${API_URL}/api/thumb/${encodeURIComponent(cleanId)}${authToken ? `?token=${authToken}` : ''}`;
 };
 
 export const fetchFolders = async (path?: string, favorite: boolean = false) => {

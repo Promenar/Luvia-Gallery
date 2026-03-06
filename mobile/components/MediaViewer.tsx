@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { View, Text, Modal, FlatList, Dimensions, StatusBar, TouchableOpacity, Platform, Pressable, useWindowDimensions } from 'react-native';
 import { Image } from 'expo-image';
-const AnimatedExpoImage = Animated.createAnimatedComponent(Image);
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { X, Music } from 'lucide-react-native';
 import { MediaItem } from '../types';
@@ -18,6 +17,8 @@ import Animated, {
     withTiming,
     runOnJS
 } from 'react-native-reanimated';
+
+const AnimatedExpoImage = Animated.createAnimatedComponent(Image);
 import { IconButton } from 'react-native-paper';
 import { useLanguage } from '../utils/i18n';
 import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -30,6 +31,7 @@ import { createDownloadResumable, cacheDirectory, deleteAsync } from 'expo-file-
 import * as MediaLibrary from 'expo-media-library';
 import * as Sharing from 'expo-sharing';
 import { useToast } from '../utils/ToastContext';
+import { formatDate as utilsFormatDate, formatSize as utilsFormatSize } from '../utils/formatters';
 
 interface MediaViewerProps {
     items: MediaItem[];
@@ -145,7 +147,7 @@ const VideoSlide = ({
                             minimumTrackTintColor="#6366f1"
                             maximumTrackTintColor="#374151"
                             thumbTintColor="white"
-                            onSlidingComplete={(val) => {
+                            onSlidingComplete={(val: any) => {
                                 if (player) {
                                     player.currentTime = val / 1000;
                                 }
@@ -342,7 +344,7 @@ const ImageSlide = ({
             { translateX: translateX.value },
             { translateY: translateY.value },
             { scale: scale.value },
-        ],
+        ] as any,
     }));
 
     // Simplified zoom state sync
@@ -435,7 +437,7 @@ const ImageSlide = ({
                 )}
                 <AnimatedExpoImage
                     source={{ uri: getFileUrl(item.id) }}
-                    style={[{ width, height }, animatedStyle]}
+                    style={[{ width, height } as any, animatedStyle]}
                     contentFit="contain"
                     onLoad={() => setLoaded(true)}
                     transition={200}
@@ -448,7 +450,7 @@ const ImageSlide = ({
 export const MediaViewer: React.FC<MediaViewerProps> = ({ items, initialIndex, onClose, onToggleFavorite }) => {
     const { width, height } = useWindowDimensions();
     const insets = useSafeAreaInsets();
-    const { t } = useLanguage();
+    const { t, language } = useLanguage();
     const { minimizePlayer } = useAudio();
     const [currentIndex, setCurrentIndex] = useState(initialIndex);
     const [showControls, setShowControls] = useState(true);
@@ -459,6 +461,15 @@ export const MediaViewer: React.FC<MediaViewerProps> = ({ items, initialIndex, o
     const [isZoomed, setIsZoomed] = useState(false);
     const [isSlideshowActive, setIsSlideshowActive] = useState(false);
     const flatListRef = useRef<FlatList>(null);
+    const abortControllerRef = useRef<AbortController | null>(null);
+    const isMountedRef = useRef(true);
+
+    useEffect(() => {
+        return () => {
+            isMountedRef.current = false;
+            abortControllerRef.current?.abort();
+        };
+    }, []);
 
     // Sync scroll on width change or index change (Slideshow)
     useEffect(() => {
@@ -497,15 +508,22 @@ export const MediaViewer: React.FC<MediaViewerProps> = ({ items, initialIndex, o
     });
 
     const currentItem = items[currentIndex];
-    const [isFavorite, setIsFavorite] = useState(currentItem.isFavorite || false);
+    const [isFavorite, setIsFavorite] = useState(currentItem?.isFavorite || false);
 
     useEffect(() => {
-        let timer: NodeJS.Timeout;
+        isMountedRef.current = true;
+        let timer: ReturnType<typeof setTimeout>;
+
         if (items[currentIndex]) {
             const item = items[currentIndex];
             setIsFavorite(item.isFavorite || false);
 
             if (item.mediaType === 'video') {
+                // Pick up AbortController based race-condition fix
+                abortControllerRef.current?.abort();
+                const controller = new AbortController();
+                abortControllerRef.current = controller;
+
                 // Calculate Static Bitrate
                 const updateBitrate = () => {
                     try {
@@ -521,14 +539,23 @@ export const MediaViewer: React.FC<MediaViewerProps> = ({ items, initialIndex, o
                 };
 
                 player.replaceAsync(getFileUrl(item.id)).then(() => {
+                    if (controller.signal.aborted || !isMountedRef.current) return;
                     player.play();
                     // Double check play state after a short delay
                     setTimeout(() => {
-                        if (!player.playing) player.play();
+                        if (!controller.signal.aborted && isMountedRef.current && !player.playing) {
+                            player.play();
+                        }
                     }, 100);
                     // Update again once loaded
-                    timer = setTimeout(updateBitrate, 1000);
-                }).catch(e => console.error('Video load error:', e));
+                    timer = setTimeout(() => {
+                        if (!controller.signal.aborted && isMountedRef.current) updateBitrate();
+                    }, 1000);
+                }).catch(e => {
+                    if (!controller.signal.aborted) {
+                        console.error('Video load error:', e);
+                    }
+                });
                 updateBitrate();
             } else {
                 player.pause();
@@ -538,13 +565,15 @@ export const MediaViewer: React.FC<MediaViewerProps> = ({ items, initialIndex, o
             if (item.mediaType === 'image' || item.mediaType === 'video') {
                 setExif(null);
                 fetchExif(item.id).then((data: any) => {
-                    if (data) setExif(data);
+                    if (isMountedRef.current && data) setExif(data);
                 });
             } else {
                 setExif(null);
             }
         }
         return () => {
+            isMountedRef.current = false;
+            abortControllerRef.current?.abort();
             if (timer) clearTimeout(timer);
         };
     }, [currentIndex, items, player]);
@@ -560,7 +589,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = ({ items, initialIndex, o
         const current = items[currentIndex];
         if (!current) return;
 
-        let timer: NodeJS.Timeout;
+        let timer: ReturnType<typeof setTimeout>;
 
         if (current.mediaType === 'video') {
             // For video, wait for end
@@ -710,20 +739,17 @@ export const MediaViewer: React.FC<MediaViewerProps> = ({ items, initialIndex, o
             // 5. Cleanup
             await deleteAsync(downloadRes.uri, { idempotent: true });
         } catch (e: any) {
-            // Silence if user cancelled - also catch generic "Download failed" from our throw
             const errorMsg = e.message?.toLowerCase() || '';
             const isCancelled = errorMsg.includes('cancel') || errorMsg.includes('cancelled') || errorMsg.includes('download failed');
 
             if (!isCancelled) {
                 console.error('Download error:', e);
                 showToast(t('common.download_failed') || 'Failed to download media', 'error');
-            } else {
-                // If cancelled, reset state silently and ensure no residual toast
-                setIsDownloading(false);
-                hideToast();
             }
         } finally {
+            // 始终重置状态
             setIsDownloading(false);
+            hideToast();
         }
     };
 
@@ -792,19 +818,19 @@ export const MediaViewer: React.FC<MediaViewerProps> = ({ items, initialIndex, o
                         <FlatList
                             ref={flatListRef}
                             data={items}
-                            keyExtractor={item => item.id}
+                            keyExtractor={(item: any) => item.id}
                             horizontal
                             pagingEnabled
                             scrollEnabled={!isZoomed}
                             initialScrollIndex={initialIndex}
-                            getItemLayout={(_, index) => ({ length: width, offset: width * index, index })}
+                            getItemLayout={(_: any, index: any) => ({ length: width, offset: width * index, index })}
                             showsHorizontalScrollIndicator={false}
                             onMomentumScrollEnd={handleScroll}
                             windowSize={3}
                             removeClippedSubviews={true}
                             initialNumToRender={1}
                             maxToRenderPerBatch={1}
-                            renderItem={({ item, index }) => (
+                            renderItem={({ item, index }: { item: any, index: any }) => (
                                 <View style={{ width, height }}>
                                     {item.mediaType === 'video' ? (
                                         <VideoSlide
@@ -872,7 +898,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = ({ items, initialIndex, o
                                             <View className="flex-row gap-2">
                                                 {/* Slideshow Toggle */}
                                                 <IconButton
-                                                    icon={({ size, color }) => (
+                                                    icon={({ size, color }: { size: any, color: any }) => (
                                                         isSlideshowActive ?
                                                             <StopCircle size={size} color={color} /> :
                                                             <PlayCircle size={size} color={color} />

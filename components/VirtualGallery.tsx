@@ -63,14 +63,15 @@ const InnerTimeline: React.FC<{
     const GUTTER_SIZE = 2; // Tighter gap for mobile
     // Dynamic column sizing
     const MIN_COL_WIDTH = width < 640 ? 90 : 150;
-    // Overlay mode: don't deduct scrubber width from calculation, just pad the container
     const SCRUBBER_WIDTH = 0;
-    const availWidth = width - SCRUBBER_WIDTH;
+    // 动态列宽计算，减去容器的 padding 确保不溢出
+    const containerPadding = width < 640 ? 28 : 36; // padding (pl-1 + pr-6/pr-8)
+    const availWidth = width - SCRUBBER_WIDTH - containerPadding;
 
     const columnCount = Math.floor((availWidth + GUTTER_SIZE) / (MIN_COL_WIDTH + GUTTER_SIZE)) || 1;
     const safeCols = Math.max(3, columnCount); // Ensure at least 3 columns for density on mobile
 
-    const cellWidth = (availWidth - (safeCols - 1) * GUTTER_SIZE) / safeCols;
+    const cellWidth = Math.floor((availWidth - (safeCols - 1) * GUTTER_SIZE) / safeCols);
     const cellHeight = cellWidth; // Square aspect ratio
 
     // 1. Group Data (Memoized on items only)
@@ -130,12 +131,10 @@ const InnerTimeline: React.FC<{
                     const row = visualRows[index];
                     if (!row) return null;
 
-                    // Adjust width in style to account for padding manually if needed, 
-                    // but standard block flow usually handles it. 
-                    // We explicitly set width to avoid overflow if scrollbar logic interferes.
+                    // Adjust width in style to account for padding
                     const rowStyle = {
                         ...style,
-                        width: width - (width < 640 ? 24 : 32) // manual padding adjustment for inner content
+                        width: availWidth
                     };
 
                     if (row.type === 'header') {

@@ -50,17 +50,50 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         }).catch((e: Error) => console.error("Audio Mode Error:", e));
     }, []);
 
-    // Status synchronization loop
+    // Status synchronization - 使用事件监听和快速轮询
     useEffect(() => {
-        const interval = setInterval(() => {
-            if (player) {
-                // Sync properties to reactive state
-                setIsPlaying(player.playing);
-                setPosition(player.currentTime * 1000);
-                setDuration(player.duration * 1000);
+        if (!player) return;
+
+        const subscriptions: any[] = [];
+
+        try {
+            if (typeof (player as any).addListener === 'function') {
+                const playingSub = (player as any).addListener('playingChange', (isPlaying: boolean) => {
+                    setIsPlaying(isPlaying);
+                });
+                subscriptions.push(playingSub);
+
+                const timeSub = (player as any).addListener('timeUpdate', (time: number) => {
+                    setPosition(time * 1000);
+                });
+                subscriptions.push(timeSub);
+
+                const durationSub = (player as any).addListener('durationChange', (dur: number) => {
+                    setDuration(dur * 1000);
+                });
+                subscriptions.push(durationSub);
+            } else {
+                throw new Error("Events not supported");
             }
-        }, 250); // Consistent with VideoSlide refresh rate
-        return () => clearInterval(interval);
+        } catch (e) {
+            // 如果事件监听不支持，回退到轮询（提高频率至 100ms）
+            const interval = setInterval(() => {
+                if (player) {
+                    setIsPlaying(player.playing);
+                    setPosition(player.currentTime * 1000);
+                    setDuration(player.duration * 1000);
+                }
+            }, 100);
+            return () => clearInterval(interval);
+        }
+
+        return () => {
+            subscriptions.forEach(sub => {
+                try {
+                    if (sub && typeof sub.remove === 'function') sub.remove();
+                } catch (e) { }
+            });
+        };
     }, [player]);
 
     const playTrack = async (item: MediaItem, list: MediaItem[]) => {
@@ -99,8 +132,10 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const togglePlayPause = async () => {
         if (player.playing) {
             player.pause();
+            setIsPlaying(false); // 即时更新
         } else {
             player.play();
+            setIsPlaying(true); // 即时更新
         }
     };
 

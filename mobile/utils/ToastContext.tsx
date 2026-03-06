@@ -26,7 +26,7 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         progress: 0,
     });
 
-    const timerRef = useRef<NodeJS.Timeout | null>(null);
+    const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const isVisibleRef = useRef(false);
     const lastVibratedTypeRef = useRef<ToastType | null>(null);
 
