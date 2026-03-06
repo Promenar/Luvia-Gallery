@@ -22,6 +22,7 @@ export const MediaCard: React.FC<MediaCardProps> = React.memo(({ item, onClick, 
   }
 
   const videoRef = useRef<HTMLVideoElement>(null);
+  const hoverTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
   const [isVideoLoaded, setIsVideoLoaded] = useState(false);
@@ -97,7 +98,7 @@ export const MediaCard: React.FC<MediaCardProps> = React.memo(({ item, onClick, 
   const handleMouseEnter = () => {
     setIsHovered(true);
     if (item.mediaType === 'video') {
-      setTimeout(() => {
+      hoverTimeoutRef.current = setTimeout(() => {
         if (videoRef.current) {
           videoRef.current.play().catch(() => { });
           setIsPlaying(true);
@@ -109,12 +110,24 @@ export const MediaCard: React.FC<MediaCardProps> = React.memo(({ item, onClick, 
   const handleMouseLeave = () => {
     setIsHovered(false);
     setIsVideoLoaded(false);
+    if (hoverTimeoutRef.current) {
+      clearTimeout(hoverTimeoutRef.current);
+      hoverTimeoutRef.current = null;
+    }
     if (item.mediaType === 'video' && videoRef.current) {
       videoRef.current.pause();
       videoRef.current.currentTime = 0;
       setIsPlaying(false);
     }
   };
+
+  useEffect(() => {
+    return () => {
+      if (hoverTimeoutRef.current) {
+        clearTimeout(hoverTimeoutRef.current);
+      }
+    };
+  }, []);
 
   const isGrid = layout === 'grid' || isVirtual;
 

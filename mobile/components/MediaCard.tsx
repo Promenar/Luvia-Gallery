@@ -1,9 +1,9 @@
-import React from 'react';
-import { View, Pressable, Dimensions, Text } from 'react-native';
+import React, { useState } from 'react';
+import { View, Pressable, Text, TouchableOpacity } from 'react-native';
 import { Image } from 'expo-image';
 import { MediaItem } from '../types';
 import { getThumbnailUrl, getToken } from '../utils/api';
-import { Play, Music, Heart } from 'lucide-react-native';
+import { Play, Music, Heart, Image as ImageIcon } from 'lucide-react-native';
 
 interface MediaCardProps {
     item: MediaItem;
@@ -13,6 +13,14 @@ interface MediaCardProps {
 }
 
 export const MediaCard = React.memo<MediaCardProps>(({ item, onPress, onLongPress, aspectRatio = 1 }) => {
+    const [error, setError] = useState(false);
+    const [retryCount, setRetryCount] = useState(0);
+
+    const handleRetry = () => {
+        setError(false);
+        setRetryCount(prev => prev + 1);
+    };
+
     return (
         <Pressable
             onPress={() => onPress(item)}
@@ -30,8 +38,17 @@ export const MediaCard = React.memo<MediaCardProps>(({ item, onPress, onLongPres
                             <Text numberOfLines={1} className="text-white text-[10px] font-medium">{item.name}</Text>
                         </View>
                     </View>
+                ) : error ? (
+                    <TouchableOpacity
+                        onPress={handleRetry}
+                        className="w-full h-full bg-gray-200 dark:bg-zinc-800 items-center justify-center p-2"
+                    >
+                        <ImageIcon size={32} color="#9ca3af" />
+                        <Text className="text-gray-400 text-[10px] mt-1 text-center font-medium">Tap to retry</Text>
+                    </TouchableOpacity>
                 ) : (
                     <Image
+                        key={`${item.id}-${retryCount}`}
                         source={{
                             uri: getThumbnailUrl(item.id),
                             headers: { Authorization: `Bearer ${getToken()}` }
@@ -43,6 +60,7 @@ export const MediaCard = React.memo<MediaCardProps>(({ item, onPress, onLongPres
                         priority="normal"
                         recyclingKey={item.id}
                         placeholderContentFit="cover"
+                        onError={() => setError(true)}
                     />
                 )}
 

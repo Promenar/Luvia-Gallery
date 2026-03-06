@@ -111,6 +111,11 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
     // Keyboard shortcuts
     useEffect(() => {
         const handleKeyPress = (e: KeyboardEvent) => {
+            const activeElement = document.activeElement;
+            if (activeElement?.tagName === 'INPUT' || activeElement?.tagName === 'TEXTAREA') {
+                return;
+            }
+
             if (!isMinimized) {
                 if (e.code === 'Space') {
                     e.preventDefault();

@@ -412,7 +412,7 @@ export const useLanguage = create<I18nState>((set: (partial: Partial<I18nState>)
     language: 'zh',
     setLanguage: async (lang: Language) => {
         set({ language: lang });
-        await AsyncStorage.setItem('app_language', lang);
+        await AsyncStorage.setItem('luvia_language', lang);
     },
     t: (key: string, vars?: Record<string, any>) => {
         const l = get().language;
@@ -427,7 +427,7 @@ export const useLanguage = create<I18nState>((set: (partial: Partial<I18nState>)
 }));
 
 export const initLanguage = async () => {
-    const stored = await AsyncStorage.getItem('app_language');
+    const stored = await AsyncStorage.getItem('luvia_language');
     if (stored === 'en' || stored === 'zh') {
         useLanguage.getState().setLanguage(stored as Language);
     }

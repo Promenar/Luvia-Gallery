@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { HomeScreenConfig, MediaItem } from '../types';
 import { getAuthUrl } from '../utils/fileUtils';
@@ -18,10 +18,9 @@ interface HomeProps {
 export const Home: React.FC<HomeProps> = React.memo(({ title, items, onEnterLibrary, onJumpToFolder, subtitle, config }) => {
     const { t } = useLanguage();
     const [currentIndex, setCurrentIndex] = useState(0);
-    const [featured, setFeatured] = useState<MediaItem[]>([]);
 
-    useEffect(() => {
-        if (items.length === 0) return;
+    const featured = useMemo(() => {
+        if (items.length === 0) return [];
 
         let filteredItems = items;
 
@@ -39,21 +38,29 @@ export const Home: React.FC<HomeProps> = React.memo(({ title, items, onEnterLibr
             filteredItems = items.filter(i => i.isFavorite);
         }
 
+        const applySeededShuffle = (list: MediaItem[]) => {
+            const seed = list.reduce((acc, item) => acc + item.id.charCodeAt(0), 0);
+            const shuffled = [...list];
+            for (let i = shuffled.length - 1; i > 0; i--) {
+                const j = Math.floor((seed * (i + 1)) % (i + 1));
+                [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+            }
+            return shuffled.slice(0, 10);
+        };
+
         if (filteredItems.length > 0) {
             // If single mode, don't shuffle, just take one.
             if (config?.mode === 'single') {
-                setFeatured([filteredItems[0]]);
+                return [filteredItems[0]];
             } else {
-                const shuffled = [...filteredItems].sort(() => 0.5 - Math.random());
-                setFeatured(shuffled.slice(0, 10)); // Take top 10 random
+                return applySeededShuffle(filteredItems);
             }
         } else {
             // In favorites mode, if没有收藏则保持空结果，不回退到全库
             if (config?.mode === 'favorites') {
-                setFeatured([]);
+                return [];
             } else {
-                const shuffled = [...items].sort(() => 0.5 - Math.random());
-                setFeatured(shuffled.slice(0, 10));
+                return applySeededShuffle(items);
             }
         }
     }, [items, config]); // Re-run if items or config changes

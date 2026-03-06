@@ -15,10 +15,6 @@ const ROTATION_INTERVAL = 7000;  // 轮播间隔（延长至7秒）
 
 const AnimatedImage = Animated.createAnimatedComponent(Image);
 
-interface CarouselViewProps {
-    isActive: boolean;
-}
-
 // 骨架屏组件 (Simple Pulse Skeleton)
 const SkeletonItem = memo(({ width, height }: { width: number, height: number }) => {
     // 使用简单的透明度脉冲动画
@@ -222,7 +218,7 @@ export const CarouselView: React.FC<CarouselViewProps> = ({ isActive, fullScreen
         };
     }, [windowWidth, windowHeight, fullScreen]);
 
-    const timerRef = useRef<NodeJS.Timeout | null>(null);
+    const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     useEffect(() => {
         loadData();
@@ -348,10 +344,13 @@ export const CarouselView: React.FC<CarouselViewProps> = ({ isActive, fullScreen
     const handleMomentumScrollEnd = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
         const offsetX = event.nativeEvent.contentOffset.x;
         const index = Math.round(offsetX / itemWidth);
-        if (displayItems.length <= 1) {
-            setActiveIndex(index);
+
+        // 边界保护：单张或两张图片时不循环
+        if (displayItems.length <= 2) {
+            setActiveIndex(Math.max(0, Math.min(index, displayItems.length - 1)));
             return;
         }
+
         if (index <= 0) {
             const realLastIndex = displayItems.length - 2;
             flatListRef.current?.scrollToIndex({ index: realLastIndex, animated: false });

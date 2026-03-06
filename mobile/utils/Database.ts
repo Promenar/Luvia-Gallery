@@ -14,9 +14,22 @@ export const initDatabase = () => {
         db.execSync(`
       CREATE TABLE IF NOT EXISTS media_items (
         id TEXT PRIMARY KEY,
-        value TEXT
+        value TEXT,
+        path TEXT,
+        is_favorite INTEGER,
+        last_modified INTEGER
       );
     `);
+        try {
+            // Attempt to add columns for existing databases (will fail silently if they already exist)
+            db.execSync(`ALTER TABLE media_items ADD COLUMN path TEXT;`);
+            db.execSync(`ALTER TABLE media_items ADD COLUMN is_favorite INTEGER;`);
+            db.execSync(`ALTER TABLE media_items ADD COLUMN last_modified INTEGER;`);
+        } catch (e) { }
+
+        db.execSync(`CREATE INDEX IF NOT EXISTS idx_path ON media_items(path)`);
+        db.execSync(`CREATE INDEX IF NOT EXISTS idx_is_favorite ON media_items(is_favorite)`);
+        db.execSync(`CREATE INDEX IF NOT EXISTS idx_last_modified ON media_items(last_modified DESC)`);
     } catch (e) {
         console.error('[Database] Initialization failed:', e);
     }
@@ -26,14 +39,26 @@ export const initDatabase = () => {
 initDatabase();
 
 export const saveMediaItem = (item: MediaItem) => {
-    db.runSync('INSERT OR REPLACE INTO media_items (id, value) VALUES (?, ?)', [item.id, JSON.stringify(item)]);
+    db.runSync('INSERT OR REPLACE INTO media_items (id, value, path, is_favorite, last_modified) VALUES (?, ?, ?, ?, ?)', [
+        item.id,
+        JSON.stringify(item),
+        item.path || item.folderPath,
+        item.isFavorite ? 1 : 0,
+        item.lastModified || Date.now()
+    ]);
 };
 
 export const saveMediaItems = (items: MediaItem[], limit?: number) => {
     db.withTransactionSync(() => {
         const toSave = limit ? items.slice(0, limit) : items;
         for (const item of toSave) {
-            db.runSync('INSERT OR REPLACE INTO media_items (id, value) VALUES (?, ?)', [item.id, JSON.stringify(item)]);
+            db.runSync('INSERT OR REPLACE INTO media_items (id, value, path, is_favorite, last_modified) VALUES (?, ?, ?, ?, ?)', [
+                item.id,
+                JSON.stringify(item),
+                item.path || item.folderPath,
+                item.isFavorite ? 1 : 0,
+                item.lastModified || Date.now()
+            ]);
         }
     });
 };
@@ -59,7 +84,6 @@ export const updateFavoriteStatus = (id: string, favorite: boolean) => {
     }
 };
 
-// @ts-ignore
 export const getCachedFiles = async ({ limit = 10, offset = 0, folderPath, favorite }: { limit?: number; offset?: number; folderPath?: string; favorite?: boolean } = {}): Promise<MediaItem[]> => {
     // Return items from SQLite
     try {
@@ -68,18 +92,18 @@ export const getCachedFiles = async ({ limit = 10, offset = 0, folderPath, favor
         let where: string[] = [];
 
         if (folderPath) {
-            where.push('JSON_EXTRACT(value, "$.path") LIKE ?');
+            where.push('path LIKE ?');
             params.push(`${folderPath}%`);
         }
         if (favorite !== undefined) {
-            where.push('JSON_EXTRACT(value, "$.isFavorite") = ?');
+            where.push('is_favorite = ?');
             params.push(favorite ? 1 : 0);
         }
 
         if (where.length > 0) {
             query += ' WHERE ' + where.join(' AND ');
         }
-        query += ' ORDER BY JSON_EXTRACT(value, "$.dateModified") DESC LIMIT ? OFFSET ?';
+        query += ' ORDER BY last_modified DESC LIMIT ? OFFSET ?';
         params.push(limit);
         params.push(offset);
 

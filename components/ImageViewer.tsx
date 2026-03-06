@@ -7,6 +7,7 @@ import { MediaItem, ExifData } from '../types';
 import { getAuthUrl } from '../utils/fileUtils';
 import { Icons } from './ui/Icon';
 import { useLanguage } from '../contexts/LanguageContext';
+import { formatDate as utilsFormatDate, formatSize as utilsFormatSize } from '../utils/formatters';
 
 interface ImageViewerProps {
     item: MediaItem | null;
@@ -26,7 +27,7 @@ interface TransformState {
 }
 
 export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext, onPrev, onDelete, onRename, onJumpToFolder, onToggleFavorite }) => {
-    const { t } = useLanguage();
+    const { t, language } = useLanguage();
     const [transform, setTransform] = useState<TransformState>({ scale: 1, x: 0, y: 0 });
     const containerRef = useRef<HTMLDivElement>(null);
     const videoRef = useRef<HTMLVideoElement>(null);
@@ -43,6 +44,17 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
     const [showInfo, setShowInfo] = useState(false);
     const [exifData, setExifData] = useState<ExifData | null>(null);
     const [isExifLoading, setIsExifLoading] = useState(false);
+
+    // Refs for callbacks to prevent hook dependency loops
+    const onNextRef = useRef(onNext);
+    const onPrevRef = useRef(onPrev);
+    const onCloseRef = useRef(onClose);
+
+    useEffect(() => {
+        onNextRef.current = onNext;
+        onPrevRef.current = onPrev;
+        onCloseRef.current = onClose;
+    }, [onNext, onPrev, onClose]);
 
     // Pinch zoom state
     const lastDist = useRef<number | null>(null);
@@ -128,15 +140,21 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
     useEffect(() => {
         if (isPlaying) {
             slideshowIntervalRef.current = setInterval(() => {
-                if (onNext) onNext();
+                if (onNextRef.current) onNextRef.current();
             }, 4000);
         } else {
-            if (slideshowIntervalRef.current) clearInterval(slideshowIntervalRef.current);
+            if (slideshowIntervalRef.current) {
+                clearInterval(slideshowIntervalRef.current);
+                slideshowIntervalRef.current = null;
+            }
         }
         return () => {
-            if (slideshowIntervalRef.current) clearInterval(slideshowIntervalRef.current);
+            if (slideshowIntervalRef.current) {
+                clearInterval(slideshowIntervalRef.current);
+                slideshowIntervalRef.current = null;
+            }
         };
-    }, [isPlaying, onNext]);
+    }, [isPlaying]);
 
     // Stop playing if closed or zoomed
     useEffect(() => {
@@ -175,16 +193,16 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
             if (!item) return;
             if (isRenaming) return;
 
-            if (e.key === 'Escape') onClose();
+            if (e.key === 'Escape') onCloseRef.current?.();
             // Only allow navigation if not zoomed in
             if (transform.scale === 1) {
-                if (e.key === 'ArrowRight' && onNext) {
+                if (e.key === 'ArrowRight' && onNextRef.current) {
                     setIsPlaying(false);
-                    onNext();
+                    onNextRef.current();
                 }
-                if (e.key === 'ArrowLeft' && onPrev) {
+                if (e.key === 'ArrowLeft' && onPrevRef.current) {
                     setIsPlaying(false);
-                    onPrev();
+                    onPrevRef.current();
                 }
                 if (e.key === ' ' || e.key === 'Spacebar') {
                     e.preventDefault();
@@ -199,7 +217,7 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
         };
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [item, onClose, onNext, onPrev, transform.scale, isRenaming]);
+    }, [item, transform.scale, isRenaming]);
 
     if (!item) return null;
 
@@ -275,8 +293,8 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
             setTransform(prev => ({
                 ...prev,
                 scale: newScale,
-                x: newScale === 1 ? 0 : prev.x,
-                y: newScale === 1 ? 0 : prev.y
+                x: newScale === 1 ? 0 : Math.max(-500, Math.min(500, prev.x)),
+                y: newScale === 1 ? 0 : Math.max(-500, Math.min(500, prev.y))
             }));
             lastDist.current = dist;
         }
@@ -340,13 +358,11 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
     };
 
     const formatDate = (ts: number | Date | undefined) => {
-        if (!ts) return '-';
-        return new Date(ts).toLocaleString();
+        return utilsFormatDate(ts, language);
     };
 
     const formatSize = (bytes: number) => {
-        const mb = bytes / 1024 / 1024;
-        return mb < 1 ? `${(bytes / 1024).toFixed(1)} KB` : `${mb.toFixed(1)} MB`;
+        return utilsFormatSize(bytes);
     };
 
     const formatExposure = (t: number | undefined) => {

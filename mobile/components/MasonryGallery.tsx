@@ -38,14 +38,17 @@ export const MasonryGallery: React.FC<MasonryGalleryProps> = ({
 
     // Three-tier fallback strategy for aspect ratio
     const getAspectRatio = (item: MediaItem): number => {
+        const validRatio = (ratio?: number) => typeof ratio === 'number' && !isNaN(ratio) && isFinite(ratio) && ratio > 0;
+
         // 1. Priority: Use server-provided aspectRatio (thumbnail)
-        if (item.aspectRatio && item.aspectRatio > 0) {
-            return item.aspectRatio;
+        if (validRatio(item.aspectRatio)) {
+            // 限制极端宽高比，防止UI崩溃
+            return Math.min(Math.max(item.aspectRatio!, 0.3), 3.0);
         }
 
         // 2. Fallback: Calculate from width/height (thumbnail)
-        if (item.width && item.height && item.height > 0) {
-            return item.width / item.height;
+        if (validRatio(item.width) && validRatio(item.height)) {
+            return Math.min(Math.max(item.width! / item.height!, 0.3), 3.0);
         }
 
         // 3. Legacy fallback: ID-based random ratio (for old data without dimensions)
