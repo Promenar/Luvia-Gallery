@@ -38,6 +38,7 @@ interface MediaViewerProps {
     initialIndex: number;
     onClose: () => void;
     onToggleFavorite: (id: string, isFavorite: boolean) => void;
+    onJumpToFolder?: (item: MediaItem) => void;
 }
 
 
@@ -447,7 +448,7 @@ const ImageSlide = ({
     );
 };
 
-export const MediaViewer: React.FC<MediaViewerProps> = ({ items, initialIndex, onClose, onToggleFavorite }) => {
+export const MediaViewer: React.FC<MediaViewerProps> = ({ items, initialIndex, onClose, onToggleFavorite, onJumpToFolder }) => {
     const { width, height } = useWindowDimensions();
     const insets = useSafeAreaInsets();
     const { t, language } = useLanguage();
@@ -933,6 +934,15 @@ export const MediaViewer: React.FC<MediaViewerProps> = ({ items, initialIndex, o
                                                     onPress={() => setShowInfo(!showInfo)}
                                                     style={{ backgroundColor: 'rgba(0,0,0,0.1)' }}
                                                 />
+                                                {onJumpToFolder && (
+                                                    <IconButton
+                                                        icon="folder-open-outline"
+                                                        iconColor="white"
+                                                        size={28}
+                                                        onPress={() => onJumpToFolder(currentItem)}
+                                                        style={{ backgroundColor: 'rgba(0,0,0,0.1)' }}
+                                                    />
+                                                )}
                                             </View>
                                         </View>
                                     </View>

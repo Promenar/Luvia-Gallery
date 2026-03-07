@@ -182,13 +182,14 @@ migrateCacheStructure();
 
 // Initialize database
 let dbReady = false;
-database.initDatabase().then(() => {
+try {
+    database.initDatabase();
     console.log('Database initialized successfully');
     dbReady = true;
-}).catch(err => {
+} catch (err) {
     console.error('Database initialization failed:', err);
     process.exit(1);
-});
+}
 // db.pragma('journal_mode = WAL');
 // db.prepare(`...`).run();
 
@@ -1228,6 +1229,7 @@ app.get('/api/scan/results', (req, res) => {
     const sortOption = req.query.sort || 'dateDesc';
     const mediaType = req.query.mediaType;
     const excludeMediaType = req.query.excludeMediaType;
+    const search = req.query.search;
     let folderPath = req.query.folder;
 
     // Handle root path mapping for folder filter
@@ -1389,7 +1391,7 @@ app.get('/api/scan/results', (req, res) => {
                 total = 0;
             } else {
                 // Query database normally
-                const queryOptions = { offset, limit, random, recursive, mediaType, excludeMediaType, userId };
+                const queryOptions = { offset, limit, random, recursive, mediaType, excludeMediaType, userId, search };
 
                 if (folderPath) {
                     queryOptions.folderPath = path.resolve(folderPath);
@@ -1402,7 +1404,8 @@ app.get('/api/scan/results', (req, res) => {
                 total = database.countFiles({
                     folderPath: folderPath ? path.resolve(folderPath) : null,
                     recursive,
-                    allowedPaths: (!folderPath && !isAdmin) ? userLibraryPaths : null
+                    allowedPaths: (!folderPath && !isAdmin) ? userLibraryPaths : null,
+                    search
                 });
             }
         }

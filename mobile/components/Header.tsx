@@ -12,13 +12,13 @@ interface HeaderProps {
     rightAction?: React.ReactNode;
 }
 
-export const Header: React.FC<HeaderProps> = ({ title, subtitle, showBack, onBack, rightAction }) => {
+export const Header: React.FC<HeaderProps> = ({ title, showBack, onBack, rightAction }) => {
     const insets = useSafeAreaInsets();
 
     return (
         <View
-            style={{ paddingTop: insets.top + 6 }}
-            className="px-6 pb-4 bg-white dark:bg-black border-b border-gray-100 dark:border-gray-800 flex-row items-center justify-between"
+            style={{ paddingTop: insets.top + 10 }}
+            className="px-6 pb-4 bg-white dark:bg-black flex-row items-center justify-between"
         >
             <View className="flex-row items-center flex-1">
                 {showBack && (
@@ -33,17 +33,12 @@ export const Header: React.FC<HeaderProps> = ({ title, subtitle, showBack, onBac
                     </Animated.View>
                 )}
                 <Animated.View
-                    className="flex-1"
+                    className="flex-1 justify-center"
                     layout={LinearTransition.springify().damping(35).stiffness(350)}
                 >
-                    <Text className="text-3xl font-bold text-gray-900 dark:text-white tracking-tighter" numberOfLines={1}>
+                    <Text className="text-3xl font-bold text-gray-900 dark:text-white tracking-tighter mt-1" numberOfLines={1}>
                         {title}
                     </Text>
-                    {subtitle && (
-                        <Text className="text-gray-500 dark:text-gray-400 font-medium text-sm" numberOfLines={1}>
-                            {subtitle}
-                        </Text>
-                    )}
                 </Animated.View>
             </View>
             {rightAction && (
