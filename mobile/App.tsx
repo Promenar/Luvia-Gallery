@@ -5,7 +5,7 @@ import { StatusBar } from 'expo-status-bar';
 import { View, FlatList, ActivityIndicator, BackHandler, Text, TouchableOpacity, ScrollView, Platform, LayoutAnimation, UIManager, RefreshControl, Alert, useWindowDimensions, DimensionValue, AppState, AppStateStatus } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, { FadeIn, FadeOut, FadeInLeft, FadeInRight, FadeOutLeft, FadeOutRight, LinearTransition } from 'react-native-reanimated';
-import { PaperProvider } from 'react-native-paper';
+import { PaperProvider, Searchbar } from 'react-native-paper';
 import { MediaCard } from './components/MediaCard';
 import { FolderCard } from './components/FolderCard';
 import { Carousel } from './components/Carousel';
@@ -110,6 +110,8 @@ const MainScreen = () => {
   const [loadingMore, setLoadingMore] = useState(false);
 
   const [sortMode, setSortMode] = useState<'dateDesc' | 'dateAsc' | 'nameAsc' | 'nameDesc' | 'random'>('dateDesc');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [activeSearch, setActiveSearch] = useState('');
   const endReachedLock = React.useRef(false);
 
   // Media Viewer State
@@ -253,7 +255,7 @@ const MainScreen = () => {
     try {
       const limit = 100; // Increased limit for smoother scrolling
       const random = sortMode === 'random';
-      const filesRes = await fetchFiles({ offset, limit, excludeMediaType: 'audio', refresh, sort: random ? undefined : sortMode, random });
+      const filesRes = await fetchFiles({ offset, limit, excludeMediaType: 'audio', refresh, sort: random ? undefined : sortMode, random, search: activeSearch });
       const newFiles = filesRes.files || [];
 
       // Respect server-side hasMore when provided; otherwise infer from page size and cache state.
@@ -295,7 +297,7 @@ const MainScreen = () => {
       console.log('Loading favorites...', { offset, append });
 
       const promises: any[] = [
-        fetchFiles({ favorite: true, offset, limit, refresh, sort: sortMode === 'random' ? undefined : sortMode, random: sortMode === 'random' })
+        fetchFiles({ favorite: true, offset, limit, refresh, sort: sortMode === 'random' ? undefined : sortMode, random: sortMode === 'random', search: activeSearch })
       ];
 
       // Only fetch folders on first page
@@ -355,7 +357,7 @@ const MainScreen = () => {
       const queryPath = path === 'root' ? undefined : (path || undefined);
 
       const promises: any[] = [
-        queryPath ? fetchFiles({ folderPath: queryPath, offset, limit, refresh, sort: sortMode === 'random' ? undefined : sortMode, random: sortMode === 'random' }) : Promise.resolve({ files: [] })
+        queryPath ? fetchFiles({ folderPath: queryPath, offset, limit, refresh, sort: sortMode === 'random' ? undefined : sortMode, random: sortMode === 'random', search: activeSearch }) : Promise.resolve({ files: [] })
       ];
 
       // Only fetch subfolders on first page
@@ -423,13 +425,13 @@ const MainScreen = () => {
     setFavoriteFolders(prev => sortFolders(prev));
   }, [sortMode, applySort, sortFolders]);
 
-  // When sort changes, refetch lists to get server-ordered data
+  // When sort or search changes, refetch lists to get server-ordered data
   useEffect(() => {
     if (!isLoggedIn) return;
     if (activeTab === 'library') loadLibraryData(0, false, true);
     if (activeTab === 'favorites') loadFavoritesData(0, false, true);
     if (activeTab === 'folders') loadFolderData(currentPath, 0, false, true);
-  }, [sortMode]);
+  }, [sortMode, activeSearch]);
 
   // Initial Load
   useEffect(() => {
@@ -506,6 +508,39 @@ const MainScreen = () => {
 
     setActiveTab('folders');
     setCurrentPath(folder.path);
+  };
+
+  const handleJumpToFolder = (item: MediaItem) => {
+    setTimeout(() => {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    }, 10);
+
+    setViewerContext(null);
+    setSearchQuery('');
+    setActiveSearch('');
+
+    setFolderFiles([]);
+    setFolders([]);
+    setFolderOffset(0);
+    setHasMoreFolderFiles(true);
+
+    // Reconstruct history stack for hierarchical back navigation
+    const targetPath = item.folderPath || '';
+    if (targetPath) {
+      const parts = targetPath.split('/');
+      const newHistory = ['root'];
+      let accum = '';
+      for (let i = 0; i < parts.length - 1; i++) {
+        accum += (accum ? '/' : '') + parts[i];
+        newHistory.push(accum);
+      }
+      setHistory(newHistory);
+    } else {
+      setHistory(['root']);
+    }
+
+    setActiveTab('folders');
+    setCurrentPath(item.folderPath || '');
   };
 
   const handleBack = () => {
@@ -639,6 +674,32 @@ const MainScreen = () => {
     </View>
   );
 
+  const renderGlobalSearchBar = () => (
+    <View className="px-4 pb-2 bg-white dark:bg-black">
+      <Searchbar
+        placeholder={t('search', { defaultValue: 'Search...' }) as string || "Search..."}
+        onChangeText={setSearchQuery}
+        value={searchQuery}
+        onSubmitEditing={() => setActiveSearch(searchQuery)}
+        onClearIconPress={() => {
+          setSearchQuery('');
+          setActiveSearch('');
+        }}
+        style={{
+          backgroundColor: isDark ? '#27272a' : '#f3f4f6',
+          elevation: 0,
+          borderRadius: 12,
+          height: 48
+        }}
+        inputStyle={{
+          color: isDark ? '#fff' : '#000',
+          minHeight: 0,
+        }}
+        iconColor={isDark ? '#a1a1aa' : '#6b7280'}
+      />
+    </View>
+  );
+
 
   // Back Button Handling
   useEffect(() => {
@@ -695,7 +756,7 @@ const MainScreen = () => {
       >
         {activeTab === 'home' && (
           <View className="flex-1">
-            <Header title={t('header.discover')} subtitle={t('header.discover.sub')} />
+            <Header title={t('header.discover')} />
             <ScrollView
               className="flex-1 bg-gray-50/50 dark:bg-black"
               contentContainerStyle={{ paddingBottom: 100 }}
@@ -753,9 +814,9 @@ const MainScreen = () => {
           <View className="flex-1">
             <Header
               title={t('header.library')}
-              subtitle={t('header.library.sub')}
               rightAction={<HeaderActions />}
             />
+            {renderGlobalSearchBar()}
             {galleryLayout === 'grid' ? (
               <FlashList
                 key={`lib-flash-${numColumns}`}
@@ -811,7 +872,6 @@ const MainScreen = () => {
           <View className="flex-1">
             <Header
               title={t('header.favorites')}
-              subtitle={t('header.favorites.sub')}
               rightAction={<HeaderActions />}
             />
             {galleryLayout === 'grid' ? (
@@ -928,13 +988,12 @@ const MainScreen = () => {
         {activeTab === 'folders' && (
           <View className="flex-1">
             <Header
-              title={currentPath ? (currentPath.split(/[/\\]/).pop() || t('header.folders')) : t('header.folders')}
-              subtitle={currentPath ? t('header.browse') : t('header.folders.sub')}
+              title={currentPath ? (currentPath.split('/').pop() || t('header.folders')) : t('header.folders')}
               showBack={!!currentPath}
               onBack={handleBack}
               rightAction={<HeaderActions />}
             />
-
+            {renderGlobalSearchBar()}
             <Animated.View
               key={currentPath || 'root'}
               entering={enteringAnimation}
@@ -1167,7 +1226,12 @@ const MainScreen = () => {
                 setFavoriteFiles(snapshot.favorites);
                 setFolderFiles(snapshot.folder);
               }
+              // 3. Fallback Full Refresh Hook
+              if (activeTab === 'favorites') {
+                loadFavoritesData(0);
+              }
             }}
+            onJumpToFolder={handleJumpToFolder}
           />
         </Animated.View>
       )}

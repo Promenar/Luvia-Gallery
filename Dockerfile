@@ -10,6 +10,12 @@ RUN npm run build
 FROM node:20-bookworm as prod-deps
 WORKDIR /app
 COPY package*.json ./
+
+# 添加编译扩展工具
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 make g++ \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN npm config set registry https://registry.npmmirror.com/ && npm install --production
 
 # Stage 3: Final Image (Extremely slimmed down)
@@ -26,6 +32,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
     gnupg \
+    python3 \
+    make \
+    g++ \
     && mkdir -p /etc/apt/keyrings \
     && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
     && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main" > /etc/apt/sources.list.d/nodesource.list \

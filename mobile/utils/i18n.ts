@@ -38,6 +38,7 @@ const translations: Record<Language, Record<string, string>> = {
         'header.favorites.sub': 'Your collected moments',
         'header.folders': 'Folders',
         'header.folders.sub': 'Browse your collection',
+        'header.folders.sub_path': 'Viewing directory contents',
         'header.browse': 'Browse Directory',
         'header.settings': 'Settings',
         'header.settings.sub': 'Configuration & Status',
@@ -214,6 +215,8 @@ const translations: Record<Language, Record<string, string>> = {
         'error.server_error': 'Server internal error\nContact administrator',
         'error.not_found': 'Resource not found',
         'error.unknown': 'Unknown error\nPlease try again',
+        'search': 'Search...',
+        'search_placeholder': 'Search...',
     },
     zh: {
         'app.title': 'Luvia 图库',
@@ -230,6 +233,7 @@ const translations: Record<Language, Record<string, string>> = {
         'header.favorites.sub': '珍藏的瞬间',
         'header.folders': '文件夹',
         'header.folders.sub': '浏览目录',
+        'header.folders.sub_path': '查看目录内容',
         'header.browse': '浏览目录',
         'header.settings': '设置',
         'header.settings.sub': '配置与状态',
@@ -404,6 +408,8 @@ const translations: Record<Language, Record<string, string>> = {
         'admin.confirm_delete_user': '确定要删除此用户吗？此操作无法撤销。',
         'admin.extract_dimensions': '渲染布局加速',
         'admin.extract_dimensions_desc': '预分析存量缩略图尺寸信息以实现列表秒开排版',
+        'search': '搜索媒体...',
+        'search_placeholder': '搜索...',
     }
 };
 
