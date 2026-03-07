@@ -32,3 +32,6 @@ thumbs/
 lumina-config.json
 media_test/
 .env
+
+# Secure Environment
+secure_env/

@@ -284,7 +284,6 @@ const MainScreen = () => {
       setLoading(false);
       setLoadingMore(false);
       setRefreshing(false);
-      endReachedLock.current = false;
     }
   };
 
@@ -344,7 +343,6 @@ const MainScreen = () => {
       setLoading(false);
       setLoadingMore(false);
       setRefreshing(false);
-      endReachedLock.current = false;
     }
   };
 
@@ -397,7 +395,6 @@ const MainScreen = () => {
       setLoading(false);
       setLoadingMore(false);
       setRefreshing(false);
-      endReachedLock.current = false;
     }
   };
 
@@ -834,7 +831,7 @@ const MainScreen = () => {
                     loadLibraryData(libraryOffset + 100, true);
                   }
                 }}
-                onEndReachedThreshold={2}
+                onEndReachedThreshold={0.5}
                 ListFooterComponent={loadingMore ? <ActivityIndicator className="py-4" color={isDark ? "#fff" : "#000"} /> : null}
                 renderItem={({ item }: { item: MediaItem }) => (
                   <View className="flex-1 p-1">
@@ -891,7 +888,7 @@ const MainScreen = () => {
                     loadFavoritesData(favoriteOffset + 50, true);
                   }
                 }}
-                onEndReachedThreshold={2}
+                onEndReachedThreshold={0.5}
                 ListFooterComponent={loadingMore ? <ActivityIndicator className="py-4" color={isDark ? "#fff" : "#000"} /> : null}
                 ListHeaderComponent={
                   favoriteFolders.length > 0 ? (
@@ -1009,12 +1006,15 @@ const MainScreen = () => {
                   keyExtractor={(item: MediaItem) => item.id}
                   contentContainerStyle={{ padding: 12, paddingBottom: 100 }}
                   refreshControl={<RefreshControl refreshing={refreshing || loading} onRefresh={onRefresh} />}
+                  onMomentumScrollBegin={() => { endReachedLock.current = false; }}
                   onEndReached={() => {
+                    if (endReachedLock.current) return;
                     if (hasMoreFolderFiles && !loadingMore && !loading) {
+                      endReachedLock.current = true;
                       loadFolderData(currentPath, folderOffset + 50, true);
                     }
                   }}
-                  onEndReachedThreshold={2}
+                  onEndReachedThreshold={0.5}
                   ListFooterComponent={loadingMore ? <ActivityIndicator className="py-4" color={isDark ? "#fff" : "#000"} /> : null}
                   ListHeaderComponent={
                     <View>
@@ -1068,8 +1068,11 @@ const MainScreen = () => {
                   onLongPress={handleManagePress}
                   onRefresh={onRefresh}
                   refreshing={refreshing || loading}
+                  onMomentumScrollBegin={() => { endReachedLock.current = false; }}
                   onEndReached={() => {
+                    if (endReachedLock.current) return;
                     if (hasMoreFolderFiles && !loadingMore && !loading) {
+                      endReachedLock.current = true;
                       loadFolderData(currentPath, folderOffset + 50, true);
                     }
                   }}
