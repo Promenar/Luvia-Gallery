@@ -1,5 +1,5 @@
 services:
-  lumina-gallery:
+  luvia:
     build: .
     image: promenarleng/luvia-gallery:latest
     container_name: luvia-gallery
@@ -7,10 +7,10 @@ services:
     ports:
       - "3000:3001"
     volumes:
-      # Volumes: Map as many folders as you need
+      # Volumes: Map as many folders as you need (read-only recommended)
       # Example:
-      - ./media:/media
-      # - /mnt/external_drive:/mnt/ext
+      - ./media:/media:ro
+      # - /mnt/external_drive:/mnt/ext:ro
 
       # Persistence for configuration
       - ./data:/app/data
