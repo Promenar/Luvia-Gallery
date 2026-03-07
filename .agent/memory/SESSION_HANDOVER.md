@@ -5,7 +5,8 @@
 - ✅ Trae 完成了二次审计验证 (Deep Audit)，确认核心修复均正确实现。
 - ✅ 完成搜索功能可行性分析，确认现有架构可直接实现搜索功能。
 - ✅ 完成 FTS5 搜索方案架构审核，发现 3 处关键设计缺陷并给出修正方案。
-- ✅ **新增** 完成热更新兼容性分析，发现 Dockerfile 缺少编译工具的问题。
+- ✅ 完成热更新兼容性分析，发现 Dockerfile 缺少编译工具的问题。
+- ✅ **新增** 修复 APP 端图库分页无限加载 BUG。
 
 ## 下一步的具体计划 (Next Steps)
 - **【搜索功能 - FTS5】** 执行修正后的实施方案：
@@ -26,7 +27,8 @@
 - 二次审计报告：`.agent/docs/audits/SECONDARY_AUDIT_REPORT.md`
 - 搜索功能可行性报告：`.agent/docs/analysis/SEARCH_FEASIBILITY_REPORT.md`
 - FTS5 架构审核报告：`.agent/docs/audits/FTS5_ARCH_REVIEW.md`
-- **新增** 热更新兼容性报告：`.agent/docs/audits/HOTUPDATE_COMPATIBILITY_REPORT.md`
+- 热更新兼容性报告：`.agent/docs/audits/HOTUPDATE_COMPATIBILITY_REPORT.md`
+- **新增** APP 分页 BUG 报告：`.agent/docs/audits/APP_PAGINATION_BUG_REPORT.md`
 - Gemini FTS5 方案：`.agent/docs/plans/ARCH_FTS5_SEARCH_PLAN.md`
 
 ## 大模型推荐
