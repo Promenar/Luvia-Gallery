@@ -1,4 +1,4 @@
-const initSqlJs = require('sql.js');
+const Database = require('better-sqlite3');
 const fs = require('fs');
 const path = require('path');
 
@@ -6,36 +6,33 @@ const DB_DIR = path.join(__dirname, 'data');
 const DB_FILE = path.join(DB_DIR, 'lumina.db');
 
 let db = null;
-let SQL = null;
 
 /**
  * Initialize the database connection and schema
  */
-async function initDatabase() {
+function initDatabase() {
     // Ensure data directory exists
     if (!fs.existsSync(DB_DIR)) {
         fs.mkdirSync(DB_DIR, { recursive: true });
     }
 
-    // Initialize sql.js
-    SQL = await initSqlJs();
-
-    // Load existing database or create new one
     if (fs.existsSync(DB_FILE)) {
-        const buffer = fs.readFileSync(DB_FILE);
-        db = new SQL.Database(buffer);
         console.log('Database loaded from', DB_FILE);
+        db = new Database(DB_FILE);
     } else {
-        db = new SQL.Database();
         console.log('Created new database');
+        db = new Database(DB_FILE);
         createSchema();
     }
 
-    // Verify schema exists (for upgrades)
+    db.pragma('journal_mode = WAL'); // Enable WAL mode for high concurrency
+
+    // Create/Verify schema exists (for upgrades)
     ensureSchema();
 
     // Migration
     migrateFavorites();
+    migrateToFTS5(); // FTS5 migration for existing data
 }
 
 /**
@@ -45,7 +42,7 @@ function createSchema() {
     console.log('Creating database schema...');
 
     // Files table
-    db.run(`
+    db.exec(`
         CREATE TABLE IF NOT EXISTS files (
             id TEXT PRIMARY KEY,
             path TEXT UNIQUE NOT NULL,
@@ -64,14 +61,39 @@ function createSchema() {
     `);
 
     // Indexes for performance
-    db.run(`CREATE INDEX IF NOT EXISTS idx_folder_path ON files(folder_path)`);
-    db.run(`CREATE INDEX IF NOT EXISTS idx_media_type ON files(media_type)`);
-    db.run(`CREATE INDEX IF NOT EXISTS idx_source_id ON files(source_id)`);
-    db.run(`CREATE INDEX IF NOT EXISTS idx_last_modified ON files(last_modified DESC)`);
-    db.run(`CREATE INDEX IF NOT EXISTS idx_name ON files(name COLLATE NOCASE)`);
+    db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_folder_path ON files(folder_path);
+        CREATE INDEX IF NOT EXISTS idx_media_type ON files(media_type);
+        CREATE INDEX IF NOT EXISTS idx_source_id ON files(source_id);
+        CREATE INDEX IF NOT EXISTS idx_last_modified ON files(last_modified DESC);
+        CREATE INDEX IF NOT EXISTS idx_name ON files(name COLLATE NOCASE);
+    `);
+
+    // FTS5 Virtual Table for Search
+    db.exec(`
+        CREATE VIRTUAL TABLE IF NOT EXISTS files_fts USING fts5(
+            name, 
+            folder_path, 
+            tokenize='unicode61'
+        );
+    `);
+
+    // FTS5 Triggers synchronized via Native ROWID
+    db.exec(`
+        CREATE TRIGGER IF NOT EXISTS files_fts_ai AFTER INSERT ON files BEGIN
+            INSERT INTO files_fts(rowid, name, folder_path) VALUES (new.rowid, new.name, new.folder_path);
+        END;
+        CREATE TRIGGER IF NOT EXISTS files_fts_ad AFTER DELETE ON files BEGIN
+            INSERT INTO files_fts(files_fts, rowid, name, folder_path) VALUES('delete', old.rowid, old.name, old.folder_path);
+        END;
+        CREATE TRIGGER IF NOT EXISTS files_fts_au AFTER UPDATE ON files BEGIN
+            INSERT INTO files_fts(files_fts, rowid, name, folder_path) VALUES('delete', old.rowid, old.name, old.folder_path);
+            INSERT INTO files_fts(rowid, name, folder_path) VALUES (new.rowid, new.name, new.folder_path);
+        END;
+    `);
 
     // Thumbnails table
-    db.run(`
+    db.exec(`
         CREATE TABLE IF NOT EXISTS thumbnails (
             file_id TEXT PRIMARY KEY,
             thumbnail_path TEXT NOT NULL,
@@ -80,7 +102,7 @@ function createSchema() {
     `);
 
     // Favorites table
-    db.run(`
+    db.exec(`
         CREATE TABLE IF NOT EXISTS favorites (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id TEXT NOT NULL,
@@ -92,7 +114,7 @@ function createSchema() {
     `);
 
     // Folders cache table
-    db.run(`
+    db.exec(`
         CREATE TABLE IF NOT EXISTS folders (
             path TEXT PRIMARY KEY,
             media_count INTEGER DEFAULT 0,
@@ -102,64 +124,100 @@ function createSchema() {
     `);
 
     console.log('Schema created successfully');
-    saveDatabase();
 }
 
 /**
  * Ensure schema exists (for database upgrades)
  */
 function ensureSchema() {
-    // Check if tables exist
-    const tables = db.exec("SELECT name FROM sqlite_master WHERE type='table'");
-    const tableNames = tables.length > 0 ? tables[0].values.map(row => row[0]) : [];
+    const tableInfo = db.pragma('table_info(files)');
+    const columns = tableInfo.map(row => row.name);
 
-    if (!tableNames.includes('files')) {
+    if (columns.length === 0) {
         createSchema();
         return;
     }
 
     // Migration: Add thumbnail dimension columns if they don't exist
     try {
-        const tableInfo = db.exec("PRAGMA table_info(files)");
-        const columns = tableInfo.length > 0 ? tableInfo[0].values.map(row => row[1]) : [];
-
         if (!columns.includes('thumb_width')) {
             console.log('[Migration] Adding thumb_width column to files table');
-            db.run('ALTER TABLE files ADD COLUMN thumb_width INTEGER');
+            db.prepare('ALTER TABLE files ADD COLUMN thumb_width INTEGER').run();
         }
 
         if (!columns.includes('thumb_height')) {
             console.log('[Migration] Adding thumb_height column to files table');
-            db.run('ALTER TABLE files ADD COLUMN thumb_height INTEGER');
+            db.prepare('ALTER TABLE files ADD COLUMN thumb_height INTEGER').run();
         }
 
         if (!columns.includes('thumb_aspect_ratio')) {
             console.log('[Migration] Adding thumb_aspect_ratio column to files table');
-            db.run('ALTER TABLE files ADD COLUMN thumb_aspect_ratio REAL');
+            db.prepare('ALTER TABLE files ADD COLUMN thumb_aspect_ratio REAL').run();
         }
-
-        saveDatabase();
     } catch (error) {
         console.error('[Migration] Failed to add thumbnail dimension columns:', error);
     }
 }
 
-/**
- * Save database to disk
- */
-function saveDatabase() {
-    if (!db) {
-        console.log('[DB] saveDatabase: db is null, skipping save');
+async function migrateToFTS5() {
+    console.log('[Migration] Checking FTS5 status...');
+
+    // Check if FTS virtual table exists
+    const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='files_fts'").get();
+    if (!tables) {
+        console.log('[Migration] Creating FTS5 table as it is missing...');
+        db.exec("CREATE VIRTUAL TABLE IF NOT EXISTS files_fts USING fts5(name, folder_path, tokenize='unicode61');");
+        db.exec(`
+            CREATE TRIGGER IF NOT EXISTS files_fts_ai AFTER INSERT ON files BEGIN
+                INSERT INTO files_fts(rowid, name, folder_path) VALUES (new.rowid, new.name, new.folder_path);
+            END;
+            CREATE TRIGGER IF NOT EXISTS files_fts_ad AFTER DELETE ON files BEGIN
+                INSERT INTO files_fts(files_fts, rowid, name, folder_path) VALUES('delete', old.rowid, old.name, old.folder_path);
+            END;
+            CREATE TRIGGER IF NOT EXISTS files_fts_au AFTER UPDATE ON files BEGIN
+                INSERT INTO files_fts(files_fts, rowid, name, folder_path) VALUES('delete', old.rowid, old.name, old.folder_path);
+                INSERT INTO files_fts(rowid, name, folder_path) VALUES (new.rowid, new.name, new.folder_path);
+            END;
+        `);
+    }
+
+    // Check if it is populated
+    const count = db.prepare("SELECT COUNT(*) as count FROM files_fts").get();
+    if (count.count > 0) {
+        console.log('[Migration] FTS5 already indexed, skipping full table scan.');
         return;
     }
-    try {
-        const data = db.export();
-        const buffer = Buffer.from(data);
-        fs.writeFileSync(DB_FILE, buffer);
-        console.log('[DB] Database saved to', DB_FILE, '- Size:', buffer.length, 'bytes');
-    } catch (error) {
-        console.error('[DB] Failed to save database:', error);
+
+    console.log('[Migration] Starting FTS5 index building for existing files...');
+    const BATCH_SIZE = 10000;
+    let offset = 0;
+    let total = 0;
+
+    const insert = db.prepare("INSERT INTO files_fts(rowid, name, folder_path) VALUES (?, ?, ?)");
+    const insertMany = db.transaction((items) => {
+        for (const item of items) {
+            insert.run(item.rowid, item.name, item.folder_path);
+        }
+    });
+
+    while (true) {
+        const rows = db.prepare("SELECT rowid, name, folder_path FROM files LIMIT ? OFFSET ?").all(BATCH_SIZE, offset);
+        if (rows.length === 0) break;
+
+        insertMany(rows);
+        total += rows.length;
+        offset += BATCH_SIZE;
+        console.log(`[Migration] Indexed ${total} files...`);
     }
+
+    console.log(`[Migration] FTS5 migration complete. Total: ${total} files indexed.`);
+}
+
+/**
+ * Save database to disk (No-op for better-sqlite3 with WAL mode)
+ */
+function saveDatabase() {
+    // No-op. Persistence is natively managed by SQLite / WAL
 }
 
 /**
@@ -178,7 +236,7 @@ function upsertFile(file) {
             thumb_aspect_ratio = excluded.thumb_aspect_ratio
     `);
 
-    stmt.run([
+    stmt.run(
         file.id,
         file.path,
         file.name,
@@ -191,28 +249,20 @@ function upsertFile(file) {
         file.thumb_width || null,
         file.thumb_height || null,
         file.thumb_aspect_ratio || null
-    ]);
-
-    stmt.free();
+    );
 }
 
 /**
  * Insert files in batch (transaction)
  */
-function insertFilesBatch(files, shouldSave = true) {
-    db.run('BEGIN TRANSACTION');
-
+function insertFilesBatch(files) {
     try {
-        for (const file of files) {
-            upsertFile(file);
-        }
-        db.run('COMMIT');
-        if (shouldSave) {
-            saveDatabase();
-        }
+        const insertTx = db.transaction((filesList) => {
+            for (const file of filesList) upsertFile(file);
+        });
+        insertTx(files);
         return true;
     } catch (error) {
-        db.run('ROLLBACK');
         console.error('Batch insert failed:', error);
         return false;
     }
@@ -226,26 +276,36 @@ function queryFiles(options = {}) {
         offset = 0,
         limit = 500,
         folderPath = null,
-        mediaType = null, // Can be string or array
+        mediaType = null,
         sourceId = null,
         userId = null,
         random = false,
         excludeMediaType = null,
-        allowedPaths = null, // [NEW] Array of root paths the user is allowed to access
-        sortOption = 'dateDesc'
+        allowedPaths = null,
+        sortOption = 'dateDesc',
+        search = null
     } = options;
 
     let query = 'SELECT f.*, fav.id as is_fav FROM files f';
 
+    if (search) {
+        query += ' JOIN files_fts fts ON f.rowid = fts.rowid';
+    }
+
     if (userId) {
         query += ' LEFT JOIN favorites fav ON f.id = fav.item_id AND fav.user_id = ?';
     } else {
-        query += ' LEFT JOIN favorites fav ON 1=0'; // Dummy join if no user
+        query += ' LEFT JOIN favorites fav ON 1=0';
     }
 
     query += ' WHERE 1=1';
     const params = [];
     if (userId) params.push(userId);
+
+    if (search) {
+        query += ' AND fts.files_fts MATCH ?';
+        params.push(search);
+    }
 
     if (folderPath !== null) {
         if (options.recursive) {
@@ -286,12 +346,10 @@ function queryFiles(options = {}) {
 
     if (allowedPaths !== null) {
         if (allowedPaths.length > 0) {
-            // Build OR clauses for each allowed root path (using standard SQL quotes for string building)
             const clauses = allowedPaths.map(() => '(f.path = ? OR f.path LIKE ? || "/%" OR f.folder_path = ? OR f.folder_path LIKE ? || "/%")').join(' OR ');
             query += ` AND (${clauses})`;
             allowedPaths.forEach(p => params.push(p, p, p, p));
         } else {
-            // Explicitly allowed paths is empty -> Deny all
             query += ' AND 1=0';
         }
     }
@@ -300,77 +358,73 @@ function queryFiles(options = {}) {
         query += ' ORDER BY RANDOM() LIMIT ? OFFSET ?';
     } else {
         switch (sortOption) {
-            case 'dateAsc':
-                query += ' ORDER BY f.last_modified ASC LIMIT ? OFFSET ?';
-                break;
-            case 'nameAsc':
-                query += ' ORDER BY f.name COLLATE NOCASE ASC LIMIT ? OFFSET ?';
-                break;
-            case 'nameDesc':
-                query += ' ORDER BY f.name COLLATE NOCASE DESC LIMIT ? OFFSET ?';
-                break;
+            case 'dateAsc': query += ' ORDER BY f.last_modified ASC LIMIT ? OFFSET ?'; break;
+            case 'nameAsc': query += ' ORDER BY f.name COLLATE NOCASE ASC LIMIT ? OFFSET ?'; break;
+            case 'nameDesc': query += ' ORDER BY f.name COLLATE NOCASE DESC LIMIT ? OFFSET ?'; break;
             case 'dateDesc':
-            default:
-                query += ' ORDER BY f.last_modified DESC LIMIT ? OFFSET ?';
+            default: query += ' ORDER BY f.last_modified DESC LIMIT ? OFFSET ?';
         }
     }
 
     params.push(limit, offset);
 
     const stmt = db.prepare(query);
-    stmt.bind(params);
+    const results = stmt.all(...params);
 
-    const results = [];
-    while (stmt.step()) {
-        const row = stmt.getAsObject();
-        results.push({
-            id: row.id,
-            path: row.path,
-            name: row.name,
-            folderPath: row.folder_path,
-            size: row.size,
-            type: row.type,
-            mediaType: row.media_type,
-            lastModified: row.last_modified,
-            sourceId: row.source_id,
-            isFavorite: !!row.is_fav,
-            thumb_width: row.thumb_width,
-            thumb_height: row.thumb_height,
-            thumb_aspect_ratio: row.thumb_aspect_ratio
-        });
-    }
-    stmt.free();
-
-    return results;
+    return results.map(row => ({
+        id: row.id,
+        path: row.path,
+        name: row.name,
+        folderPath: row.folder_path,
+        size: row.size,
+        type: row.type,
+        mediaType: row.media_type,
+        lastModified: row.last_modified,
+        sourceId: row.source_id,
+        isFavorite: !!row.is_fav,
+        thumb_width: row.thumb_width,
+        thumb_height: row.thumb_height,
+        thumb_aspect_ratio: row.thumb_aspect_ratio
+    }));
 }
 
 /**
  * Count total files
  */
 function countFiles(options = {}) {
-    const { folderPath = null, mediaType = null, recursive = false, allowedPaths = null } = options;
+    const { folderPath = null, mediaType = null, recursive = false, allowedPaths = null, search = null } = options;
 
-    let query = 'SELECT COUNT(*) as count FROM files WHERE 1=1';
+    let query = 'SELECT COUNT(*) as count FROM files f';
+    if (search) {
+        query += ' JOIN files_fts fts ON f.rowid = fts.rowid';
+    }
+
+    query += ' WHERE 1=1';
     const params = [];
+
+    if (search) {
+        query += ' AND fts.files_fts MATCH ?';
+        params.push(search);
+    }
 
     if (folderPath !== null) {
         if (recursive) {
-            query += ' AND (folder_path = ? OR folder_path LIKE ?)';
+            query += ' AND (f.folder_path = ? OR f.folder_path LIKE ?)';
             params.push(folderPath, folderPath + '/%');
         } else {
-            query += ' AND folder_path = ?';
+            query += ' AND f.folder_path = ?';
             params.push(folderPath);
         }
     }
 
     if (mediaType) {
-        query += ' AND media_type = ?';
+        query += ' AND f.media_type = ?';
         params.push(mediaType);
     }
 
     if (allowedPaths !== null) {
         if (allowedPaths.length > 0) {
-            const clauses = allowedPaths.map(() => '(path = ? OR path LIKE ? || "/%" OR folder_path = ? OR folder_path LIKE ? || "/%")').join(' OR ');
+            const clauses = allowedPaths.map(() => '(f.path = ? OR f.path LIKE ? || "/%" OR f.folder_path = ? OR f.folder_path LIKE ? || "/%")').join(' OR ');
             query += ` AND (${clauses})`;
             allowedPaths.forEach(p => params.push(p, p, p, p));
         } else {
@@ -379,17 +433,10 @@ function countFiles(options = {}) {
     }
 
     const stmt = db.prepare(query);
-    stmt.bind(params);
-    stmt.step();
-    const result = stmt.getAsObject();
-    stmt.free();
-
+    const result = stmt.get(...params);
     return result.count || 0;
 }
 
-/**
- * Delete file by path
- */
 /**
  * Delete file by path or ID
  */
@@ -402,46 +449,30 @@ function deleteFile(filePath, id = null) {
         params.push(id);
     }
 
-    const stmt = db.prepare(query);
-    stmt.run(params);
-    stmt.free();
+    db.prepare(query).run(...params);
 
-    // Also delete from favorites
     if (id) {
-        const favStmt = db.prepare('DELETE FROM favorites WHERE item_id = ?');
-        favStmt.run([id]);
-        favStmt.free();
+        db.prepare('DELETE FROM favorites WHERE item_id = ?').run(id);
     }
-    // Note: Single file usage usually implies manual action, so saving immediately is tolerable,
-    // but for bulk, use deleteFilesBatch. 
-    // Ideally we shouldn't save on every delete even for single, but to keep existing behavior for now:
-    // We will REMOVE saveDatabase() here and let caller handle it, or add a debounce?
-    // User interaction "Delete" should save.
-    // I will add a `shouldSave` param defaulting to true.
 }
 
 /**
  * Batch delete files
  */
-function deleteFilesBatch(files, shouldSave = true) {
-    db.run('BEGIN TRANSACTION');
+function deleteFilesBatch(files) {
     try {
         const stmt = db.prepare('DELETE FROM files WHERE id = ?');
         const favStmt = db.prepare('DELETE FROM favorites WHERE item_id = ?');
 
-        for (const file of files) {
-            stmt.run([file.id]);
-            favStmt.run([file.id]);
-        }
-
-        stmt.free();
-        favStmt.free();
-
-        db.run('COMMIT');
-        if (shouldSave) saveDatabase();
+        const tx = db.transaction((filesList) => {
+            for (const file of filesList) {
+                stmt.run(file.id);
+                favStmt.run(file.id);
+            }
+        });
+        tx(files);
         return true;
     } catch (e) {
-        db.run('ROLLBACK');
         console.error('Batch delete failed:', e);
         return false;
     }
@@ -449,82 +480,47 @@ function deleteFilesBatch(files, shouldSave = true) {
 
 /**
  * Get all file paths and their last modified times for incremental scan
- * Returns a Map<path, lastModified>
  */
 function getAllFilesMtime() {
-    const stmt = db.prepare('SELECT path, last_modified FROM files');
+    const rows = db.prepare('SELECT path, last_modified FROM files').all();
     const mtimeMap = new Map();
-
-    while (stmt.step()) {
-        const row = stmt.getAsObject();
+    for (const row of rows) {
         mtimeMap.set(row.path, row.last_modified);
     }
-    stmt.free();
     return mtimeMap;
 }
 
-
-/**
- * Delete files by folder path
- */
 function deleteFilesByFolder(folderPath) {
-    const stmt = db.prepare('DELETE FROM files WHERE folder_path = ? OR folder_path LIKE ?');
-    stmt.run([folderPath, folderPath + '/%']);
-    stmt.free();
-    saveDatabase();
+    db.prepare('DELETE FROM files WHERE folder_path = ? OR folder_path LIKE ?').run(folderPath, folderPath + '/%');
 }
 
-/**
- * Delete files by source ID
- */
 function deleteFilesBySourceId(sourceId) {
-    const stmt = db.prepare('DELETE FROM files WHERE source_id = ?');
-    stmt.run([sourceId]);
-    stmt.free();
-    saveDatabase();
+    db.prepare('DELETE FROM files WHERE source_id = ?').run(sourceId);
 }
 
-/**
- * Get file by path
- */
 function getFileByPath(filePath) {
-    const stmt = db.prepare('SELECT * FROM files WHERE path = ?');
-    stmt.bind([filePath]);
-
-    let result = null;
-    if (stmt.step()) {
-        const row = stmt.getAsObject();
-        result = {
-            id: row.id,
-            path: row.path,
-            name: row.name,
-            folderPath: row.folder_path,
-            size: row.size,
-            type: row.type,
-            mediaType: row.media_type,
-            lastModified: row.last_modified,
-            sourceId: row.source_id,
-            thumb_width: row.thumb_width,
-            thumb_height: row.thumb_height,
-            thumb_aspect_ratio: row.thumb_aspect_ratio
-        };
-    }
-    stmt.free();
-
-    return result;
+    const row = db.prepare('SELECT * FROM files WHERE path = ?').get(filePath);
+    if (!row) return null;
+    return {
+        id: row.id,
+        path: row.path,
+        name: row.name,
+        folderPath: row.folder_path,
+        size: row.size,
+        type: row.type,
+        mediaType: row.media_type,
+        lastModified: row.last_modified,
+        sourceId: row.source_id,
+        thumb_width: row.thumb_width,
+        thumb_height: row.thumb_height,
+        thumb_aspect_ratio: row.thumb_aspect_ratio
+    };
 }
 
-/**
- * Clear all files (for rescan)
- */
 function clearAllFiles() {
-    db.run('DELETE FROM files');
-    saveDatabase();
+    db.prepare('DELETE FROM files').run();
 }
 
-/**
- * Get database statistics
- */
 function getStats(options = {}) {
     const { allowedPaths = null } = options;
     const totalFiles = countFiles({ allowedPaths });
@@ -541,223 +537,120 @@ function getStats(options = {}) {
     };
 }
 
-/**
- * Close database connection
- */
 function closeDatabase() {
     if (db) {
-        saveDatabase();
         db.close();
         db = null;
     }
 }
 
-/**
- * Migration: Convert legacy Path-based favorites to ID-based favorites
- */
 function migrateFavorites() {
     try {
         console.log('[Migration] Checking for legacy path-based favorites...');
-        // 1. Try to resolve favorites where item_id matches a file path
         db.exec(`
             UPDATE favorites 
             SET item_id = (SELECT id FROM files WHERE path = favorites.item_id) 
             WHERE item_type = 'file' 
-            AND item_id NOT IN (SELECT id FROM files) 
-            AND item_id IN (SELECT path FROM files);
-        `);
-
-        console.log('[Migration] Favorites migration complete.');
-        saveDatabase();
+            AND item_id NOT IN(SELECT id FROM files) 
+            AND item_id IN(SELECT path FROM files);
+            `);
     } catch (e) {
         console.error('[Migration] Error migrating favorites:', e);
     }
 }
 
-/**
- * Toggle favorite status
- */
 function toggleFavorite(userId, itemId, itemType) {
-    console.log('[DB] toggleFavorite called:', { userId, itemId, itemType });
-
-    // Check if already favorited
-    const checkStmt = db.prepare('SELECT id FROM favorites WHERE user_id = ? AND item_id = ? AND item_type = ?');
-    checkStmt.bind([userId, itemId, itemType]);
-
-    const exists = checkStmt.step();
-    checkStmt.free();
-
-    console.log('[DB] Favorite exists:', exists);
+    const exists = db.prepare('SELECT id FROM favorites WHERE user_id = ? AND item_id = ? AND item_type = ?').get(userId, itemId, itemType);
 
     if (exists) {
-        // Remove favorite
-        const deleteStmt = db.prepare('DELETE FROM favorites WHERE user_id = ? AND item_id = ? AND item_type = ?');
-        deleteStmt.run([userId, itemId, itemType]);
-        deleteStmt.free();
-        console.log('[DB] Removed favorite, saving database...');
-        saveDatabase();
-        return false; // Not favorited anymore
+        db.prepare('DELETE FROM favorites WHERE user_id = ? AND item_id = ? AND item_type = ?').run(userId, itemId, itemType);
+        return false;
     } else {
-        // Add favorite
-        const insertStmt = db.prepare('INSERT INTO favorites (user_id, item_id, item_type) VALUES (?, ?, ?)');
-        insertStmt.run([userId, itemId, itemType]);
-        insertStmt.free();
-        console.log('[DB] Added favorite, saving database...');
-        saveDatabase();
-        return true; // Now favorited
+        db.prepare('INSERT INTO favorites (user_id, item_id, item_type) VALUES (?, ?, ?)').run(userId, itemId, itemType);
+        return true;
     }
 }
 
-/**
- * Get favorite IDs for a user
- */
 function getFavoriteIds(userId) {
-    const stmt = db.prepare('SELECT item_id, item_type FROM favorites WHERE user_id = ?');
-    stmt.bind([userId]);
-
+    const rows = db.prepare('SELECT item_id, item_type FROM favorites WHERE user_id = ?').all(userId);
     const files = [];
     const folders = [];
-
-    while (stmt.step()) {
-        const row = stmt.getAsObject();
-        if (row.item_type === 'file') {
-            files.push(row.item_id);
-        } else if (row.item_type === 'folder') {
-            folders.push(row.item_id);
-        }
+    for (const row of rows) {
+        if (row.item_type === 'file') files.push(row.item_id);
+        else if (row.item_type === 'folder') folders.push(row.item_id);
     }
-    stmt.free();
-
     return { files, folders };
 }
 
-/**
- * Query favorite files for a user
- */
 function queryFavoriteFiles(userId, options = {}) {
     const { offset = 0, limit = 500 } = options;
-
     const query = `
         SELECT f.*
-        FROM favorites fav
-        JOIN files f ON (f.id = fav.item_id OR f.path = fav.item_id)
+                FROM favorites fav
+        JOIN files f ON(f.id = fav.item_id OR f.path = fav.item_id)
         WHERE fav.user_id = ? AND fav.item_type = 'file'
         ORDER BY f.last_modified DESC
-        LIMIT ? OFFSET ?
-    `;
+            LIMIT ? OFFSET ?
+                `;
+    const rows = db.prepare(query).all(userId, limit, offset);
 
-    const stmt = db.prepare(query);
-    stmt.bind([userId, limit, offset]);
-
-    const results = [];
-    while (stmt.step()) {
-        const row = stmt.getAsObject();
-        results.push({
-            id: row.id,
-            path: row.path,
-            name: row.name,
-            folderPath: row.folder_path,
-            size: row.size,
-            type: row.type,
-            mediaType: row.media_type,
-            lastModified: row.last_modified,
-            sourceId: row.source_id,
-            thumb_width: row.thumb_width,
-            thumb_height: row.thumb_height,
-            thumb_aspect_ratio: row.thumb_aspect_ratio
-        });
-    }
-    stmt.free();
-
-    return results;
+    return rows.map(row => ({
+        id: row.id,
+        path: row.path,
+        name: row.name,
+        folderPath: row.folder_path,
+        size: row.size,
+        type: row.type,
+        mediaType: row.media_type,
+        lastModified: row.last_modified,
+        sourceId: row.source_id,
+        thumb_width: row.thumb_width,
+        thumb_height: row.thumb_height,
+        thumb_aspect_ratio: row.thumb_aspect_ratio
+    }));
 }
 
-/**
- * Count favorite files for a user
- */
 function countFavoriteFiles(userId) {
-    const query = `SELECT COUNT(*) as count FROM favorites fav JOIN files f ON (f.id = fav.item_id OR f.path = fav.item_id) WHERE fav.user_id = ? AND fav.item_type = 'file'`;
-    const stmt = db.prepare(query);
-    stmt.bind([userId]);
-    stmt.step();
-    const result = stmt.getAsObject();
-    stmt.free();
-
+    const query = `SELECT COUNT(*) as count FROM favorites fav JOIN files f ON(f.id = fav.item_id OR f.path = fav.item_id) WHERE fav.user_id = ? AND fav.item_type = 'file'`;
+    const result = db.prepare(query).get(userId);
     return result.count || 0;
 }
 
-/**
- * Rename file and update ID/references
- */
 function renameFile(oldPath, newPath, newName) {
     const oldId = Buffer.from(oldPath).toString('base64');
     const newId = Buffer.from(newPath).toString('base64');
     const folderPath = path.dirname(newPath);
 
-    db.run('BEGIN TRANSACTION');
     try {
-        // 1. Files table
-        // We delete old and insert new, OR update.
-        // If we update, we must update ID.
-        // SQLite allows updating PK if cascades are set, but here we do manually.
-        const file = getFileByPath(oldPath);
-        if (file) {
-            // Delete old
-            db.prepare('DELETE FROM files WHERE id = ?').run([oldId]);
+        const tx = db.transaction(() => {
+            const row = db.prepare('SELECT * FROM files WHERE path = ?').get(oldPath);
+            if (row) {
+                db.prepare('DELETE FROM files WHERE id = ?').run(oldId);
+                const stmt = db.prepare(`
+                    INSERT INTO files(id, path, name, folder_path, size, type, media_type, last_modified, source_id)
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+                `);
+                stmt.run(newId, newPath, newName, folderPath, row.size, row.type, row.media_type, Date.now(), row.source_id);
 
-            // Insert new (copy props)
-            const stmt = db.prepare(`
-                INSERT INTO files (id, path, name, folder_path, size, type, media_type, last_modified, source_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            `);
-            stmt.run([
-                newId,
-                newPath,
-                newName,
-                folderPath,
-                file.size,
-                file.type,
-                file.mediaType,
-                Date.now(), // Update modified time or keep old? Usually rename updates mtime on disk? 
-                // fs.rename updates ctime, not mtime usually. Let's keep old or use Date.now().
-                file.sourceId
-            ]);
-            stmt.free();
-
-            // 2. Favorites
-            db.prepare('UPDATE favorites SET item_id = ? WHERE item_id = ?').run([newId, oldId]);
-
-            // 3. Thumbnails
-            db.prepare('UPDATE thumbnails SET file_id = ? WHERE file_id = ?').run([newId, oldId]);
-        }
-
-        db.run('COMMIT');
+                db.prepare('UPDATE favorites SET item_id = ? WHERE item_id = ?').run(newId, oldId);
+                db.prepare('UPDATE thumbnails SET file_id = ? WHERE file_id = ?').run(newId, oldId);
+            }
+        });
+        tx();
         return true;
     } catch (e) {
-        db.run('ROLLBACK');
         console.error("Rename DB error:", e);
         return false;
     }
 }
 
-/**
- * Clear thumbnails table
- */
 function clearThumbnails() {
-    db.run('DELETE FROM thumbnails');
+    db.prepare('DELETE FROM thumbnails').run();
 }
 
-/**
- * Get all file paths (for sync)
- */
 function getAllFilePaths() {
-    const stmt = db.prepare('SELECT path FROM files');
-    const paths = [];
-    while (stmt.step()) {
-        paths.push(stmt.getAsObject().path);
-    }
-    stmt.free();
-    return paths;
+    const rows = db.prepare('SELECT path FROM files').all();
+    return rows.map(r => r.path);
 }
 
 module.exports = {
@@ -769,7 +662,7 @@ module.exports = {
     countFiles,
     deleteFile,
     deleteFilesByFolder,
-    deleteFilesBySourceId, // NEW
+    deleteFilesBySourceId,
     getFileByPath,
     clearAllFiles,
     getStats,
@@ -781,7 +674,7 @@ module.exports = {
     getAllFilePaths,
     deleteFilesBatch,
     getAllFilesMtime,
-    renameFile,      // NEW
-    clearThumbnails, // NEW
-    migrateFavorites // NEW
+    renameFile,
+    clearThumbnails,
+    migrateFavorites
 };

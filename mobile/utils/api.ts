@@ -212,11 +212,12 @@ interface FetchFilesOptions {
     refresh?: boolean; // New flag to force network
     recursive?: boolean;
     sort?: 'dateDesc' | 'dateAsc' | 'nameAsc' | 'nameDesc';
+    search?: string;
 }
 
 export const fetchFiles = async (options: FetchFilesOptions = {}) => {
     try {
-        const { folderPath, offset = 0, limit = 100, favorite, random, mediaType, excludeMediaType, refresh = false } = options;
+        const { folderPath, offset = 0, limit = 100, favorite, random, mediaType, excludeMediaType, refresh = false, search } = options;
 
         // 1. Try Cache First (if not random and not forcing refresh)
         if (!random && !refresh) {
@@ -234,6 +235,7 @@ export const fetchFiles = async (options: FetchFilesOptions = {}) => {
         if (favorite) url += `&favorites=true`;
         if (random) url += `&random=true`;
         if (options.recursive) url += `&recursive=true`;
+        if (search) url += `&search=${encodeURIComponent(search)}`;
 
         if (options.sort) url += `&sort=${options.sort}`;
 

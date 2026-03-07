@@ -629,12 +629,9 @@ export const SettingsScreenV2: React.FC<SettingsScreenV2Props> = ({ onBack, onLo
                                 <ArrowLeft size={20} color={isDark ? "#fff" : "#000"} />
                             </TouchableOpacity>
                         )}
-                        <View>
+                        <View className="justify-center mt-1">
                             <Text className="text-3xl font-bold text-gray-900 dark:text-white tracking-tighter">
                                 {t('header.settings')}
-                            </Text>
-                            <Text className="text-gray-500 dark:text-gray-400 text-sm font-medium">
-                                {t('settings.subtitle')}
                             </Text>
                         </View>
                     </View>

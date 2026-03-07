@@ -243,6 +243,14 @@ export default function App() {
     // --- Sort & Filter State ---
     const [sortOption, setSortOption] = useState<SortOption>('dateDesc');
     const [filterOption, setFilterOption] = useState<FilterOption>('all');
+    const [searchQuery, setSearchQuery] = useState('');
+    const [activeSearch, setActiveSearch] = useState('');
+
+    // Refs to combat stale closures
+    const activeSearchRef = useRef('');
+    useEffect(() => {
+        activeSearchRef.current = activeSearch;
+    }, [activeSearch]);
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
     const [settingsTab, setSettingsTab] = useState<SettingsTab>('general');
 
@@ -723,7 +731,8 @@ export default function App() {
         folderFilter: string | null = null,
         favoritesOnly: boolean = false,
         favoriteIdsOverride?: { files: string[], folders: string[] },
-        recursiveFavorites: boolean = false
+        recursiveFavorites: boolean = false,
+        searchQuery?: string
     ) => {
         try {
             setIsFetchingMore(true);
@@ -753,6 +762,11 @@ export default function App() {
                 if (recursiveFavorites) url += `&recursive=true`;
             } else if (folderFilter !== null && folderFilter !== undefined) {
                 url += `&folder=${encodeURIComponent(folderFilter)}`;
+            }
+
+            const effectiveSearch = searchQuery || activeSearchRef.current;
+            if (effectiveSearch) {
+                url += `&search=${encodeURIComponent(effectiveSearch)}`;
             }
 
             const res = await apiFetch(url);
@@ -863,7 +877,7 @@ export default function App() {
         const filter = viewMode === 'folders' ? currentPath : null;
         const favs = viewMode === 'favorites';
         fetchServerFiles(currentUser.username, allUserData, 0, true, filter, favs);
-    }, [sortOption, isServerMode, currentUser, viewMode, currentPath, homeConfig.mode]);
+    }, [sortOption, isServerMode, currentUser, viewMode, currentPath, homeConfig.mode, activeSearch]);
 
     const stopPolling = () => {
         if (scanTimeoutRef.current) {
@@ -2153,6 +2167,34 @@ export default function App() {
                         </div>
 
                         <div className="flex items-center gap-2">
+                            {/* Search Bar */}
+                            <div className="relative hidden md:flex items-center mr-2">
+                                <div className="absolute left-3 text-gray-400">
+                                    <Icons.Search size={16} />
+                                </div>
+                                <input
+                                    type="text"
+                                    placeholder="Search..."
+                                    value={searchQuery}
+                                    onChange={(e) => setSearchQuery(e.target.value)}
+                                    onKeyDown={(e) => {
+                                        if (e.key === 'Enter') setActiveSearch(searchQuery);
+                                    }}
+                                    className="pl-9 pr-8 py-1.5 bg-white/5 border border-white/10 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-accent-500 focus:bg-white/10 transition-all text-gray-800 dark:text-gray-200 placeholder-gray-500 w-48 lg:w-64"
+                                />
+                                {searchQuery && (
+                                    <button
+                                        onClick={() => {
+                                            setSearchQuery('');
+                                            setActiveSearch('');
+                                        }}
+                                        className="absolute right-2 p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 rounded-full"
+                                    >
+                                        <Icons.Close size={14} />
+                                    </button>
+                                )}
+                            </div>
+
                             {/* View/Sort Controls */}
                             {viewMode !== 'folders' && (
                                 <div className="flex items-center bg-white/5 rounded-lg p-1 border border-white/5">
