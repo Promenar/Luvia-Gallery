@@ -309,11 +309,23 @@ function queryFiles(options = {}) {
 
     if (folderPath !== null) {
         if (options.recursive) {
-            query += ' AND (f.folder_path = ? OR f.folder_path LIKE ?)';
-            params.push(folderPath, folderPath + '/%');
+            // Try both normalized and original path for backward compatibility
+            if (options.alternativeFolderPath) {
+                query += ' AND ((f.folder_path = ? OR f.folder_path LIKE ?) OR (f.folder_path = ? OR f.folder_path LIKE ?))';
+                params.push(folderPath, folderPath + '/%', options.alternativeFolderPath, options.alternativeFolderPath + '/%');
+            } else {
+                query += ' AND (f.folder_path = ? OR f.folder_path LIKE ?)';
+                params.push(folderPath, folderPath + '/%');
+            }
         } else {
-            query += ' AND f.folder_path = ?';
-            params.push(folderPath);
+            // Try both normalized and original path for backward compatibility
+            if (options.alternativeFolderPath) {
+                query += ' AND (f.folder_path = ? OR f.folder_path = ?)';
+                params.push(folderPath, options.alternativeFolderPath);
+            } else {
+                query += ' AND f.folder_path = ?';
+                params.push(folderPath);
+            }
         }
     }
 

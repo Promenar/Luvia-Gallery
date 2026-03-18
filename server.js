@@ -13,6 +13,25 @@ const sizeOf = require('image-size');
 const app = express();
 const port = process.env.PORT || 3001;
 
+// --- Helper Functions ---
+
+/**
+ * Smart path normalization for database consistency
+ * - Only normalizes if path is relative or contains '..' or '.'
+ * - Preserves absolute paths as-is (avoid breaking existing DB records)
+ */
+function smartNormalizePath(filePath) {
+    if (!filePath) return filePath;
+
+    // If path is already absolute and doesn't contain relative parts, keep it as-is
+    if (path.isAbsolute(filePath) && !filePath.includes('..') && !filePath.includes('/.')) {
+        return filePath;
+    }
+
+    // Otherwise, normalize it
+    return path.resolve(filePath);
+}
+
 // --- Constants ---
 const RAW_MEDIA_ROOT = process.env.MEDIA_ROOT || path.join(__dirname, 'media');
 // Support multiple roots via ';' delimiter (cross-platform friendly config)
@@ -1048,15 +1067,15 @@ async function processScan() {
                         if (allSupportedExts.includes(ext)) {
                             // OPTIMIZATION: Single stat call instead of two
                             const stats = fs.statSync(fullPath);
-                            
-                            // Normalize path for consistent lookup and storage
-                            const normalizedPath = path.resolve(fullPath);
+
+                            // Smart normalize path - only normalize if necessary (relative paths, symlinks, etc.)
+                            const normalizedPath = smartNormalizePath(fullPath);
 
                             // INCREMENTAL SCAN CHECK - try both normalized and original path for backward compatibility
                             const lastMtime = existingFilesMtime.get(normalizedPath) || existingFilesMtime.get(fullPath);
                             if (lastMtime && Math.abs(lastMtime - stats.mtimeMs) < 100) {
                                 // File unchanged, skip detailed processing
-                                allScannedPaths.add(normalizedPath);
+                                allScannedPaths.add(fullPath);  // Keep original for cleanup
                                 totalProcessed++;
                                 if (totalProcessed % 50 === 0) scanState.count = totalProcessed;
                                 continue;
@@ -1075,12 +1094,12 @@ async function processScan() {
                                 else if (ext === '.wma') fileType = 'audio/x-ms-wma';
                             }
 
-                            // Normalize folder path
-                            const normalizedFolderPath = path.resolve(path.dirname(fullPath));
-                            
+                            // Smart normalize folder path
+                            const normalizedFolderPath = smartNormalizePath(path.dirname(fullPath));
+
                             const fileData = {
-                                id: Buffer.from(normalizedPath).toString('base64'),
-                                path: normalizedPath,
+                                id: Buffer.from(fullPath).toString('base64'),  // Use fullPath for ID consistency
+                                path: fullPath,  // Store original path to match database
                                 name: item.name,
                                 folderPath: normalizedFolderPath,
                                 size: stats.size,
@@ -1091,7 +1110,7 @@ async function processScan() {
                             };
 
                             batchBuffer.push(fileData);
-                            allScannedPaths.add(normalizedPath);  // Use normalized path for cleanup consistency
+                            allScannedPaths.add(fullPath);  // Track original path for cleanup
                             totalProcessed++;
                             scanState.count = totalProcessed;
 
@@ -1127,13 +1146,9 @@ async function processScan() {
         console.log('Syncing database with scan results...');
         try {
             const allDbPaths = database.getAllFilePaths();
-            
-            // Normalize paths for comparison to handle old unnormalized data in database
-            const normalizedScannedPaths = new Set([...allScannedPaths].map(p => path.resolve(p)));
-            const pathsToDelete = allDbPaths.filter(p => {
-                const normalizedP = path.resolve(p);
-                return !normalizedScannedPaths.has(normalizedP);
-            });
+
+            // Direct path comparison - we store original paths now
+            const pathsToDelete = allDbPaths.filter(p => !allScannedPaths.has(p));
 
             if (pathsToDelete.length > 0) {
                 console.log(`Found ${pathsToDelete.length} missing files to delete.`);
@@ -1406,7 +1421,10 @@ app.get('/api/scan/results', (req, res) => {
                 const queryOptions = { offset, limit, random, recursive, mediaType, excludeMediaType, userId, search };
 
                 if (folderPath) {
-                    queryOptions.folderPath = path.resolve(folderPath);
+                    // Try both original and normalized path for backward compatibility
+                    const normalizedFolderPath = path.resolve(folderPath);
+                    queryOptions.folderPath = normalizedFolderPath;
+                    queryOptions.alternativeFolderPath = folderPath;  // For fallback lookup
                 } else if (!isAdmin) {
                     // If no specific folder and not admin, ALWAYS apply path constraints
                     queryOptions.allowedPaths = userLibraryPaths;
@@ -1415,6 +1433,7 @@ app.get('/api/scan/results', (req, res) => {
                 files = database.queryFiles({ ...queryOptions, sortOption });
                 total = database.countFiles({
                     folderPath: folderPath ? path.resolve(folderPath) : null,
+                    alternativeFolderPath: folderPath,  // For fallback lookup
                     recursive,
                     allowedPaths: (!folderPath && !isAdmin) ? userLibraryPaths : null,
                     search
