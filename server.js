@@ -1048,14 +1048,17 @@ async function processScan() {
                         if (allSupportedExts.includes(ext)) {
                             // OPTIMIZATION: Single stat call instead of two
                             const stats = fs.statSync(fullPath);
+                            
+                            // Normalize path for consistent lookup and storage
+                            const normalizedPath = path.resolve(fullPath);
 
-                            // INCREMENTAL SCAN CHECK
-                            const lastMtime = existingFilesMtime.get(fullPath);
+                            // INCREMENTAL SCAN CHECK - try both normalized and original path for backward compatibility
+                            const lastMtime = existingFilesMtime.get(normalizedPath) || existingFilesMtime.get(fullPath);
                             if (lastMtime && Math.abs(lastMtime - stats.mtimeMs) < 100) {
                                 // File unchanged, skip detailed processing
-                                allScannedPaths.add(fullPath);
+                                allScannedPaths.add(normalizedPath);
                                 totalProcessed++;
-                                if (totalProcessed % 50 === 0) scanState.count = totalProcessed; // Update UI less frequently for speed
+                                if (totalProcessed % 50 === 0) scanState.count = totalProcessed;
                                 continue;
                             }
 
@@ -1072,11 +1075,14 @@ async function processScan() {
                                 else if (ext === '.wma') fileType = 'audio/x-ms-wma';
                             }
 
+                            // Normalize folder path
+                            const normalizedFolderPath = path.resolve(path.dirname(fullPath));
+                            
                             const fileData = {
-                                id: Buffer.from(fullPath).toString('base64'),
-                                path: fullPath,
+                                id: Buffer.from(normalizedPath).toString('base64'),
+                                path: normalizedPath,
                                 name: item.name,
-                                folderPath: path.dirname(fullPath),
+                                folderPath: normalizedFolderPath,
                                 size: stats.size,
                                 type: fileType,
                                 mediaType: fileType.startsWith('video') ? 'video' : (fileType.startsWith('audio') ? 'audio' : 'image'),
@@ -1085,7 +1091,7 @@ async function processScan() {
                             };
 
                             batchBuffer.push(fileData);
-                            allScannedPaths.add(fullPath);
+                            allScannedPaths.add(normalizedPath);  // Use normalized path for cleanup consistency
                             totalProcessed++;
                             scanState.count = totalProcessed;
 
@@ -1121,7 +1127,13 @@ async function processScan() {
         console.log('Syncing database with scan results...');
         try {
             const allDbPaths = database.getAllFilePaths();
-            const pathsToDelete = allDbPaths.filter(p => !allScannedPaths.has(p));
+            
+            // Normalize paths for comparison to handle old unnormalized data in database
+            const normalizedScannedPaths = new Set([...allScannedPaths].map(p => path.resolve(p)));
+            const pathsToDelete = allDbPaths.filter(p => {
+                const normalizedP = path.resolve(p);
+                return !normalizedScannedPaths.has(normalizedP);
+            });
 
             if (pathsToDelete.length > 0) {
                 console.log(`Found ${pathsToDelete.length} missing files to delete.`);
