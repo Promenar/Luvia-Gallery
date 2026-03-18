@@ -105,7 +105,23 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-# 4. Cleanup (Optional)
+# 4. Run Database Migration (if needed)
+echo "[Update] Checking database migration status..."
+if [ -f "scripts/normalize-paths.js" ]; then
+    echo "[Update] Running path normalization migration..."
+    node scripts/normalize-paths.js
+    if [ $? -ne 0 ]; then
+        echo "[Update] Migration failed! Continuing with current state..."
+        # Don't exit on migration failure - allow app to run with old paths
+        echo "[Update] Note: The app will attempt backward-compatible queries"
+    else
+        echo "[Update] Migration completed successfully!"
+    fi
+else
+    echo "[Update] Migration script not found, skipping..."
+fi
+
+# 5. Cleanup (Optional)
 # Prune dev dependencies to save space after build
 # echo "[Update] Pruning dev dependencies..."
 # npm prune --production
