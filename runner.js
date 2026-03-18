@@ -211,6 +211,8 @@ const SAFE_MODE_HTML = `
         <p>1. 请检查容器日志。<br>2. 修复代码并推送到仓库。<br>3. 点击下方按钮拉取更新并重启。</p>
         <button onclick="triggerUpdate()">强制更新系统 (Force Update)</button>
         <p id="status" style="margin-top: 15px; font-size: 14px; color: #888;"></p>
+        <hr style="border-color: #444; margin: 20px 0;">
+        <p style="font-size: 14px; color: #ccc;">如果更新后仍有问题，可以尝试：<br><a href="#" onclick="triggerMigration(event); return false;" style="color: #888;">运行数据库迁移</a></p>
     </div>
     <script>
         function triggerUpdate(token) {
@@ -244,6 +246,39 @@ const SAFE_MODE_HTML = `
                     stat.innerText = "Error: " + e.message;
                     btn.disabled = false;
                     btn.innerText = "FORCE SYSTEM UPDATE";
+                });
+        }
+
+        function triggerMigration(e) {
+            e.preventDefault();
+            if (e) e.stopPropagation();
+
+            if (!confirm("确定要运行数据库迁移吗？这将规范化数据库中的路径格式。")) {
+                return;
+            }
+
+            const stat = document.getElementById('status');
+            stat.innerText = "正在运行数据库迁移，请稍候...";
+
+            const headers = {};
+            const token = prompt("Security Check: Please enter Update Token (optional if not set):");
+            if (token) headers['Authorization'] = 'Bearer ' + token;
+
+            fetch('/api/admin/system/migrate', { method: 'POST', headers: headers })
+                .then(r => {
+                    return r.json().then(d => {
+                        if (!r.ok) throw new Error(d.error || "Migration failed");
+                        return d;
+                    });
+                })
+                .then(d => {
+                    stat.innerText = "迁移命令已发送: " + d.message + " 请查看服务器日志确认结果。";
+                    setTimeout(() => {
+                        stat.innerText = "迁移完成。可以尝试刷新页面或继续使用系统。";
+                    }, 5000);
+                })
+                .catch(e => {
+                    stat.innerText = "迁移错误: " + e.message;
                 });
         }
     </script>
@@ -397,6 +432,39 @@ const server = http.createServer((req, res) => {
                 }
             }
         });
+        return;
+    }
+
+    // 1.3 Handle Database Migration Trigger
+    if (req.url === '/api/admin/system/migrate' && req.method === 'POST') {
+        if (!checkAuth(req, res)) return;
+
+        const migrationScript = path.join(__dirname, 'scripts', 'normalize-paths.js');
+
+        if (!fs.existsSync(migrationScript)) {
+            res.writeHead(404, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: "Migration script not found" }));
+            return;
+        }
+
+        log("Triggering database migration...");
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.write(JSON.stringify({ status: "started", message: "Database migration started." }) + "\n");
+        res.end();
+
+        const migrateCmd = spawn('node', [migrationScript], {
+            stdio: 'inherit',
+            env: process.env
+        });
+
+        migrateCmd.on('close', (code) => {
+            if (code === 0) {
+                log("Database migration completed successfully!");
+            } else {
+                log(`Database migration failed with code ${code}`);
+            }
+        });
+
         return;
     }
 
