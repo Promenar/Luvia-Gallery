@@ -105,20 +105,34 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-# 4. Run Database Migration (if needed)
+# 4. Run Database Migrations (if needed)
 echo "[Update] Checking database migration status..."
+
+# 4.1 Path normalization migration
 if [ -f "scripts/normalize-paths.js" ]; then
     echo "[Update] Running path normalization migration..."
     node scripts/normalize-paths.js
     if [ $? -ne 0 ]; then
-        echo "[Update] Migration failed! Continuing with current state..."
-        # Don't exit on migration failure - allow app to run with old paths
+        echo "[Update] Path migration failed! Continuing with current state..."
         echo "[Update] Note: The app will attempt backward-compatible queries"
     else
-        echo "[Update] Migration completed successfully!"
+        echo "[Update] Path migration completed successfully!"
     fi
 else
-    echo "[Update] Migration script not found, skipping..."
+    echo "[Update] Path migration script not found, skipping..."
+fi
+
+# 4.2 Timestamp fix migration (fixes millisecond timestamps in last_modified)
+if [ -f "scripts/fix-timestamps.js" ]; then
+    echo "[Update] Running timestamp fix migration..."
+    node scripts/fix-timestamps.js
+    if [ $? -ne 0 ]; then
+        echo "[Update] Timestamp migration failed! Continuing with current state..."
+    else
+        echo "[Update] Timestamp migration completed successfully!"
+    fi
+else
+    echo "[Update] Timestamp migration script not found, skipping..."
 fi
 
 # 5. Cleanup (Optional)

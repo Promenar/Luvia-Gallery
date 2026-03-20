@@ -498,7 +498,7 @@ async function processFileForDB(filePath) {
             size: stats.size,
             type: type,
             mediaType: mediaType,
-            lastModified: stats.mtimeMs,
+            lastModified: Math.floor(stats.mtimeMs / 1000),
             sourceId: 'local'
         };
     } catch (error) {
@@ -784,7 +784,7 @@ app.get('/api/library/folders', (req, res) => {
 
             let lastModified = 0;
             try {
-                lastModified = fs.statSync(folderPath).mtimeMs;
+                lastModified = Math.floor(fs.statSync(folderPath).mtimeMs / 1000);
             } catch (e) { }
 
             return {
@@ -874,7 +874,7 @@ app.get('/api/library/folders', (req, res) => {
 
         try {
             const stats = fs.statSync(sub);
-            lastModified = stats.mtimeMs;
+            lastModified = Math.floor(stats.mtimeMs / 1000);
 
             // Count media files (non-recursive)
             const items = fs.readdirSync(sub, { withFileTypes: true });
@@ -1073,7 +1073,8 @@ async function processScan() {
 
                             // INCREMENTAL SCAN CHECK - try both normalized and original path for backward compatibility
                             const lastMtime = existingFilesMtime.get(normalizedPath) || existingFilesMtime.get(fullPath);
-                            if (lastMtime && Math.abs(lastMtime - stats.mtimeMs) < 100) {
+                            const currentMtimeSec = Math.floor(stats.mtimeMs / 1000);
+                            if (lastMtime && Math.abs(lastMtime - currentMtimeSec) < 1) {
                                 // File unchanged, skip detailed processing
                                 allScannedPaths.add(fullPath);  // Keep original for cleanup
                                 totalProcessed++;
@@ -1105,7 +1106,7 @@ async function processScan() {
                                 size: stats.size,
                                 type: fileType,
                                 mediaType: fileType.startsWith('video') ? 'video' : (fileType.startsWith('audio') ? 'audio' : 'image'),
-                                lastModified: stats.mtimeMs,
+                                lastModified: Math.floor(stats.mtimeMs / 1000),
                                 sourceId: 'local'
                             };
 
