@@ -5,44 +5,58 @@ echo "[Update] Starting update process..."
 # Get dynamic config from environment (injected by runner.js)
 REPO_URL=${REPO_URL:-"git@github.com:NarcisWL/Luvia-Gallery.git"}
 BRANCH=${BRANCH:-"main"}
+GH_TOKEN=${GH_TOKEN:-""}
 
 echo "[Update] Tracking Address: $REPO_URL"
 echo "[Update] Tracking Branch: $BRANCH"
 
-# --- 0. Setup SSH (Fix Permissions for Windows Mounts) ---
-echo "[Update] Setting up Secure SSH..."
-mkdir -p /root/.ssh
-chmod 700 /root/.ssh
+# --- 0. Convert SSH URL to HTTPS and setup credentials ---
+echo "[Update] Setting up Git credentials..."
 
-# Copy keys from temporary mount point (configured in docker-compose)
-if [ -d "/tmp/ssh_mount" ]; then
-    echo "[Update] Importing keys from /tmp/ssh_mount..."
-    # Copy all files from mount to .ssh dir
-    cp -rf /tmp/ssh_mount/* /root/.ssh/
+# Convert SSH URL (git@github.com:owner/repo.git) to HTTPS URL
+if echo "$REPO_URL" | grep -q "^git@github.com:"; then
+    # Extract owner/repo from git@github.com:owner/repo.git format
+    HTTPS_URL=$(echo "$REPO_URL" | sed 's/git@github.com:/https:\/\/github.com\//')
+    echo "[Update] Converted SSH URL to HTTPS: $HTTPS_URL"
+    REPO_URL="$HTTPS_URL"
 fi
 
-# FIX: Set strict permissions (Critical for OpenSSH)
-# Docker bind mounts from Windows are often 777, causing "Bad owner/permissions" errors.
-chmod 600 /root/.ssh/*
-# config needs to be readable but strict is better. 600 is fine.
-if [ -f "/root/.ssh/config" ]; then
-    chmod 600 /root/.ssh/config
+# If GH_TOKEN is provided (via docker-compose env), configure git to use it
+if [ -n "$GH_TOKEN" ]; then
+    echo "[Update] Using provided GH_TOKEN for authentication"
+    git config --global credential.helper store
+    echo "https://${GH_TOKEN}@github.com" > ~/.git-credentials
+    chmod 600 ~/.git-credentials
+else
+    # Try to use SSH if no token available
+    echo "[Update] No GH_TOKEN found, attempting SSH..."
+
+    # Setup SSH (Fix Permissions for Windows Mounts)
+    mkdir -p /root/.ssh
+    chmod 700 /root/.ssh
+
+    # Copy keys from temporary mount point (configured in docker-compose)
+    if [ -d "/tmp/ssh_mount" ]; then
+        echo "[Update] Importing keys from /tmp/ssh_mount..."
+        cp -rf /tmp/ssh_mount/* /root/.ssh/
+    fi
+
+    # Set strict permissions (Critical for OpenSSH)
+    chmod 600 /root/.ssh/* 2>/dev/null
+    if [ -f "/root/.ssh/config" ]; then
+        chmod 600 /root/.ssh/config
+    fi
+
+    # Auto-add GitHub to known_hosts
+    if [ ! -f "/root/.ssh/known_hosts" ]; then
+        echo "[Update] Scanning GitHub host key..."
+        ssh-keyscan github.com >> /root/.ssh/known_hosts
+    fi
+
+    # Test SSH connection
+    echo "[Update Debug] Testing SSH connection..."
+    ssh -T git@github.com 2>&1 || true
 fi
-
-# Auto-add GitHub to known_hosts to prevent interactive prompt hang
-if [ ! -f "/root/.ssh/known_hosts" ]; then
-    echo "[Update] Scanning GitHub host key..."
-    ssh-keyscan github.com >> /root/.ssh/known_hosts
-fi
-
-# DEBUG: Check what keys we actually have
-echo "[Update Debug] /root/.ssh contents:"
-ls -la /root/.ssh
-
-# DEBUG: Test Connection to GitHub
-echo "[Update Debug] Testing SSH connection..."
-ssh -T git@github.com
-# Note: ssh -T returns 1 on success (because it disallows shell access), so we don't exit on error here.
 
 # ---------------------------------------------------------
 
@@ -68,8 +82,15 @@ echo "[Update] Fetching from origin/$BRANCH..."
 # Ensure we are on the right branch/remote
 git fetch origin "$BRANCH"
 if [ $? -ne 0 ]; then
-    echo "[Update] Git fetch failed! Check SSH keys."
-    exit 1
+    echo "[Update] Git fetch failed!"
+    if [ -n "$GH_TOKEN" ]; then
+        echo "[Update] Retrying with HTTPS..."
+        git config --global url."https://github.com/".insteadOf "git@github.com:"
+        git fetch origin "$BRANCH"
+    fi
+    if [ $? -ne 0 ]; then
+        exit 1
+    fi
 fi
 
 echo "[Update] Resetting to origin/$BRANCH..."
