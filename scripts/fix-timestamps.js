@@ -68,7 +68,7 @@ try {
         console.log(`   Corrected: ${corrected} (${date.toISOString().slice(0, 19)})`);
     });
 
-    // 3. Temporarily disable FTS5 triggers to avoid SQL logic errors
+    // 3. Temporarily disable FTS5 triggers to avoid SQL logic errors during batch UPDATE
     console.log('\n--- Step 3: Disabling FTS5 triggers ---');
     db.exec('DROP TRIGGER IF EXISTS files_fts_au');
     db.exec('DROP TRIGGER IF EXISTS files_fts_ad');
@@ -91,24 +91,8 @@ try {
 
     const fixedCount = transaction();
 
-    // 5. Recreate FTS5 triggers
-    console.log('\n--- Step 5: Recreating FTS5 triggers ---');
-    db.exec(`
-        CREATE TRIGGER IF NOT EXISTS files_fts_ai AFTER INSERT ON files BEGIN
-            INSERT INTO files_fts(rowid, name, folder_path) VALUES (new.rowid, new.name, new.folder_path);
-        END;
-        CREATE TRIGGER IF NOT EXISTS files_fts_ad AFTER DELETE ON files BEGIN
-            INSERT INTO files_fts(files_fts, rowid, name, folder_path) VALUES('delete', old.rowid, old.name, old.folder_path);
-        END;
-        CREATE TRIGGER IF NOT EXISTS files_fts_au AFTER UPDATE ON files BEGIN
-            INSERT INTO files_fts(files_fts, rowid, name, folder_path) VALUES('delete', old.rowid, old.name, old.folder_path);
-            INSERT INTO files_fts(rowid, name, folder_path) VALUES (new.rowid, new.name, new.folder_path);
-        END;
-    `);
-    console.log('FTS5 triggers recreated');
-
-    // 6. Rebuild FTS5 index
-    console.log('\n--- Step 6: Rebuilding FTS5 index ---');
+    // 5. Rebuild FTS5 index
+    console.log('\n--- Step 5: Rebuilding FTS5 index ---');
     db.exec("INSERT INTO files_fts(files_fts) VALUES('rebuild')");
     console.log('FTS5 index rebuilt');
 

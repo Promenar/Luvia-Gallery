@@ -135,19 +135,6 @@ else
     echo "[Update] Timestamp migration script not found, skipping..."
 fi
 
-# 4.3 FTS5 triggers fix (fixes double quotes in trigger definitions)
-if [ -f "scripts/fix-triggers.js" ]; then
-    echo "[Update] Running FTS5 triggers fix..."
-    node scripts/fix-triggers.js
-    if [ $? -ne 0 ]; then
-        echo "[Update] Triggers fix failed! Continuing with current state..."
-    else
-        echo "[Update] Triggers fix completed successfully!"
-    fi
-else
-    echo "[Update] Triggers fix script not found, skipping..."
-fi
-
 # 5. Cleanup (Optional)
 # Prune dev dependencies to save space after build
 # echo "[Update] Pruning dev dependencies..."
