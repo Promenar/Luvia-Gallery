@@ -33,6 +33,10 @@ function initDatabase() {
     // Migration
     migrateFavorites();
     migrateToFTS5(); // FTS5 migration for existing data
+
+    // Force-recreate FTS5 triggers to prevent stale/corrupted trigger definitions
+    // from causing SQL logic errors on INSERT/UPDATE/DELETE
+    recreateFTS5Triggers();
 }
 
 /**
@@ -214,6 +218,35 @@ async function migrateToFTS5() {
 }
 
 /**
+ * Force-recreate FTS5 triggers to ensure correct syntax (single-quoted 'delete')
+ * This prevents SQL logic errors caused by corrupted trigger definitions
+ * (e.g. double-quoted "delete" which SQLite interprets as a column name)
+ */
+function recreateFTS5Triggers() {
+    console.log('[Init] Force-recreating FTS5 triggers...');
+    try {
+        db.exec('DROP TRIGGER IF EXISTS files_fts_ai');
+        db.exec('DROP TRIGGER IF EXISTS files_fts_ad');
+        db.exec('DROP TRIGGER IF EXISTS files_fts_au');
+        db.exec(`
+            CREATE TRIGGER files_fts_ai AFTER INSERT ON files BEGIN
+                INSERT INTO files_fts(rowid, name, folder_path) VALUES (new.rowid, new.name, new.folder_path);
+            END;
+            CREATE TRIGGER files_fts_ad AFTER DELETE ON files BEGIN
+                INSERT INTO files_fts(files_fts, rowid, name, folder_path) VALUES('delete', old.rowid, old.name, old.folder_path);
+            END;
+            CREATE TRIGGER files_fts_au AFTER UPDATE ON files BEGIN
+                INSERT INTO files_fts(files_fts, rowid, name, folder_path) VALUES('delete', old.rowid, old.name, old.folder_path);
+                INSERT INTO files_fts(rowid, name, folder_path) VALUES (new.rowid, new.name, new.folder_path);
+            END;
+        `);
+        console.log('[Init] FTS5 triggers recreated successfully');
+    } catch (err) {
+        console.error('[Init] Failed to recreate FTS5 triggers:', err.message);
+    }
+}
+
+/**
  * Save database to disk (No-op for better-sqlite3 with WAL mode)
  */
 function saveDatabase() {
@@ -228,9 +261,14 @@ function upsertFile(file) {
         INSERT INTO files (id, path, name, folder_path, size, type, media_type, last_modified, source_id, thumb_width, thumb_height, thumb_aspect_ratio)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(path) DO UPDATE SET
+            id = excluded.id,
             name = excluded.name,
+            folder_path = excluded.folder_path,
             size = excluded.size,
+            type = excluded.type,
+            media_type = excluded.media_type,
             last_modified = excluded.last_modified,
+            source_id = excluded.source_id,
             thumb_width = excluded.thumb_width,
             thumb_height = excluded.thumb_height,
             thumb_aspect_ratio = excluded.thumb_aspect_ratio
