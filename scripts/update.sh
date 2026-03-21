@@ -14,49 +14,16 @@ echo "[Update] Tracking Branch: $BRANCH"
 echo "[Update] Setting up Git credentials..."
 
 # Convert SSH URL (git@github.com:owner/repo.git) to HTTPS URL
+# Public repos don't need authentication over HTTPS
 if echo "$REPO_URL" | grep -q "^git@github.com:"; then
-    # Extract owner/repo from git@github.com:owner/repo.git format
     HTTPS_URL=$(echo "$REPO_URL" | sed 's/git@github.com:/https:\/\/github.com\//')
     echo "[Update] Converted SSH URL to HTTPS: $HTTPS_URL"
     REPO_URL="$HTTPS_URL"
 fi
 
-# If GH_TOKEN is provided (via docker-compose env), configure git to use it
-if [ -n "$GH_TOKEN" ]; then
-    echo "[Update] Using provided GH_TOKEN for authentication"
-    git config --global credential.helper store
-    echo "https://${GH_TOKEN}@github.com" > ~/.git-credentials
-    chmod 600 ~/.git-credentials
-else
-    # Try to use SSH if no token available
-    echo "[Update] No GH_TOKEN found, attempting SSH..."
-
-    # Setup SSH (Fix Permissions for Windows Mounts)
-    mkdir -p /root/.ssh
-    chmod 700 /root/.ssh
-
-    # Copy keys from temporary mount point (configured in docker-compose)
-    if [ -d "/tmp/ssh_mount" ]; then
-        echo "[Update] Importing keys from /tmp/ssh_mount..."
-        cp -rf /tmp/ssh_mount/* /root/.ssh/
-    fi
-
-    # Set strict permissions (Critical for OpenSSH)
-    chmod 600 /root/.ssh/* 2>/dev/null
-    if [ -f "/root/.ssh/config" ]; then
-        chmod 600 /root/.ssh/config
-    fi
-
-    # Auto-add GitHub to known_hosts
-    if [ ! -f "/root/.ssh/known_hosts" ]; then
-        echo "[Update] Scanning GitHub host key..."
-        ssh-keyscan github.com >> /root/.ssh/known_hosts
-    fi
-
-    # Test SSH connection
-    echo "[Update Debug] Testing SSH connection..."
-    ssh -T git@github.com 2>&1 || true
-fi
+# Configure git for HTTPS (no auth needed for public repos)
+git config --global url."https://github.com/".insteadOf "git@github.com:"
+echo "[Update] Git configured to use HTTPS for GitHub"
 
 # ---------------------------------------------------------
 
@@ -79,18 +46,10 @@ git config --global --add safe.directory /app
 
 # 1. Pull latest code
 echo "[Update] Fetching from origin/$BRANCH..."
-# Ensure we are on the right branch/remote
 git fetch origin "$BRANCH"
 if [ $? -ne 0 ]; then
     echo "[Update] Git fetch failed!"
-    if [ -n "$GH_TOKEN" ]; then
-        echo "[Update] Retrying with HTTPS..."
-        git config --global url."https://github.com/".insteadOf "git@github.com:"
-        git fetch origin "$BRANCH"
-    fi
-    if [ $? -ne 0 ]; then
-        exit 1
-    fi
+    exit 1
 fi
 
 echo "[Update] Resetting to origin/$BRANCH..."
