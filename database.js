@@ -33,7 +33,7 @@ function initDatabase() {
     // Migration
     migrateFavorites();
     migrateToFTS5(); // FTS5 migration for existing data
-
+    
     // Force-recreate FTS5 triggers to prevent stale/corrupted trigger definitions
     // from causing SQL logic errors on INSERT/UPDATE/DELETE
     recreateFTS5Triggers();
@@ -86,9 +86,6 @@ function createSchema() {
     db.exec(`
         CREATE TRIGGER IF NOT EXISTS files_fts_ai AFTER INSERT ON files BEGIN
             INSERT INTO files_fts(rowid, name, folder_path) VALUES (new.rowid, new.name, new.folder_path);
-        END;
-        CREATE TRIGGER IF NOT EXISTS files_fts_ad AFTER DELETE ON files BEGIN
-            INSERT INTO files_fts(files_fts, rowid, name, folder_path) VALUES('delete', old.rowid, old.name, old.folder_path);
         END;
         CREATE TRIGGER IF NOT EXISTS files_fts_au AFTER UPDATE ON files BEGIN
             INSERT INTO files_fts(files_fts, rowid, name, folder_path) VALUES('delete', old.rowid, old.name, old.folder_path);
@@ -175,9 +172,6 @@ async function migrateToFTS5() {
             CREATE TRIGGER IF NOT EXISTS files_fts_ai AFTER INSERT ON files BEGIN
                 INSERT INTO files_fts(rowid, name, folder_path) VALUES (new.rowid, new.name, new.folder_path);
             END;
-            CREATE TRIGGER IF NOT EXISTS files_fts_ad AFTER DELETE ON files BEGIN
-                INSERT INTO files_fts(files_fts, rowid, name, folder_path) VALUES('delete', old.rowid, old.name, old.folder_path);
-            END;
             CREATE TRIGGER IF NOT EXISTS files_fts_au AFTER UPDATE ON files BEGIN
                 INSERT INTO files_fts(files_fts, rowid, name, folder_path) VALUES('delete', old.rowid, old.name, old.folder_path);
                 INSERT INTO files_fts(rowid, name, folder_path) VALUES (new.rowid, new.name, new.folder_path);
@@ -231,9 +225,6 @@ function recreateFTS5Triggers() {
         db.exec(`
             CREATE TRIGGER files_fts_ai AFTER INSERT ON files BEGIN
                 INSERT INTO files_fts(rowid, name, folder_path) VALUES (new.rowid, new.name, new.folder_path);
-            END;
-            CREATE TRIGGER files_fts_ad AFTER DELETE ON files BEGIN
-                INSERT INTO files_fts(files_fts, rowid, name, folder_path) VALUES('delete', old.rowid, old.name, old.folder_path);
             END;
             CREATE TRIGGER files_fts_au AFTER UPDATE ON files BEGIN
                 INSERT INTO files_fts(files_fts, rowid, name, folder_path) VALUES('delete', old.rowid, old.name, old.folder_path);
@@ -491,6 +482,17 @@ function countFiles(options = {}) {
  * Delete file by path or ID
  */
 function deleteFile(filePath, id = null) {
+    // Sync FTS
+    try {
+        if (id) {
+            db.prepare('DELETE FROM files_fts WHERE rowid IN (SELECT rowid FROM files WHERE id = ?)').run(id);
+        } else {
+            db.prepare('DELETE FROM files_fts WHERE rowid IN (SELECT rowid FROM files WHERE path = ?)').run(filePath);
+        }
+    } catch (e) {
+        console.error('FTS sync delete failed in deleteFile:', e);
+    }
+
     let query = 'DELETE FROM files WHERE path = ?';
     const params = [filePath];
 
@@ -511,11 +513,17 @@ function deleteFile(filePath, id = null) {
  */
 function deleteFilesBatch(files) {
     try {
+        const ftsStmt = db.prepare('DELETE FROM files_fts WHERE rowid IN (SELECT rowid FROM files WHERE id = ?)');
         const stmt = db.prepare('DELETE FROM files WHERE id = ?');
         const favStmt = db.prepare('DELETE FROM favorites WHERE item_id = ?');
 
         const tx = db.transaction((filesList) => {
             for (const file of filesList) {
+                try {
+                    ftsStmt.run(file.id);
+                } catch (ftsErr) {
+                    console.error('FTS batch delete error for', file.id, ftsErr.message);
+                }
                 stmt.run(file.id);
                 favStmt.run(file.id);
             }
@@ -541,10 +549,16 @@ function getAllFilesMtime() {
 }
 
 function deleteFilesByFolder(folderPath) {
+    try {
+        db.prepare('DELETE FROM files_fts WHERE rowid IN (SELECT rowid FROM files WHERE folder_path = ? OR folder_path LIKE ?)').run(folderPath, folderPath + '/%');
+    } catch (e) { }
     db.prepare('DELETE FROM files WHERE folder_path = ? OR folder_path LIKE ?').run(folderPath, folderPath + '/%');
 }
 
 function deleteFilesBySourceId(sourceId) {
+    try {
+        db.prepare('DELETE FROM files_fts WHERE rowid IN (SELECT rowid FROM files WHERE source_id = ?)').run(sourceId);
+    } catch (e) { }
     db.prepare('DELETE FROM files WHERE source_id = ?').run(sourceId);
 }
 
@@ -568,6 +582,9 @@ function getFileByPath(filePath) {
 }
 
 function clearAllFiles() {
+    try {
+        db.prepare('DELETE FROM files_fts').run();
+    } catch (e) { }
     db.prepare('DELETE FROM files').run();
 }
 
