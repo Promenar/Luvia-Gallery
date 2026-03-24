@@ -1072,12 +1072,19 @@ async function processScan() {
                             const normalizedPath = smartNormalizePath(fullPath);
 
                             // INCREMENTAL SCAN CHECK - try both normalized and original path for backward compatibility
-                            const lastMtime = existingFilesMtime.get(normalizedPath) || existingFilesMtime.get(fullPath);
+                            const lastMtimeNormalized = existingFilesMtime.get(normalizedPath);
+                            const lastMtimeOriginal = existingFilesMtime.get(fullPath);
+                            const lastMtime = lastMtimeNormalized || lastMtimeOriginal;
                             const currentMtimeSec = Math.floor(stats.mtimeMs / 1000);
                             if (lastMtime && Math.abs(lastMtime - currentMtimeSec) < 1) {
                                 // File unchanged, skip detailed processing
-                                // Use normalized path for cleanup to match database storage
-                                allScannedPaths.add(normalizedPath);
+                                // Add the path that exists in database to ensure cleanup works correctly
+                                // If database has original path, add original; otherwise add normalized
+                                if (lastMtimeOriginal) {
+                                    allScannedPaths.add(fullPath);
+                                } else {
+                                    allScannedPaths.add(normalizedPath);
+                                }
                                 totalProcessed++;
                                 if (totalProcessed % 50 === 0) scanState.count = totalProcessed;
                                 continue;
@@ -1099,9 +1106,13 @@ async function processScan() {
                             // Smart normalize folder path
                             const normalizedFolderPath = smartNormalizePath(path.dirname(fullPath));
 
+                            // Determine which path to use: prefer normalized, but check if original exists in DB
+                            const useNormalized = !existingFilesMtime.has(fullPath) || existingFilesMtime.has(normalizedPath);
+                            const pathToUse = useNormalized ? normalizedPath : fullPath;
+
                             const fileData = {
-                                id: Buffer.from(normalizedPath).toString('base64'),  // Use normalized path for ID consistency
-                                path: normalizedPath,  // Store normalized path to match database
+                                id: Buffer.from(pathToUse).toString('base64'),
+                                path: pathToUse,
                                 name: item.name,
                                 folderPath: normalizedFolderPath,
                                 size: stats.size,
@@ -1112,7 +1123,7 @@ async function processScan() {
                             };
 
                             batchBuffer.push(fileData);
-                            allScannedPaths.add(normalizedPath);  // Track normalized path for cleanup
+                            allScannedPaths.add(pathToUse);  // Track the path we're using for cleanup
                             totalProcessed++;
                             scanState.count = totalProcessed;
 
@@ -1148,12 +1159,22 @@ async function processScan() {
         console.log('Syncing database with scan results...');
         try {
             const allDbPaths = database.getAllFilePaths();
+            console.log(`Database has ${allDbPaths.length} paths, scan found ${allScannedPaths.size} paths.`);
+
+            // Debug: Log first few paths for comparison
+            if (allDbPaths.length > 0) {
+                console.log('Sample DB paths:', allDbPaths.slice(0, 3));
+            }
+            if (allScannedPaths.size > 0) {
+                console.log('Sample scanned paths:', [...allScannedPaths].slice(0, 3));
+            }
 
             // Direct path comparison - we store normalized paths now
             const pathsToDelete = allDbPaths.filter(p => !allScannedPaths.has(p));
 
             if (pathsToDelete.length > 0) {
                 console.log(`Found ${pathsToDelete.length} missing files to delete.`);
+                console.log('Sample paths to delete:', pathsToDelete.slice(0, 5));
                 const deleteBatch = pathsToDelete.map(p => ({
                     path: p,
                     id: Buffer.from(p).toString('base64')
