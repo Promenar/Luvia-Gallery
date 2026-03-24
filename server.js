@@ -1076,7 +1076,8 @@ async function processScan() {
                             const currentMtimeSec = Math.floor(stats.mtimeMs / 1000);
                             if (lastMtime && Math.abs(lastMtime - currentMtimeSec) < 1) {
                                 // File unchanged, skip detailed processing
-                                allScannedPaths.add(fullPath);  // Keep original for cleanup
+                                // Use normalized path for cleanup to match database storage
+                                allScannedPaths.add(normalizedPath);
                                 totalProcessed++;
                                 if (totalProcessed % 50 === 0) scanState.count = totalProcessed;
                                 continue;
@@ -1099,8 +1100,8 @@ async function processScan() {
                             const normalizedFolderPath = smartNormalizePath(path.dirname(fullPath));
 
                             const fileData = {
-                                id: Buffer.from(fullPath).toString('base64'),  // Use fullPath for ID consistency
-                                path: fullPath,  // Store original path to match database
+                                id: Buffer.from(normalizedPath).toString('base64'),  // Use normalized path for ID consistency
+                                path: normalizedPath,  // Store normalized path to match database
                                 name: item.name,
                                 folderPath: normalizedFolderPath,
                                 size: stats.size,
@@ -1111,7 +1112,7 @@ async function processScan() {
                             };
 
                             batchBuffer.push(fileData);
-                            allScannedPaths.add(fullPath);  // Track original path for cleanup
+                            allScannedPaths.add(normalizedPath);  // Track normalized path for cleanup
                             totalProcessed++;
                             scanState.count = totalProcessed;
 
@@ -1148,7 +1149,7 @@ async function processScan() {
         try {
             const allDbPaths = database.getAllFilePaths();
 
-            // Direct path comparison - we store original paths now
+            // Direct path comparison - we store normalized paths now
             const pathsToDelete = allDbPaths.filter(p => !allScannedPaths.has(p));
 
             if (pathsToDelete.length > 0) {
