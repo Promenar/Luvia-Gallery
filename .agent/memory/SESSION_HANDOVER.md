@@ -10,17 +10,19 @@
 - ✅ **新增** 完成 README.md 文档审计并更新，修复 docker-compose.yml 配置问题。
 
 ## 下一步的具体计划 (Next Steps)
-- **【搜索功能 - FTS5】** 执行修正后的实施方案：
-  1. 修改 Dockerfile（Stage 2 & Stage 3）添加 `python3 make g++` 编译工具
-  2. 修改 package.json：`sql.js` → `better-sqlite3`
-  3. 重写 database.js（WAL 模式 + FTS5）
-  4. 添加 FTS5 迁移脚本（使用 `rowid` 而非 `id`，添加 `tokenize='unicode61'`）
-  5. 测试环境验证迁移流程和热更新流程
+- **【macOS 桌面小组件】** Phase 0-4 代码已完成，待创建 Xcode 项目：
+  - ✅ 代码文件已生成（14 个 Swift 文件，约 650 行）
+  - ✅ 目录结构：`macos-widget/GalleryWidget/`
+  - ⬜ 待办：在 Xcode 中创建项目并添加文件
+  - ⬜ 待办：配置 App Groups (`group.com.luvia.gallery`)
+  - ⬜ 待办：联调测试
+  - 文档：`.agent/docs/plans/MACOS_WIDGET_IMPLEMENTATION.md`
+- **【搜索功能 - FTS5】** 执行修正后的实施方案（此前已完成 FTS5 迁移）
 
 ## 任何未决的问题或风险 (Risk)
-- FTS5 迁移脚本需在测试环境先验证，确保 90 万数据迁移不会导致服务中断。
-- Dockerfile 修改后需重新构建镜像，镜像体积预计增加 50-100MB。
-- 热更新流程验证：确保 `npm install` 能成功编译 `better-sqlite3`。
+- macOS Widget 需 Apple Developer 付费账号进行签名和 App Groups 配置
+- Widget 内存限制 30MB，需严格使用缩略图（WebP），限制加载数量 ≤9 张
+- WidgetKit 后台刷新可能被系统延迟，需设计离线缓存兜底策略
 
 ## 审计报告归档
 - 首次审计报告：`.agent/docs/audits/FRONTEND_AUDIT_REPORT.md`
