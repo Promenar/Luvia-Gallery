@@ -87,8 +87,11 @@ function createSchema() {
         CREATE TRIGGER IF NOT EXISTS files_fts_ai AFTER INSERT ON files BEGIN
             INSERT INTO files_fts(rowid, name, folder_path) VALUES (new.rowid, new.name, new.folder_path);
         END;
+        CREATE TRIGGER IF NOT EXISTS files_fts_ad AFTER DELETE ON files BEGIN
+            DELETE FROM files_fts WHERE rowid = old.rowid;
+        END;
         CREATE TRIGGER IF NOT EXISTS files_fts_au AFTER UPDATE ON files BEGIN
-            INSERT INTO files_fts(files_fts, rowid, name, folder_path) VALUES('delete', old.rowid, old.name, old.folder_path);
+            DELETE FROM files_fts WHERE rowid = old.rowid;
             INSERT INTO files_fts(rowid, name, folder_path) VALUES (new.rowid, new.name, new.folder_path);
         END;
     `);
@@ -172,8 +175,11 @@ async function migrateToFTS5() {
             CREATE TRIGGER IF NOT EXISTS files_fts_ai AFTER INSERT ON files BEGIN
                 INSERT INTO files_fts(rowid, name, folder_path) VALUES (new.rowid, new.name, new.folder_path);
             END;
+            CREATE TRIGGER IF NOT EXISTS files_fts_ad AFTER DELETE ON files BEGIN
+                DELETE FROM files_fts WHERE rowid = old.rowid;
+            END;
             CREATE TRIGGER IF NOT EXISTS files_fts_au AFTER UPDATE ON files BEGIN
-                INSERT INTO files_fts(files_fts, rowid, name, folder_path) VALUES('delete', old.rowid, old.name, old.folder_path);
+                DELETE FROM files_fts WHERE rowid = old.rowid;
                 INSERT INTO files_fts(rowid, name, folder_path) VALUES (new.rowid, new.name, new.folder_path);
             END;
         `);
@@ -226,8 +232,11 @@ function recreateFTS5Triggers() {
             CREATE TRIGGER files_fts_ai AFTER INSERT ON files BEGIN
                 INSERT INTO files_fts(rowid, name, folder_path) VALUES (new.rowid, new.name, new.folder_path);
             END;
+            CREATE TRIGGER files_fts_ad AFTER DELETE ON files BEGIN
+                DELETE FROM files_fts WHERE rowid = old.rowid;
+            END;
             CREATE TRIGGER files_fts_au AFTER UPDATE ON files BEGIN
-                INSERT INTO files_fts(files_fts, rowid, name, folder_path) VALUES('delete', old.rowid, old.name, old.folder_path);
+                DELETE FROM files_fts WHERE rowid = old.rowid;
                 INSERT INTO files_fts(rowid, name, folder_path) VALUES (new.rowid, new.name, new.folder_path);
             END;
         `);
