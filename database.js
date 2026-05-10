@@ -37,6 +37,9 @@ function initDatabase() {
     // Force-recreate FTS5 triggers to prevent stale/corrupted trigger definitions
     // from causing SQL logic errors on INSERT/UPDATE/DELETE
     recreateFTS5Triggers();
+
+    // 清理历史遗留的孤立 FTS 条目（files_fts 中存在但 files 表中已删除的 rowid）
+    repairOrphanedFTS();
 }
 
 /**
@@ -247,6 +250,26 @@ function recreateFTS5Triggers() {
 }
 
 /**
+ * 清理孤立的 FTS5 条目（files_fts 中存在但 files 表中已删除的 rowid）
+ * 修复因缺少 files_fts_ad 触发器或 FTS 清理失败导致的历史残留问题
+ */
+function repairOrphanedFTS() {
+    console.log('[Repair] Checking for orphaned FTS entries...');
+    try {
+        const result = db.prepare(
+            'DELETE FROM files_fts WHERE rowid NOT IN (SELECT rowid FROM files)'
+        ).run();
+        if (result.changes > 0) {
+            console.log(`[Repair] Cleaned ${result.changes} orphaned FTS entries`);
+        } else {
+            console.log('[Repair] No orphaned FTS entries found');
+        }
+    } catch (err) {
+        console.error('[Repair] Failed to clean orphaned FTS entries:', err.message);
+    }
+}
+
+/**
  * Save database to disk (No-op for better-sqlite3 with WAL mode)
  */
 function saveDatabase() {
@@ -293,12 +316,13 @@ function upsertFile(file) {
 /**
  * Insert files in batch (transaction)
  */
-function insertFilesBatch(files) {
+function insertFilesBatch(files, shouldSave = false) {
     try {
         const insertTx = db.transaction((filesList) => {
             for (const file of filesList) upsertFile(file);
         });
         insertTx(files);
+        if (shouldSave) saveDatabase();
         return true;
     } catch (error) {
         console.error('Batch insert failed:', error);
@@ -532,6 +556,8 @@ function deleteFilesBatch(files) {
                     ftsStmt.run(file.id);
                 } catch (ftsErr) {
                     console.error('FTS batch delete error for', file.id, ftsErr.message);
+                    // FTS 清理失败时跳过该文件的 files 行删除，避免产生新的孤儿条目
+                    continue;
                 }
                 stmt.run(file.id);
                 favStmt.run(file.id);
@@ -752,5 +778,6 @@ module.exports = {
     getAllFilesMtime,
     renameFile,
     clearThumbnails,
-    migrateFavorites
+    migrateFavorites,
+    repairOrphanedFTS
 };

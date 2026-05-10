@@ -1044,9 +1044,17 @@ async function processScan() {
         const currentDir = queue.shift();
         scanState.currentPath = currentDir;
 
+        let items;
         try {
             if (fs.existsSync(currentDir)) {
-                const items = fs.readdirSync(currentDir, { withFileTypes: true });
+                items = fs.readdirSync(currentDir, { withFileTypes: true });
+            }
+        } catch (e) {
+            console.error("Error reading dir:", currentDir, e);
+            continue;
+        }
+
+        if (!items) continue;
 
                 for (const item of items) {
                     if (scanState.shouldStop) break;
@@ -1058,6 +1066,7 @@ async function processScan() {
                     if (item.isDirectory()) {
                         queue.push(fullPath);
                     } else if (item.isFile()) {
+                        try {
                         const ext = path.extname(item.name).toLowerCase();
                         const imageExts = ['.jpg', '.jpeg', '.png', '.gif', '.webp'];
                         const videoExts = ['.mp4', '.webm', '.mov'];
@@ -1074,12 +1083,10 @@ async function processScan() {
                             // INCREMENTAL SCAN CHECK - try both normalized and original path for backward compatibility
                             const lastMtimeNormalized = existingFilesMtime.get(normalizedPath);
                             const lastMtimeOriginal = existingFilesMtime.get(fullPath);
-                            const lastMtime = lastMtimeNormalized || lastMtimeOriginal;
+                            const lastMtime = (lastMtimeNormalized !== undefined) ? lastMtimeNormalized : lastMtimeOriginal;
                             const currentMtimeSec = Math.floor(stats.mtimeMs / 1000);
                             if (lastMtime && Math.abs(lastMtime - currentMtimeSec) < 1) {
                                 // File unchanged, skip detailed processing
-                                // Add the path that exists in database to ensure cleanup works correctly
-                                // If database has original path, add original; otherwise add normalized
                                 if (lastMtimeOriginal) {
                                     allScannedPaths.add(fullPath);
                                 } else {
@@ -1130,24 +1137,30 @@ async function processScan() {
                             // OPTIMIZATION: Batch insert without saving to disk
                             if (batchBuffer.length >= BATCH_SIZE) {
                                 const shouldSave = (totalProcessed % SAVE_INTERVAL) === 0;
-                                database.insertFilesBatch(batchBuffer, shouldSave);
-                                if (shouldSave) {
-                                    console.log(`Checkpoint: Saved database at ${totalProcessed} files`);
+                                const batchOk = database.insertFilesBatch(batchBuffer, shouldSave);
+                                if (batchOk) {
+                                    if (shouldSave) {
+                                        console.log(`Checkpoint: Saved database at ${totalProcessed} files`);
+                                    }
+                                } else {
+                                    console.error(`Batch insert FAILED at ${totalProcessed} files, ${batchBuffer.length} files may be lost`);
                                 }
                                 batchBuffer = []; // Clear buffer
                             }
                         }
+                        } catch (fileErr) {
+                            console.error("Error processing file:", fullPath, fileErr);
+                        }
                     }
                 }
-            }
-        } catch (e) {
-            console.error("Error scanning dir:", currentDir, e);
-        }
     }
 
     // Insert remaining files in buffer
     if (!scanState.shouldStop && batchBuffer.length > 0) {
-        database.insertFilesBatch(batchBuffer, false);
+        const finalOk = database.insertFilesBatch(batchBuffer, false);
+        if (!finalOk) {
+            console.error(`Final batch insert FAILED, ${batchBuffer.length} remaining files may be lost`);
+        }
         batchBuffer = [];
     }
 
@@ -2404,7 +2417,22 @@ app.get('/api/thumb/:id', async (req, res) => {
             if (fs.existsSync(filePath)) {
                 // Check if it's a supported media type before trying to generate
                 // (Optional optimization, but generateThumbnail handles generic file object)
-                const success = await generateThumbnail({ path: filePath });
+                // 构建完整 file 对象，避免 updateDbWithDimensions 写入 undefined 字段
+                const dbFile = database.getFileByPath(filePath);
+                const ext = path.extname(filePath).toLowerCase();
+                const videoExts = ['.mp4', '.webm', '.mov'];
+                const fileObj = dbFile || {
+                    id: Buffer.from(smartNormalizePath(filePath)).toString('base64'),
+                    path: smartNormalizePath(filePath),
+                    name: path.basename(filePath),
+                    folderPath: smartNormalizePath(path.dirname(filePath)),
+                    size: fs.statSync(filePath).size,
+                    type: videoExts.includes(ext) ? 'video/mp4' : 'image/jpeg',
+                    mediaType: videoExts.includes(ext) ? 'video' : 'image',
+                    lastModified: Math.floor(fs.statSync(filePath).mtimeMs / 1000),
+                    sourceId: 'local'
+                };
+                const success = await generateThumbnail(fileObj, true);
                 if (success && fs.existsSync(thumbPath)) {
                     res.setHeader('Content-Type', 'image/webp');
                     res.setHeader('Cache-Control', 'public, max-age=31536000');
@@ -2926,7 +2954,6 @@ app.listen(port, () => {
             if (config.monitorMode === 'periodic') {
                 console.log(`Starting periodic scanner (every ${scanInterval}m)...`);
                 monitorMode = 'periodic';
-                startPeriodicScanner(libraryPaths, scanInterval);
                 startPeriodicScanner(libraryPaths, scanInterval);
             } else {
                 monitorMode = 'manual';
