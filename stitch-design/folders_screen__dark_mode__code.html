@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Luvia Gallery - Folders</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700&amp;family=Inter:wght@400;500&amp;family=Geist:wght@400;500&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "primary-fixed": "#d1e4ff",
+                        "surface-container-high": "#262a30",
+                        "on-secondary-fixed": "#0f2000",
+                        "error-container": "#93000a",
+                        "status-warning": "#FF9800",
+                        "surface-main": "#121212",
+                        "on-primary-fixed": "#001d36",
+                        "text-secondary": "#B0B0B0",
+                        "secondary": "#9ed75b",
+                        "on-tertiary-container": "#452200",
+                        "surface-container-lowest": "#0a0e14",
+                        "inverse-primary": "#0061a4",
+                        "on-background": "#dfe2ea",
+                        "on-tertiary-fixed": "#2e1500",
+                        "tertiary-fixed": "#ffdcc2",
+                        "surface-glass": "rgba(30, 30, 30, 0.7)",
+                        "inverse-on-surface": "#2d3137",
+                        "primary-container": "#2196f3",
+                        "secondary-container": "#4b7d00",
+                        "error": "#ffb4ab",
+                        "on-secondary": "#1e3700",
+                        "surface-container": "#1c2026",
+                        "on-error": "#690005",
+                        "on-surface-variant": "#bfc7d4",
+                        "outline-variant": "#404752",
+                        "primary-fixed-dim": "#9ecaff",
+                        "on-primary-fixed-variant": "#00497d",
+                        "on-primary-container": "#002c4f",
+                        "text-primary": "#FFFFFF",
+                        "secondary-fixed": "#b9f474",
+                        "surface-card": "#1E1E1E",
+                        "tertiary": "#ffb77b",
+                        "status-success": "#4CAF50",
+                        "on-surface": "#dfe2ea",
+                        "inverse-surface": "#dfe2ea",
+                        "tertiary-fixed-dim": "#ffb77b",
+                        "on-tertiary": "#4d2700",
+                        "surface-bright": "#353940",
+                        "on-secondary-fixed-variant": "#2e4f00",
+                        "primary": "#9ecaff",
+                        "background": "#0f1419",
+                        "secondary-fixed-dim": "#9ed75b",
+                        "status-error": "#F44336",
+                        "accent-heart": "#F44336",
+                        "on-tertiary-fixed-variant": "#6d3900",
+                        "surface-variant": "#31353b",
+                        "surface-container-highest": "#31353b",
+                        "tertiary-container": "#db7900",
+                        "surface": "#0f1419",
+                        "on-error-container": "#ffdad6",
+                        "surface-dim": "#0f1419",
+                        "outline": "#89919d",
+                        "surface-tint": "#9ecaff",
+                        "on-secondary-container": "#dfffb6",
+                        "on-primary": "#003258",
+                        "surface-container-low": "#181c22"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    "spacing": {
+                        "margin-mobile": "16px",
+                        "gutter-grid": "8px",
+                        "margin-tablet": "24px",
+                        "stack-lg": "24px",
+                        "stack-sm": "4px",
+                        "stack-md": "12px"
+                    },
+                    "fontFamily": {
+                        "headline-sm": ["Manrope", "sans-serif"],
+                        "headline-md": ["Manrope", "sans-serif"],
+                        "label-md": ["Geist", "sans-serif"],
+                        "body-md": ["Inter", "sans-serif"],
+                        "body-lg": ["Inter", "sans-serif"],
+                        "headline-lg": ["Manrope", "sans-serif"],
+                        "mono-sm": ["Geist", "monospace"]
+                    },
+                    "fontSize": {
+                        "headline-sm": ["20px", { "lineHeight": "28px", "fontWeight": "600" }],
+                        "headline-md": ["24px", { "lineHeight": "32px", "fontWeight": "600" }],
+                        "label-md": ["12px", { "lineHeight": "16px", "letterSpacing": "0.5px", "fontWeight": "500" }],
+                        "body-md": ["14px", { "lineHeight": "20px", "fontWeight": "400" }],
+                        "body-lg": ["16px", { "lineHeight": "24px", "fontWeight": "400" }],
+                        "headline-lg": ["32px", { "lineHeight": "40px", "fontWeight": "700" }],
+                        "mono-sm": ["11px", { "lineHeight": "14px", "fontWeight": "400" }]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+    </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="bg-surface text-on-surface font-body-md antialiased min-h-screen flex flex-col">
+<!-- TopAppBar -->
+<header class="fixed top-0 w-full z-50 flex justify-between items-center px-margin-mobile py-4 bg-surface transition-colors">
+<button class="text-on-surface-variant hover:bg-surface-container-high transition-colors active:opacity-80 p-2 rounded-full flex items-center justify-center">
+<span class="material-symbols-outlined">menu</span>
+</button>
+<h1 class="font-headline-md text-headline-md font-bold text-primary">Luvia Gallery</h1>
+<button class="text-on-surface-variant hover:bg-surface-container-high transition-colors active:opacity-80 p-2 rounded-full flex items-center justify-center">
+<span class="material-symbols-outlined">search</span>
+</button>
+</header>
+<!-- Main Content -->
+<main class="flex-grow pt-24 pb-24 px-margin-mobile flex flex-col gap-stack-lg">
+<!-- Section Title -->
+<section>
+<h2 class="font-headline-lg text-headline-lg text-text-primary mb-stack-sm">Folders</h2>
+<p class="font-body-md text-body-md text-text-secondary">Organize your secure gallery</p>
+</section>
+<!-- Folder Grid -->
+<section class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-gutter-grid">
+<!-- Folder Card 1 (Favorite) -->
+<button class="relative bg-surface-card rounded-lg p-4 flex flex-col items-start gap-stack-md hover:bg-surface-variant transition-colors text-left w-full h-full">
+<span class="material-symbols-outlined absolute top-3 right-3 text-accent-heart text-lg" style="font-variation-settings: 'FILL' 1;">favorite</span>
+<span class="material-symbols-outlined text-primary text-3xl mb-1">folder</span>
+<div class="flex flex-col gap-stack-sm">
+<span class="font-body-md text-body-md text-on-surface line-clamp-1">Vacation 2023</span>
+<span class="font-label-md text-label-md text-text-secondary">128 items</span>
+</div>
+</button>
+<!-- Folder Card 2 -->
+<button class="relative bg-surface-card rounded-lg p-4 flex flex-col items-start gap-stack-md hover:bg-surface-variant transition-colors text-left w-full h-full">
+<span class="material-symbols-outlined text-primary text-3xl mb-1">folder</span>
+<div class="flex flex-col gap-stack-sm">
+<span class="font-body-md text-body-md text-on-surface line-clamp-1">Design Assets</span>
+<span class="font-label-md text-label-md text-text-secondary">45 items</span>
+</div>
+</button>
+<!-- Folder Card 3 (Favorite) -->
+<button class="relative bg-surface-card rounded-lg p-4 flex flex-col items-start gap-stack-md hover:bg-surface-variant transition-colors text-left w-full h-full">
+<span class="material-symbols-outlined absolute top-3 right-3 text-accent-heart text-lg" style="font-variation-settings: 'FILL' 1;">favorite</span>
+<span class="material-symbols-outlined text-primary text-3xl mb-1">folder</span>
+<div class="flex flex-col gap-stack-sm">
+<span class="font-body-md text-body-md text-on-surface line-clamp-1">Family Photos</span>
+<span class="font-label-md text-label-md text-text-secondary">892 items</span>
+</div>
+</button>
+<!-- Folder Card 4 -->
+<button class="relative bg-surface-card rounded-lg p-4 flex flex-col items-start gap-stack-md hover:bg-surface-variant transition-colors text-left w-full h-full">
+<span class="material-symbols-outlined text-primary text-3xl mb-1">folder</span>
+<div class="flex flex-col gap-stack-sm">
+<span class="font-body-md text-body-md text-on-surface line-clamp-1">Work Projects</span>
+<span class="font-label-md text-label-md text-text-secondary">12 items</span>
+</div>
+</button>
+<!-- Folder Card 5 -->
+<button class="relative bg-surface-card rounded-lg p-4 flex flex-col items-start gap-stack-md hover:bg-surface-variant transition-colors text-left w-full h-full">
+<span class="material-symbols-outlined text-primary text-3xl mb-1">folder</span>
+<div class="flex flex-col gap-stack-sm">
+<span class="font-body-md text-body-md text-on-surface line-clamp-1">Screenshots</span>
+<span class="font-label-md text-label-md text-text-secondary">304 items</span>
+</div>
+</button>
+<!-- Folder Card 6 -->
+<button class="relative bg-surface-card rounded-lg p-4 flex flex-col items-start gap-stack-md hover:bg-surface-variant transition-colors text-left w-full h-full flex items-center justify-center border-2 border-dashed border-outline-variant bg-transparent hover:bg-surface-card/50">
+<span class="material-symbols-outlined text-on-surface-variant text-3xl">add</span>
+<span class="font-body-md text-body-md text-on-surface-variant mt-2">New Folder</span>
+</button>
+</section>
+<!-- Preview Content -->
+<section class="mt-stack-lg">
+<h3 class="font-headline-sm text-headline-sm text-text-primary mb-stack-md">Recent Additions</h3>
+<div class="grid grid-cols-3 md:grid-cols-5 lg:grid-cols-7 gap-gutter-grid">
+<div class="aspect-square bg-surface-card rounded-lg overflow-hidden relative group cursor-pointer">
+<img alt="Mountain landscape" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" data-alt="A breathtaking landscape photograph of rugged, snow-capped mountains reflecting perfectly in a still, dark alpine lake. The lighting is moody and dramatic, typical of a professional nature documentary, with deep shadows and sharp contrast. The overall aesthetic is dark and immersive, fitting a high-end minimalist digital gallery focused on high-resolution media viewing." src="https://lh3.googleusercontent.com/aida-public/AB6AXuC2gl2F_ZkqDFwt9Zt2dlsMdB82h0C8QIrZo95J31J0GC2jkuP3vz1wlLEeutrNWlbxzoKoBqRtRF3cU6BNqwUKBMwoyH0AK2lkqG7D7WsWFFpOFtl9xFNfoJNKxlrOqneLTkvEad88udSHCp8xx69UEfJICA9xWJMv8VNwzogu8E0Jq1BpVvlACPP8R6dXws6JWq3FPD0V2-fc04o27BTi_tqLx_Jk6hIgkbq-WEiv70nGwyD52h0MMq8YMg_uyJu6YkOyUQHV0As"/>
+</div>
+<div class="aspect-square bg-surface-card rounded-lg overflow-hidden relative group cursor-pointer">
+<img alt="Desert dunes" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" data-alt="An expansive aerial view of undulating desert sand dunes at sunset, casting long, sharp shadows. The color palette features rich oranges, deep reds, and stark black shadows, creating a high-contrast, dramatic scene. The image evokes a sense of vast emptiness and natural beauty, perfectly suited for a premium dark-mode media viewer." src="https://lh3.googleusercontent.com/aida-public/AB6AXuAvffJoYDg54-_lHqLdHiXaLGvycx7IcWfDIpMbji4XbG8FBOvDlZfchLNA1SKS9kyKY7pnzsmnHTekg2g-3FZkjMC4GcPALc8yJFCWwU3_tfLegDmsKGzHVAAVkmH1d3F87B1sfBELaPC1hm0f284E1I8Ur7BY9Nc9cwvSahqfMte2B4_coM2wO4p0qGxymAUWpTobnz8PgUwCNNC8hoSs1WtelH9AZMx1l8rzqVrLAXuIXTDiKjCoV-4Q1h9Ppv-Rb7L0MWKblmQ"/>
+</div>
+<div class="aspect-square bg-surface-card rounded-lg overflow-hidden relative group cursor-pointer">
+<span class="material-symbols-outlined absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 text-white drop-shadow-md z-10" style="font-variation-settings: 'FILL' 1;">play_circle</span>
+<img alt="Ocean waves video thumbnail" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300 opacity-80" data-alt="A close-up, high-speed photograph capturing the exact moment a dark ocean wave crashes, with droplets frozen in mid-air. The water is a deep, moody teal, contrasted against a completely black background. The style is hyper-realistic and intense, emphasizing the raw power of nature within a sleek, modern gallery interface." src="https://lh3.googleusercontent.com/aida-public/AB6AXuB_ev3UYjmdOaP7uVp7TtgTzkQTz1v_mqjry4a55iczToflhNDGIjUQPtnTYdgMvats2VRmPjb5qHS2f6WNkmlWFJ1b_GF3XMylf23JYP2URRGnK5gHH0VtsCXHkEUwZ2TENZNCFxy6pnWxyE8isyj_pANH6PimUvaRqg8rN_3ay9JgjtT0v1Asho1jESKCsDxtBjvNHHdt55cWCpJmKUfQzr8dm9qmkMuJmc6-9P05XiV24xZWtR4ZCdLO0TjOLROC1GL_ensR8Gg"/>
+</div>
+<div class="aspect-square bg-surface-card rounded-lg overflow-hidden relative group cursor-pointer hidden md:block">
+<img alt="Forest canopy" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" data-alt="A dense, dark green forest canopy viewed from above, shrouded in a light, eerie mist. The lighting is extremely subdued, creating a moody, cinematic atmosphere with rich emerald tones and deep black shadows. The image aligns with a sophisticated, professional digital asset management aesthetic, focusing on visual depth." src="https://lh3.googleusercontent.com/aida-public/AB6AXuBMm22OvqDgRyqkeYorf3HctA5Vlf2rhm62CO-gD9sawubD3wpSVpGevybBz9JmUOQzXNsrRLwutt3kMMBCuOjOSK-5fJr9YsUY_JaZIaYg4BV51zgtVN-zPta2imQ7jFQ1bIQ4OhxU_G5unMZdV0f6zaxbsSpu6PUUqAgf-RIA82N1voFBgPvUErCcA-5hjpRewnxeOt9LthDzdRnkseViAUQN1cBhmDx2VwRPFgY6xY4uAT077pteNylstcFLlDeUAKZcEtuoS-E"/>
+</div>
+<div class="aspect-square bg-surface-card rounded-lg overflow-hidden relative group cursor-pointer hidden lg:block">
+<img alt="Abstract architecture" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" data-alt="An abstract detail shot of modern, brutalist architecture featuring sharp angles and smooth concrete textures. The scene is lit by harsh, directional light that creates stark black geometric shadows across the grey surface. The composition is highly structured and minimalist, reflecting a secure, system-oriented gallery design ethos." src="https://lh3.googleusercontent.com/aida-public/AB6AXuDr3kz7E7EK93Qrq8zLUw4TYBcj1jTdOx-oeVewFQsXHz0UZisJjUaH644C2oTLa847dK8plpa9rkSpyYUnJGkoqoQeVW87ssH_fCfcBHarFAKuKjHNgxL_X0FWqnb3equJ0x8wzLXHkD4nSlwulwxTgURWoIrNgP0zwqQQ8rvq3FfFaMGH2Hw0oeW5rqtxCoWWSrGaLRWdIs9foj2R_O88OYO4WL7GcYrZp1SEiUA538MxvxNOqC01VzrD51jcVZ8zc7U-jSvlT60"/>
+</div>
+</div>
+</section>
+</main>
+<!-- BottomNavBar -->
+<nav class="fixed bottom-0 w-full z-50 flex justify-around items-center px-4 py-3 bg-surface-glass backdrop-blur-md pb-safe">
+<button class="flex flex-col items-center justify-center text-on-surface-variant hover:bg-surface-variant transition-colors active:scale-95 duration-200 w-16 h-14 rounded-xl">
+<span class="material-symbols-outlined mb-1">home</span>
+<span class="font-label-md text-label-md">Home</span>
+</button>
+<button class="flex flex-col items-center justify-center text-on-surface-variant hover:bg-surface-variant transition-colors active:scale-95 duration-200 w-16 h-14 rounded-xl">
+<span class="material-symbols-outlined mb-1">photo_library</span>
+<span class="font-label-md text-label-md">Gallery</span>
+</button>
+<!-- Active Tab -->
+<button class="flex flex-col items-center justify-center bg-primary-container text-on-primary-container rounded-full px-4 py-1 hover:bg-surface-variant transition-colors active:scale-95 duration-200 h-14 min-w-[64px]">
+<span class="material-symbols-outlined mb-1" style="font-variation-settings: 'FILL' 1;">folder</span>
+<span class="font-label-md text-label-md">Folders</span>
+</button>
+<button class="flex flex-col items-center justify-center text-on-surface-variant hover:bg-surface-variant transition-colors active:scale-95 duration-200 w-16 h-14 rounded-xl">
+<span class="material-symbols-outlined mb-1">favorite</span>
+<span class="font-label-md text-label-md">Favorites</span>
+</button>
+<button class="flex flex-col items-center justify-center text-on-surface-variant hover:bg-surface-variant transition-colors active:scale-95 duration-200 w-16 h-14 rounded-xl">
+<span class="material-symbols-outlined mb-1">settings</span>
+<span class="font-label-md text-label-md">Settings</span>
+</button>
+</nav>
+</body></html>

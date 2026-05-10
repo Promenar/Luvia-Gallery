@@ -1,31 +1,36 @@
 # 跨会话交接
 
 ## Done (已完成)
-- [x] 初始化项目级 `AGENTS.md`
-- [x] 初始化文档注册表 `.agent/registry.md`
-- [x] 三份审计报告交叉对比（DeepSeek / GLM / MiniMax）
-- [x] 编写最终修复方案 `.agent/plans/final-fix-plan.md`
-- [x] 编写综合评估 `.agent/plans/comprehensive-evaluation.md`
-- [x] 合并远程 e5cff90（Gemini 3 Pro FTS 触发器修复）
-- [x] 实施全部修复项（共 11 项改动，2 个文件 +70/-16 行）：
-  - `database.js`: FTS 触发器(Gemini) + `repairOrphanedFTS`(DeepSeek) + `deleteFilesBatch` 异常处理(DeepSeek) + `insertFilesBatch` 签名(MiniMax)
-  - `server.js`: 扫描引擎加固(DeepSeek) + 删除重复 `startPeriodicScanner`(GLM) + on-the-fly 缩略图 file 对象(GLM)
-- [x] 语法检查通过（`node -c` 两个文件均 OK）
+- [x] 在 `native-ui` 目录下完成了移动端从 React Native 到 Kotlin (Jetpack Compose) 的全面重构。
+- [x] 建立了现代化的 Android 架构 (MVVM + Hilt + Retrofit + DataStore)。
+- [x] 实现了完整的 UI 骨架：Splash -> Login -> Main (5 Tabs)。
+- [x] 核心页面开发完成：
+  - **Home**: 英雄轮播图 + 最近添加列表。
+  - **Gallery**: 高性能媒体网格。
+  - **Folders**: 文件夹列表（逻辑框架已就绪）。
+  - **Favorites**: 收藏媒体视图。
+  - **Settings**: 服务器状态查看与注销功能。
+  - **Media Viewer**: 全屏查看器，支持 EXIF 信息浮层。
+- [x] 实现了 **DynamicUrlInterceptor**，支持动态切换后端服务器地址。
+- [x] 同步更新了文档体系：
+  - `docs/ARCHITECTURE.md`: 新增 Android 原生架构说明。
+  - `docs/DATA_SCHEMA.md`: 新增 DataStore 与 API 模型定义。
+  - `release_notes.md`: 新增 v1.2.0 版本记录。
 
 ## Next Steps (下一步计划)
-- [ ] 提交变更并推送到远程
-- [ ] 构建 Docker 镜像部署到 NAS 实机
-- [ ] 实机验证清单（见 comprehensive-evaluation.md §四）
-- [ ] 补全核心架构文档 `docs/ARCHITECTURE.md`
+- [ ] 完善 **Folders** 下钻功能：点击文件夹后进入该文件夹的媒体列表页。
+- [ ] 集成 **Media3 (ExoPlayer)** 实现全屏视频播放支持。
+- [ ] 增加图片手势缩放功能 (ZoomableImage)。
+- [ ] 增加图片/视频删除确认逻辑。
+- [ ] 进行端测与混淆配置 (Proguard)。
 
 ## Risks (未决风险与阻塞)
-- 全部改动已实施但**未提交**，`database.js` 和 `server.js` 有未暂存改动
-- 路径规范化问题（GLM 提出）为潜在风险，暂不处理，需实机验证后评估
-- `deleteFilesBatch` FTS 失败跳过时文件不会被删除，需关注日志中的 `FTS batch delete error` 记录
+- 目前由于环境限制无法进行实机编译测试，所有代码均为静态逻辑实现。
+- 视频播放器 (Media3) 的 Lifecycle 管理尚未完成，需防止内存泄漏。
+- 缩略图加载性能在超大数据集（>10000项）下的表现需实测调优。
 
 ## DIA Status (文档同步状态)
-- [x] `AGENTS.md` 已创建
-- [x] `.agent/registry.md` 已创建
+- [x] `docs/ARCHITECTURE.md` 已同步
+- [x] `docs/DATA_SCHEMA.md` 已同步
+- [x] `release_notes.md` 已同步
 - [x] `.agent/handover.md` 已更新
-- [x] `.agent/plans/final-fix-plan.md` 已更新
-- [x] `.agent/plans/comprehensive-evaluation.md` 已创建（本次新增）

@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Favorites - Luvia Gallery</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<style>
+        .material-symbols-outlined {
+            font-family: 'Material Symbols Outlined';
+            font-weight: normal;
+            font-style: normal;
+            font-size: 24px;
+            line-height: 1;
+            letter-spacing: normal;
+            text-transform: none;
+            display: inline-block;
+            white-space: nowrap;
+            word-wrap: normal;
+            direction: ltr;
+            -webkit-font-feature-settings: 'liga';
+            -webkit-font-smoothing: antialiased;
+        }
+        
+        /* Hide scrollbar for horizontal carousel but keep functionality */
+        .no-scrollbar::-webkit-scrollbar {
+            display: none;
+        }
+        .no-scrollbar {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+    </style>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "primary-fixed": "#d1e4ff",
+                        "surface-container-high": "#262a30",
+                        "on-secondary-fixed": "#0f2000",
+                        "error-container": "#93000a",
+                        "status-warning": "#FF9800",
+                        "surface-main": "#121212",
+                        "on-primary-fixed": "#001d36",
+                        "text-secondary": "#B0B0B0",
+                        "secondary": "#9ed75b",
+                        "on-tertiary-container": "#452200",
+                        "surface-container-lowest": "#0a0e14",
+                        "inverse-primary": "#0061a4",
+                        "on-background": "#dfe2ea",
+                        "on-tertiary-fixed": "#2e1500",
+                        "tertiary-fixed": "#ffdcc2",
+                        "surface-glass": "rgba(30, 30, 30, 0.7)",
+                        "inverse-on-surface": "#2d3137",
+                        "primary-container": "#2196f3",
+                        "secondary-container": "#4b7d00",
+                        "error": "#ffb4ab",
+                        "on-secondary": "#1e3700",
+                        "surface-container": "#1c2026",
+                        "on-error": "#690005",
+                        "on-surface-variant": "#bfc7d4",
+                        "outline-variant": "#404752",
+                        "primary-fixed-dim": "#9ecaff",
+                        "on-primary-fixed-variant": "#00497d",
+                        "on-primary-container": "#002c4f",
+                        "text-primary": "#FFFFFF",
+                        "secondary-fixed": "#b9f474",
+                        "surface-card": "#1E1E1E",
+                        "tertiary": "#ffb77b",
+                        "status-success": "#4CAF50",
+                        "on-surface": "#dfe2ea",
+                        "inverse-surface": "#dfe2ea",
+                        "tertiary-fixed-dim": "#ffb77b",
+                        "on-tertiary": "#4d2700",
+                        "surface-bright": "#353940",
+                        "on-secondary-fixed-variant": "#2e4f00",
+                        "primary": "#9ecaff",
+                        "background": "#0f1419",
+                        "secondary-fixed-dim": "#9ed75b",
+                        "status-error": "#F44336",
+                        "accent-heart": "#F44336",
+                        "on-tertiary-fixed-variant": "#6d3900",
+                        "surface-variant": "#31353b",
+                        "surface-container-highest": "#31353b",
+                        "tertiary-container": "#db7900",
+                        "surface": "#0f1419",
+                        "on-error-container": "#ffdad6",
+                        "surface-dim": "#0f1419",
+                        "outline": "#89919d",
+                        "surface-tint": "#9ecaff",
+                        "on-secondary-container": "#dfffb6",
+                        "on-primary": "#003258",
+                        "surface-container-low": "#181c22"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    "spacing": {
+                        "margin-mobile": "16px",
+                        "gutter-grid": "8px",
+                        "margin-tablet": "24px",
+                        "stack-lg": "24px",
+                        "stack-sm": "4px",
+                        "stack-md": "12px"
+                    },
+                    "fontFamily": {
+                        "headline-sm": ["manrope", "sans-serif"],
+                        "headline-md": ["manrope", "sans-serif"],
+                        "label-md": ["geist", "sans-serif"],
+                        "body-md": ["inter", "sans-serif"],
+                        "body-lg": ["inter", "sans-serif"],
+                        "headline-lg": ["manrope", "sans-serif"],
+                        "mono-sm": ["geist", "monospace"]
+                    },
+                    "fontSize": {
+                        "headline-sm": ["20px", { "lineHeight": "28px", "fontWeight": "600" }],
+                        "headline-md": ["24px", { "lineHeight": "32px", "fontWeight": "600" }],
+                        "label-md": ["12px", { "lineHeight": "16px", "letterSpacing": "0.5px", "fontWeight": "500" }],
+                        "body-md": ["14px", { "lineHeight": "20px", "fontWeight": "400" }],
+                        "body-lg": ["16px", { "lineHeight": "24px", "fontWeight": "400" }],
+                        "headline-lg": ["32px", { "lineHeight": "40px", "fontWeight": "700" }],
+                        "mono-sm": ["11px", { "lineHeight": "14px", "fontWeight": "400" }]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="bg-surface-main text-on-surface font-body-md min-h-screen flex flex-col antialiased">
+<!-- TopAppBar -->
+<header class="docked full-width top-0 z-50 bg-surface dark:bg-surface flex justify-between items-center w-full px-margin-mobile py-4">
+<button class="text-primary hover:bg-surface-container-high transition-colors active:opacity-80 transition-opacity p-2 rounded-full flex items-center justify-center">
+<span class="material-symbols-outlined" data-icon="menu">menu</span>
+</button>
+<div class="flex items-center gap-stack-sm">
+<span class="material-symbols-outlined text-accent-heart" data-icon="favorite" style="font-variation-settings: 'FILL' 1;">favorite</span>
+<h1 class="font-headline-md text-headline-md font-bold text-primary">Favorites</h1>
+</div>
+<div class="flex items-center gap-2">
+<button class="text-primary hover:bg-surface-container-high transition-colors active:opacity-80 transition-opacity p-2 rounded-full flex items-center justify-center hidden md:flex">
+<span class="material-symbols-outlined" data-icon="search">search</span>
+</button>
+<!-- Desktop Nav Cluster (Hidden on mobile) -->
+<nav class="hidden md:flex gap-4 px-4">
+<a class="text-on-surface-variant font-label-md text-label-md hover:text-primary transition-colors" href="#">Home</a>
+<a class="text-on-surface-variant font-label-md text-label-md hover:text-primary transition-colors" href="#">Gallery</a>
+<a class="text-on-surface-variant font-label-md text-label-md hover:text-primary transition-colors" href="#">Folders</a>
+<a class="text-primary font-label-md text-label-md border-b-2 border-primary pb-1" href="#">Favorites</a>
+</nav>
+</div>
+</header>
+<!-- Main Content Canvas -->
+<main class="flex-grow pt-4 pb-24 px-margin-mobile md:px-margin-tablet flex flex-col gap-stack-lg">
+<!-- Section 1: Favorite Folders Carousel -->
+<section class="flex flex-col gap-stack-md">
+<div class="flex justify-between items-end">
+<h2 class="font-headline-sm text-headline-sm text-on-surface">Favorite Folders</h2>
+<a class="font-label-md text-label-md text-primary hover:text-primary-fixed-dim transition-colors" href="#">View All</a>
+</div>
+<div class="flex overflow-x-auto gap-gutter-grid pb-2 snap-x no-scrollbar">
+<!-- Folder Card 1 -->
+<div class="bg-surface-card rounded-lg p-4 min-w-[140px] snap-start flex flex-col items-center justify-center gap-stack-sm relative hover:bg-surface-bright transition-colors cursor-pointer group">
+<span class="material-symbols-outlined absolute top-2 right-2 text-accent-heart text-[16px]" data-icon="favorite" style="font-variation-settings: 'FILL' 1;">favorite</span>
+<span class="material-symbols-outlined text-[40px] text-primary group-hover:scale-105 transition-transform" data-icon="folder" style="font-variation-settings: 'FILL' 1;">folder</span>
+<span class="font-label-md text-label-md text-on-surface mt-2 text-center w-full truncate">Portraits 2023</span>
+<span class="font-mono-sm text-mono-sm text-text-secondary">42 items</span>
+</div>
+<!-- Folder Card 2 -->
+<div class="bg-surface-card rounded-lg p-4 min-w-[140px] snap-start flex flex-col items-center justify-center gap-stack-sm relative hover:bg-surface-bright transition-colors cursor-pointer group">
+<span class="material-symbols-outlined absolute top-2 right-2 text-accent-heart text-[16px]" data-icon="favorite" style="font-variation-settings: 'FILL' 1;">favorite</span>
+<span class="material-symbols-outlined text-[40px] text-primary group-hover:scale-105 transition-transform" data-icon="folder" style="font-variation-settings: 'FILL' 1;">folder</span>
+<span class="font-label-md text-label-md text-on-surface mt-2 text-center w-full truncate">Architecture</span>
+<span class="font-mono-sm text-mono-sm text-text-secondary">18 items</span>
+</div>
+<!-- Folder Card 3 -->
+<div class="bg-surface-card rounded-lg p-4 min-w-[140px] snap-start flex flex-col items-center justify-center gap-stack-sm relative hover:bg-surface-bright transition-colors cursor-pointer group">
+<span class="material-symbols-outlined absolute top-2 right-2 text-accent-heart text-[16px]" data-icon="favorite" style="font-variation-settings: 'FILL' 1;">favorite</span>
+<span class="material-symbols-outlined text-[40px] text-primary group-hover:scale-105 transition-transform" data-icon="folder" style="font-variation-settings: 'FILL' 1;">folder</span>
+<span class="font-label-md text-label-md text-on-surface mt-2 text-center w-full truncate">Tokyo Trip</span>
+<span class="font-mono-sm text-mono-sm text-text-secondary">156 items</span>
+</div>
+<!-- Folder Card 4 -->
+<div class="bg-surface-card rounded-lg p-4 min-w-[140px] snap-start flex flex-col items-center justify-center gap-stack-sm relative hover:bg-surface-bright transition-colors cursor-pointer group">
+<span class="material-symbols-outlined absolute top-2 right-2 text-accent-heart text-[16px]" data-icon="favorite" style="font-variation-settings: 'FILL' 1;">favorite</span>
+<span class="material-symbols-outlined text-[40px] text-primary group-hover:scale-105 transition-transform" data-icon="folder" style="font-variation-settings: 'FILL' 1;">folder</span>
+<span class="font-label-md text-label-md text-on-surface mt-2 text-center w-full truncate">Inspo</span>
+<span class="font-mono-sm text-mono-sm text-text-secondary">89 items</span>
+</div>
+</div>
+</section>
+<!-- Section 2: Media Files Grid -->
+<section class="flex flex-col gap-stack-md">
+<div class="flex justify-between items-end">
+<h2 class="font-headline-sm text-headline-sm text-on-surface">Saved Media</h2>
+<span class="font-mono-sm text-mono-sm text-text-secondary">Sorted by Date Added</span>
+</div>
+<!-- 3 Column Grid for Mobile, adapting to more on tablet -->
+<div class="grid grid-cols-3 md:grid-cols-5 gap-gutter-grid">
+<!-- Media Item 1 -->
+<div class="aspect-square bg-surface-card rounded-lg overflow-hidden relative group cursor-pointer">
+<img alt="A high-contrast macro photograph of a textured dark leaf with glowing dew drops. The lighting is dramatic and moody, fitting a modern dark-mode gallery aesthetic. The image features deep blacks, subtle grays, and tiny bright highlights." class="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" data-alt="A high-contrast macro photograph of a textured dark leaf with glowing dew drops. The lighting is dramatic and moody, fitting a modern dark-mode gallery aesthetic. The image features deep blacks, subtle grays, and tiny bright highlights." src="https://lh3.googleusercontent.com/aida-public/AB6AXuBrH-VrwAAhHAb6pRXo2jKzryFVnYs0poe9Fcx_wjkUA21RoUkPV3uaNAyAKausrPS1DtMZOx7aP74Yf6BMSZmV0jC79EZPVw7KU7-f_Fh_ffFE1ZkJyJLiEXZWVFSbg-_PZrPJ_JWKub-KaIs9v4L1QHp3be4fxFsJ087J8PtUKEXm35TmeAhnfVSw-to-ORYvp0sW2IlXngYG-Clyx8EmiLsr4zYyXR63ZtB25ifUCU1pgqD7JUx3czwTjXlpOxdkQgkSgm4zdy4"/>
+<div class="absolute inset-0 bg-gradient-to-b from-black/40 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
+<button class="absolute top-2 right-2 p-1 rounded-full bg-surface-glass backdrop-blur-md hover:bg-surface-container transition-colors">
+<span class="material-symbols-outlined text-[18px] text-accent-heart" data-icon="favorite" style="font-variation-settings: 'FILL' 1;">favorite</span>
+</button>
+</div>
+<!-- Media Item 2 (Video Indicator) -->
+<div class="aspect-square bg-surface-card rounded-lg overflow-hidden relative group cursor-pointer">
+<img alt="A sleek architectural exterior shot at dusk, featuring sharp geometric lines of a modern building against a deep blue, almost black sky. Warm orange interior lights contrast heavily with the cool dark exterior, matching a minimalist premium vibe." class="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" data-alt="A sleek architectural exterior shot at dusk, featuring sharp geometric lines of a modern building against a deep blue, almost black sky. Warm orange interior lights contrast heavily with the cool dark exterior, matching a minimalist premium vibe." src="https://lh3.googleusercontent.com/aida-public/AB6AXuBjy4ere98cZCPoFcDbJceUa1SwG220YVAh0JZiP-8vn_V3Yu8kc0qIgeFtweLd1UgmqYBTQdVJPQ7W54Kfsle-86TgnEbKt8UDvLbbGleS3yHlsLeOTUAwPkrH0SI7o5zNJ3libFvnT0TrC0VqaQ8jTfrIJeLIsvsVABLAFX3ScGWuBNBJP0PWAJiF1LYf7cLn7p4UdPBDeM9dAXEGIF0Sd1LH9eLnfowUvopmUoKNH098zXUCUOgFAXV6QARO8gubacq6V8x3fcQ"/>
+<div class="absolute inset-0 bg-black/20 group-hover:bg-black/40 transition-colors duration-300 flex items-center justify-center">
+<span class="material-symbols-outlined text-white text-[32px] drop-shadow-lg" data-icon="play_circle" style="font-variation-settings: 'FILL' 1;">play_circle</span>
+</div>
+<button class="absolute top-2 right-2 p-1 rounded-full bg-surface-glass backdrop-blur-md hover:bg-surface-container transition-colors z-10">
+<span class="material-symbols-outlined text-[18px] text-accent-heart" data-icon="favorite" style="font-variation-settings: 'FILL' 1;">favorite</span>
+</button>
+<span class="absolute bottom-2 right-2 font-mono-sm text-mono-sm text-white bg-black/60 px-1.5 py-0.5 rounded backdrop-blur-sm">0:45</span>
+</div>
+<!-- Media Item 3 -->
+<div class="aspect-square bg-surface-card rounded-lg overflow-hidden relative group cursor-pointer">
+<img alt="A minimal portrait of a silhouette against an abstract, softly glowing gradient background in muted cyan and dark grey tones. The subject is completely underexposed, prioritizing shapes and negative space within a clean, modern composition." class="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" data-alt="A minimal portrait of a silhouette against an abstract, softly glowing gradient background in muted cyan and dark grey tones. The subject is completely underexposed, prioritizing shapes and negative space within a clean, modern composition." src="https://lh3.googleusercontent.com/aida-public/AB6AXuABbRO3MQCbeD_7QblT8GCklZAoSO8E_7VT7WWrysPLzRlEtrUIjpFCzMR_mwUKMWsyA6XAqD7G4wd9guFLLUS3OT8NxcoZTewA2J8mmHGMit_bDloIeOIVWJjZrCe-xgi0-wHTlWtasH-Lj9Yrg02NZQIO3_jVvoydSB3OwteYYCheQRmTxnvATSjfjPl5qyGLcASBeoAjiDllX34JLM-Sq5MjEZiHyxhfifFSTsxXThAYxnXIXHU10ZQLVMbugVzf7UiSWbZ0aro"/>
+<div class="absolute inset-0 bg-gradient-to-b from-black/40 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
+<button class="absolute top-2 right-2 p-1 rounded-full bg-surface-glass backdrop-blur-md hover:bg-surface-container transition-colors">
+<span class="material-symbols-outlined text-[18px] text-accent-heart" data-icon="favorite" style="font-variation-settings: 'FILL' 1;">favorite</span>
+</button>
+</div>
+<!-- Media Item 4 -->
+<div class="aspect-square bg-surface-card rounded-lg overflow-hidden relative group cursor-pointer">
+<img alt="A top-down view of beautifully arranged, sleek technological hardware components on a matte black desk. The lighting is highly controlled and studio-quality, casting soft shadows that emphasize the premium materials and minimalist design." class="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" data-alt="A top-down view of beautifully arranged, sleek technological hardware components on a matte black desk. The lighting is highly controlled and studio-quality, casting soft shadows that emphasize the premium materials and minimalist design." src="https://lh3.googleusercontent.com/aida-public/AB6AXuBVIq9uj1nr5AZUYpBcrz1QoTY1TqPyWa8FYpCQqW35aYfzl4pTBtja9i9MfKJNHaaO8NhgUkr0dvTli1w3jreqaGzi8qcVTMOaasKceuVvgFe2ozkgRlQPWnAD5KeQaDlRMQxZ-6IuWrcffq7ZBEpkMH_H83vSFSrFJ5mgB6Sf-k_p4-LW1yyu4IgnMw9qeaNKhVvx6_vcx4KhB22rkC8VkndPdfTFiAvsP83rHHummM7X0sKqXtijxbFmOmNNY4cFJn9YMeRPds8"/>
+<div class="absolute inset-0 bg-gradient-to-b from-black/40 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
+<button class="absolute top-2 right-2 p-1 rounded-full bg-surface-glass backdrop-blur-md hover:bg-surface-container transition-colors">
+<span class="material-symbols-outlined text-[18px] text-accent-heart" data-icon="favorite" style="font-variation-settings: 'FILL' 1;">favorite</span>
+</button>
+</div>
+<!-- Media Item 5 -->
+<div class="aspect-square bg-surface-card rounded-lg overflow-hidden relative group cursor-pointer">
+<img alt="An abstract 3D rendered scene featuring smooth, dark grey, fluid geometric shapes overlapping softly. A single, distinct light source provides a subtle metallic sheen, perfect for a high-end, self-hosted gallery environment." class="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" data-alt="An abstract 3D rendered scene featuring smooth, dark grey, fluid geometric shapes overlapping softly. A single, distinct light source provides a subtle metallic sheen, perfect for a high-end, self-hosted gallery environment." src="https://lh3.googleusercontent.com/aida-public/AB6AXuDz1l-CaWYgkcQNcsdc06MBhcevQiMwu0-o4Dih5GdwO3Q5EN1CXkf6qXd7nSjkJm3QTfPtvxASYV50DmPlbCZspqUZ6cldNQqZD8S1K5EjN8l_qjh1600A6ih1R7TqcD6sIGot1WTAbemlO3tR26c3ewsLgF_NdCzzgkTZheWvoUfV1Cr0MWlWXDNS1LOOOPHRWMCpzx-K4dy2gP5TU7fg2di1-sTohJ5safTJpAcuX86MVWJMEZt1A8Zuo639n8AXC4WOX-IcKWQ"/>
+<div class="absolute inset-0 bg-gradient-to-b from-black/40 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
+<button class="absolute top-2 right-2 p-1 rounded-full bg-surface-glass backdrop-blur-md hover:bg-surface-container transition-colors">
+<span class="material-symbols-outlined text-[18px] text-accent-heart" data-icon="favorite" style="font-variation-settings: 'FILL' 1;">favorite</span>
+</button>
+</div>
+<!-- Media Item 6 -->
+<div class="aspect-square bg-surface-card rounded-lg overflow-hidden relative group cursor-pointer">
+<img alt="A night landscape showing dense, dark forest silhouettes against an awe-inspiring starry sky. The milky way is slightly visible in deep cool blues and purples, evoking a sense of calm and vastness in dark mode." class="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" data-alt="A night landscape showing dense, dark forest silhouettes against an awe-inspiring starry sky. The milky way is slightly visible in deep cool blues and purples, evoking a sense of calm and vastness in dark mode." src="https://lh3.googleusercontent.com/aida-public/AB6AXuAguDPdG7hZ2RbQrnPiIkduW7J9Jfcwf1PhNhYqJFSmwK68wkAsuRfRmF27BMiFoGhnKKAGKabKr5dU3VB4kQAD2TiyTzzrWT8LBTqKMOu8yXtlSZGyr04t0tndYfzJxsD-hI5oJSapfo5Jz29oN13HmzA5H_etD8Xh84Aet-e1b2CNRrNsqvm3pA21QwC9RTGwwT_C_D7MbbTi9qrznReHiMwC9EV80lYdPLeMVlEgnnGm3xx4i8D75pLtdhpy21FhlEa_A2iI56E"/>
+<div class="absolute inset-0 bg-gradient-to-b from-black/40 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
+<button class="absolute top-2 right-2 p-1 rounded-full bg-surface-glass backdrop-blur-md hover:bg-surface-container transition-colors">
+<span class="material-symbols-outlined text-[18px] text-accent-heart" data-icon="favorite" style="font-variation-settings: 'FILL' 1;">favorite</span>
+</button>
+</div>
+</div>
+</section>
+</main>
+<!-- BottomNavBar (Visible on Mobile, Hidden on md+) -->
+<nav class="md:hidden fixed bottom-0 w-full z-50 flex justify-around items-center px-4 py-3 bg-surface-glass backdrop-blur-lg">
+<button class="flex flex-col items-center justify-center text-on-surface-variant hover:bg-surface-variant transition-colors active:scale-95 duration-200 px-4 py-1 rounded-full group">
+<span class="material-symbols-outlined group-hover:text-primary transition-colors" data-icon="home">home</span>
+<span class="font-label-md text-[10px] mt-1 group-hover:text-primary transition-colors">Home</span>
+</button>
+<button class="flex flex-col items-center justify-center text-on-surface-variant hover:bg-surface-variant transition-colors active:scale-95 duration-200 px-4 py-1 rounded-full group">
+<span class="material-symbols-outlined group-hover:text-primary transition-colors" data-icon="photo_library">photo_library</span>
+<span class="font-label-md text-[10px] mt-1 group-hover:text-primary transition-colors">Gallery</span>
+</button>
+<button class="flex flex-col items-center justify-center text-on-surface-variant hover:bg-surface-variant transition-colors active:scale-95 duration-200 px-4 py-1 rounded-full group">
+<span class="material-symbols-outlined group-hover:text-primary transition-colors" data-icon="folder">folder</span>
+<span class="font-label-md text-[10px] mt-1 group-hover:text-primary transition-colors">Folders</span>
+</button>
+<!-- Active Tab: Favorites -->
+<button class="flex flex-col items-center justify-center bg-primary-container text-on-primary-container rounded-full px-4 py-1 active:scale-95 transition-transform duration-200 shadow-sm">
+<span class="material-symbols-outlined" data-icon="favorite" style="font-variation-settings: 'FILL' 1;">favorite</span>
+<span class="font-label-md text-[10px] mt-1 font-bold">Favorites</span>
+</button>
+<button class="flex flex-col items-center justify-center text-on-surface-variant hover:bg-surface-variant transition-colors active:scale-95 duration-200 px-4 py-1 rounded-full group">
+<span class="material-symbols-outlined group-hover:text-primary transition-colors" data-icon="settings">settings</span>
+<span class="font-label-md text-[10px] mt-1 group-hover:text-primary transition-colors">Settings</span>
+</button>
+</nav>
+</body></html>

@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Luvia Gallery</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@600;700&amp;family=Inter:wght@400&amp;family=Geist:wght@400;500&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            "colors": {
+                    "primary-fixed": "#d1e4ff",
+                    "surface-container-high": "#262a30",
+                    "on-secondary-fixed": "#0f2000",
+                    "error-container": "#93000a",
+                    "status-warning": "#FF9800",
+                    "surface-main": "#121212",
+                    "on-primary-fixed": "#001d36",
+                    "text-secondary": "#B0B0B0",
+                    "secondary": "#9ed75b",
+                    "on-tertiary-container": "#452200",
+                    "surface-container-lowest": "#0a0e14",
+                    "inverse-primary": "#0061a4",
+                    "on-background": "#dfe2ea",
+                    "on-tertiary-fixed": "#2e1500",
+                    "tertiary-fixed": "#ffdcc2",
+                    "surface-glass": "rgba(30, 30, 30, 0.7)",
+                    "inverse-on-surface": "#2d3137",
+                    "primary-container": "#2196f3",
+                    "secondary-container": "#4b7d00",
+                    "error": "#ffb4ab",
+                    "on-secondary": "#1e3700",
+                    "surface-container": "#1c2026",
+                    "on-error": "#690005",
+                    "on-surface-variant": "#bfc7d4",
+                    "outline-variant": "#404752",
+                    "primary-fixed-dim": "#9ecaff",
+                    "on-primary-fixed-variant": "#00497d",
+                    "on-primary-container": "#002c4f",
+                    "text-primary": "#FFFFFF",
+                    "secondary-fixed": "#b9f474",
+                    "surface-card": "#1E1E1E",
+                    "tertiary": "#ffb77b",
+                    "status-success": "#4CAF50",
+                    "on-surface": "#dfe2ea",
+                    "inverse-surface": "#dfe2ea",
+                    "tertiary-fixed-dim": "#ffb77b",
+                    "on-tertiary": "#4d2700",
+                    "surface-bright": "#353940",
+                    "on-secondary-fixed-variant": "#2e4f00",
+                    "primary": "#9ecaff",
+                    "background": "#0f1419",
+                    "secondary-fixed-dim": "#9ed75b",
+                    "status-error": "#F44336",
+                    "accent-heart": "#F44336",
+                    "on-tertiary-fixed-variant": "#6d3900",
+                    "surface-variant": "#31353b",
+                    "surface-container-highest": "#31353b",
+                    "tertiary-container": "#db7900",
+                    "surface": "#0f1419",
+                    "on-error-container": "#ffdad6",
+                    "surface-dim": "#0f1419",
+                    "outline": "#89919d",
+                    "surface-tint": "#9ecaff",
+                    "on-secondary-container": "#dfffb6",
+                    "on-primary": "#003258",
+                    "surface-container-low": "#181c22"
+            },
+            "borderRadius": {
+                    "DEFAULT": "0.25rem",
+                    "lg": "0.5rem",
+                    "xl": "0.75rem",
+                    "full": "9999px"
+            },
+            "spacing": {
+                    "margin-mobile": "16px",
+                    "gutter-grid": "8px",
+                    "margin-tablet": "24px",
+                    "stack-lg": "24px",
+                    "stack-sm": "4px",
+                    "stack-md": "12px"
+            },
+            "fontFamily": {
+                    "headline-sm": [
+                            "Manrope", "sans-serif"
+                    ],
+                    "headline-md": [
+                            "Manrope", "sans-serif"
+                    ],
+                    "label-md": [
+                            "Geist", "sans-serif"
+                    ],
+                    "body-md": [
+                            "Inter", "sans-serif"
+                    ],
+                    "body-lg": [
+                            "Inter", "sans-serif"
+                    ],
+                    "headline-lg": [
+                            "Manrope", "sans-serif"
+                    ],
+                    "mono-sm": [
+                            "Geist", "monospace"
+                    ]
+            },
+            "fontSize": {
+                    "headline-sm": [
+                            "20px",
+                            {
+                                    "lineHeight": "28px",
+                                    "fontWeight": "600"
+                            }
+                    ],
+                    "headline-md": [
+                            "24px",
+                            {
+                                    "lineHeight": "32px",
+                                    "fontWeight": "600"
+                            }
+                    ],
+                    "label-md": [
+                            "12px",
+                            {
+                                    "lineHeight": "16px",
+                                    "letterSpacing": "0.5px",
+                                    "fontWeight": "500"
+                            }
+                    ],
+                    "body-md": [
+                            "14px",
+                            {
+                                    "lineHeight": "20px",
+                                    "fontWeight": "400"
+                            }
+                    ],
+                    "body-lg": [
+                            "16px",
+                            {
+                                    "lineHeight": "24px",
+                                    "fontWeight": "400"
+                            }
+                    ],
+                    "headline-lg": [
+                            "32px",
+                            {
+                                    "lineHeight": "40px",
+                                    "fontWeight": "700"
+                            }
+                    ],
+                    "mono-sm": [
+                            "11px",
+                            {
+                                    "lineHeight": "14px",
+                                    "fontWeight": "400"
+                            }
+                    ]
+            }
+          }
+        }
+      }
+    </script>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="bg-surface text-on-surface h-screen w-screen flex flex-col items-center justify-center relative overflow-hidden">
+<!-- Central Content Area -->
+<main class="flex flex-col items-center justify-center z-10 space-y-stack-lg">
+<!-- Minimalist Camera/Lens Logo -->
+<div class="relative w-32 h-32 flex items-center justify-center rounded-full bg-surface-container-lowest shadow-[0_0_40px_rgba(158,202,255,0.05)] border border-surface-container-high">
+<!-- Subtle glow effect behind the icon -->
+<div class="absolute inset-0 rounded-full bg-primary/10 blur-xl"></div>
+<span class="material-symbols-outlined text-primary z-10" style="font-size: 56px; font-variation-settings: 'FILL' 1, 'wght' 300;">
+                camera
+            </span>
+</div>
+<!-- App Title -->
+<h1 class="font-headline-lg text-headline-lg text-on-surface tracking-tight text-center">
+            Luvia Gallery
+        </h1>
+</main>
+<!-- Bottom Loading Indicator -->
+<div class="absolute bottom-margin-tablet w-full flex flex-col items-center justify-end pb-8">
+<div class="w-32 h-1 bg-surface-container-high rounded-full overflow-hidden">
+<!-- Static progress bar indicating loading state -->
+<div class="h-full bg-primary w-2/5 rounded-full"></div>
+</div>
+</div>
+</body></html>
