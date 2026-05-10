@@ -18,6 +18,8 @@
   - `release_notes.md`: 新增 v1.2.0 版本记录。
 
 ## Next Steps (下一步计划)
+- [x] 提交变更并推送到远程
+- [ ] 构建 Docker 镜像部署到 NAS 实机
 - [ ] 完善 **Folders** 下钻功能：点击文件夹后进入该文件夹的媒体列表页。
 - [ ] 集成 **Media3 (ExoPlayer)** 实现全屏视频播放支持。
 - [ ] 增加图片手势缩放功能 (ZoomableImage)。
