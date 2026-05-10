@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Media Viewer - Audio Mode</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "primary-fixed": "#d1e4ff",
+                        "surface-container-high": "#262a30",
+                        "on-secondary-fixed": "#0f2000",
+                        "error-container": "#93000a",
+                        "status-warning": "#FF9800",
+                        "surface-main": "#121212",
+                        "on-primary-fixed": "#001d36",
+                        "text-secondary": "#B0B0B0",
+                        "secondary": "#9ed75b",
+                        "on-tertiary-container": "#452200",
+                        "surface-container-lowest": "#0a0e14",
+                        "inverse-primary": "#0061a4",
+                        "on-background": "#dfe2ea",
+                        "on-tertiary-fixed": "#2e1500",
+                        "tertiary-fixed": "#ffdcc2",
+                        "surface-glass": "rgba(30, 30, 30, 0.7)",
+                        "inverse-on-surface": "#2d3137",
+                        "primary-container": "#2196f3",
+                        "secondary-container": "#4b7d00",
+                        "error": "#ffb4ab",
+                        "on-secondary": "#1e3700",
+                        "surface-container": "#1c2026",
+                        "on-error": "#690005",
+                        "on-surface-variant": "#bfc7d4",
+                        "outline-variant": "#404752",
+                        "primary-fixed-dim": "#9ecaff",
+                        "on-primary-fixed-variant": "#00497d",
+                        "on-primary-container": "#002c4f",
+                        "text-primary": "#FFFFFF",
+                        "secondary-fixed": "#b9f474",
+                        "surface-card": "#1E1E1E",
+                        "tertiary": "#ffb77b",
+                        "status-success": "#4CAF50",
+                        "on-surface": "#dfe2ea",
+                        "inverse-surface": "#dfe2ea",
+                        "tertiary-fixed-dim": "#ffb77b",
+                        "on-tertiary": "#4d2700",
+                        "surface-bright": "#353940",
+                        "on-secondary-fixed-variant": "#2e4f00",
+                        "primary": "#9ecaff",
+                        "background": "#0f1419",
+                        "secondary-fixed-dim": "#9ed75b",
+                        "status-error": "#F44336",
+                        "accent-heart": "#F44336",
+                        "on-tertiary-fixed-variant": "#6d3900",
+                        "surface-variant": "#31353b",
+                        "surface-container-highest": "#31353b",
+                        "tertiary-container": "#db7900",
+                        "surface": "#0f1419",
+                        "on-error-container": "#ffdad6",
+                        "surface-dim": "#0f1419",
+                        "outline": "#89919d",
+                        "surface-tint": "#9ecaff",
+                        "on-secondary-container": "#dfffb6",
+                        "on-primary": "#003258",
+                        "surface-container-low": "#181c22"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    "spacing": {
+                        "margin-mobile": "16px",
+                        "gutter-grid": "8px",
+                        "margin-tablet": "24px",
+                        "stack-lg": "24px",
+                        "stack-sm": "4px",
+                        "stack-md": "12px"
+                    },
+                    "fontFamily": {
+                        "headline-sm": ["manrope"],
+                        "headline-md": ["manrope"],
+                        "label-md": ["geist"],
+                        "body-md": ["inter"],
+                        "body-lg": ["inter"],
+                        "headline-lg": ["manrope"],
+                        "mono-sm": ["geist"]
+                    },
+                    "fontSize": {
+                        "headline-sm": ["20px", {"lineHeight": "28px", "fontWeight": "600"}],
+                        "headline-md": ["24px", {"lineHeight": "32px", "fontWeight": "600"}],
+                        "label-md": ["12px", {"lineHeight": "16px", "letterSpacing": "0.5px", "fontWeight": "500"}],
+                        "body-md": ["14px", {"lineHeight": "20px", "fontWeight": "400"}],
+                        "body-lg": ["16px", {"lineHeight": "24px", "fontWeight": "400"}],
+                        "headline-lg": ["32px", {"lineHeight": "40px", "fontWeight": "700"}],
+                        "mono-sm": ["11px", {"lineHeight": "14px", "fontWeight": "400"}]
+                    }
+                }
+            }
+        }
+    </script>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=Manrope:wght@600;700&amp;family=Geist:wght@400;500&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<style>
+        .material-symbols-outlined {
+            font-family: 'Material Symbols Outlined';
+            font-weight: normal;
+            font-style: normal;
+            font-size: 24px;
+            line-height: 1;
+            letter-spacing: normal;
+            text-transform: none;
+            display: inline-block;
+            white-space: nowrap;
+            word-wrap: normal;
+            direction: ltr;
+            -webkit-font-feature-settings: 'liga';
+            -webkit-font-smoothing: antialiased;
+        }
+    </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="bg-background text-on-surface h-screen w-screen overflow-hidden flex flex-col items-center justify-center relative">
+<!-- Immersive Blurred Background -->
+<div class="absolute inset-0 w-full h-full z-0 overflow-hidden">
+<img alt="Immersive Background" class="w-full h-full object-cover scale-110 filter blur-3xl opacity-50 brightness-50" data-alt="A deeply atmospheric, abstract background featuring swirls of deep neon blue and purple colors blending together smoothly. The image is highly blurred, creating a soft, immersive gradient effect that feels like a modern digital art installation or a futuristic dreamscape. The lighting is low-key with vibrant accents, perfectly suited for a sleek, dark-mode user interface aesthetic." src="https://lh3.googleusercontent.com/aida-public/AB6AXuAsYEF140tEIMl3WtHv2ZCKF_pK-8LTXIE67X2rAdo_7I5l9qaVQqTF1fWZaDq4jvDby62dNLmVoXxP9rL2yBSVoxlrlhd4qbRaG-SyI6YVhhAxg72RSf6iCnh44DlBuEPq0rH3Gbc9JUkT36doHsVMGlH0y4cTb048t_zyFFuQC3wx80VK-LOnR3YFBJLUREzO4otDXSjDMnGZPsMhxqfGkFdGh2OHzkyQgOAgzf66f3k5FXW_9Pg97fjJ6AmXEzurYY-1ooPbghc"/>
+<div class="absolute inset-0 bg-gradient-to-b from-transparent via-surface-main/50 to-surface-main/90"></div>
+</div>
+<!-- Top App Bar (Transparent) -->
+<div class="absolute top-0 left-0 w-full z-50 flex justify-between items-center px-margin-mobile py-4">
+<button class="w-10 h-10 flex items-center justify-center rounded-full bg-surface-glass backdrop-blur-md text-on-surface hover:bg-surface-variant transition-colors">
+<span class="material-symbols-outlined">expand_more</span>
+</button>
+<button class="w-10 h-10 flex items-center justify-center rounded-full bg-surface-glass backdrop-blur-md text-on-surface hover:bg-surface-variant transition-colors">
+<span class="material-symbols-outlined">more_vert</span>
+</button>
+</div>
+<!-- Center Content: Album Art & Info -->
+<div class="z-10 flex flex-col items-center w-full max-w-md px-margin-mobile mt-[-10vh]">
+<!-- Album Cover -->
+<div class="w-64 h-64 md:w-80 md:h-80 rounded-2xl overflow-hidden shadow-[0_20px_50px_rgba(0,0,0,0.5)] mb-stack-lg border border-white/5 relative group">
+<img alt="Album Cover" class="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" data-alt="A striking, modern album cover featuring abstract, flowing shapes in vibrant neon blue and purple hues against a dark, moody background. The composition is dynamic and sleek, evoking a sense of high-fidelity electronic music. The lighting is dramatic, highlighting the smooth curves of the abstract forms, fitting perfectly into a dark-mode minimalist UI." src="https://lh3.googleusercontent.com/aida-public/AB6AXuCYqc3NDqj-cvE8c5uKqeTzl3h2pxIgn3v4A972rl86IExmQ3jXUH0lOC89lz4Jnmhzx5aGS7IRifh9J65dzJm_Bdo2efVNPrWEgYdoliDAj3AJV5YIbW4W9sm3JZuor0OjPPNTXMAT6Mv9DYvhpEquPgZSHO9p95HIHRHAHdYhYi8r_g61cIdW5xnODRSrqo0JOebqLcUNnuwLzMfKuYcP_ccE_kmVf0y0uqXq-dgWiwi72r3q8b27nbo6aWSa1pySKVDg1Iw9-4w"/>
+</div>
+<!-- Song Info -->
+<div class="text-center w-full px-4 mb-8">
+<h1 class="font-headline-lg text-headline-lg text-text-primary mb-stack-sm truncate">Midnight Drift</h1>
+<p class="font-body-lg text-body-lg text-text-secondary truncate">Ethereal Sounds</p>
+</div>
+</div>
+<!-- Bottom Control Panel (Glassmorphism) -->
+<div class="absolute bottom-0 left-0 w-full z-20 flex flex-col items-center pb-margin-tablet pt-6 px-margin-mobile md:px-margin-tablet bg-surface-glass backdrop-blur-xl border-t border-white/5 rounded-t-[32px]">
+<div class="w-full max-w-lg flex flex-col items-center">
+<!-- Progress Bar -->
+<div class="w-full mb-stack-lg px-2">
+<div class="flex justify-between items-center mb-stack-sm px-1">
+<span class="font-mono-sm text-mono-sm text-text-secondary">1:24</span>
+<span class="font-mono-sm text-mono-sm text-text-secondary">4:05</span>
+</div>
+<div class="w-full h-1.5 bg-surface-variant rounded-full relative cursor-pointer group">
+<div class="absolute top-0 left-0 h-full bg-primary-fixed rounded-full w-1/3"></div>
+<!-- Playhead -->
+<div class="absolute top-1/2 left-1/3 -translate-y-1/2 -translate-x-1/2 w-3 h-3 bg-white rounded-full shadow-md opacity-0 group-hover:opacity-100 transition-opacity"></div>
+</div>
+</div>
+<!-- Controls -->
+<div class="w-full flex items-center justify-between px-4">
+<button class="text-on-surface-variant hover:text-primary transition-colors">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 0;">shuffle</span>
+</button>
+<div class="flex items-center gap-6">
+<button class="w-12 h-12 flex items-center justify-center rounded-full text-on-surface hover:bg-surface-variant/50 transition-colors">
+<span class="material-symbols-outlined text-[32px]" style="font-variation-settings: 'FILL' 1;">skip_previous</span>
+</button>
+<button class="w-16 h-16 flex items-center justify-center rounded-full bg-primary-fixed text-on-primary-fixed shadow-lg hover:scale-105 active:scale-95 transition-all">
+<span class="material-symbols-outlined text-[36px]" style="font-variation-settings: 'FILL' 1;">pause</span>
+</button>
+<button class="w-12 h-12 flex items-center justify-center rounded-full text-on-surface hover:bg-surface-variant/50 transition-colors">
+<span class="material-symbols-outlined text-[32px]" style="font-variation-settings: 'FILL' 1;">skip_next</span>
+</button>
+</div>
+<button class="text-on-surface-variant hover:text-primary transition-colors">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 0;">repeat</span>
+</button>
+</div>
+<!-- Bottom Action Row -->
+<div class="w-full flex justify-between items-center mt-stack-lg px-4 opacity-70">
+<button class="text-on-surface-variant hover:text-accent-heart transition-colors">
+<span class="material-symbols-outlined">favorite_border</span>
+</button>
+<button class="text-on-surface-variant hover:text-primary transition-colors">
+<span class="material-symbols-outlined">volume_up</span>
+</button>
+</div>
+</div>
+</div>
+</body></html>

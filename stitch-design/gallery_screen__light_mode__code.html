@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Luvia Gallery</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500&amp;family=Inter:wght@400&amp;family=Manrope:wght@600;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "primary-fixed": "#d1e4ff",
+                        "surface-container-high": "#262a30",
+                        "on-secondary-fixed": "#0f2000",
+                        "error-container": "#93000a",
+                        "status-warning": "#FF9800",
+                        "surface-main": "#121212",
+                        "on-primary-fixed": "#001d36",
+                        "text-secondary": "#B0B0B0",
+                        "secondary": "#9ed75b",
+                        "on-tertiary-container": "#452200",
+                        "surface-container-lowest": "#0a0e14",
+                        "inverse-primary": "#0061a4",
+                        "on-background": "#dfe2ea",
+                        "on-tertiary-fixed": "#2e1500",
+                        "tertiary-fixed": "#ffdcc2",
+                        "surface-glass": "rgba(30, 30, 30, 0.7)",
+                        "inverse-on-surface": "#2d3137",
+                        "primary-container": "#2196f3",
+                        "secondary-container": "#4b7d00",
+                        "error": "#ffb4ab",
+                        "on-secondary": "#1e3700",
+                        "surface-container": "#1c2026",
+                        "on-error": "#690005",
+                        "on-surface-variant": "#bfc7d4",
+                        "outline-variant": "#404752",
+                        "primary-fixed-dim": "#9ecaff",
+                        "on-primary-fixed-variant": "#00497d",
+                        "on-primary-container": "#002c4f",
+                        "text-primary": "#FFFFFF",
+                        "secondary-fixed": "#b9f474",
+                        "surface-card": "#1E1E1E",
+                        "tertiary": "#ffb77b",
+                        "status-success": "#4CAF50",
+                        "on-surface": "#dfe2ea",
+                        "inverse-surface": "#dfe2ea",
+                        "tertiary-fixed-dim": "#ffb77b",
+                        "on-tertiary": "#4d2700",
+                        "surface-bright": "#353940",
+                        "on-secondary-fixed-variant": "#2e4f00",
+                        "primary": "#9ecaff",
+                        "background": "#0f1419",
+                        "secondary-fixed-dim": "#9ed75b",
+                        "status-error": "#F44336",
+                        "accent-heart": "#F44336",
+                        "on-tertiary-fixed-variant": "#6d3900",
+                        "surface-variant": "#31353b",
+                        "surface-container-highest": "#31353b",
+                        "tertiary-container": "#db7900",
+                        "surface": "#0f1419",
+                        "on-error-container": "#ffdad6",
+                        "surface-dim": "#0f1419",
+                        "outline": "#89919d",
+                        "surface-tint": "#9ecaff",
+                        "on-secondary-container": "#dfffb6",
+                        "on-primary": "#003258",
+                        "surface-container-low": "#181c22"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    "spacing": {
+                        "margin-mobile": "16px",
+                        "gutter-grid": "8px",
+                        "margin-tablet": "24px",
+                        "stack-lg": "24px",
+                        "stack-sm": "4px",
+                        "stack-md": "12px"
+                    },
+                    "fontFamily": {
+                        "headline-sm": ["manrope"],
+                        "headline-md": ["manrope"],
+                        "label-md": ["geist"],
+                        "body-md": ["inter"],
+                        "body-lg": ["inter"],
+                        "headline-lg": ["manrope"],
+                        "mono-sm": ["geist"]
+                    },
+                    "fontSize": {
+                        "headline-sm": ["20px", { "lineHeight": "28px", "fontWeight": "600" }],
+                        "headline-md": ["24px", { "lineHeight": "32px", "fontWeight": "600" }],
+                        "label-md": ["12px", { "lineHeight": "16px", "letterSpacing": "0.5px", "fontWeight": "500" }],
+                        "body-md": ["14px", { "lineHeight": "20px", "fontWeight": "400" }],
+                        "body-lg": ["16px", { "lineHeight": "24px", "fontWeight": "400" }],
+                        "headline-lg": ["32px", { "lineHeight": "40px", "fontWeight": "700" }],
+                        "mono-sm": ["11px", { "lineHeight": "14px", "fontWeight": "400" }]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        /* Custom scrollbar for webkit */
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-thumb {
+            background-color: #e2e8f0;
+            border-radius: 10px;
+        }
+    </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-900 font-body-md antialiased min-h-screen pb-24 pt-20">
+<!-- TopAppBar -->
+<header class="fixed top-0 w-full z-50 flex justify-between items-center px-margin-mobile py-4 bg-white/90 backdrop-blur-md">
+<button class="material-symbols-outlined text-slate-600 hover:bg-slate-100 transition-colors active:opacity-80 transition-opacity p-2 rounded-full -ml-2">
+            menu
+        </button>
+<h1 class="font-headline-md text-headline-md font-bold text-blue-600 mr-auto ml-2">Luvia Gallery</h1>
+<div class="flex items-center gap-1">
+<button class="material-symbols-outlined text-slate-600 hover:bg-slate-100 transition-colors active:opacity-80 transition-opacity p-2 rounded-full">
+                grid_view
+            </button>
+<button class="material-symbols-outlined text-slate-600 hover:bg-slate-100 transition-colors active:opacity-80 transition-opacity p-2 rounded-full">
+                sort
+            </button>
+<button class="material-symbols-outlined text-blue-600 hover:bg-slate-100 transition-colors active:opacity-80 transition-opacity p-2 rounded-full">
+                search
+            </button>
+</div>
+</header>
+<main class="w-full max-w-7xl mx-auto">
+<!-- Search Bar -->
+<div class="px-margin-mobile mb-6 mt-2">
+<div class="flex items-center bg-white rounded-full px-4 py-3 border border-slate-200 focus-within:border-blue-500 transition-colors shadow-sm">
+<span class="material-symbols-outlined text-slate-500 mr-3">search</span>
+<input class="bg-transparent border-none text-body-lg font-body-lg text-slate-900 w-full focus:outline-none focus:ring-0 placeholder:text-slate-400 p-0" placeholder="Search places, dates, or tags..." type="text"/>
+</div>
+</div>
+<!-- Gallery Section 1 -->
+<section class="mb-8">
+<div class="px-margin-mobile mb-3 flex items-baseline justify-between">
+<h2 class="font-headline-sm text-headline-sm text-slate-900">Today</h2>
+<span class="font-body-md text-body-md text-slate-600">San Francisco, CA</span>
+</div>
+<div class="grid grid-cols-3 md:grid-cols-5 lg:grid-cols-6 gap-[2px]">
+<div class="relative aspect-square w-full bg-slate-200 overflow-hidden group cursor-pointer">
+<img class="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" data-alt="A breathtaking view of the Golden Gate Bridge wrapped in thick, ethereal morning fog. The scene is captured at dawn, with soft, cool blue and grey lighting typical of a coastal minimalist aesthetic. The deep shadows of the bridge structure contrast perfectly with the muted background, fitting seamlessly into a high-end dark mode gallery interface." src="https://lh3.googleusercontent.com/aida-public/AB6AXuCQoJTH04pi46RdG66ewzCr1U8Z9YnjcuqL8F50wwH29cRRvqaqxjicCeI399tm6Xjt57r_8L3S-h6rJyK6Q9-HRnu_Uc-UOzJlr2l-Nj4Zx82PTyqrmV_g_J-Xp3EdVMndSdE9QRJ3EGVuJb_5hL_-ZoczJ55s7Xy0DG_oioFtWPtlpq0npmVeowqXnjYARMJ5MjabJSp49w_Tv_mKgw5bPyzhOffUAr5sjP6mVA26NoMojur3RbETBnD6oA-SGq9WNAO1FGajBHM"/>
+</div>
+<div class="relative aspect-square w-full bg-slate-200 overflow-hidden group cursor-pointer">
+<img class="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" data-alt="A macro shot of a single, vibrant green fern leaf covered in tiny morning dew drops. The depth of field is incredibly shallow, blurring the dark, moody forest background into a smooth bokeh. The bright green of the leaf acts as a striking accent color against the deep blacks and dark greens, perfectly suited for a modern, sleek media gallery." src="https://lh3.googleusercontent.com/aida-public/AB6AXuCcfCpzr-vwH-VAnXOhLIxZAgASmyFbWnnAN1LLYQcaHOB049pipkQ7ZhCQFXMbV7idiuTxmqgc8814gkkuQK9P-5zE6Z0TLuuFF8D7Hure5LjJBeotmnDFUp3P9zSLxxz1Npp5nkfrCLfeaScBMbzDH3iFHO_j8_JxEDBcHlihhw7eLcmAlUiW7zYiydCPpoAciq7xair7UtUFYPX57yzjK85og7_HlX6aO2bTCC-ecABVHIZUu690A1KGNLNsL5BuivAmi_yXW58"/>
+</div>
+<!-- Video Thumbnail -->
+<div class="relative aspect-square w-full bg-slate-200 overflow-hidden group cursor-pointer">
+<img class="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105 opacity-90" data-alt="A dynamic action shot of a person skateboarding mid-air against a stark, concrete urban backdrop. The lighting is harsh and dramatic, creating sharp, contrasting shadows that emphasize the movement. The monochrome palette with deep blacks and bright greys aligns beautifully with a sophisticated, professional dark-mode design system." src="https://lh3.googleusercontent.com/aida-public/AB6AXuBAJWo8chbQd_5nkVgmZsudWbK_U8T1D7wsDrnXSaaIAHxu1BIbio3TYy-Nv5UnZs9PPGkrYsSpCw_5otQeTMj52UXdBZBPHhDX5HFLrnZIzYlnkIjFBd9Jvovh0BnCDGPJhfiZ6QeDk8HAaQq-OnhAIOL_qaVBQIuwHWwDvMxhRYomlLagABvRydP4gX6T_8XHUHTrOTg0L1mBGGApSE5Z4G4OlLLBnTXLB9Lj7YB2ZmAP3h3rEWdgbGqAfffJsovNeW8aJChEGbs"/>
+<div class="absolute top-2 right-2 w-8 h-8 rounded-full bg-black/50 backdrop-blur-md flex items-center justify-center">
+<span class="material-symbols-outlined text-white text-[20px]" style="font-variation-settings: 'FILL' 1;">play_arrow</span>
+</div>
+<div class="absolute bottom-2 left-2">
+<span class="font-label-md text-label-md text-white bg-black/50 backdrop-blur-md px-1.5 py-0.5 rounded">0:15</span>
+</div>
+</div>
+<div class="relative aspect-square w-full bg-slate-200 overflow-hidden group cursor-pointer">
+<img class="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" data-alt="A high-fashion portrait of a woman looking directly into the lens. The background is a solid, deep charcoal grey, providing a minimalist canvas that makes the subject pop. The lighting is studio-quality, casting soft, flattering highlights and deep, moody shadows that resonate with a premium, elegant application aesthetic." src="https://lh3.googleusercontent.com/aida-public/AB6AXuCe4rdm2VR8Z45U-d2rR41lQpp3TnkqD9wLHo59AslAI-pWoC-iRrCkR1xHToUy5qjnicrCJF5-guR21g9pSgo_6FkzDrAw4xd4RO0scDc-Qq6QUKGhIcA0xmNT8ncETR-9GHkc-rUUXxapZbPD9dvl2-SUdnU9R60Tsot4w7clXsspGAYTZUo0YkNtjg7fe1x1z7Sid_GczT91FxIxaJyKLQpsNrstbRIn0DTxhrPTrhI8TpCYkKrtbsW_A_HBF0K0M16RvI9by8M"/>
+</div>
+<div class="relative aspect-square w-full bg-slate-200 overflow-hidden group cursor-pointer">
+<img class="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" data-alt="An abstract architectural detail showing the smooth, sweeping curves of a modern concrete building. The composition is entirely geometric, relying on stark contrasting lines and deep shadow play. The monochromatic cool-toned color scheme fits perfectly into a highly structured, minimalist dark UI, offering an immersive visual experience." src="https://lh3.googleusercontent.com/aida-public/AB6AXuCvPTqu2dFmzOOyTRLsgY1TZfIQ_UeVPE6mohHu8NvZ1JNVenlIyeoN688rQ4yhYr5wkwSgHGXyk8pf-5U_JPDy-kA2JA3jONCGaEiUaJUPQyQXMgZZGmkxottJOMhE6TdI43N0IY0xCoEFDTWY0CsbK0OqpUtJq0QPHDrCKhnXVrmB8gQoR__NIKfzcpRshmt1YK5f9K8uvGO02vYINr4GF8zFQhKhurOo01jlOA-MkI6645a_IZHJiKXwc_BuzUABwe7wAKrbLFk"/>
+</div>
+<div class="relative aspect-square w-full bg-slate-200 overflow-hidden group cursor-pointer hidden md:block">
+<img class="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" data-alt="A serene landscape of a vast, still lake mirroring a dark, starry night sky. The horizon line is perfectly centered, creating a sense of balance and calm. The deep blues and blacks of the night palette seamlessly integrate with a dark-mode theme, providing a visually resting point within a dense media grid." src="https://lh3.googleusercontent.com/aida-public/AB6AXuDMqvc3RqVIzqP2eQCvKFIGRZDTVHtdJ8K_0YaHA0oFcrrNR4N9OjORMZe4ml38rGGtYdMjCFynCClBHr4Hi8KOHin8VLRRLoFFHkKrOHNtjeT8hVj4Nyhj9iPhp4ae9z00wI9mLKkYGHOjqichq05ps35gxDo4TRX_MrGkCfprlYNaBKg9CzBIxuPqmpGNMMG9oPyHwt4iU9S_XrUU8PIYvz5DDQIpjpxZPhLxOdkyCRoDDSKWlbOW3xreCgYqRIG7EqvS1Ljn7ag"/>
+</div>
+</div>
+</section>
+<!-- Gallery Section 2 -->
+<section class="mb-8">
+<div class="px-margin-mobile mb-3 flex items-baseline justify-between">
+<h2 class="font-headline-sm text-headline-sm text-slate-900">Yesterday</h2>
+</div>
+<div class="grid grid-cols-3 md:grid-cols-5 lg:grid-cols-6 gap-[2px]">
+<div class="relative aspect-square w-full bg-slate-200 overflow-hidden group cursor-pointer">
+<img class="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" data-alt="A minimalist flat lay of assorted analog camera gear arranged neatly on a dark matte surface. The lighting is diffused, ensuring no harsh reflections off the metallic parts. The organized, grid-like composition mirrors the structural precision expected in a high-end, self-hosted media management application." src="https://lh3.googleusercontent.com/aida-public/AB6AXuCX6MH1fN3L95iX2StaRWKgSQXrR8039wc5uOX5OsRh-b2dfxqelMnWaNwEXoXeJroJCfhjrm5eWZ5vhCTHWLAuEdZVYcW2EyRHsmD9-AR0vGdjhfjTQIQkqgQ5WO8pyubJ8jCpq2VrhXvhUBD77UTpnnNh7lW_Qq6eq4lm1d0mW3gHoW4XdrQ-q1a1e_lFf7Xs-UY2tbKh5I4v-K3ScYET7g525WtK8TX0TJlPrOu37fcnwwCTyNeJYu3RtghreinHiUm6h4fJNAI"/>
+</div>
+<!-- Video Thumbnail -->
+<div class="relative aspect-square w-full bg-slate-200 overflow-hidden group cursor-pointer">
+<img class="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105 opacity-90" data-alt="A close-up shot of neon lights reflecting in a rain-slicked city street at night. The vibrant pinks and blues of the neon cut through the deep, dominant black of the wet asphalt. This high-contrast, cyberpunk-inspired visual serves as a brilliant pop of color within a restrained dark-mode gallery environment." src="https://lh3.googleusercontent.com/aida-public/AB6AXuBrsKcnr8HFXh41j9QVS0FPnxsBdmcWKI9TZ3OubVHGgr5P0lmzT7_yikH5_GlUJQlzoML13AboiWfg3MCpz4FfXSFkj3q-8O1-YpE2yP7A3ulAFPwamajIpP1Yw52rSLePctCl8b9x1KdOyGpUHWofvsgbCFdQSbawYtcGAQhbSrxyoa3MqJk370GjSq6IUggZVBcgDvsfYVEyx_w-y0z1LelBmk1zqALEV_UTi2ONPwowoy-UHs9iTk4zvPsvO6nr5_wySzDHjzU"/>
+<div class="absolute top-2 right-2 w-8 h-8 rounded-full bg-black/50 backdrop-blur-md flex items-center justify-center">
+<span class="material-symbols-outlined text-white text-[20px]" style="font-variation-settings: 'FILL' 1;">play_arrow</span>
+</div>
+<div class="absolute bottom-2 left-2">
+<span class="font-label-md text-label-md text-white bg-black/50 backdrop-blur-md px-1.5 py-0.5 rounded">1:04</span>
+</div>
+</div>
+<div class="relative aspect-square w-full bg-slate-200 overflow-hidden group cursor-pointer">
+<img class="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" data-alt="A vast, sweeping view of a mountain range enveloped in dense, moody clouds. The colors are incredibly desaturated, leaning heavily into shades of charcoal and stormy grey. The imposing natural structure conveys a sense of scale and power, perfect for an immersive full-bleed media viewing experience." src="https://lh3.googleusercontent.com/aida-public/AB6AXuCugPo1zYOzuPprbPsWDOh_wkq6I67GM2gGODJGKqcIPDWnXauyWhTzs-Hcw_lk1jQEXgsYqLxwb8ey6xPnsYncD-2GkHYQRUfL6mF0TuMOztxGW9aXz2590vvtoI4VoqZvyz3xJI69Efqv3E5ZSmJEPLW85n98Kwe_lUKF80MAqBAo7iVTsnF22tqMjvHlSc4PNWhwDSiKV_cYx2_nNHU_rwJqUXONwDze9rI7Hx7qfZyjCBr879XQ3EU_cLsSH-8IgrgYGkBXpC0"/>
+</div>
+<div class="relative aspect-square w-full bg-slate-200 overflow-hidden group cursor-pointer">
+<img class="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" data-alt="A stark, minimalist shot of white sand dunes under a harsh, clear sky. The image is cropped tightly to emphasize the abstract patterns and deep shadows formed by the wind on the sand. The extreme contrast between the bright highlights and dark shadows makes it an arresting thumbnail in a dark UI context." src="https://lh3.googleusercontent.com/aida-public/AB6AXuCHPB95RJMw4BMKVtz7JXXg8xVMddIsTNIwNIr1Xlz-ZkcUwDb3PiDZ5bzsiBdBRwZEu09YtmJdohRZqkQARWs_qlrJOiGFa_42UgWr5fJn6705E7vnMnpEVJfq77U-bAjysVy9gXXkNx8GnykFg6bmC6YFL6FpyidftplaDJ_VR_TXbNmFbo1xaGv5F_o4sv_OpSg0WWRHkkM_vr8jF_4fTjAD9Sdb2vjfZaYKmcZ5DZ7iXiwkhzW1PXOg98CKLGO3hdeA60E5sgA"/>
+</div>
+<div class="relative aspect-square w-full bg-slate-200 overflow-hidden group cursor-pointer">
+<img class="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" data-alt="A detailed, macro view of a dark, textured rock face. The rugged surface is illuminated by a single, sharp directional light source, creating deep crevices and stark highlights. This highly tactile image adds a sense of grounded realism and texture to a digital, screen-based media gallery." src="https://lh3.googleusercontent.com/aida-public/AB6AXuDTwgM4apGRZuDph_yQ33egL2HpP3MQfJj5TAY13xwL92fCzMijl_oaBu9wUBF9sc95JMjgmIqljWfw8I6Lgxrn_wuYNAh4RJqdsNFkIHYhU-7vc0RXalwjGli-Tjie-8WsbSYhhdKW0XMGrJkjHbWB98jz5zMKGWsUoCMlMiJ5Qxht2waEkZw4c5q-A_oQEEBx_rFZxmVxCR_CpM0-freA2Kis-1fw9FmaULGyeNQ21MZC-3xMIhqKfKMDnMpLacrLsDEORRQo0Z4"/>
+</div>
+<div class="relative aspect-square w-full bg-slate-200 overflow-hidden group cursor-pointer hidden md:block">
+<img class="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" data-alt="A serene image of a solitary tree standing in an empty field under an overcast, brooding sky. The composition is highly symmetric, evoking a sense of calm and isolation. The muted, earthy tones blend flawlessly with a sophisticated dark-mode aesthetic, providing a visually quiet moment in the grid." src="https://lh3.googleusercontent.com/aida-public/AB6AXuBlg9RPLy5QoWFUXxydJJu23uA6iwIaNtrv-25xhTTo0ai7iX3YlXOHouf0fcUzZzEGpFPhINRFigVBCDIYNNdCG91ZBgQ3gES13rAH5_qgeLAAjumIjHsFJGtTLf3L4-BqNeR2hZmyzn_-ZnsFYKoa3cRL8ObTLE0O6yl-QLCT9gIkxgnzHP7iOdCT5BEV-DiVtyofaG9Umk1Xz9EJ_scWphGQxwnRiiv6RjDWHu9-4U2rXD6rBmJYpTZA-7qoo4Zc7QNRX1ptgXY"/>
+</div>
+</div>
+</section>
+<!-- Skeleton Loaders (Infinite Scroll Indicator) -->
+<div class="px-margin-mobile mb-3">
+<h2 class="font-headline-sm text-headline-sm text-slate-400 animate-pulse">Loading...</h2>
+</div>
+<div class="grid grid-cols-3 md:grid-cols-5 lg:grid-cols-6 gap-[2px]">
+<div class="aspect-square w-full bg-slate-200 animate-pulse"></div>
+<div class="aspect-square w-full bg-slate-200 animate-pulse"></div>
+<div class="aspect-square w-full bg-slate-200 animate-pulse"></div>
+<div class="aspect-square w-full bg-slate-200 animate-pulse hidden md:block"></div>
+<div class="aspect-square w-full bg-slate-200 animate-pulse hidden md:block"></div>
+<div class="aspect-square w-full bg-slate-200 animate-pulse hidden lg:block"></div>
+</div>
+</main>
+<!-- BottomNavBar -->
+<nav class="fixed bottom-0 w-full z-50 flex justify-around items-center px-4 py-3 bg-white/90 backdrop-blur-lg border-t border-slate-200">
+<button class="flex flex-col items-center justify-center text-slate-600 hover:bg-slate-100 transition-colors active:scale-95 transition-transform duration-200 px-3 py-1 rounded-lg">
+<span class="material-symbols-outlined mb-1">home</span>
+<span class="font-label-md text-label-md">Home</span>
+</button>
+<button class="flex flex-col items-center justify-center bg-blue-100 text-blue-900 rounded-full px-5 py-1 hover:bg-blue-200 transition-colors active:scale-95 transition-transform duration-200">
+<span class="material-symbols-outlined mb-1" style="font-variation-settings: 'FILL' 1;">photo_library</span>
+<span class="font-label-md text-label-md">Gallery</span>
+</button>
+<button class="flex flex-col items-center justify-center text-slate-600 hover:bg-slate-100 transition-colors active:scale-95 transition-transform duration-200 px-3 py-1 rounded-lg">
+<span class="material-symbols-outlined mb-1">folder</span>
+<span class="font-label-md text-label-md">Folders</span>
+</button>
+<button class="flex flex-col items-center justify-center text-slate-600 hover:bg-slate-100 transition-colors active:scale-95 transition-transform duration-200 px-3 py-1 rounded-lg">
+<span class="material-symbols-outlined mb-1">favorite</span>
+<span class="font-label-md text-label-md">Favorites</span>
+</button>
+<button class="flex flex-col items-center justify-center text-slate-600 hover:bg-slate-100 transition-colors active:scale-95 transition-transform duration-200 px-3 py-1 rounded-lg">
+<span class="material-symbols-outlined mb-1">settings</span>
+<span class="font-label-md text-label-md">Settings</span>
+</button>
+</nav>
+</body></html>

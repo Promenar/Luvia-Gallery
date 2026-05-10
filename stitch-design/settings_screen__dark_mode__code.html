@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Luvia Gallery - Settings</title>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700&amp;family=Geist:wght@400;500&amp;family=Inter:wght@400;500;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "primary-fixed": "#d1e4ff",
+                        "surface-container-high": "#262a30",
+                        "on-secondary-fixed": "#0f2000",
+                        "error-container": "#93000a",
+                        "status-warning": "#FF9800",
+                        "surface-main": "#121212",
+                        "on-primary-fixed": "#001d36",
+                        "text-secondary": "#B0B0B0",
+                        "secondary": "#9ed75b",
+                        "on-tertiary-container": "#452200",
+                        "surface-container-lowest": "#0a0e14",
+                        "inverse-primary": "#0061a4",
+                        "on-background": "#dfe2ea",
+                        "on-tertiary-fixed": "#2e1500",
+                        "tertiary-fixed": "#ffdcc2",
+                        "surface-glass": "rgba(30, 30, 30, 0.7)",
+                        "inverse-on-surface": "#2d3137",
+                        "primary-container": "#2196f3",
+                        "secondary-container": "#4b7d00",
+                        "error": "#ffb4ab",
+                        "on-secondary": "#1e3700",
+                        "surface-container": "#1c2026",
+                        "on-error": "#690005",
+                        "on-surface-variant": "#bfc7d4",
+                        "outline-variant": "#404752",
+                        "primary-fixed-dim": "#9ecaff",
+                        "on-primary-fixed-variant": "#00497d",
+                        "on-primary-container": "#002c4f",
+                        "text-primary": "#FFFFFF",
+                        "secondary-fixed": "#b9f474",
+                        "surface-card": "#1E1E1E",
+                        "tertiary": "#ffb77b",
+                        "status-success": "#4CAF50",
+                        "on-surface": "#dfe2ea",
+                        "inverse-surface": "#dfe2ea",
+                        "tertiary-fixed-dim": "#ffb77b",
+                        "on-tertiary": "#4d2700",
+                        "surface-bright": "#353940",
+                        "on-secondary-fixed-variant": "#2e4f00",
+                        "primary": "#9ecaff",
+                        "background": "#0f1419",
+                        "secondary-fixed-dim": "#9ed75b",
+                        "status-error": "#F44336",
+                        "accent-heart": "#F44336",
+                        "on-tertiary-fixed-variant": "#6d3900",
+                        "surface-variant": "#31353b",
+                        "surface-container-highest": "#31353b",
+                        "tertiary-container": "#db7900",
+                        "surface": "#0f1419",
+                        "on-error-container": "#ffdad6",
+                        "surface-dim": "#0f1419",
+                        "outline": "#89919d",
+                        "surface-tint": "#9ecaff",
+                        "on-secondary-container": "#dfffb6",
+                        "on-primary": "#003258",
+                        "surface-container-low": "#181c22"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    "spacing": {
+                        "margin-mobile": "16px",
+                        "gutter-grid": "8px",
+                        "margin-tablet": "24px",
+                        "stack-lg": "24px",
+                        "stack-sm": "4px",
+                        "stack-md": "12px"
+                    },
+                    "fontFamily": {
+                        "headline-sm": ["manrope"],
+                        "headline-md": ["manrope"],
+                        "label-md": ["geist"],
+                        "body-md": ["inter"],
+                        "body-lg": ["inter"],
+                        "headline-lg": ["manrope"],
+                        "mono-sm": ["geist"]
+                    },
+                    "fontSize": {
+                        "headline-sm": ["20px", { "lineHeight": "28px", "fontWeight": "600" }],
+                        "headline-md": ["24px", { "lineHeight": "32px", "fontWeight": "600" }],
+                        "label-md": ["12px", { "lineHeight": "16px", "letterSpacing": "0.5px", "fontWeight": "500" }],
+                        "body-md": ["14px", { "lineHeight": "20px", "fontWeight": "400" }],
+                        "body-lg": ["16px", { "lineHeight": "24px", "fontWeight": "400" }],
+                        "headline-lg": ["32px", { "lineHeight": "40px", "fontWeight": "700" }],
+                        "mono-sm": ["11px", { "lineHeight": "14px", "fontWeight": "400" }]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .material-symbols-outlined.fill {
+            font-variation-settings: 'FILL' 1;
+        }
+    </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="bg-surface text-on-surface antialiased min-h-screen flex flex-col font-body-md selection:bg-primary-container selection:text-on-primary-container">
+<!-- TopAppBar -->
+<header class="flex justify-between items-center w-full px-margin-mobile py-4 bg-surface dark:bg-surface docked full-width top-0 z-50 flat no shadows">
+<button class="text-on-surface-variant hover:bg-surface-container-high transition-colors active:opacity-80 transition-opacity p-2 rounded-full flex items-center justify-center">
+<span class="material-symbols-outlined">menu</span>
+</button>
+<h1 class="font-headline-md text-headline-md font-bold text-primary">Luvia Gallery</h1>
+<button class="text-on-surface-variant hover:bg-surface-container-high transition-colors active:opacity-80 transition-opacity p-2 rounded-full flex items-center justify-center">
+<span class="material-symbols-outlined">search</span>
+</button>
+</header>
+<!-- Main Content -->
+<main class="flex-1 px-margin-mobile pb-[100px] md:px-margin-tablet w-full max-w-4xl mx-auto">
+<div class="mb-stack-lg mt-stack-md">
+<h2 class="font-headline-lg text-headline-lg mb-stack-md">Settings</h2>
+<!-- Tabs -->
+<div class="flex space-x-6 border-b border-outline-variant">
+<button class="pb-3 border-b-2 border-primary text-primary font-body-md font-medium px-1">App Settings</button>
+<button class="pb-3 border-b-2 border-transparent text-on-surface-variant hover:text-on-surface transition-colors font-body-md px-1">Server Admin</button>
+</div>
+</div>
+<!-- Settings List Container -->
+<div class="flex flex-col gap-stack-lg">
+<!-- General Preferences Group -->
+<section>
+<h3 class="font-label-md text-label-md text-on-surface-variant uppercase tracking-wider mb-stack-sm px-2">General</h3>
+<div class="bg-surface-card rounded-xl overflow-hidden flex flex-col">
+<!-- Language Item -->
+<div class="flex items-center justify-between p-4 border-b border-surface-container-highest hover:bg-surface-container-low transition-colors cursor-pointer">
+<div class="flex items-center gap-4">
+<span class="material-symbols-outlined text-on-surface-variant">language</span>
+<span class="font-body-lg text-body-lg">Language</span>
+</div>
+<div class="flex items-center gap-2 text-on-surface-variant">
+<span class="font-body-md text-body-md">English (EN)</span>
+<span class="material-symbols-outlined text-sm">chevron_right</span>
+</div>
+</div>
+<!-- Theme Item -->
+<div class="flex items-center justify-between p-4 border-b border-surface-container-highest">
+<div class="flex items-center gap-4">
+<span class="material-symbols-outlined text-on-surface-variant">palette</span>
+<span class="font-body-lg text-body-lg">Theme</span>
+</div>
+<div class="flex bg-surface-container-highest rounded-full p-1">
+<button class="flex items-center justify-center px-3 py-1.5 rounded-full text-on-surface-variant hover:text-on-surface transition-colors">
+<span class="material-symbols-outlined text-sm">brightness_auto</span>
+</button>
+<button class="flex items-center justify-center px-3 py-1.5 rounded-full text-on-surface-variant hover:text-on-surface transition-colors">
+<span class="material-symbols-outlined text-sm">light_mode</span>
+</button>
+<button class="flex items-center justify-center px-3 py-1.5 rounded-full bg-surface text-primary shadow-sm transition-colors">
+<span class="material-symbols-outlined text-sm fill">dark_mode</span>
+</button>
+</div>
+</div>
+<!-- Carousel Config Item -->
+<div class="flex items-center justify-between p-4 hover:bg-surface-container-low transition-colors cursor-pointer">
+<div class="flex items-center gap-4">
+<span class="material-symbols-outlined text-on-surface-variant">view_carousel</span>
+<span class="font-body-lg text-body-lg">Carousel Config</span>
+</div>
+<span class="material-symbols-outlined text-on-surface-variant">chevron_right</span>
+</div>
+</div>
+</section>
+<!-- Security & Data Group -->
+<section>
+<h3 class="font-label-md text-label-md text-on-surface-variant uppercase tracking-wider mb-stack-sm px-2">Security &amp; Data</h3>
+<div class="bg-surface-card rounded-xl overflow-hidden flex flex-col">
+<!-- Security Item (Switch) -->
+<div class="flex items-center justify-between p-4 border-b border-surface-container-highest">
+<div class="flex items-center gap-4">
+<span class="material-symbols-outlined text-on-surface-variant">fingerprint</span>
+<div class="flex flex-col">
+<span class="font-body-lg text-body-lg">Require Biometrics</span>
+<span class="font-label-md text-label-md text-on-surface-variant">App lock active when in background</span>
+</div>
+</div>
+<!-- MD3 Switch Active -->
+<div class="w-12 h-8 rounded-full bg-primary-container p-1 flex items-center justify-end cursor-pointer transition-colors duration-300">
+<div class="w-6 h-6 rounded-full bg-on-primary-container flex items-center justify-center shadow-md transform transition-transform duration-300">
+<div class="w-2 h-2 rounded-full bg-primary-container"></div>
+</div>
+</div>
+</div>
+<!-- Cache Item -->
+<div class="flex items-center justify-between p-4 hover:bg-surface-container-low transition-colors cursor-pointer">
+<div class="flex items-center gap-4">
+<span class="material-symbols-outlined text-on-surface-variant">cleaning_services</span>
+<div class="flex flex-col">
+<span class="font-body-lg text-body-lg">Cache Management</span>
+<span class="font-label-md text-label-md text-on-surface-variant">1.2 GB used by thumbnails</span>
+</div>
+</div>
+<button class="px-4 py-2 rounded-full border border-status-error text-status-error font-label-md text-label-md hover:bg-error-container hover:text-on-error-container transition-colors">
+                            Clear Cache
+                        </button>
+</div>
+</div>
+</section>
+<!-- Account Section -->
+<section class="mt-stack-sm">
+<button class="w-full bg-surface-card hover:bg-surface-container-low border border-status-error/30 transition-colors rounded-xl p-4 flex items-center justify-center gap-2 text-status-error">
+<span class="material-symbols-outlined">logout</span>
+<span class="font-body-lg text-body-lg font-medium">Log Out</span>
+</button>
+</section>
+</div>
+</main>
+<!-- BottomNavBar -->
+<nav class="fixed bottom-0 w-full z-50 flex justify-around items-center px-4 py-3 bg-surface-glass dark:bg-surface-glass backdrop-blur-lg flat no shadows md:hidden">
+<button class="flex flex-col items-center justify-center text-on-surface-variant hover:bg-surface-variant transition-colors active:scale-95 duration-200 w-16 h-12 rounded-xl">
+<span class="material-symbols-outlined">home</span>
+<span class="font-label-md text-label-md mt-1 hidden sm:block">Home</span>
+</button>
+<button class="flex flex-col items-center justify-center text-on-surface-variant hover:bg-surface-variant transition-colors active:scale-95 duration-200 w-16 h-12 rounded-xl">
+<span class="material-symbols-outlined">photo_library</span>
+<span class="font-label-md text-label-md mt-1 hidden sm:block">Gallery</span>
+</button>
+<button class="flex flex-col items-center justify-center text-on-surface-variant hover:bg-surface-variant transition-colors active:scale-95 duration-200 w-16 h-12 rounded-xl">
+<span class="material-symbols-outlined">folder</span>
+<span class="font-label-md text-label-md mt-1 hidden sm:block">Folders</span>
+</button>
+<button class="flex flex-col items-center justify-center text-on-surface-variant hover:bg-surface-variant transition-colors active:scale-95 duration-200 w-16 h-12 rounded-xl">
+<span class="material-symbols-outlined">favorite</span>
+<span class="font-label-md text-label-md mt-1 hidden sm:block">Favorites</span>
+</button>
+<button class="flex flex-col items-center justify-center bg-primary-container text-on-primary-container rounded-full px-4 py-1 active:scale-95 transition-transform duration-200 w-16 h-12">
+<span class="material-symbols-outlined fill">settings</span>
+<span class="font-label-md text-label-md mt-1 hidden sm:block">Settings</span>
+</button>
+</nav>
+</body></html>
