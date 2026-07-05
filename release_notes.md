@@ -1,3 +1,13 @@
+# Luvia Gallery v1.2.1 (Production Stability)
+
+本次更新针对 FNOS 生产环境中 `luvia-gallery` 容器内存持续膨胀与媒体浏览间歇卡顿进行稳定性修复。
+
+### 修复与优化
+- 修复 `runner.js` 代理层缺少连接生命周期清理的问题：客户端断开、上游异常、空闲超时都会主动销毁对应 socket，避免内部 `runner.js -> server.js` 连接长期滞留。
+- 代理到内部后端时强制使用短连接并关闭 keep-alive 复用，降低图片/视频 Range 请求堆积导致的 socket 缓冲占用。
+- 为 Supervisor HTTP 服务设置明确的 keep-alive、headers timeout 与代理空闲超时，提升异常网络场景下的鲁棒性。
+- 为 Docker Compose 增加 `mem_limit`、`memswap_limit` 与 `NODE_OPTIONS=--max-old-space-size=2048`，防止容器无上限占用 FNOS 内存与 swap。
+
 # 🚀 Luvia Gallery v1.2.0 (Kotlin Native Refactor)
 
 本次更新完成了移动端从 React Native 到 Android 原生 Kotlin (Jetpack Compose) 的全面重构。
@@ -30,4 +40,3 @@
 - **Android**: v1.1.0 (Release Build)
 - **Architecture**: arm64-v8a
 - **Signing**: Production Keystore Signed (promenar)
-
