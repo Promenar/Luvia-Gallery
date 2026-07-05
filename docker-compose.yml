@@ -4,6 +4,8 @@ services:
     image: promenarleng/luvia-gallery:latest
     container_name: luvia-gallery
     restart: unless-stopped
+    mem_limit: 8g
+    memswap_limit: 8g
     ports:
       - "3000:3001"
     volumes:
@@ -24,6 +26,8 @@ services:
       - ./ssh:/tmp/ssh_mount:ro
     environment:
       - NODE_ENV=production
+      - NODE_OPTIONS=--max-old-space-size=2048
+      - PROXY_IDLE_TIMEOUT_MS=120000
       # [MULTI-ROOT SUPPORT] Separate paths with ';' (semicolon)
       # Example: MEDIA_ROOT=/media;/mnt/ext
       - MEDIA_ROOT=/media
@@ -39,6 +43,8 @@ services:
     runtime: nvidia
     deploy:
       resources:
+        limits:
+          memory: 8G
         reservations:
           devices:
             - driver: nvidia
