@@ -9,6 +9,7 @@ const INTERNAL_PORT = 3002;
 const MAX_RETRIES = 3;
 const RETRY_WINDOW = 60000; // 1 minute
 const SERVER_SCRIPT = 'server.js';
+const PROXY_IDLE_TIMEOUT_MS = Number(process.env.PROXY_IDLE_TIMEOUT_MS || 120000);
 
 const CONFIG_FILE = path.join(__dirname, 'data', 'update_config.json');
 if (!fs.existsSync(path.join(__dirname, 'data'))) fs.mkdirSync(path.join(__dirname, 'data'), { recursive: true });
@@ -288,17 +289,49 @@ const SAFE_MODE_HTML = `
 
 // Helper: Proxy request to Internal Backend
 function proxyRequest(req, res) {
+    const headers = {
+        ...req.headers,
+        host: `localhost:${INTERNAL_PORT}`,
+        connection: 'close'
+    };
+    delete headers['proxy-connection'];
+    delete headers['keep-alive'];
+
     const options = {
         hostname: 'localhost',
         port: INTERNAL_PORT,
         path: req.url,
         method: req.method,
-        headers: req.headers,
+        headers,
+        agent: false
     };
 
-    const proxy = http.request(options, (targetRes) => {
-        res.writeHead(targetRes.statusCode, targetRes.headers);
-        targetRes.pipe(res, { end: true });
+    let targetRes = null;
+    let settled = false;
+
+    const closeUpstream = () => {
+        if (!proxy.destroyed) proxy.destroy();
+        if (targetRes && !targetRes.destroyed) targetRes.destroy();
+    };
+
+    const closeDownstream = () => {
+        if (!res.destroyed) res.destroy();
+    };
+
+    const settle = () => {
+        settled = true;
+    };
+
+    const proxy = http.request(options, (upstreamRes) => {
+        targetRes = upstreamRes;
+        res.writeHead(upstreamRes.statusCode, upstreamRes.headers);
+        upstreamRes.pipe(res, { end: true });
+
+        upstreamRes.on('end', settle);
+        upstreamRes.on('close', () => {
+            if (!settled && !res.writableEnded) closeDownstream();
+        });
+        upstreamRes.on('error', closeDownstream);
     });
 
     proxy.on('error', (err) => {
@@ -307,8 +340,26 @@ function proxyRequest(req, res) {
         if (!res.headersSent) {
             res.writeHead(503, { 'Content-Type': 'text/plain' });
             res.end('Service starting...');
+        } else {
+            closeDownstream();
         }
     });
+
+    proxy.setTimeout(PROXY_IDLE_TIMEOUT_MS, () => {
+        log(`Proxy idle timeout for ${req.method} ${req.url}`);
+        closeUpstream();
+        closeDownstream();
+    });
+
+    req.on('aborted', closeUpstream);
+    req.on('close', () => {
+        if (!req.complete || res.destroyed || res.writableEnded) closeUpstream();
+    });
+    req.on('error', closeUpstream);
+    res.on('close', () => {
+        if (!res.writableEnded) closeUpstream();
+    });
+    res.on('error', closeUpstream);
 
     req.pipe(proxy, { end: true });
 }
@@ -478,6 +529,10 @@ const server = http.createServer((req, res) => {
     // 3. Normal Proxy
     proxyRequest(req, res);
 });
+
+server.keepAliveTimeout = 5000;
+server.headersTimeout = 10000;
+server.requestTimeout = 0;
 
 // Start Supervisor
 server.listen(EXTERNAL_PORT, '0.0.0.0', () => {
