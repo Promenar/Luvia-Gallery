@@ -54,6 +54,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=prod-deps /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/server.js /app/database.js /app/runner.js ./
+COPY --from=builder /app/lib ./lib
 COPY --from=builder /app/scripts ./scripts
 COPY package*.json ./
 
