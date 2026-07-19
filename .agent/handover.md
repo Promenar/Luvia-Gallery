@@ -135,3 +135,47 @@ continuity-key: fnos-media-stall
 ### HLG
 
 - 已追加本记录并沿用 `continuity-key: fnos-media-stall`；部署与 15 分钟窗口验证完成后需追加结果记录。
+
+## 2026-07-20T01:00:26+08:00 · FNOS 媒体浏览卡顿修复生产验证完成
+
+- type: deployment-verification
+- scope: production/fnos/media-scan
+- status: completed
+- tags: performance, event-loop, media-scan, cache-stats, production
+- continuity: none
+- continuity-key: fnos-media-stall
+
+### Summary
+
+已将媒体目录扫描与缓存统计从同步递归文件系统遍历改为异步流式、限并发、分批让出事件循环的实现，并完成 FNOS 生产部署与真实周期任务验证。原先每 10/15 分钟可能造成十几秒至数十秒全站断连的事件循环阻塞已消除。
+
+### Changed
+
+- 生产运行代码提交：`a87f86e9a46c20178c607c69ce97768d5e21d49a`。
+- 生产镜像：`sha256:4138bdb52d50baaa3ca30fb9f398cdbc63720e5ab26f6147135ce6246d253214`。
+- 回滚镜像：`promenarleng/luvia-gallery:rollback-a9fb8ea`。
+- 缓存统计与媒体扫描互斥执行；扫描不完整时禁止清理数据库缺失记录；数据库清理按游标分批事务执行。
+
+### Validation
+
+- Node 20 生产依赖环境测试：16/16 通过。
+- 前端生产构建通过；服务端及新增模块语法检查通过。
+- 缓存统计处理 899,964 个文件、耗时 37.659 秒；执行期间 120 次 API 请求零失败，最大延迟 3.703ms。
+- 首次 15 分钟周期扫描处理 906,148 个文件、耗时 42.359 秒；执行期间 103 次 API 请求零失败，平均延迟 3.390ms，最大延迟 6.416ms，超过 100ms 与 500ms 的请求均为 0。
+- 扫描后容器状态：running，restart=0，OOM=false，内存约 318.7MiB/8GiB，CPU 约 0.17%。
+
+### Next
+
+无需继续施工；保留真实用户连续浏览图片和视频的常规观察，如再次出现卡顿，优先按事件循环告警时间戳与反向代理日志关联定位。
+
+### Risks
+
+自动化验证覆盖服务端 API 连续请求与真实大目录后台任务，未代替浏览器端长时间连续图片/视频播放体验；当前生产证据已覆盖本次已确认的服务端全局断连根因。
+
+### DIA
+
+已同步 README、release_notes、project_memory、registry、实施计划与 handover。
+
+### HLG
+
+已追加本条完成记录，并以同一 continuity-key 关闭本次生产性能工作流。

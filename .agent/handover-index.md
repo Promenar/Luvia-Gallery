@@ -1,6 +1,6 @@
 # Handover Index
 
-> generated_at: 2026-07-20T00:42:34+08:00
+> generated_at: 2026-07-20T01:01:17+08:00
 > generated: true; do not edit manually
 > recovery_window_days: 7
 
@@ -14,6 +14,7 @@
 
 | date | format | status | continuity | scope | tags | title | source |
 | :---: | :---: | :---: | :---: | :--- | :--- | :--- | :--- |
+| 2026-07-20 | iso | unknown | unknown | - | - | FNOS 媒体浏览卡顿修复生产验证完成 | `.agent/handover.md` · `2026-07-20T01:00:26+08:00` |
 | 2026-07-20 | iso | done | waiting | fnos-production | [performance, nodejs, event-loop, sqlite, media, deployment] | FNOS 媒体浏览全局停顿优化实现 | `.agent/handover.md` · `2026-07-20T00:41:43+08:00` |
 | 2026-07-19 | iso | done | resume | fnos-production | [performance, nodejs, event-loop, media, scan] | FNOS 媒体浏览周期性全局停顿诊断 | `.agent/handover.md` · `2026-07-19T23:58:36+08:00` |
 
