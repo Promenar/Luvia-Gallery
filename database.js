@@ -1,6 +1,7 @@
 const Database = require('better-sqlite3');
 const fs = require('fs');
 const path = require('path');
+const { createDatabaseBatchOperations } = require('./lib/database-batch-operations');
 
 const DB_DIR = path.join(__dirname, 'data');
 const DB_FILE = path.join(DB_DIR, 'lumina.db');
@@ -545,42 +546,15 @@ function deleteFile(filePath, id = null) {
  * Batch delete files
  */
 function deleteFilesBatch(files) {
-    try {
-        const ftsStmt = db.prepare('DELETE FROM files_fts WHERE rowid IN (SELECT rowid FROM files WHERE id = ?)');
-        const stmt = db.prepare('DELETE FROM files WHERE id = ?');
-        const favStmt = db.prepare('DELETE FROM favorites WHERE item_id = ?');
-
-        const tx = db.transaction((filesList) => {
-            for (const file of filesList) {
-                try {
-                    ftsStmt.run(file.id);
-                } catch (ftsErr) {
-                    console.error('FTS batch delete error for', file.id, ftsErr.message);
-                    // FTS 清理失败时跳过该文件的 files 行删除，避免产生新的孤儿条目
-                    continue;
-                }
-                stmt.run(file.id);
-                favStmt.run(file.id);
-            }
-        });
-        tx(files);
-        return true;
-    } catch (e) {
-        console.error('Batch delete failed:', e);
-        return false;
-    }
+    return createDatabaseBatchOperations(db).deleteFilesBatch(files);
 }
 
-/**
- * Get all file paths and their last modified times for incremental scan
- */
-function getAllFilesMtime() {
-    const rows = db.prepare('SELECT path, last_modified FROM files').all();
-    const mtimeMap = new Map();
-    for (const row of rows) {
-        mtimeMap.set(row.path, row.last_modified);
-    }
-    return mtimeMap;
+function getFilesMtimeByPaths(paths) {
+    return createDatabaseBatchOperations(db).getFilesMtimeByPaths(paths);
+}
+
+function getFilesAfterRowid(afterRowid = 0, limit = 256) {
+    return createDatabaseBatchOperations(db).getFilesAfterRowid(afterRowid, limit);
 }
 
 function deleteFilesByFolder(folderPath) {
@@ -773,9 +747,9 @@ module.exports = {
     getFavoriteIds,
     queryFavoriteFiles,
     countFavoriteFiles,
-    getAllFilePaths,
     deleteFilesBatch,
-    getAllFilesMtime,
+    getFilesAfterRowid,
+    getFilesMtimeByPaths,
     renameFile,
     clearThumbnails,
     migrateFavorites,

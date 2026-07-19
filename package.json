@@ -35,7 +35,8 @@
     "dev": "vite",
     "start": "node server.js",
     "build": "vite build",
-    "test": "react-scripts test",
+    "test:background": "node --test test/background-file-walker.test.js",
+    "test": "node --test",
     "eject": "react-scripts eject",
     "serve": "node server.js",
     "fix-structure": "mkdir -p src public && [ -f index.html ] && mv index.html public/ || true && [ -f metadata.json ] && mv metadata.json public/ || true && [ -f App.tsx ] && mv *.tsx *.ts components utils src/ || true"

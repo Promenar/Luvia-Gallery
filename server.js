@@ -4,11 +4,22 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const os = require('os');
+const { monitorEventLoopDelay } = require('perf_hooks');
 const jwt = require('jsonwebtoken'); // Added for Auth
 // const chokidar = require('chokidar'); // REMOVED: Realtime watcher deprecated for performance
 const database = require('./database');
 const exifr = require('exifr');
 const sizeOf = require('image-size');
+const {
+    canCleanUpScan,
+    collectCacheStats,
+    createBackgroundTaskCoordinator,
+    findMissingDatabaseRows,
+    getScanStartResponse,
+    reconcileScannedFiles,
+    tryStartScan,
+    walkMediaFiles
+} = require('./lib/background-file-walker');
 
 const app = express();
 const port = process.env.PORT || 3001;
@@ -106,41 +117,59 @@ function updateConfig(newConfig) {
 let globalCacheCount = 0;
 let globalCacheSize = 0;
 let lastCacheUpdate = 0;
+const backgroundTaskCoordinator = createBackgroundTaskCoordinator();
 
 function updateGlobalCacheStats() {
-    try {
-        if (!fs.existsSync(CACHE_DIR)) return;
-
-        let count = 0;
-        let size = 0;
-
-        const countRecursive = (dir) => {
-            const items = fs.readdirSync(dir, { withFileTypes: true });
-            for (const item of items) {
-                const fullPath = path.join(dir, item.name);
-                if (item.isDirectory()) {
-                    countRecursive(fullPath);
-                } else if (item.isFile() && item.name.endsWith('.webp')) {
-                    count++;
-                    try { size += fs.statSync(fullPath).size; } catch (e) { }
+    const task = backgroundTaskCoordinator.run('cache-stats', async () => {
+        const startedAt = Date.now();
+        try {
+            await fs.promises.access(CACHE_DIR);
+            console.log('[System] Start background cache stats update...');
+            let hadFileSystemError = false;
+            const stats = await collectCacheStats(CACHE_DIR, {
+                batchSize: 256,
+                concurrency: 16,
+                onError: (error, target) => {
+                    hadFileSystemError = true;
+                    console.warn('[System] Cache stats skipped:', target, error.message);
                 }
+            });
+            if (hadFileSystemError) {
+                console.warn('[System] Cache stats update was incomplete; retaining the last successful values.');
+                return;
             }
-        };
+            globalCacheCount = stats.count;
+            globalCacheSize = stats.size;
+            lastCacheUpdate = Date.now();
+            console.log(`[System] Cache stats updated: ${stats.count} files, ${stats.size} bytes in ${Date.now() - startedAt}ms`);
+        } catch (error) {
+            if (error.code !== 'ENOENT') {
+                console.error('[System] Failed to update cache stats', error);
+            }
+        }
+    });
 
-        console.log('[System] Start background cache stats update...');
-        countRecursive(CACHE_DIR);
-        globalCacheCount = count;
-        globalCacheSize = size;
-        lastCacheUpdate = Date.now();
-        console.log(`[System] Cache stats updated: ${count} files, ${globalCacheSize} bytes`);
-    } catch (e) {
-        console.error("[System] Failed to update cache stats", e);
+    if (task === false) {
+        console.log('[System] Skipping cache stats update; background task is already running.');
     }
+    return task;
 }
 
 // Schedule updates
 setTimeout(updateGlobalCacheStats, 2000); // 2s after start
 setInterval(updateGlobalCacheStats, 10 * 60 * 1000); // map every 10 mins
+
+const eventLoopDelay = monitorEventLoopDelay({ resolution: 20 });
+eventLoopDelay.enable();
+const eventLoopDelayTimer = setInterval(() => {
+    const p99 = eventLoopDelay.percentile(99) / 1e6;
+    const max = eventLoopDelay.max / 1e6;
+    if (p99 >= 100 || max >= 500) {
+        console.warn(`[System] Event loop delay warning: p99=${p99.toFixed(1)}ms max=${max.toFixed(1)}ms`);
+    }
+    eventLoopDelay.reset();
+}, 60 * 1000);
+eventLoopDelayTimer.unref();
 
 // Ensure directories exist
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -998,13 +1027,27 @@ app.post('/api/folder/rename', (req, res) => {
 
 // --- Scanning Logic ---
 
-async function processScan() {
+function processScan() {
+    const result = tryStartScan(backgroundTaskCoordinator, scanState, async () => {
+        try {
+            await runMediaScan();
+        } catch (error) {
+            scanState.status = scanState.shouldStop ? 'cancelled' : 'idle';
+            console.error('[Scan] Background media scan failed:', error);
+        }
+    });
+    if (!result.started) {
+        console.log('[Scan] Skipping media scan; background task is already running.');
+    }
+    return result;
+}
+
+async function runMediaScan() {
     // Non-blocking yield to allow API response
     await new Promise(r => setImmediate(r));
+    const startedAt = Date.now();
 
     console.log('Starting processScan...');
-    scanState.status = 'scanning';
-    scanState.shouldStop = false;
 
     let libraryPaths = MEDIA_ROOTS;
     const config = getConfig();
@@ -1023,143 +1066,130 @@ async function processScan() {
         scanState.status = 'scanning';
     };
 
-    // Incremental Scan: Fetch all existing files mtime
-    console.log('Fetching existing file stats for incremental scan...');
-    const existingFilesMtime = database.getAllFilesMtime();
-    console.log(`Loaded ${existingFilesMtime.size} existing files from database.`);
-
-    // Streaming batch processing - avoid memory accumulation
+    // 流式批处理：单批路径查询和写入均有上限，避免将整库加载到内存。
     let batchBuffer = [];
     const BATCH_SIZE = 1000;
+    const LOOKUP_BATCH_SIZE = 512;
+    const CLEANUP_BATCH_SIZE = 256;
     const SAVE_INTERVAL = 10000; // Save database every 10k files for safety
     let totalProcessed = 0;
-    let allScannedPaths = new Set(); // Track scanned paths for cleanup
+    let scanIncomplete = false;
+    const allScannedPaths = new Set();
 
-    const queue = [...libraryPaths];
+    const videoExts = ['.mp4', '.webm', '.mov'];
+    const audioExts = ['.mp3', '.wav', '.flac', '.m4a', '.aac', '.ogg', '.wma'];
 
-    while (queue.length > 0) {
+    for await (const files of walkMediaFiles(libraryPaths, {
+        batchSize: 256,
+        concurrency: 16,
+        shouldStop: () => scanState.shouldStop,
+        onDirectory: directory => { scanState.currentPath = directory; },
+        onError: (error, target) => {
+            scanIncomplete = true;
+            console.warn('[Scan] 文件系统读取或 stat 失败；本轮将跳过清理:', target, error.message);
+        }
+    })) {
         if (scanState.shouldStop) break;
         await waitIfPaused();
+        if (scanState.shouldStop) break;
 
-        const currentDir = queue.shift();
-        scanState.currentPath = currentDir;
-
-        let items;
+        const lookupPaths = files.flatMap(file => {
+            const normalizedPath = smartNormalizePath(file.path);
+            return normalizedPath === file.path ? [file.path] : [file.path, normalizedPath];
+        });
+        let existingFilesMtime;
         try {
-            if (fs.existsSync(currentDir)) {
-                items = fs.readdirSync(currentDir, { withFileTypes: true });
-            }
-        } catch (e) {
-            console.error("Error reading dir:", currentDir, e);
-            continue;
+            existingFilesMtime = database.getFilesMtimeByPaths(lookupPaths.slice(0, LOOKUP_BATCH_SIZE));
+        } catch (error) {
+            scanIncomplete = true;
+            existingFilesMtime = new Map();
+            console.error('[Scan] 查询已有文件修改时间失败；本轮将跳过清理:', error);
         }
 
-        if (!items) continue;
+        for (const file of files) {
+            if (scanState.shouldStop) break;
+            await waitIfPaused();
 
-                for (const item of items) {
-                    if (scanState.shouldStop) break;
-                    await waitIfPaused();
+            try {
+                const fullPath = file.path;
+                const stats = file.stats;
+                const ext = path.extname(file.name).toLowerCase();
 
-                    if (item.name.startsWith('.')) continue;
-                    const fullPath = path.join(currentDir, item.name);
+                // Smart normalize path - only normalize if necessary (relative paths, symlinks, etc.)
+                const normalizedPath = smartNormalizePath(fullPath);
 
-                    if (item.isDirectory()) {
-                        queue.push(fullPath);
-                    } else if (item.isFile()) {
-                        try {
-                        const ext = path.extname(item.name).toLowerCase();
-                        const imageExts = ['.jpg', '.jpeg', '.png', '.gif', '.webp'];
-                        const videoExts = ['.mp4', '.webm', '.mov'];
-                        const audioExts = ['.mp3', '.wav', '.flac', '.m4a', '.aac', '.ogg', '.wma'];
-                        const allSupportedExts = [...imageExts, ...videoExts, ...audioExts];
-
-                        if (allSupportedExts.includes(ext)) {
-                            // OPTIMIZATION: Single stat call instead of two
-                            const stats = fs.statSync(fullPath);
-
-                            // Smart normalize path - only normalize if necessary (relative paths, symlinks, etc.)
-                            const normalizedPath = smartNormalizePath(fullPath);
-
-                            // INCREMENTAL SCAN CHECK - try both normalized and original path for backward compatibility
-                            const lastMtimeNormalized = existingFilesMtime.get(normalizedPath);
-                            const lastMtimeOriginal = existingFilesMtime.get(fullPath);
-                            const lastMtime = (lastMtimeNormalized !== undefined) ? lastMtimeNormalized : lastMtimeOriginal;
-                            const currentMtimeSec = Math.floor(stats.mtimeMs / 1000);
-                            if (lastMtime && Math.abs(lastMtime - currentMtimeSec) < 1) {
-                                // File unchanged, skip detailed processing
-                                if (lastMtimeOriginal) {
-                                    allScannedPaths.add(fullPath);
-                                } else {
-                                    allScannedPaths.add(normalizedPath);
-                                }
-                                totalProcessed++;
-                                if (totalProcessed % 50 === 0) scanState.count = totalProcessed;
-                                continue;
-                            }
-
-                            let fileType = 'image/jpeg';
-                            if (videoExts.includes(ext)) {
-                                fileType = ext === '.mp4' ? 'video/mp4' : ext === '.webm' ? 'video/webm' : 'video/quicktime';
-                            } else if (audioExts.includes(ext)) {
-                                if (ext === '.mp3') fileType = 'audio/mpeg';
-                                else if (ext === '.wav') fileType = 'audio/wav';
-                                else if (ext === '.flac') fileType = 'audio/flac';
-                                else if (ext === '.m4a') fileType = 'audio/mp4';
-                                else if (ext === '.aac') fileType = 'audio/aac';
-                                else if (ext === '.ogg') fileType = 'audio/ogg';
-                                else if (ext === '.wma') fileType = 'audio/x-ms-wma';
-                            }
-
-                            // Smart normalize folder path
-                            const normalizedFolderPath = smartNormalizePath(path.dirname(fullPath));
-
-                            // Determine which path to use: prefer normalized, but check if original exists in DB
-                            const useNormalized = !existingFilesMtime.has(fullPath) || existingFilesMtime.has(normalizedPath);
-                            const pathToUse = useNormalized ? normalizedPath : fullPath;
-
-                            const fileData = {
-                                id: Buffer.from(pathToUse).toString('base64'),
-                                path: pathToUse,
-                                name: item.name,
-                                folderPath: normalizedFolderPath,
-                                size: stats.size,
-                                type: fileType,
-                                mediaType: fileType.startsWith('video') ? 'video' : (fileType.startsWith('audio') ? 'audio' : 'image'),
-                                lastModified: Math.floor(stats.mtimeMs / 1000),
-                                sourceId: 'local'
-                            };
-
-                            batchBuffer.push(fileData);
-                            allScannedPaths.add(pathToUse);  // Track the path we're using for cleanup
-                            totalProcessed++;
-                            scanState.count = totalProcessed;
-
-                            // OPTIMIZATION: Batch insert without saving to disk
-                            if (batchBuffer.length >= BATCH_SIZE) {
-                                const shouldSave = (totalProcessed % SAVE_INTERVAL) === 0;
-                                const batchOk = database.insertFilesBatch(batchBuffer, shouldSave);
-                                if (batchOk) {
-                                    if (shouldSave) {
-                                        console.log(`Checkpoint: Saved database at ${totalProcessed} files`);
-                                    }
-                                } else {
-                                    console.error(`Batch insert FAILED at ${totalProcessed} files, ${batchBuffer.length} files may be lost`);
-                                }
-                                batchBuffer = []; // Clear buffer
-                            }
-                        }
-                        } catch (fileErr) {
-                            console.error("Error processing file:", fullPath, fileErr);
-                        }
-                    }
+                // INCREMENTAL SCAN CHECK - try both normalized and original path for backward compatibility
+                const lastMtimeNormalized = existingFilesMtime.get(normalizedPath);
+                const lastMtimeOriginal = existingFilesMtime.get(fullPath);
+                const lastMtime = lastMtimeNormalized !== undefined ? lastMtimeNormalized : lastMtimeOriginal;
+                const currentMtimeSec = Math.floor(stats.mtimeMs / 1000);
+                if (lastMtime !== undefined && Math.abs(lastMtime - currentMtimeSec) < 1) {
+                    allScannedPaths.add(lastMtimeNormalized !== undefined ? normalizedPath : fullPath);
+                    totalProcessed++;
+                    if (totalProcessed % 50 === 0) scanState.count = totalProcessed;
+                    continue;
                 }
+
+                let fileType = 'image/jpeg';
+                if (videoExts.includes(ext)) {
+                    fileType = ext === '.mp4' ? 'video/mp4' : ext === '.webm' ? 'video/webm' : 'video/quicktime';
+                } else if (audioExts.includes(ext)) {
+                    if (ext === '.mp3') fileType = 'audio/mpeg';
+                    else if (ext === '.wav') fileType = 'audio/wav';
+                    else if (ext === '.flac') fileType = 'audio/flac';
+                    else if (ext === '.m4a') fileType = 'audio/mp4';
+                    else if (ext === '.aac') fileType = 'audio/aac';
+                    else if (ext === '.ogg') fileType = 'audio/ogg';
+                    else if (ext === '.wma') fileType = 'audio/x-ms-wma';
+                }
+
+                const normalizedFolderPath = smartNormalizePath(path.dirname(fullPath));
+
+                const useNormalized = !existingFilesMtime.has(fullPath) || existingFilesMtime.has(normalizedPath);
+                const pathToUse = useNormalized ? normalizedPath : fullPath;
+                allScannedPaths.add(pathToUse);
+
+                const fileData = {
+                    id: Buffer.from(pathToUse).toString('base64'),
+                    path: pathToUse,
+                    name: file.name,
+                    folderPath: normalizedFolderPath,
+                    size: stats.size,
+                    type: fileType,
+                    mediaType: fileType.startsWith('video') ? 'video' : (fileType.startsWith('audio') ? 'audio' : 'image'),
+                    lastModified: Math.floor(stats.mtimeMs / 1000),
+                    sourceId: 'local'
+                };
+
+                batchBuffer.push(fileData);
+                totalProcessed++;
+                scanState.count = totalProcessed;
+
+                if (batchBuffer.length >= BATCH_SIZE) {
+                    const shouldSave = (totalProcessed % SAVE_INTERVAL) === 0;
+                    const batchOk = database.insertFilesBatch(batchBuffer, shouldSave);
+                    if (!batchOk) {
+                        scanIncomplete = true;
+                        console.error(`[Scan] 批量写入失败；本轮将跳过清理，失败批次大小: ${batchBuffer.length}`);
+                    } else if (shouldSave) {
+                        console.log(`Checkpoint: Saved database at ${totalProcessed} files`);
+                    }
+                    batchBuffer = [];
+                }
+            } catch (fileErr) {
+                scanIncomplete = true;
+                console.error('[Scan] 处理文件失败；本轮将跳过清理:', file.path, fileErr);
+            }
+        }
+        await new Promise(resolve => setImmediate(resolve));
     }
 
     // Insert remaining files in buffer
     if (!scanState.shouldStop && batchBuffer.length > 0) {
         const finalOk = database.insertFilesBatch(batchBuffer, false);
         if (!finalOk) {
-            console.error(`Final batch insert FAILED, ${batchBuffer.length} remaining files may be lost`);
+            scanIncomplete = true;
+            console.error(`[Scan] 最后批次写入失败；本轮将跳过清理，失败批次大小: ${batchBuffer.length}`);
         }
         batchBuffer = [];
     }
@@ -1168,37 +1198,25 @@ async function processScan() {
     if (!scanState.shouldStop) {
         console.log(`Scan complete. Total files processed: ${totalProcessed}`);
 
-        // Cleanup / Pruning Phase
-        console.log('Syncing database with scan results...');
-        try {
-            const allDbPaths = database.getAllFilePaths();
-            console.log(`Database has ${allDbPaths.length} paths, scan found ${allScannedPaths.size} paths.`);
-
-            // Debug: Log first few paths for comparison
-            if (allDbPaths.length > 0) {
-                console.log('Sample DB paths:', allDbPaths.slice(0, 3));
-            }
-            if (allScannedPaths.size > 0) {
-                console.log('Sample scanned paths:', [...allScannedPaths].slice(0, 3));
-            }
-
-            // Direct path comparison - we store normalized paths now
-            const pathsToDelete = allDbPaths.filter(p => !allScannedPaths.has(p));
-
-            if (pathsToDelete.length > 0) {
-                console.log(`Found ${pathsToDelete.length} missing files to delete.`);
-                console.log('Sample paths to delete:', pathsToDelete.slice(0, 5));
-                const deleteBatch = pathsToDelete.map(p => ({
-                    path: p,
-                    id: Buffer.from(p).toString('base64')
-                }));
-                database.deleteFilesBatch(deleteBatch);
-                console.log('Cleanup complete.');
+        if (!canCleanUpScan({ scanIncomplete, shouldStop: scanState.shouldStop })) {
+            console.warn('[Scan] 扫描不完整或已停止；为保护数据库与收藏，跳过清理。');
+        } else {
+            console.log('Syncing database with scan results in bounded cursor batches...');
+            console.log(`Scan found ${allScannedPaths.size} unique paths.`);
+            const cleanupResult = await reconcileScannedFiles({
+                database,
+                scannedPaths: allScannedPaths,
+                scanIncomplete,
+                shouldStop: () => scanState.shouldStop,
+                batchSize: CLEANUP_BATCH_SIZE,
+                onError: error => console.error('[Scan] 清理批次读取失败:', error)
+            });
+            if (cleanupResult.incomplete) {
+                scanIncomplete = true;
+                console.warn('[Scan] 清理未完成；数据库与收藏保留未处理记录。');
             } else {
-                console.log('No missing files found.');
+                console.log(`[Scan] Bounded cleanup complete; deleted ${cleanupResult.deletedCount} missing files.`);
             }
-        } catch (err) {
-            console.error('Error during database sync/cleanup:', err);
         }
 
 
@@ -1206,8 +1224,10 @@ async function processScan() {
         database.saveDatabase();
         console.log('Database save complete');
         scanState.status = 'idle';
+        console.log(`[Scan] Completed in ${Date.now() - startedAt}ms`);
     } else {
         scanState.status = 'cancelled';
+        console.log(`[Scan] Cancelled after ${Date.now() - startedAt}ms`);
     }
 }
 
@@ -1253,16 +1273,9 @@ app.get('/api/scan/status', (req, res) => {
 });
 
 app.post('/api/scan/start', adminOnly, (req, res) => {
-    // Set status synchronously to prevent UI from seeing 'idle' in the next poll
-    scanState.status = 'scanning';
-    scanState.shouldPause = false;
-    scanState.shouldStop = false;
-    scanState.count = 0;
-
-    // Start Async
-    processScan();
-
-    res.json({ success: true });
+    const result = processScan();
+    const response = getScanStartResponse(result.started);
+    res.status(response.statusCode).json(response.body);
 });
 
 app.post('/api/scan/control', adminOnly, (req, res) => {

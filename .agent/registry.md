@@ -4,6 +4,7 @@
 - README.md — 项目介绍与启动指南
 - release_notes.md — 版本变更记录 (现用)
 - .agent/handover.md — 跨会话交接
+- .agent/handover-index.md — HLG 派生索引（由脚本生成）
 - .agent/project_memory.md — 项目记忆存档
 
 ## 按需文档

@@ -43,3 +43,95 @@
 - [x] `docs/DATA_SCHEMA.md` 已同步
 - [x] `release_notes.md` 已同步
 - [x] `.agent/handover.md` 已更新
+
+## 2026-07-19T23:58:36+08:00 · FNOS 媒体浏览周期性全局停顿诊断
+
+type: diagnostic
+scope: fnos-production
+status: done
+tags: [performance, nodejs, event-loop, media, scan]
+continuity: resume
+continuity-key: fnos-media-stall
+
+### Summary
+
+- 两周运行观察确认上一轮 socket 内存修复有效；本次诊断时容器内存约 808 MiB，`sock` 为 0，未发生重启或 OOM。
+- 生产日志确认两个定时任务会同步占用 `server.js` 的单一事件循环：缓存统计每 10 分钟遍历约 89.9 万个缓存文件，单次约 5.7-16.1 秒；周期扫描每 15 分钟遍历约 90.6 万个媒体文件，单次约 11.7-14.9 秒。
+- 两个任务每 30 分钟会近乎连续执行，可形成约 20 秒的整体无响应窗口，与“页面仍在、全部内容请求暂时断掉后恢复”的现象高度一致。
+- 连续视频浏览会产生多段 Range 请求，是磁盘与网络压力的潜在放大器；当前没有 socket、fd 或代理错误证据支持旧泄露问题复发。
+
+### Changed
+
+- 本轮未修改业务代码或生产配置，仅完成只读运行时诊断。
+
+### Validation
+
+- 检查 `docker stats`、cgroup 内存分类、容器重启/OOM 状态、24 小时生产日志和宿主机 I/O 快照。
+- 对照源码确认 `updateGlobalCacheStats()` 使用递归 `readdirSync`/`statSync`，`processScan()` 在主事件循环中使用 `readdirSync`/`statSync`，且正常扫描路径没有真正让出 I/O 事件循环。
+- Terra 只读子代理独立审阅后同样将上述两个同步全库任务列为最高概率根因；主控已用生产日志复核。
+
+### Next
+
+- 将缓存统计改为增量计数或 Worker Thread 后台任务，禁止主事件循环递归同步遍历缓存目录。
+- 将媒体周期扫描改为异步分批扫描或 Worker Thread，并加入事件循环延迟、任务耗时和媒体首字节指标。
+- 在优化后用真实连续浏览负载复测 10/15/30 分钟时间窗，再评估视频 Range 请求取消与预加载策略。
+
+### Risks
+
+- 当前已确认固定周期的全局阻塞根因，但尚未在用户实际操作时采集浏览器网络瀑布；不能排除视频源文件结构、旧流取消或存储尾延迟形成独立的第二问题。
+- 约 90 万文件规模下，简单把同步 API 替换为逐文件异步 API 可能造成任务风暴；实施时需要有界并发、分批让出和可取消设计。
+
+### DIA
+
+- 无业务代码、接口、配置或用户可见行为变更；仅同步 HLG 诊断记录和索引注册。
+
+### HLG
+
+- 已追加标准时间戳交接记录，后续沿用 `continuity-key: fnos-media-stall`。
+
+## 2026-07-20T00:41:43+08:00 · FNOS 媒体浏览全局停顿优化实现
+
+type: implementation
+scope: fnos-production
+status: done
+tags: [performance, nodejs, event-loop, sqlite, media, deployment]
+continuity: waiting
+continuity-key: fnos-media-stall
+
+### Summary
+
+- 已将缓存统计和媒体周期扫描改为 `opendir` 异步流式遍历、16 路有界文件状态读取和 256 项批次让出，消除两个全库任务对 Node 主事件循环的同步占用。
+- 后台任务协调器禁止缓存统计与媒体扫描重叠；扫描启动冲突返回 409，且不会重置正在运行的扫描状态。
+- 增量 mtime 查询改为最多 512 路径的批次查询；数据库清理改为 `rowid` 游标 256 项批次，不使用 OFFSET 或一次性全库 `.all()`。
+- 扫描不完整时禁止清理；FTS、文件表和收藏删除置于同一事务，任一失败整体回滚并停止后续批次。
+
+### Changed
+
+- 新增 `lib/background-file-walker.js`、`lib/database-batch-operations.js` 和对应 Node 原生测试。
+- 更新 `server.js`、`database.js`、`package.json` 与 `Dockerfile`，并增加事件循环延迟告警。
+- 同步 `README.md`、`release_notes.md`、`.agent/project_memory.md` 与 HLG 索引。
+
+### Validation
+
+- TDD 首轮：新增后台遍历接口前测试按预期失败；实现后转为 10 项通过。
+- TDD 风险修正：新增数据库清理 helper 前测试按预期失败；生产 Node 20 容器中的真实 `better-sqlite3` 测试最终 15 项全部通过。
+- 已验证 FTS 故障时文件与收藏事务回滚、`rowid` 游标边删除边翻页不漏记录、扫描不完整零清理、清理中停止不再处理后续批次。
+- 本地语法检查和 Vite 生产构建通过；最终生产部署验证待提交推送后执行。
+
+### Next
+
+- 提交并推送候选版本，更新 FNOS 容器后观察启动 2 秒触发的缓存统计期间 API 延迟。
+- 覆盖一个 15 分钟周期扫描窗口，确认约 90 万文件扫描期间 API 不再整体暂停，并记录事件循环延迟告警。
+
+### Risks
+
+- 完整扫描期间会临时维护约 90 万路径的 `Set`；它避免第二次文件系统遍历和一次性数据库 Map，但仍需观察扫描峰值内存。
+- 清理过程中收到停止请求时，已提交的安全删除批次不会回滚；后续批次立即停止并返回 incomplete。
+
+### DIA
+
+- 已同步 README、release notes、项目记忆、Docker 运行时打包和测试入口。
+
+### HLG
+
+- 已追加本记录并沿用 `continuity-key: fnos-media-stall`；部署与 15 分钟窗口验证完成后需追加结果记录。

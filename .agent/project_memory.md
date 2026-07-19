@@ -1,4 +1,6 @@
 ## Core Technical Decisions
+- **超大媒体库后台 I/O**（2026-07-20）：缓存统计与媒体扫描必须使用 `opendir` 流式遍历、有界 `stat` 并发和批次级事件循环让出；两个全库任务由同一协调器互斥，禁止在 Node 主事件循环中使用递归 `readdirSync`/`statSync`。
+- **扫描清理安全门禁**（2026-07-20）：目录读取、文件状态、增量查询或批量写入任一失败时，本轮扫描标记为不完整并禁止清理。数据库对账使用完整扫描路径集合与 `rowid` 游标批次；FTS、文件表和收藏删除必须处于同一事务并向上返回失败。
 - **Unified Data Loading**: Managed via a single `useEffect` in `App.tsx` observing `activeTab` and `currentPath`. Eliminates duplicate fetch and stale views.
 - **并发数据同步**：在 `Database.ts` 中实现全局写入队列。所有涉及事务的操作必须进入该队列排队执行，严禁在 Native 回调内直接触发可能导致嵌套事务的异步更新。
 - **图片加载稳定性**：针对 `expo-image`，在频繁切换或背景层渲染时，优先移除原生 `transition` 属性，转而使用 `react-native-reanimated` 控制容器透明度。这能有效规避 Native 层的声明周期冲突（`IllegalStateException`）。
@@ -91,4 +93,3 @@
     - **Zero-Broken Policy**: 为避免被 Steam 标记为失效组件，壁纸端 (`public/wallpaper`) 必须具备离线回退能力。
     - **Demo Mode**: 当无法连接到 Luvia 服务端或配置缺失时，前端自动切换至演示模式，使用 `assets/demo/` 下内置的高清素材进行循环展播。
     - **Visual Feedback**: 在演示模式下，UI 必须显式展示 `DEMO MODE` 标签，引导用户进行正确配置。
-
