@@ -94,36 +94,45 @@ struct ContentView: View {
 
     // MARK: - 主内容
 
+    /// 设置面板覆盖/收起的过渡动画（减少动态效果时关闭）
+    private var settingsAnimation: Animation? {
+        reduceMotion ? nil : .easeInOut(duration: 0.25)
+    }
+
     private var mainContent: some View {
         VStack(spacing: 0) {
             titleBar
 
-            if showSettings {
-                // 包一层 ScrollView 并限高，面板内容超出可滚动，
-                // 避免把窗口布局撑爆导致底部控件被裁切
-                ScrollView {
-                    SettingsPanel(
-                        serverAddress: $serverAddress,
-                        apiToken: $apiToken,
-                        loadMode: $loadMode,
-                        folderPath: $folderPath,
-                        intervalSeconds: $intervalSeconds,
-                        floatingOnTop: $floatingOnTop,
-                        launchAtLogin: $launchAtLogin,
-                        snapToGrid: $snapToGrid,
-                        gridCellSize: $gridCellSize,
-                        viewModel: viewModel,
-                        onLoad: performLoad,
-                        onCollapse: collapseSettings
-                    )
+            // stage 区域：设置面板展开时完整覆盖卡片区，
+            // 标题栏与底部行保持不动
+            ZStack {
+                if showSettings {
+                    // 面板撑满卡片区全部高度，内容超出内部滚动
+                    ScrollView {
+                        SettingsPanel(
+                            serverAddress: $serverAddress,
+                            apiToken: $apiToken,
+                            loadMode: $loadMode,
+                            folderPath: $folderPath,
+                            intervalSeconds: $intervalSeconds,
+                            floatingOnTop: $floatingOnTop,
+                            launchAtLogin: $launchAtLogin,
+                            snapToGrid: $snapToGrid,
+                            gridCellSize: $gridCellSize,
+                            viewModel: viewModel,
+                            onLoad: performLoad,
+                            onCollapse: collapseSettings
+                        )
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+                } else {
+                    carouselRow
+                        .transition(.opacity.combined(with: .move(edge: .bottom)))
                 }
-                .frame(maxHeight: 320)
-                .transition(.move(edge: .top).combined(with: .opacity))
             }
-
-            carouselRow
-                .frame(maxHeight: .infinity)
-                .padding(.horizontal, 14)
+            .frame(maxHeight: .infinity)
+            .padding(.horizontal, 14)
 
             bottomBar
         }
@@ -167,7 +176,7 @@ struct ContentView: View {
                 icon: showSettings ? "gearshape.fill" : "gearshape",
                 help: showSettings ? "收起设置" : "设置"
             ) {
-                withAnimation(springAnimation) {
+                withAnimation(settingsAnimation) {
                     showSettings.toggle()
                 }
             }
@@ -234,8 +243,7 @@ struct ContentView: View {
             // 权重变化用弹簧动画平滑过渡
             .animation(springAnimation, value: weights)
         }
-        // 设置面板展开期间把卡片区最小高度压低，让压缩优先发生在卡片区
-        .frame(minHeight: showSettings ? 60 : 120)
+        .frame(minHeight: 120)
     }
 
     /// 悬停处理：展开手风琴 + 暂停轮播（浮光由卡片内部自管理）
@@ -251,28 +259,15 @@ struct ContentView: View {
 
     /// 收起设置面板（面板内「收起」按钮 / 加载成功后调用）
     private func collapseSettings() {
-        withAnimation(springAnimation) {
+        withAnimation(settingsAnimation) {
             showSettings = false
         }
     }
 
-    // MARK: - 底部进度条与来源说明
+    // MARK: - 底部行：左侧来源说明 + 右侧进度条
 
     private var bottomBar: some View {
-        VStack(spacing: 6) {
-            // 3px 蓝色进度条
-            GeometryReader { geo in
-                ZStack(alignment: .leading) {
-                    Rectangle().fill(.white.opacity(0.08))
-                    Rectangle()
-                        .fill(accentBlue)
-                        .frame(width: geo.size.width * min(max(viewModel.progress, 0), 1))
-                }
-            }
-            .frame(height: 3)
-            .clipShape(Capsule())
-            .padding(.horizontal, 16)
-
+        HStack(spacing: 12) {
             // 来源说明
             HStack(spacing: 5) {
                 Circle()
@@ -281,11 +276,25 @@ struct ContentView: View {
                 Text("Luvia Gallery \(viewModel.files.isEmpty ? "未连接" : "在线 \(viewModel.files.count) 张")")
                     .font(.system(size: 10))
                     .foregroundStyle(.white.opacity(0.4))
-                Spacer()
             }
-            .padding(.horizontal, 16)
-            .padding(.bottom, 8)
+
+            Spacer()
+
+            // 3px 蓝色进度条（固定宽度，与来源文本同行）
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(.white.opacity(0.08))
+                    Capsule()
+                        .fill(accentBlue)
+                        .frame(width: geo.size.width * min(max(viewModel.progress, 0), 1))
+                }
+            }
+            .frame(width: 140, height: 3)
         }
+        .padding(.horizontal, 16)
+        // 与图片区之间保留约 10px 间距
+        .padding(.top, 10)
+        .padding(.bottom, 10)
     }
 
     // MARK: - 空状态
@@ -303,7 +312,7 @@ struct ContentView: View {
                 .foregroundStyle(.white.opacity(0.35))
                 .multilineTextAlignment(.center)
             Button {
-                withAnimation(springAnimation) {
+                withAnimation(settingsAnimation) {
                     showSettings = true
                 }
             } label: {
