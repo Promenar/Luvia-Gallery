@@ -268,3 +268,48 @@ continuity-key: macos-floating-widget
 ### HLG
 
 本条为 macos-floating-widget 工作流追加记录，保持 continuity 可续。
+
+
+## 2026-07-23T05:57:00+08:00 · 悬浮窗 App 视频播放支持
+
+type: feature
+scope: macos-widget/video-playback
+status: done
+tags: [macos, video, avplayer, carousel, media-type]
+continuity: resume
+continuity-key: macos-floating-widget
+
+### Summary
+
+悬浮窗 App 新增视频播放支持：后端壁纸 API 返回的视频条目此前被当作图片加载导致无限转圈，现已按媒体类型分派 AVPlayer 播放，静音自动循环，复用卡片动画框架。
+
+### Changed
+
+- 新增 `Views/VideoCardView.swift`：AVPlayerLayer（resizeAspectFill）+ 静音 + 片尾 seek 回零循环；远程视频走 `/api/file/{id}?token=` 流式播放。
+- `ViewModels/CarouselViewModel.swift`：不再过滤视频，保留 `mediaType == image || video`。
+- `Services/LocalImageSource.swift`：本地目录扫描纳入 `mp4/mov/m4v`，新增 `isVideoFile(_:)`。
+- `Views/CarouselCard.swift`：按来源与媒体类型分派图片/视频视图，新增 `isPlaying` 参数。
+- `ContentView.swift`：逐卡计算播放状态传入；底部文案改为「媒体 N 项」。
+- 性能：`preferredForwardBufferDuration = 5s`；手风琴收缩态与设置面板覆盖时暂停，可见恢复；URL 不变不重建播放器，dismantle 时释放。
+- 提交 `1f3d1dc` 并推送 `main`；dist Release 打包已刷新（App 1.4 MB / zip 528 KB，codesign 校验通过，不入库）。
+
+### Validation
+
+- Debug `xcodebuild` BUILD SUCCEEDED；Release ARCHIVE SUCCEEDED。
+- 真机验证（视频播放 / hover 恢复 / 6 卡同屏内存）待用户确认。
+
+### Next
+
+用户真机验证；如有视频卡顿或内存异常，优先检查 6 卡同屏缓冲策略与 FNOS 网络吞吐。
+
+### Risks
+
+多张视频卡同屏的内存占用未做量化压测；5s 前向缓冲在低带宽内网下可能出现起播延迟。
+
+### DIA
+
+已同步 handover；服务端与看板 Widget 无变更，registry 无需更新。
+
+### HLG
+
+本条为 macos-floating-widget 工作流追加记录，保持 continuity 可续。
