@@ -220,3 +220,51 @@ continuity-key: fnos-media-stall
 ### HLG
 
 已追加本条完成记录，并以同一 continuity-key 关闭本次生产性能工作流。
+
+
+## 2026-07-23T05:44:00+08:00 · 悬浮窗 App 拖窗冲突修复与打包交付
+
+type: fix
+scope: macos-widget/floating-window
+status: done
+tags: [macos, floating-window, drag, input, packaging]
+continuity: resume
+continuity-key: macos-floating-widget
+
+### Summary
+
+修复悬浮窗 App 设置面板输入框拖选文字时整个窗口被拖动的冲突，并完成 Release 打包交付。
+
+### Changed
+
+- `FloatingWindow.swift`：关闭 `isMovableByWindowBackground`（拖选触发拖窗的根因）。
+- 新增 `Views/WindowDragView.swift`：NSView 包装，仅在空白区域 `mouseDown` 时调用 `window?.performDrag`。
+- `ContentView.swift`：根 ZStack 最底层铺 WindowDragView，深色遮罩矩形补 `.allowsHitTesting(false)`。
+- 提交 `b28ceb0` 并推送 `main`。
+
+### Validation
+
+- `xcodebuild -scheme LuviaGalleryWidget -configuration Debug build` 通过（BUILD SUCCEEDED）。
+- 真机四项验证（输入框拖选 / 空白拖窗 / 卡片交互 / 边缘缩放）待用户确认。
+
+### Artifacts
+
+- 打包产物（被 .gitignore 忽略，不入库）：`macos-widget/dist/LuviaGalleryWidget.app`、`macos-widget/dist/LuviaGalleryWidget.app.zip`（约 504 KB）。
+- Apple Development 证书签名；spctl 拒绝属预期（非 Developer ID 公证签名）。
+- 注意：`macos-widget/dist` 下的 .app 为本次修复**之前**的 Release 构建；若需包含本次拖窗修复，需重新 Release 打包。
+
+### Next
+
+用户真机验证四项交互；如通过且需要最新修复的独立 App，重新执行 Release 打包刷新 dist 产物。
+
+### Risks
+
+无新增；xcuserstate 等 Xcode 用户态文件未入库。
+
+### DIA
+
+已同步 handover；Widget（看板组件）侧无代码变更，无需更新 registry。
+
+### HLG
+
+本条为 macos-floating-widget 工作流追加记录，保持 continuity 可续。
