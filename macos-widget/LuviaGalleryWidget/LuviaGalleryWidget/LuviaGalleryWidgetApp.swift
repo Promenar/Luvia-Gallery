@@ -52,6 +52,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         return false
     }
 
+    // MARK: - 桌面网格吸附
+
+    /// 防抖任务：拖动中 windowDidMove 频繁触发，frame 稳定 0.2s 后才吸附
+    private var snapWorkItem: DispatchWorkItem?
+
+    func windowDidMove(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow else { return }
+        // 开关关闭时完全不吸附（@AppStorage("snapToGrid")，缺省视为开）
+        let defaults = UserDefaults.standard
+        guard defaults.object(forKey: "snapToGrid") == nil || defaults.bool(forKey: "snapToGrid") else { return }
+        // 窗口缩放期间（含左/上边缘缩放引起的原点移动）不吸附
+        guard !window.inLiveResize else { return }
+
+        snapWorkItem?.cancel()
+        let item = DispatchWorkItem { [weak window] in
+            guard let window, !window.inLiveResize else { return }
+            guard let screen = window.screen ?? NSScreen.main,
+                  let target = DesktopGrid.shared.snappedFrame(for: window.frame, in: screen)
+            else { return }
+            // 0.2s 动画滑到最近网格点
+            window.setFrame(target, display: true, animate: true)
+        }
+        snapWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: item)
+    }
+
     /// 点击 Dock 图标：重新显示悬浮窗
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         if !flag {
