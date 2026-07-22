@@ -141,10 +141,29 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
         }
     };
 
-    const copyToClipboard = (text: string) => {
-        navigator.clipboard.writeText(text);
-        setJustCopied(true);
-        setTimeout(() => setJustCopied(false), 2000);
+    const copyToClipboard = async (text: string) => {
+        try {
+            if (navigator.clipboard && window.isSecureContext) {
+                await navigator.clipboard.writeText(text);
+            } else {
+                // 非安全上下文（如 http://内网地址 访问）下 clipboard API 不可用，使用回退方案
+                const ta = document.createElement('textarea');
+                ta.value = text;
+                ta.style.position = 'fixed';
+                ta.style.opacity = '0';
+                document.body.appendChild(ta);
+                ta.focus();
+                ta.select();
+                const ok = document.execCommand('copy');
+                document.body.removeChild(ta);
+                if (!ok) throw new Error('execCommand copy failed');
+            }
+            setJustCopied(true);
+            setTimeout(() => setJustCopied(false), 2000);
+        } catch (err) {
+            console.error('复制失败:', err);
+            alert('复制失败，请手动长按选中文本复制');
+        }
     };
 
     if (!isOpen) return null;

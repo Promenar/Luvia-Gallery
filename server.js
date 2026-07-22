@@ -241,6 +241,13 @@ try {
 // db.pragma('journal_mode = WAL');
 // db.prepare(`...`).run();
 
+// 私有网络访问（Chrome Private Network Access）放行：
+// 从 https/安全上下文的页面（如 Kimi Work 组件、公网管理页）访问 Tailscale/局域网内网地址时，
+// 浏览器会发起 PNA 预检，缺少该响应头会导致 "Failed to fetch"。
+app.use((req, res, next) => {
+    res.setHeader('Access-Control-Allow-Private-Network', 'true');
+    next();
+});
 app.use(cors());
 app.use(express.json());
 
