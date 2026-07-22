@@ -74,10 +74,15 @@ struct ContentView: View {
 
     var body: some View {
         ZStack {
+            // 最底层：空白区域拖动层（按钮/滑块/输入框/卡片在其上方，事件优先到达控件）
+            WindowDragView()
+
             // 极轻深色 tint：叠在玻璃材质之上保证文字对比度，
-            // 同时仍能透出桌面壁纸（窗口本身 isOpaque=false + clear 背景）
+            // 同时仍能透出桌面壁纸（窗口本身 isOpaque=false + clear 背景）。
+            // 不拦截命中，确保鼠标事件穿透到下方拖动层
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .fill(.black.opacity(0.18))
+                .allowsHitTesting(false)
 
             if !hasConfig && viewModel.items.isEmpty && !showSettings {
                 emptyState
