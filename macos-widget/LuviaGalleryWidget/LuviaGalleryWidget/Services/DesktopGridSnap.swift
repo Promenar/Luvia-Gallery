@@ -55,7 +55,16 @@ final class DesktopGrid {
     /// 计算窗口吸附后的 frame；已在网格点上（偏差 < 1px）时返回 nil
     /// - 网格原点：屏幕 visibleFrame 左上角（菜单栏下方）向内 margin
     /// - 以窗口左上角对齐网格交点，与桌面图标视觉一致
+    /// - cell 尺寸优先使用用户在设置面板里调的"网格大小"（@AppStorage gridCellSize），
+    ///   未设置时回退到 plist 读取/默认的估算值（Finder gridSpacing 换算公式不公开，
+    ///   iconSize + gridSpacing 只是参考，实测明显偏大，故交给用户校准）
     func snappedFrame(for frame: NSRect, in screen: NSScreen) -> NSRect? {
+        let cell: CGFloat = {
+            if let custom = UserDefaults.standard.object(forKey: "gridCellSize") as? Double {
+                return CGFloat(custom)
+            }
+            return self.cell
+        }()
         let visible = screen.visibleFrame
         let originX = visible.minX + margin
         let originTopY = visible.maxY - margin
