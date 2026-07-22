@@ -24,6 +24,16 @@ struct ContentView: View {
     @AppStorage("snapToGrid") private var snapToGrid: Bool = true
     /// 吸附网格 cell 边长（用户校准值，px）
     @AppStorage("gridCellSize") private var gridCellSize: Double = 84
+    /// 图片来源："online"（Luvia Gallery）/ "local"（本地目录）
+    @AppStorage("sourceMode") private var sourceMode: String = "online"
+    /// 本地目录 security-scoped bookmark（沙盒持久化访问权限）
+    @AppStorage("localFolderBookmark") private var localFolderBookmark: Data = Data()
+    /// 本地目录显示路径（仅 UI 展示）
+    @AppStorage("localFolderPath") private var localFolderPath: String = ""
+    /// 本地目录是否递归子目录（默认递归）
+    @AppStorage("localRecursive") private var localRecursive: Bool = true
+    /// 同时呈现的卡片数量（1–6）
+    @AppStorage("displayCount") private var displayCount: Double = 6
 
     // MARK: - 状态
 
@@ -34,20 +44,30 @@ struct ContentView: View {
     @State private var hoveredOffset: Int? = nil
     /// 系统"减少动态效果"偏好
     @State private var reduceMotion = false
+    /// 本地目录当前已恢复访问的 URL（App 生命周期内保持）
+    @State private var localFolderURL: URL? = nil
 
     /// 品牌蓝
     private let accentBlue = Color(red: 0x3f / 255, green: 0x7b / 255, blue: 0xff / 255)
     /// 卡片间距
     private let cardSpacing: CGFloat = 10
 
-    /// 弹簧动画（减少动态效果时关闭）
-    private var springAnimation: Animation? {
+    /// hover 手风琴弹簧（较快手感，减少动态效果时关闭）
+    private var hoverSpring: Animation? {
         reduceMotion ? nil : .spring(response: 0.55, dampingFraction: 0.85)
+    }
+
+    /// 轮播换批弹簧（放慢，避免"闪现"感）
+    private var shuffleSpring: Animation? {
+        reduceMotion ? nil : .spring(response: 0.85, dampingFraction: 0.9)
     }
 
     /// 是否已配置来源
     private var hasConfig: Bool {
-        !serverAddress.isEmpty && !apiToken.isEmpty
+        if sourceMode == "local" {
+            return !localFolderBookmark.isEmpty
+        }
+        return !serverAddress.isEmpty && !apiToken.isEmpty
     }
 
     // MARK: - 界面
@@ -59,7 +79,7 @@ struct ContentView: View {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .fill(.black.opacity(0.18))
 
-            if !hasConfig && viewModel.files.isEmpty && !showSettings {
+            if !hasConfig && viewModel.items.isEmpty && !showSettings {
                 emptyState
             } else {
                 mainContent
@@ -76,16 +96,21 @@ struct ContentView: View {
         .onAppear {
             reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
             viewModel.intervalSeconds = intervalSeconds
+            viewModel.visibleCount = Int(displayCount)
             WindowController.shared.applyLevel(floatingOnTop: floatingOnTop)
             // 开机启动开关以系统侧真实状态为准回显
             launchAtLogin = LoginItemManager.isEnabled
             // 已配置则自动加载
-            if hasConfig && viewModel.files.isEmpty {
+            if hasConfig && viewModel.items.isEmpty {
                 performLoad()
             }
         }
         .onChange(of: intervalSeconds) { _, newValue in
             viewModel.intervalSeconds = newValue
+        }
+        .onChange(of: displayCount) { _, newValue in
+            // 同时呈现数量变化，权重布局即时动画过渡
+            viewModel.visibleCount = Int(newValue)
         }
         .onChange(of: floatingOnTop) { _, newValue in
             WindowController.shared.applyLevel(floatingOnTop: newValue)
@@ -119,8 +144,13 @@ struct ContentView: View {
                             launchAtLogin: $launchAtLogin,
                             snapToGrid: $snapToGrid,
                             gridCellSize: $gridCellSize,
+                            sourceMode: $sourceMode,
+                            localFolderPath: $localFolderPath,
+                            localRecursive: $localRecursive,
+                            displayCount: $displayCount,
                             viewModel: viewModel,
                             onLoad: performLoad,
+                            onChooseLocalFolder: chooseLocalFolder,
                             onCollapse: collapseSettings
                         )
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -148,7 +178,7 @@ struct ContentView: View {
                 .foregroundStyle(.white.opacity(0.92))
 
             // 序号：当前 / 总数
-            Text("\(viewModel.files.isEmpty ? 0 : viewModel.currentIndex + 1) / \(viewModel.files.count)")
+            Text("\(viewModel.items.isEmpty ? 0 : viewModel.currentIndex + 1) / \(viewModel.items.count)")
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundStyle(.white.opacity(0.4))
 
@@ -215,21 +245,27 @@ struct ContentView: View {
 
     private var carouselRow: some View {
         GeometryReader { geo in
-            let visible = viewModel.visibleFiles
+            let visible = viewModel.visibleItems
             let weights = (0..<max(visible.count, 1)).map { weight(for: $0) }
             let totalWeight = weights.reduce(0, +)
             let available = geo.size.width - cardSpacing * CGFloat(max(visible.count - 1, 0))
 
             HStack(spacing: cardSpacing) {
-                ForEach(Array(visible.enumerated()), id: \.element.id) { offset, file in
+                ForEach(Array(visible.enumerated()), id: \.element.id) { offset, item in
                     CarouselCard(
-                        file: file,
+                        item: item,
                         number: offset + 1,
                         isCurrent: offset == 0,
                         client: viewModel.client,
                         reduceMotion: reduceMotion
                     )
                     .frame(width: max(available * weights[offset] / totalWeight, 0))
+                    // 新进入可见窗口的卡片：0.4s 淡入 + 从右轻微滑入，避免"闪现"
+                    .transition(
+                        reduceMotion
+                            ? .identity
+                            : .opacity.combined(with: .offset(x: 20, y: 0))
+                    )
                     .onHover { hovering in
                         handleHover(hovering, offset: offset)
                     }
@@ -240,8 +276,12 @@ struct ContentView: View {
                 }
             }
             .frame(height: geo.size.height)
-            // 权重变化用弹簧动画平滑过渡
-            .animation(springAnimation, value: weights)
+            // 轮播换批：慢速弹簧过渡权重与新卡入场
+            .animation(shuffleSpring, value: viewModel.currentIndex)
+            // 同时呈现数量变化：权重布局即时动画过渡
+            .animation(shuffleSpring, value: displayCount)
+            // hover 手风琴：保持较快手感
+            .animation(hoverSpring, value: hoveredOffset)
         }
         .frame(minHeight: 120)
     }
@@ -268,12 +308,12 @@ struct ContentView: View {
 
     private var bottomBar: some View {
         HStack(spacing: 12) {
-            // 来源说明
+            // 来源说明（在线 / 本地）
             HStack(spacing: 5) {
                 Circle()
-                    .fill(viewModel.files.isEmpty ? .gray : .green)
+                    .fill(viewModel.items.isEmpty ? .gray : .green)
                     .frame(width: 5, height: 5)
-                Text("Luvia Gallery \(viewModel.files.isEmpty ? "未连接" : "在线 \(viewModel.files.count) 张")")
+                Text(viewModel.sourceLabel)
                     .font(.system(size: 10))
                     .foregroundStyle(.white.opacity(0.4))
             }
@@ -304,10 +344,10 @@ struct ContentView: View {
             Image(systemName: "photo.stack")
                 .font(.system(size: 30))
                 .foregroundStyle(.white.opacity(0.3))
-            Text("还没有在线相册来源")
+            Text("还没有相册来源")
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(.white.opacity(0.6))
-            Text("连接你的 Luvia Gallery 服务器，\n照片将以悬浮卡片的方式在桌面轮播。")
+            Text("连接 Luvia Gallery 服务器，或选择本地图片目录，\n照片将以悬浮卡片的方式在桌面轮播。")
                 .font(.caption)
                 .foregroundStyle(.white.opacity(0.35))
                 .multilineTextAlignment(.center)
@@ -316,7 +356,7 @@ struct ContentView: View {
                     showSettings = true
                 }
             } label: {
-                Label("添加在线来源", systemImage: "plus.circle.fill")
+                Label("添加图片来源", systemImage: "plus.circle.fill")
             }
             .buttonStyle(.borderedProminent)
         }
@@ -324,8 +364,17 @@ struct ContentView: View {
 
     // MARK: - 加载动作
 
-    /// 立即加载：成功后收起设置面板并同步配置到 App Groups（供 Widget 共享）
+    /// 立即加载：按来源模式分发到在线 / 本地加载
     private func performLoad() {
+        if sourceMode == "local" {
+            performLocalLoad()
+        } else {
+            performOnlineLoad()
+        }
+    }
+
+    /// 在线加载：成功后收起设置面板并同步配置到 App Groups（供 Widget 共享）
+    private func performOnlineLoad() {
         let mode = WidgetConfig.DisplayMode(rawValue: loadMode) ?? .random
         Task {
             let success = await viewModel.load(
@@ -350,6 +399,53 @@ struct ContentView: View {
                 collapseSettings()
             }
         }
+    }
+
+    /// 本地加载：解析 bookmark 恢复目录访问权限后扫描图片
+    private func performLocalLoad() {
+        // 优先复用已恢复访问的目录，否则从 bookmark 恢复
+        let folder = localFolderURL ?? LocalImageSource.resolveBookmark(localFolderBookmark)
+        guard let folder else {
+            viewModel.reportLocalBookmarkStale()
+            return
+        }
+        localFolderURL = folder
+        Task {
+            let success = await viewModel.loadLocal(folder: folder, recursive: localRecursive)
+            if success {
+                // 加载成功后自动收起设置面板
+                collapseSettings()
+            }
+        }
+    }
+
+    /// 选择本地图片目录（NSOpenPanel，仅目录），选中后存 bookmark 并立即加载
+    private func chooseLocalFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "选择"
+        panel.message = "选择存放图片的目录"
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        // 创建 security-scoped bookmark 持久化沙盒访问权限
+        guard let bookmark = LocalImageSource.createBookmark(for: url) else {
+            viewModel.statusIsError = true
+            viewModel.statusText = "无法保存目录访问权限，请重试"
+            return
+        }
+        localFolderBookmark = bookmark
+        localFolderPath = url.path
+
+        // 恢复访问并立即加载
+        if let resolved = LocalImageSource.resolveBookmark(bookmark) {
+            localFolderURL = resolved
+        } else {
+            localFolderURL = url
+        }
+        performLocalLoad()
     }
 }
 
