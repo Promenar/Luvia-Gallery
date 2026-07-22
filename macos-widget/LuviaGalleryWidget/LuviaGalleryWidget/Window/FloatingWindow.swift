@@ -6,6 +6,7 @@
 //
 
 import AppKit
+import CoreGraphics
 
 // MARK: - FloatingWindow
 
@@ -58,9 +59,27 @@ final class WindowController {
         self.window = window
     }
 
-    /// 根据开关应用置顶层级
+    /// 根据开关应用窗口层级与集合行为
+    /// - 置顶：.floating，浮在所有普通窗口之上
+    /// - 非置顶：桌面图标层级 +1（普通 App 窗口之下），成为真正的"桌面组件"，
+    ///   台前调度不会收编非正常层级的窗口，不会被吸到屏幕边缘
     func applyLevel(floatingOnTop: Bool) {
-        window?.level = floatingOnTop ? .floating : .normal
+        guard let window else { return }
+
+        // 两种层级统一集合行为：
+        // .canJoinAllSpaces + .stationary —— 所有桌面 Space 可见且位置固定
+        //   （符合"桌面组件"语义，刻意不选 .moveToActiveSpace）
+        // .ignoresCycle —— 不进入 Cmd+Tab / 窗口循环
+        // .fullScreenAuxiliary —— 可叠加在全屏 App 的 Space 上
+        window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]
+
+        if floatingOnTop {
+            window.level = .floating
+        } else {
+            window.level = NSWindow.Level(
+                rawValue: Int(CGWindowLevelForKey(.desktopIconWindow)) + 1
+            )
+        }
     }
 
     /// 隐藏窗口（不退出 App）
