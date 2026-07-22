@@ -78,8 +78,8 @@ final class CarouselViewModel: ObservableObject {
 
     /// 底部来源文案
     var sourceLabel: String {
-        if items.isEmpty { return sourceIsLocal ? "本地图片 未连接" : "Luvia Gallery 未连接" }
-        return sourceIsLocal ? "本地图片 \(items.count) 张" : "Luvia Gallery 在线 \(items.count) 张"
+        if items.isEmpty { return sourceIsLocal ? "本地媒体 未连接" : "Luvia Gallery 未连接" }
+        return sourceIsLocal ? "本地媒体 \(items.count) 项" : "Luvia Gallery 在线 \(items.count) 项"
     }
 
     // MARK: - 在线加载
@@ -105,21 +105,21 @@ final class CarouselViewModel: ObservableObject {
                 mode: mode,
                 folder: folder
             )
-            // 过滤视频，只保留图片
-            let images = result.filter { $0.mediaType == "image" }
-            guard !images.isEmpty else {
+            // 保留图片与视频（服务端 mediaType 字段直接区分，无需额外探测）
+            let media = result.filter { $0.mediaType == "image" || $0.mediaType == "video" }
+            guard !media.isEmpty else {
                 statusIsError = true
-                statusText = "没有可用图片（该模式下返回为空）"
+                statusText = "没有可用媒体（该模式下返回为空）"
                 return false
             }
 
             self.client = api
             self.sourceIsLocal = false
-            self.items = images.map { .remote($0) }
+            self.items = media.map { .remote($0) }
             self.currentIndex = 0
             self.progress = 0
             statusIsError = false
-            statusText = "已加载 \(images.count) 张图片"
+            statusText = "已加载 \(media.count) 项媒体"
             startTicker()
             return true
         } catch let error as WidgetError {
@@ -151,7 +151,7 @@ final class CarouselViewModel: ObservableObject {
         let images = LocalImageSource.listImages(in: folder, recursive: recursive)
         guard !images.isEmpty else {
             statusIsError = true
-            statusText = "目录内没有找到图片（jpg / png / webp / heic / gif）"
+            statusText = "目录内没有找到图片或视频（jpg / png / webp / heic / gif / mp4 / mov）"
             return false
         }
 
@@ -161,7 +161,7 @@ final class CarouselViewModel: ObservableObject {
         self.currentIndex = 0
         self.progress = 0
         statusIsError = false
-        statusText = "已加载 \(images.count) 张本地图片"
+        statusText = "已加载 \(images.count) 项本地媒体"
         startTicker()
         return true
     }
