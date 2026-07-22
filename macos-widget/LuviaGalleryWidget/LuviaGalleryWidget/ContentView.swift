@@ -125,6 +125,15 @@ struct ContentView: View {
 
             Spacer()
 
+            // 置顶切换：置顶时实心图钉高亮，非置顶线框灰色
+            titleBarButton(
+                icon: floatingOnTop ? "pin.fill" : "pin",
+                help: floatingOnTop ? "取消置顶" : "置顶到所有窗口之上",
+                color: floatingOnTop ? accentBlue : nil
+            ) {
+                floatingOnTop.toggle()
+            }
+
             // 播放/暂停
             titleBarButton(
                 icon: viewModel.isPlaying ? "pause.fill" : "play.fill",
@@ -152,12 +161,12 @@ struct ContentView: View {
         .padding(.vertical, 8)
     }
 
-    /// 标题栏小图标按钮
-    private func titleBarButton(icon: String, help: String, action: @escaping () -> Void) -> some View {
+    /// 标题栏小图标按钮（color 为空时用默认灰色）
+    private func titleBarButton(icon: String, help: String, color: Color? = nil, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: icon)
                 .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(.white.opacity(0.65))
+                .foregroundStyle(color ?? .white.opacity(0.65))
                 .frame(width: 22, height: 22)
                 .contentShape(Rectangle())
         }
