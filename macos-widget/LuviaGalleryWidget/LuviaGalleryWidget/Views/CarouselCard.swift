@@ -11,12 +11,13 @@ import SwiftUI
 
 struct CarouselCard: View {
 
-    let file: MediaFile
+    /// 轮播条目（在线远程 / 本地文件）
+    let item: CarouselItem
     /// 序号（1 起）
     let number: Int
     /// 是否为当前大卡（第一张）
     let isCurrent: Bool
-    /// 图片客户端（小卡缩略图 / 大卡原图）
+    /// 图片客户端（仅在线来源需要；本地为 nil）
     let client: APIClient?
     /// 系统"减少动态效果"是否开启
     let reduceMotion: Bool
@@ -30,15 +31,10 @@ struct CarouselCard: View {
     var body: some View {
         GeometryReader { geo in
             ZStack(alignment: .topLeading) {
-                // 图片本体：大卡用原图，小卡用缩略图
-                CachedImageView(
-                    fileId: file.id,
-                    kind: isCurrent ? .original : .thumbnail,
-                    client: client,
-                    reduceMotion: reduceMotion
-                )
-                .frame(width: geo.size.width, height: geo.size.height)
-                .clipped()
+                // 图片本体：大卡用原图规格，小卡用缩略图规格
+                imageContent
+                    .frame(width: geo.size.width, height: geo.size.height)
+                    .clipped()
 
                 // 左上角小编号：当前卡亮蓝，其余白色 55%
                 Text(String(format: "%02d", number))
@@ -82,6 +78,26 @@ struct CarouselCard: View {
                     shineX = -1.4
                 }
             }
+        }
+    }
+
+    /// 按来源选择图片加载视图（在线走带 token 的缓存加载，本地走降采样加载）
+    @ViewBuilder
+    private var imageContent: some View {
+        switch item {
+        case .remote(let file):
+            CachedImageView(
+                fileId: file.id,
+                kind: isCurrent ? .original : .thumbnail,
+                client: client,
+                reduceMotion: reduceMotion
+            )
+        case .local(let url):
+            LocalImageView(
+                url: url,
+                isLarge: isCurrent,
+                reduceMotion: reduceMotion
+            )
         }
     }
 }
