@@ -21,6 +21,8 @@ struct CarouselCard: View {
     let client: APIClient?
     /// 系统"减少动态效果"是否开启
     let reduceMotion: Bool
+    /// 视频是否应播放（手风琴收缩态 / 被面板覆盖时暂停）
+    var isPlaying: Bool = true
 
     /// 浮光水平位置系数：-1.4 左侧屏幕外 → 1.4 右侧屏幕外
     @State private var shineX: CGFloat = -1.4
@@ -81,23 +83,36 @@ struct CarouselCard: View {
         }
     }
 
-    /// 按来源选择图片加载视图（在线走带 token 的缓存加载，本地走降采样加载）
+    /// 按来源与媒体类型选择加载视图：
+    /// 在线用服务端 mediaType 区分；本地按扩展名区分；视频走 AVPlayer 卡片
     @ViewBuilder
     private var imageContent: some View {
         switch item {
         case .remote(let file):
-            CachedImageView(
-                fileId: file.id,
-                kind: isCurrent ? .original : .thumbnail,
-                client: client,
-                reduceMotion: reduceMotion
-            )
+            if file.mediaType == "video" {
+                RemoteVideoCardView(
+                    fileId: file.id,
+                    client: client,
+                    isPlaying: isPlaying
+                )
+            } else {
+                CachedImageView(
+                    fileId: file.id,
+                    kind: isCurrent ? .original : .thumbnail,
+                    client: client,
+                    reduceMotion: reduceMotion
+                )
+            }
         case .local(let url):
-            LocalImageView(
-                url: url,
-                isLarge: isCurrent,
-                reduceMotion: reduceMotion
-            )
+            if LocalImageSource.isVideoFile(url) {
+                VideoCardView(url: url, isPlaying: isPlaying)
+            } else {
+                LocalImageView(
+                    url: url,
+                    isLarge: isCurrent,
+                    reduceMotion: reduceMotion
+                )
+            }
         }
     }
 }
