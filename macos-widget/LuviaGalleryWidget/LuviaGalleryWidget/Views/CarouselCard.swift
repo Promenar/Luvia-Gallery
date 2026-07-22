@@ -34,7 +34,8 @@ struct CarouselCard: View {
                 CachedImageView(
                     fileId: file.id,
                     kind: isCurrent ? .original : .thumbnail,
-                    client: client
+                    client: client,
+                    reduceMotion: reduceMotion
                 )
                 .frame(width: geo.size.width, height: geo.size.height)
                 .clipped()

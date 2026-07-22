@@ -22,6 +22,8 @@ struct ContentView: View {
     @AppStorage("launchAtLogin") private var launchAtLogin: Bool = false
     /// 拖动松手后吸附桌面网格（默认开）
     @AppStorage("snapToGrid") private var snapToGrid: Bool = true
+    /// 吸附网格 cell 边长（用户校准值，px）
+    @AppStorage("gridCellSize") private var gridCellSize: Double = 84
 
     // MARK: - 状态
 
@@ -52,9 +54,10 @@ struct ContentView: View {
 
     var body: some View {
         ZStack {
-            // 深色圆角卡片底（圆角 16）
-            RoundedRectangle(cornerRadius: 16)
-                .fill(Color(red: 0.07, green: 0.08, blue: 0.11))
+            // 极轻深色 tint：叠在玻璃材质之上保证文字对比度，
+            // 同时仍能透出桌面壁纸（窗口本身 isOpaque=false + clear 背景）
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(.black.opacity(0.18))
 
             if !hasConfig && viewModel.files.isEmpty && !showSettings {
                 emptyState
@@ -62,6 +65,9 @@ struct ContentView: View {
                 mainContent
             }
         }
+        // 液态玻璃外壳（macOS 26 Liquid Glass API）：
+        // .regular 玻璃渲染在视图后方，裁剪为 16px 圆角
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         // 给窗口阴影留出呼吸空间
         .padding(8)
         .frame(minWidth: 464, minHeight: 244)
@@ -105,6 +111,7 @@ struct ContentView: View {
                         floatingOnTop: $floatingOnTop,
                         launchAtLogin: $launchAtLogin,
                         snapToGrid: $snapToGrid,
+                        gridCellSize: $gridCellSize,
                         viewModel: viewModel,
                         onLoad: performLoad,
                         onCollapse: collapseSettings
