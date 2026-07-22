@@ -20,6 +20,7 @@ struct SettingsPanel: View {
     @Binding var intervalSeconds: Double
     @Binding var floatingOnTop: Bool
     @Binding var launchAtLogin: Bool
+    @Binding var snapToGrid: Bool
 
     /// 视图模型（状态文字、加载动作）
     @ObservedObject var viewModel: CarouselViewModel
@@ -81,7 +82,10 @@ struct SettingsPanel: View {
             .toggleStyle(.checkbox)
             .font(.caption)
 
-            // 加载按钮 + 状态文字
+            // 拖动松手后吸附桌面图标网格
+            Toggle("拖动后吸附桌面网格", isOn: $snapToGrid)
+                .toggleStyle(.checkbox)
+                .font(.caption)
             HStack(spacing: 10) {
                 Button(action: onLoad) {
                     HStack(spacing: 4) {

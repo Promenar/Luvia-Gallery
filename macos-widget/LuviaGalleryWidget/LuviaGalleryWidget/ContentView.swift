@@ -20,6 +20,8 @@ struct ContentView: View {
     @AppStorage("floatingOnTop") private var floatingOnTop: Bool = true
     /// 开机自动启动的用户意图（UI 回显以系统 SMAppService 状态为准）
     @AppStorage("launchAtLogin") private var launchAtLogin: Bool = false
+    /// 拖动松手后吸附桌面网格（默认开）
+    @AppStorage("snapToGrid") private var snapToGrid: Bool = true
 
     // MARK: - 状态
 
@@ -91,18 +93,24 @@ struct ContentView: View {
             titleBar
 
             if showSettings {
-                SettingsPanel(
-                    serverAddress: $serverAddress,
-                    apiToken: $apiToken,
-                    loadMode: $loadMode,
-                    folderPath: $folderPath,
-                    intervalSeconds: $intervalSeconds,
-                    floatingOnTop: $floatingOnTop,
-                    launchAtLogin: $launchAtLogin,
-                    viewModel: viewModel,
-                    onLoad: performLoad,
-                    onCollapse: collapseSettings
-                )
+                // 包一层 ScrollView 并限高，面板内容超出可滚动，
+                // 避免把窗口布局撑爆导致底部控件被裁切
+                ScrollView {
+                    SettingsPanel(
+                        serverAddress: $serverAddress,
+                        apiToken: $apiToken,
+                        loadMode: $loadMode,
+                        folderPath: $folderPath,
+                        intervalSeconds: $intervalSeconds,
+                        floatingOnTop: $floatingOnTop,
+                        launchAtLogin: $launchAtLogin,
+                        snapToGrid: $snapToGrid,
+                        viewModel: viewModel,
+                        onLoad: performLoad,
+                        onCollapse: collapseSettings
+                    )
+                }
+                .frame(maxHeight: 320)
                 .transition(.move(edge: .top).combined(with: .opacity))
             }
 
@@ -219,7 +227,8 @@ struct ContentView: View {
             // 权重变化用弹簧动画平滑过渡
             .animation(springAnimation, value: weights)
         }
-        .frame(minHeight: 120)
+        // 设置面板展开期间把卡片区最小高度压低，让压缩优先发生在卡片区
+        .frame(minHeight: showSettings ? 60 : 120)
     }
 
     /// 悬停处理：展开手风琴 + 暂停轮播（浮光由卡片内部自管理）
