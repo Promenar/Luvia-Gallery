@@ -18,6 +18,8 @@ struct ContentView: View {
     @AppStorage("folderPath") private var folderPath: String = ""
     @AppStorage("intervalSeconds") private var intervalSeconds: Double = 6
     @AppStorage("floatingOnTop") private var floatingOnTop: Bool = true
+    /// 开机自动启动的用户意图（UI 回显以系统 SMAppService 状态为准）
+    @AppStorage("launchAtLogin") private var launchAtLogin: Bool = false
 
     // MARK: - 状态
 
@@ -67,6 +69,8 @@ struct ContentView: View {
             reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
             viewModel.intervalSeconds = intervalSeconds
             WindowController.shared.applyLevel(floatingOnTop: floatingOnTop)
+            // 开机启动开关以系统侧真实状态为准回显
+            launchAtLogin = LoginItemManager.isEnabled
             // 已配置则自动加载
             if hasConfig && viewModel.files.isEmpty {
                 performLoad()
@@ -94,6 +98,7 @@ struct ContentView: View {
                     folderPath: $folderPath,
                     intervalSeconds: $intervalSeconds,
                     floatingOnTop: $floatingOnTop,
+                    launchAtLogin: $launchAtLogin,
                     viewModel: viewModel,
                     onLoad: performLoad,
                     onCollapse: collapseSettings
