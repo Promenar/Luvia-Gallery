@@ -13,6 +13,13 @@ enum LocalImageSource {
 
     /// 支持的图片扩展名
     static let imageExtensions: Set<String> = ["jpg", "jpeg", "png", "webp", "heic", "gif"]
+    /// 支持的视频扩展名
+    static let videoExtensions: Set<String> = ["mp4", "mov", "m4v"]
+
+    /// 按扩展名判断是否视频文件
+    static func isVideoFile(_ url: URL) -> Bool {
+        videoExtensions.contains(url.pathExtension.lowercased())
+    }
 
     // MARK: - Bookmark
 
@@ -74,7 +81,7 @@ enum LocalImageSource {
                 options: [.skipsHiddenFiles, .skipsPackageDescendants]
             ) else { return [] }
             for case let url as URL in enumerator {
-                if isImageFile(url) { urls.append(url) }
+                if isMediaFile(url) { urls.append(url) }
             }
         } else {
             // 仅顶层
@@ -83,15 +90,16 @@ enum LocalImageSource {
                 includingPropertiesForKeys: [.isRegularFileKey],
                 options: [.skipsHiddenFiles]
             )) ?? []
-            urls = children.filter { isImageFile($0) }
+            urls = children.filter { isMediaFile($0) }
         }
 
         // 随机洗牌，与在线 random 模式语义一致
         return urls.shuffled()
     }
 
-    /// 按扩展名判断是否支持的图片
-    private static func isImageFile(_ url: URL) -> Bool {
-        imageExtensions.contains(url.pathExtension.lowercased())
+    /// 按扩展名判断是否支持的媒体（图片或视频）
+    private static func isMediaFile(_ url: URL) -> Bool {
+        let ext = url.pathExtension.lowercased()
+        return imageExtensions.contains(ext) || videoExtensions.contains(ext)
     }
 }

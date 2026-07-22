@@ -262,7 +262,9 @@ struct ContentView: View {
                         number: offset + 1,
                         isCurrent: offset == 0,
                         client: viewModel.client,
-                        reduceMotion: reduceMotion
+                        reduceMotion: reduceMotion,
+                        // 手风琴收缩态暂停视频；设置面板覆盖时全部暂停
+                        isPlaying: !showSettings && (hoveredOffset == nil || hoveredOffset == offset)
                     )
                     .frame(width: max(available * weights[offset] / totalWeight, 0))
                     // 新进入可见窗口的卡片：0.4s 淡入 + 从右轻微滑入，避免"闪现"
