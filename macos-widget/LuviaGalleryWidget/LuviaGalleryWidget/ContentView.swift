@@ -61,6 +61,8 @@ struct ContentView: View {
         // 给窗口阴影留出呼吸空间
         .padding(8)
         .frame(minWidth: 464, minHeight: 244)
+        // 内容延伸到标题栏区域（标题栏已透明隐藏）
+        .ignoresSafeArea()
         .onAppear {
             reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
             viewModel.intervalSeconds = intervalSeconds
@@ -93,7 +95,8 @@ struct ContentView: View {
                     intervalSeconds: $intervalSeconds,
                     floatingOnTop: $floatingOnTop,
                     viewModel: viewModel,
-                    onLoad: performLoad
+                    onLoad: performLoad,
+                    onCollapse: collapseSettings
                 )
                 .transition(.move(edge: .top).combined(with: .opacity))
             }
@@ -130,8 +133,11 @@ struct ContentView: View {
                 viewModel.togglePlaying()
             }
 
-            // 设置齿轮
-            titleBarButton(icon: "gearshape", help: "设置") {
+            // 设置齿轮：真正的开关，展开时再点一次收起
+            titleBarButton(
+                icon: showSettings ? "gearshape.fill" : "gearshape",
+                help: showSettings ? "收起设置" : "设置"
+            ) {
                 withAnimation(springAnimation) {
                     showSettings.toggle()
                 }
@@ -178,22 +184,21 @@ struct ContentView: View {
 
             HStack(spacing: cardSpacing) {
                 ForEach(Array(visible.enumerated()), id: \.element.id) { offset, file in
-                    let card = CarouselCard(
+                    CarouselCard(
                         file: file,
                         number: offset + 1,
                         isCurrent: offset == 0,
                         client: viewModel.client,
                         reduceMotion: reduceMotion
                     )
-                    card
-                        .frame(width: max(available * weights[offset] / totalWeight, 0))
-                        .onHover { hovering in
-                            handleHover(hovering, offset: offset, card: card)
-                        }
-                        .onTapGesture {
-                            // 点击任意卡片立即跳转并重置计时
-                            viewModel.jump(toVisibleOffset: offset)
-                        }
+                    .frame(width: max(available * weights[offset] / totalWeight, 0))
+                    .onHover { hovering in
+                        handleHover(hovering, offset: offset)
+                    }
+                    .onTapGesture {
+                        // 点击任意卡片立即跳转并重置计时
+                        viewModel.jump(toVisibleOffset: offset)
+                    }
                 }
             }
             .frame(height: geo.size.height)
@@ -203,15 +208,21 @@ struct ContentView: View {
         .frame(minHeight: 120)
     }
 
-    /// 悬停处理：展开手风琴 + 触发浮光 + 暂停轮播
-    private func handleHover(_ hovering: Bool, offset: Int, card: CarouselCard) {
+    /// 悬停处理：展开手风琴 + 暂停轮播（浮光由卡片内部自管理）
+    private func handleHover(_ hovering: Bool, offset: Int) {
         if hovering {
             hoveredOffset = offset
             viewModel.isHoveringCard = true
-            card.triggerShine()
         } else if hoveredOffset == offset {
             hoveredOffset = nil
             viewModel.isHoveringCard = false
+        }
+    }
+
+    /// 收起设置面板（面板内「收起」按钮 / 加载成功后调用）
+    private func collapseSettings() {
+        withAnimation(springAnimation) {
+            showSettings = false
         }
     }
 
@@ -297,9 +308,7 @@ struct ContentView: View {
                     )
                 )
                 // 加载成功后自动收起设置面板
-                withAnimation(springAnimation) {
-                    showSettings = false
-                }
+                collapseSettings()
             }
         }
     }
