@@ -2,156 +2,310 @@
 //  ContentView.swift
 //  LuviaGalleryWidget
 //
-//  Widget Configuration UI
+//  悬浮相册轮播主界面：标题栏、卡片轮播行、设置面板、底部进度条。
 //
 
 import SwiftUI
+import AppKit
 
 struct ContentView: View {
-    @State private var serverUrl: String = ""
-    @State private var token: String = ""
-    @State private var selectedMode: WidgetConfig.DisplayMode = .random
-    @State private var folderPath: String = ""
-    @State private var showVideos: Bool = false
-    @State private var refreshInterval: Int = 30
-    @State private var showSaveSuccess: Bool = false
-    
+
+    // MARK: - 持久化设置（@AppStorage）
+
+    @AppStorage("serverAddress") private var serverAddress: String = ""
+    @AppStorage("apiToken") private var apiToken: String = ""
+    @AppStorage("loadMode") private var loadMode: String = "random"
+    @AppStorage("folderPath") private var folderPath: String = ""
+    @AppStorage("intervalSeconds") private var intervalSeconds: Double = 6
+    @AppStorage("floatingOnTop") private var floatingOnTop: Bool = true
+
+    // MARK: - 状态
+
+    @StateObject private var viewModel = CarouselViewModel()
+    /// 设置面板展开/收起
+    @State private var showSettings = false
+    /// 当前悬停卡片在可见窗口中的偏移（nil 表示无悬停）
+    @State private var hoveredOffset: Int? = nil
+    /// 系统"减少动态效果"偏好
+    @State private var reduceMotion = false
+
+    /// 品牌蓝
+    private let accentBlue = Color(red: 0x3f / 255, green: 0x7b / 255, blue: 0xff / 255)
+    /// 卡片间距
+    private let cardSpacing: CGFloat = 10
+
+    /// 弹簧动画（减少动态效果时关闭）
+    private var springAnimation: Animation? {
+        reduceMotion ? nil : .spring(response: 0.55, dampingFraction: 0.85)
+    }
+
+    /// 是否已配置来源
+    private var hasConfig: Bool {
+        !serverAddress.isEmpty && !apiToken.isEmpty
+    }
+
+    // MARK: - 界面
+
     var body: some View {
-        VStack(spacing: 20) {
-            // Header
-            HStack {
-                Image(systemName: "photo.on.rectangle.angled")
-                    .font(.largeTitle)
-                    .foregroundStyle(Color.accentColor)
-                VStack(alignment: .leading) {
-                    Text("Luvia Gallery")
-                        .font(.title)
-                        .fontWeight(.bold)
-                    Text("Widget Configuration")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+        ZStack {
+            // 深色圆角卡片底（圆角 16）
+            RoundedRectangle(cornerRadius: 16)
+                .fill(Color(red: 0.07, green: 0.08, blue: 0.11))
+
+            if !hasConfig && viewModel.files.isEmpty && !showSettings {
+                emptyState
+            } else {
+                mainContent
+            }
+        }
+        // 给窗口阴影留出呼吸空间
+        .padding(8)
+        .frame(minWidth: 464, minHeight: 244)
+        .onAppear {
+            reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+            viewModel.intervalSeconds = intervalSeconds
+            WindowController.shared.applyLevel(floatingOnTop: floatingOnTop)
+            // 已配置则自动加载
+            if hasConfig && viewModel.files.isEmpty {
+                performLoad()
+            }
+        }
+        .onChange(of: intervalSeconds) { _, newValue in
+            viewModel.intervalSeconds = newValue
+        }
+        .onChange(of: floatingOnTop) { _, newValue in
+            WindowController.shared.applyLevel(floatingOnTop: newValue)
+        }
+    }
+
+    // MARK: - 主内容
+
+    private var mainContent: some View {
+        VStack(spacing: 0) {
+            titleBar
+
+            if showSettings {
+                SettingsPanel(
+                    serverAddress: $serverAddress,
+                    apiToken: $apiToken,
+                    loadMode: $loadMode,
+                    folderPath: $folderPath,
+                    intervalSeconds: $intervalSeconds,
+                    floatingOnTop: $floatingOnTop,
+                    viewModel: viewModel,
+                    onLoad: performLoad
+                )
+                .transition(.move(edge: .top).combined(with: .opacity))
+            }
+
+            carouselRow
+                .frame(maxHeight: .infinity)
+                .padding(.horizontal, 14)
+
+            bottomBar
+        }
+        .padding(.top, 4)
+    }
+
+    // MARK: - 顶部标题栏
+
+    private var titleBar: some View {
+        HStack(spacing: 8) {
+            Text("相册轮播")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.92))
+
+            // 序号：当前 / 总数
+            Text("\(viewModel.files.isEmpty ? 0 : viewModel.currentIndex + 1) / \(viewModel.files.count)")
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.4))
+
+            Spacer()
+
+            // 播放/暂停
+            titleBarButton(
+                icon: viewModel.isPlaying ? "pause.fill" : "play.fill",
+                help: viewModel.isPlaying ? "暂停" : "播放"
+            ) {
+                viewModel.togglePlaying()
+            }
+
+            // 设置齿轮
+            titleBarButton(icon: "gearshape", help: "设置") {
+                withAnimation(springAnimation) {
+                    showSettings.toggle()
                 }
             }
-            .padding(.bottom, 10)
-            
-            Form {
-                Section("Server Settings") {
-                    TextField("Server URL", text: $serverUrl, prompt: Text("http://localhost:3000"))
-                        .textFieldStyle(.roundedBorder)
-                    
-                    TextField("API Token", text: $token, prompt: Text("Paste your token here..."))
-                        .textFieldStyle(.roundedBorder)
-                }
-                
-                Section("Display Options") {
-                    Picker("Mode", selection: $selectedMode) {
-                        Text("Random Photos").tag(WidgetConfig.DisplayMode.random)
-                        Text("Favorites").tag(WidgetConfig.DisplayMode.favorites)
-                        Text("Specific Folder").tag(WidgetConfig.DisplayMode.folder)
-                    }
-                    
-                    if selectedMode == .folder {
-                        TextField("Folder Path", text: $folderPath, prompt: Text("Photos/Vacation"))
-                            .textFieldStyle(.roundedBorder)
-                    }
-                    
-                    Toggle("Include Videos", isOn: $showVideos)
-                    
-                    Picker("Refresh Interval", selection: $refreshInterval) {
-                        Text("15 Minutes").tag(15)
-                        Text("30 Minutes").tag(30)
-                        Text("1 Hour").tag(60)
-                    }
+
+            // 关闭（隐藏窗口，不退出 App）
+            titleBarButton(icon: "xmark", help: "关闭") {
+                WindowController.shared.closeWindow()
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+    }
+
+    /// 标题栏小图标按钮
+    private func titleBarButton(icon: String, help: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.white.opacity(0.65))
+                .frame(width: 22, height: 22)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(help)
+    }
+
+    // MARK: - 轮播卡片行
+
+    /// 卡片宽度权重：悬停时悬停卡展开 2.5、其余 0.6；否则当前大卡 2.1、其余 1.0
+    private func weight(for offset: Int) -> CGFloat {
+        if let hovered = hoveredOffset {
+            return offset == hovered ? 2.5 : 0.6
+        }
+        return offset == 0 ? 2.1 : 1.0
+    }
+
+    private var carouselRow: some View {
+        GeometryReader { geo in
+            let visible = viewModel.visibleFiles
+            let weights = (0..<max(visible.count, 1)).map { weight(for: $0) }
+            let totalWeight = weights.reduce(0, +)
+            let available = geo.size.width - cardSpacing * CGFloat(max(visible.count - 1, 0))
+
+            HStack(spacing: cardSpacing) {
+                ForEach(Array(visible.enumerated()), id: \.element.id) { offset, file in
+                    let card = CarouselCard(
+                        file: file,
+                        number: offset + 1,
+                        isCurrent: offset == 0,
+                        client: viewModel.client,
+                        reduceMotion: reduceMotion
+                    )
+                    card
+                        .frame(width: max(available * weights[offset] / totalWeight, 0))
+                        .onHover { hovering in
+                            handleHover(hovering, offset: offset, card: card)
+                        }
+                        .onTapGesture {
+                            // 点击任意卡片立即跳转并重置计时
+                            viewModel.jump(toVisibleOffset: offset)
+                        }
                 }
             }
-            .formStyle(.grouped)
-            
-            // Save Button
-            Button(action: saveConfiguration) {
-                HStack {
-                    Image(systemName: "checkmark.circle.fill")
-                    Text("Save Configuration")
+            .frame(height: geo.size.height)
+            // 权重变化用弹簧动画平滑过渡
+            .animation(springAnimation, value: weights)
+        }
+        .frame(minHeight: 120)
+    }
+
+    /// 悬停处理：展开手风琴 + 触发浮光 + 暂停轮播
+    private func handleHover(_ hovering: Bool, offset: Int, card: CarouselCard) {
+        if hovering {
+            hoveredOffset = offset
+            viewModel.isHoveringCard = true
+            card.triggerShine()
+        } else if hoveredOffset == offset {
+            hoveredOffset = nil
+            viewModel.isHoveringCard = false
+        }
+    }
+
+    // MARK: - 底部进度条与来源说明
+
+    private var bottomBar: some View {
+        VStack(spacing: 6) {
+            // 3px 蓝色进度条
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Rectangle().fill(.white.opacity(0.08))
+                    Rectangle()
+                        .fill(accentBlue)
+                        .frame(width: geo.size.width * min(max(viewModel.progress, 0), 1))
                 }
-                .frame(maxWidth: .infinity)
-                .padding()
+            }
+            .frame(height: 3)
+            .clipShape(Capsule())
+            .padding(.horizontal, 16)
+
+            // 来源说明
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(viewModel.files.isEmpty ? .gray : .green)
+                    .frame(width: 5, height: 5)
+                Text("Luvia Gallery \(viewModel.files.isEmpty ? "未连接" : "在线 \(viewModel.files.count) 张")")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.white.opacity(0.4))
+                Spacer()
+            }
+            .padding(.horizontal, 16)
+            .padding(.bottom, 8)
+        }
+    }
+
+    // MARK: - 空状态
+
+    private var emptyState: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "photo.stack")
+                .font(.system(size: 30))
+                .foregroundStyle(.white.opacity(0.3))
+            Text("还没有在线相册来源")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.white.opacity(0.6))
+            Text("连接你的 Luvia Gallery 服务器，\n照片将以悬浮卡片的方式在桌面轮播。")
+                .font(.caption)
+                .foregroundStyle(.white.opacity(0.35))
+                .multilineTextAlignment(.center)
+            Button {
+                withAnimation(springAnimation) {
+                    showSettings = true
+                }
+            } label: {
+                Label("添加在线来源", systemImage: "plus.circle.fill")
             }
             .buttonStyle(.borderedProminent)
-            .disabled(serverUrl.isEmpty || token.isEmpty)
-            .padding(.horizontal)
-            
-            if showSaveSuccess {
-                HStack {
-                    Image(systemName: "checkmark.circle")
-                        .foregroundStyle(.green)
-                    Text("Configuration saved! Add widget to your desktop.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+        }
+    }
+
+    // MARK: - 加载动作
+
+    /// 立即加载：成功后收起设置面板并同步配置到 App Groups（供 Widget 共享）
+    private func performLoad() {
+        let mode = WidgetConfig.DisplayMode(rawValue: loadMode) ?? .random
+        Task {
+            let success = await viewModel.load(
+                server: serverAddress,
+                token: apiToken,
+                mode: mode,
+                folder: folderPath
+            )
+            if success {
+                // 同步配置到 App Groups，与 WidgetKit 扩展共享
+                TokenStore.shared.saveConfig(
+                    WidgetConfig(
+                        serverUrl: serverAddress,
+                        token: apiToken,
+                        mode: mode,
+                        folderPath: folderPath,
+                        showVideos: false,
+                        refreshInterval: 30
+                    )
+                )
+                // 加载成功后自动收起设置面板
+                withAnimation(springAnimation) {
+                    showSettings = false
                 }
-                .transition(.opacity)
             }
-            
-            Spacer()
-            
-            // Instructions
-            VStack(alignment: .leading, spacing: 8) {
-                Text("How to use:")
-                    .font(.headline)
-                
-                Text("1. Generate a Wallpaper Token in Luvia Gallery web settings")
-                Text("2. Enter the server URL and token above")
-                Text("3. Click Save Configuration")
-                Text("4. Right-click your desktop → Edit Widgets → Add Luvia Gallery")
-            }
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .padding()
-            .background(Color(.windowBackgroundColor))
-            .cornerRadius(8)
-            .padding(.horizontal)
-        }
-        .padding()
-        .frame(width: 450, height: 600)
-        .onAppear {
-            loadConfiguration()
-        }
-    }
-    
-    private func saveConfiguration() {
-        let config = WidgetConfig(
-            serverUrl: serverUrl,
-            token: token,
-            mode: selectedMode,
-            folderPath: folderPath,
-            showVideos: showVideos,
-            refreshInterval: refreshInterval
-        )
-        
-        TokenStore.shared.saveConfig(config)
-        
-        withAnimation {
-            showSaveSuccess = true
-        }
-        
-        // Hide success message after 3 seconds
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-            withAnimation {
-                showSaveSuccess = false
-            }
-        }
-    }
-    
-    private func loadConfiguration() {
-        if let config = TokenStore.shared.loadConfig() {
-            serverUrl = config.serverUrl
-            token = config.token
-            selectedMode = config.mode
-            folderPath = config.folderPath
-            showVideos = config.showVideos
-            refreshInterval = config.refreshInterval
         }
     }
 }
 
 #Preview {
     ContentView()
+        .frame(width: 980, height: 320)
 }
