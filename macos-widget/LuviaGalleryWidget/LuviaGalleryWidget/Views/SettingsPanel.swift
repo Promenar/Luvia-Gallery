@@ -24,6 +24,8 @@ struct SettingsPanel: View {
     @ObservedObject var viewModel: CarouselViewModel
     /// 点击"立即加载"
     let onLoad: () -> Void
+    /// 点击"收起"（面板右下角）
+    let onCollapse: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -81,6 +83,12 @@ struct SettingsPanel: View {
                         .lineLimit(2)
                 }
                 Spacer()
+
+                // 收起面板
+                Button("收起", action: onCollapse)
+                    .buttonStyle(.plain)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
         .padding(12)

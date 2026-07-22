@@ -25,6 +25,14 @@ final class FloatingWindow: NSWindow {
         isOpaque = false
         backgroundColor = .clear
         hasShadow = true
+        // 隐藏标题栏：透明 + 隐藏标题文字 + 隐藏红绿灯按钮
+        titlebarAppearsTransparent = true
+        titleVisibility = .hidden
+        for buttonType: NSWindow.ButtonType in [.closeButton, .miniaturizeButton, .zoomButton] {
+            standardWindowButton(buttonType)?.superview?.isHidden = true
+        }
+        // 内容区按住即可拖动窗口
+        isMovableByWindowBackground = true
         // 默认置顶（悬浮在所有窗口之上）
         level = .floating
     }

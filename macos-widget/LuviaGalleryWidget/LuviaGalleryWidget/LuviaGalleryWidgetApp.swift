@@ -27,16 +27,15 @@ struct LuviaGalleryWidgetApp: App {
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // 创建无边框透明悬浮窗
+        // 创建悬浮窗：titled + fullSizeContentView，隐藏标题栏与红绿灯按钮，
+        // 视觉上是圆角浮窗，但原生边缘缩放与整窗拖动全部保留
         let window = FloatingWindow(
             contentRect: NSRect(x: 0, y: 0, width: 980, height: 320),
-            styleMask: [.borderless, .resizable],
+            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
         window.minSize = NSSize(width: 480, height: 260)
-        // 内容区按住即可拖动窗口
-        window.isMovableByWindowBackground = true
         window.delegate = self
         window.contentView = NSHostingView(rootView: ContentView())
         window.center()
