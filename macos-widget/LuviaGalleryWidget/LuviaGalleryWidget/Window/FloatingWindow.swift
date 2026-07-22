@@ -32,8 +32,9 @@ final class FloatingWindow: NSWindow {
         for buttonType: NSWindow.ButtonType in [.closeButton, .miniaturizeButton, .zoomButton] {
             standardWindowButton(buttonType)?.superview?.isHidden = true
         }
-        // 内容区按住即可拖动窗口
-        isMovableByWindowBackground = true
+        // 内容区按住拖动窗口改由 WindowDragView 空白拖动层实现
+        // （isMovableByWindowBackground 会劫持文本框内的拖选，关闭）
+        isMovableByWindowBackground = false
         // 默认置顶（悬浮在所有窗口之上）
         level = .floating
     }
