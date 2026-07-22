@@ -21,6 +21,7 @@ struct SettingsPanel: View {
     @Binding var floatingOnTop: Bool
     @Binding var launchAtLogin: Bool
     @Binding var snapToGrid: Bool
+    @Binding var gridCellSize: Double
 
     /// 视图模型（状态文字、加载动作）
     @ObservedObject var viewModel: CarouselViewModel
@@ -86,6 +87,17 @@ struct SettingsPanel: View {
             Toggle("拖动后吸附桌面网格", isOn: $snapToGrid)
                 .toggleStyle(.checkbox)
                 .font(.caption)
+
+            // 网格 cell 大小滑块（Finder gridSpacing 换算不公开，交给用户校准）
+            if snapToGrid {
+                HStack(spacing: 8) {
+                    Text("网格大小 \(Int(gridCellSize)) px")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(width: 90, alignment: .leading)
+                    Slider(value: $gridCellSize, in: 60...140, step: 2)
+                }
+            }
             HStack(spacing: 10) {
                 Button(action: onLoad) {
                     HStack(spacing: 4) {
