@@ -19,6 +19,7 @@ struct SettingsPanel: View {
     @Binding var folderPath: String
     @Binding var intervalSeconds: Double
     @Binding var floatingOnTop: Bool
+    @Binding var launchAtLogin: Bool
 
     /// 视图模型（状态文字、加载动作）
     @ObservedObject var viewModel: CarouselViewModel
@@ -62,6 +63,23 @@ struct SettingsPanel: View {
             Toggle("悬浮在所有窗口之上", isOn: $floatingOnTop)
                 .toggleStyle(.checkbox)
                 .font(.caption)
+
+            // 开机自动启动（SMAppService，系统侧记录；失败时回滚并报错）
+            Toggle("开机自动启动", isOn: Binding(
+                get: { launchAtLogin },
+                set: { newValue in
+                    // 先记录用户意图
+                    launchAtLogin = newValue
+                    if let error = LoginItemManager.setEnabled(newValue) {
+                        // 注册/注销失败：回滚开关并在状态区显示错误
+                        launchAtLogin = !newValue
+                        viewModel.statusIsError = true
+                        viewModel.statusText = "设置开机启动失败：\(error.localizedDescription)"
+                    }
+                }
+            ))
+            .toggleStyle(.checkbox)
+            .font(.caption)
 
             // 加载按钮 + 状态文字
             HStack(spacing: 10) {
