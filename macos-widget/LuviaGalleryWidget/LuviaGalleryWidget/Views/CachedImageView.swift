@@ -2,24 +2,23 @@
 //  CachedImageView.swift
 //  LuviaGalleryWidget
 //
-//  带本地磁盘缓存的异步图片视图（复用现有 ImageCache）。
-//  双缓冲交叉淡化：旧图保持垫底，新图加载完成后淡入覆盖（0.5s）。
+//  远程图片视图：缩略图优先即时显示，大卡后台加载原图升级替换；
+//  双缓冲交叉淡化；失败显示错误占位，点击重试。
 //
 
 import SwiftUI
 
 // MARK: - CachedImageView
 
-/// 先查 ImageCache，未命中再走网络下载并写入缓存。
-/// token 携带在 URL query 中（由 APIClient 构造）。
+/// 加载统一走 ImageLoader（超时 / 限流 / in-flight 合并 / 重试），
+/// 加载状态与视图生命周期解耦，不再出现永久转圈。
 struct CachedImageView: View {
 
-    /// 图片规格：小卡用缩略图，当前大卡用原图
+    /// 图片规格：小卡用缩略图，当前大卡先缩略图后原图升级
     enum Kind {
         case thumbnail
         case original
 
-        /// 缓存 key 前缀，避免缩略图与原图互相覆盖
         var cachePrefix: String {
             switch self {
             case .thumbnail: return "thumb"
@@ -40,16 +39,40 @@ struct CachedImageView: View {
     @State private var backImage: NSImage?
     /// 前景不透明度（驱动淡入）
     @State private var frontOpacity: Double = 0
+    /// 是否加载失败（显示错误占位）
+    @State private var loadFailed = false
+    /// 重试计数（变化触发 .task 重跑）
+    @State private var retryCount = 0
 
     var body: some View {
         ZStack {
             // 加载中占位：深色底 + 小转圈
-            if frontImage == nil && backImage == nil {
+            if frontImage == nil && backImage == nil && !loadFailed {
                 ZStack {
                     Color(white: 0.14)
                     ProgressView()
                         .controlSize(.small)
                         .tint(.white.opacity(0.4))
+                }
+            }
+            // 错误占位：点击重试
+            if loadFailed {
+                ZStack {
+                    Color(white: 0.14)
+                    Button {
+                        // 重试：重置状态并触发重新加载
+                        loadFailed = false
+                        retryCount += 1
+                    } label: {
+                        VStack(spacing: 4) {
+                            Image(systemName: "exclamationmark.triangle")
+                                .font(.system(size: 14))
+                            Text("点击重试")
+                                .font(.system(size: 9))
+                        }
+                        .foregroundStyle(.white.opacity(0.45))
+                    }
+                    .buttonStyle(.plain)
                 }
             }
             // 旧图垫底
@@ -66,55 +89,51 @@ struct CachedImageView: View {
                     .opacity(frontOpacity)
             }
         }
-        .task(id: fileId) {
+        // retryCount 变化时重新加载
+        .task(id: "\(fileId)#\(retryCount)") {
             await load()
         }
     }
 
-    /// 加载图片：缓存优先，网络兜底；完成后交叉淡化切换到新图
+    /// 加载图片：小卡只下缩略图；大卡先缩略图即时显示，再后台升级原图
+    /// （服务端 /api/file 无缩放参数，原图单张可达 14MB+，
+    ///   缩略图先行保证卡片秒开，原图到达后交叉淡化替换）
     private func load() async {
-        let cacheKey = "\(kind.cachePrefix)_\(fileId)"
-
-        // 1. 命中本地缓存直接展示
-        if let data = ImageCache.shared.image(for: cacheKey),
-           let cached = NSImage(data: data) {
-            crossfade(to: cached)
+        guard let client else {
+            loadFailed = true
             return
         }
 
-        // 2. 构造带 token 的图片 URL
-        guard let client else { return }
-        let url: URL? = await {
-            switch kind {
-            case .thumbnail: return await client.thumbnailURL(for: fileId)
-            case .original: return await client.originalImageURL(for: fileId)
-            }
-        }()
-        guard let url else { return }
+        // 缩略图（大卡也先显示它，避免等待原图期间转圈）
+        if let thumbURL = await client.thumbnailURL(for: fileId),
+           let thumb = await ImageLoader.shared.image(
+               forKey: "\(Kind.thumbnail.cachePrefix)_\(fileId)", url: thumbURL) {
+            crossfade(to: thumb)
+        } else if kind == .thumbnail {
+            // 小卡缩略图失败即失败
+            loadFailed = true
+            return
+        }
 
-        // 3. 网络下载并写入缓存
-        do {
-            let (data, response) = try await URLSession.shared.data(from: url)
-            guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
-                return
+        // 大卡：后台升级原图，失败则保留缩略图不报错
+        if kind == .original {
+            if let origURL = await client.originalImageURL(for: fileId),
+               let original = await ImageLoader.shared.image(
+                   forKey: "\(Kind.original.cachePrefix)_\(fileId)", url: origURL) {
+                crossfade(to: original)
+            } else if frontImage == nil {
+                // 缩略图也没有才报错
+                loadFailed = true
             }
-            if let downloaded = NSImage(data: data) {
-                ImageCache.shared.save(data, for: cacheKey)
-                crossfade(to: downloaded)
-            }
-        } catch {
-            print("[CachedImageView] 下载失败 \(fileId.prefix(20)): \(error.localizedDescription)")
         }
     }
 
     /// 双缓冲切换：旧图转入底层，新图淡入覆盖
     private func crossfade(to newImage: NSImage) {
-        // 同一张图不重复触发
         if frontImage === newImage { return }
         backImage = frontImage
         frontImage = newImage
         if reduceMotion {
-            // 减少动态效果：直接呈现，不做淡化
             frontOpacity = 1
         } else {
             frontOpacity = 0
