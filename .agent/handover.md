@@ -505,3 +505,51 @@ for i in 1 2 3; do curl -s -o /dev/null -r 0-2097151 -w "第${i}次: %{time_tota
 ### HLG
 
 本条新建 continuity-key `fnos-udp-qos`，待冷却后复测续接。
+
+
+## 2026-07-23T21:12:00+08:00 · 修正：UDP QoS 推论推翻 + 加载转圈/失败根因实为 App 实现 + 启动层级修复
+
+type: correction
+scope: macos-widget/loading-network
+status: done
+tags: [correction, loading, urlsession, tailscale, window-level]
+continuity: resume
+continuity-key: fnos-udp-qos
+corrects: 2026-07-23T17:20:00+08:00 · Tailscale 慢速根因排查：运营商 UDP QoS（PT 触发）
+
+### Correction（追加修正，原条目不改）
+
+上一条「运营商 UDP QoS」推论被用户实测**推翻**：Mac 回到家与 FNOS 同内网后，hy2（UDP）上传跑 9MB/s 无 QoS 迹象；HTTPS 域名与 tailscale IP 直连同为内网速度；浏览器视频秒开。悬浮窗 App 依旧大量转圈 → 慢的真实根因是 **App 加载实现缺陷**，并非链路 QoS。qbit/PT 的 UDP QoS 分析仅作为历史经验保留参考，不作为本次结论。
+
+### 真实根因（多因叠加）
+
+1. 旧 `CachedImageView` 用 `URLSession.shared` 默认配置，resource 超时默认 7 天：链路偶发 stall（Tailscale 间歇性整条连接零字节响应，日志实测一请求卡 671s）时请求永不失败 → 卡片永久转圈；所有失败分支静默 return。
+2. 大卡直拉 `/api/file` 全量原图（单张 14MB+），多卡并发争抢连接，stall 概率倍增；加载与视图生命周期耦合，hover/换批时下载被反复取消重来。
+3. 视频卡无起播状态监听，缓冲黑屏、失败无提示。
+
+### 修复（按序）
+
+- `fd82e84`：专用 URLSession（15s/30s 超时、每主机 4 并发）、全局限流、同 URL 合并下载不随视图取消、失败重试；大卡先 300px 缩略图秒开再原图交叉淡化升级；失败显示「⚠ 点击重试」；视频卡 readyToPlay 状态监听。
+- `d0256e9`：超时放宽 30s/120s，重试 1→2 次指数退避；缩略图失败自动降级原图；双失败后自动退避重试两轮才进错误态（偶发抖动自愈）。证据：服务端并发 8×24 全 200（20-80ms），修复版进程零网络错误。服务端无改动。
+- `1f67c5d`：修复启动时置顶设置未生效——FloatingWindow 初始化硬编码 `level=.floating`，校正只挂 onAppear 时机不可靠；改为 applicationDidFinishLaunching 中按持久化 floatingOnTop 值直接 applyLevel（CGWindowList 实测 false→layer -2147483602 沉桌面、true→3 浮顶，均正确）。
+
+### Validation
+
+- 用户确认真机：全部卡片正常显示，不再转圈、不再大面积⚠。
+- 各 commit Debug/Release 构建通过，已安装至 /Applications 并验签。
+
+### Next
+
+无需后续；tailnet 偶发 stall 由 App 侧重试/降级兜住。若日后重现大面积失败，先查 `log stream` 中 NSURLSession 错误码与 Tailscale flow 记录。
+
+### Risks
+
+Tailscale 间歇性整条连接无响应的底层原因未查明（可能与笔记本睡眠/网络切换有关），目前由应用层容错覆盖。
+
+### DIA
+
+本条为追加修正条目；原 UDP QoS 条目保持原样未改。registry 无变更。
+
+### HLG
+
+continuity-key `fnos-udp-qos` 关闭（结论修正完毕）；悬浮窗工作流仍归 macos-floating-widget。
