@@ -43,6 +43,8 @@ struct CachedImageView: View {
     @State private var loadFailed = false
     /// 重试计数（变化触发 .task 重跑）
     @State private var retryCount = 0
+    /// 自动重试次数（失败后退避自动再试，上限 2 次）
+    @State private var autoRetryCount = 0
 
     var body: some View {
         ZStack {
@@ -62,6 +64,7 @@ struct CachedImageView: View {
                     Button {
                         // 重试：重置状态并触发重新加载
                         loadFailed = false
+                        autoRetryCount = 0
                         retryCount += 1
                     } label: {
                         VStack(spacing: 4) {
@@ -95,9 +98,9 @@ struct CachedImageView: View {
         }
     }
 
-    /// 加载图片：小卡只下缩略图；大卡先缩略图即时显示，再后台升级原图
-    /// （服务端 /api/file 无缩放参数，原图单张可达 14MB+，
-    ///   缩略图先行保证卡片秒开，原图到达后交叉淡化替换）
+    /// 加载图片：缩略图优先即时显示；缩略图失败自动降级尝试原图，
+    /// 两者都失败才报错（小卡此前缩略图一失败直接错误态，不降级原图，
+    /// 是网络抖动期大量卡片显示"点击重试"的直接原因之一）
     private func load() async {
         guard let client else {
             loadFailed = true
@@ -109,22 +112,32 @@ struct CachedImageView: View {
            let thumb = await ImageLoader.shared.image(
                forKey: "\(Kind.thumbnail.cachePrefix)_\(fileId)", url: thumbURL) {
             crossfade(to: thumb)
-        } else if kind == .thumbnail {
-            // 小卡缩略图失败即失败
-            loadFailed = true
-            return
         }
 
-        // 大卡：后台升级原图，失败则保留缩略图不报错
-        if kind == .original {
-            if let origURL = await client.originalImageURL(for: fileId),
-               let original = await ImageLoader.shared.image(
-                   forKey: "\(Kind.original.cachePrefix)_\(fileId)", url: origURL) {
-                crossfade(to: original)
-            } else if frontImage == nil {
-                // 缩略图也没有才报错
+        // 大卡后台升级原图；小卡在缩略图失败时也降级尝试原图兜底
+        let needOriginal = (kind == .original) || (frontImage == nil)
+        if needOriginal,
+           let origURL = await client.originalImageURL(for: fileId),
+           let original = await ImageLoader.shared.image(
+               forKey: "\(Kind.original.cachePrefix)_\(fileId)", url: origURL) {
+            crossfade(to: original)
+        }
+
+        // 缩略图与原图都失败才进入错误态；随后自动重试（退避 4s/10s，共 2 次），
+        // 覆盖 Tailscale 链路偶发 stall 后自行恢复的场景
+        if frontImage == nil {
+            if autoRetryCount < 2 {
+                autoRetryCount += 1
+                let delay: UInt64 = autoRetryCount == 1 ? 4_000_000_000 : 10_000_000_000
+                try? await Task.sleep(nanoseconds: delay)
+                if !Task.isCancelled {
+                    retryCount += 1
+                }
+            } else {
                 loadFailed = true
             }
+        } else {
+            autoRetryCount = 0
         }
     }
 
