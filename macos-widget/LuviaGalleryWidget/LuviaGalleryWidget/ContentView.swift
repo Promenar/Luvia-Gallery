@@ -40,6 +40,8 @@ struct ContentView: View {
     @AppStorage("mediaFilter") private var mediaFilter: String = "all"
     /// 一键锁定坐标：锁定后禁止拖动与边缘缩放
     @AppStorage("positionLocked") private var positionLocked: Bool = false
+    /// 隐藏 Dock 图标（默认隐藏：accessory 模式运行，不在 Dock 占位）
+    @AppStorage("hideDockIcon") private var hideDockIcon: Bool = true
 
     // MARK: - 状态
 
@@ -139,6 +141,10 @@ struct ContentView: View {
             // 锁定/解锁：即时切换窗口可缩放性
             WindowController.shared.setLocked(newValue)
         }
+        .onChange(of: hideDockIcon) { _, newValue in
+            // 隐藏/显示 Dock 图标：运行时切换 activationPolicy
+            AppDelegate.applyDockVisibility(hidden: newValue)
+        }
     }
 
     // MARK: - 主内容
@@ -174,6 +180,7 @@ struct ContentView: View {
                             displayCount: $displayCount,
                             layoutDirection: $layoutDirection,
                             mediaFilter: $mediaFilter,
+                            hideDockIcon: $hideDockIcon,
                             viewModel: viewModel,
                             onLoad: performLoad,
                             onChooseLocalFolder: chooseLocalFolder,
