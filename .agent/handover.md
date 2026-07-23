@@ -356,3 +356,46 @@ continuity-key: macos-floating-widget
 ### HLG
 
 本条为 macos-floating-widget 工作流追加记录，保持 continuity 可续。
+
+
+## 2026-07-23T13:42:00+08:00 · 悬浮窗 App 图标接入与 /Applications 安装交付（收官）
+
+type: delivery
+scope: macos-widget/icon-install
+status: done
+tags: [macos, app-icon, packaging, install, delivery]
+continuity: close
+continuity-key: macos-floating-widget
+
+### Summary
+
+悬浮窗 App 接入项目 LOGO 作为应用图标并完成 /Applications 安装交付，macos-floating-widget 工作流收官。
+
+### Changed
+
+- 图标源：`public/icon.png`（1024×1024 项目主图标），`sips -s format png -z` 生成 macOS 全尺寸 10 槽位 PNG 接入 `Assets.xcassets/AppIcon.appiconset`（注意：sips 必须显式指定 format png，否则输出 JPEG）。
+- 工程 `ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon` 已存在，归档包生成 `Contents/Resources/AppIcon.icns`。
+- 提交 `80e34db`（10 张图标 PNG + Contents.json）并推送 `main`。
+- dist 刷新：App 2.4 MB / zip 1.4 MB，codesign 校验通过（不入库）。
+- 安装：`pkill` 退出旧进程后 `ditto` 覆盖安装至 `/Applications/LuviaGalleryWidget.app`，签名复验通过。
+
+### Validation
+
+- Debug BUILD SUCCEEDED；Release ARCHIVE SUCCEEDED；INSTALL_OK。
+- Launchpad/Dock 显示项目 LOGO；Spotlight 旧图标缓存可 `touch /Applications/LuviaGalleryWidget.app` 刷新。
+
+### Next
+
+无计划内后续；新需求以 continuity-key `macos-floating-widget` 续接。
+
+### Risks
+
+Apple Development 签名过不了 Gatekeeper（spctl rejected），分发给他机需右键打开或后续做 Developer ID 公证。
+
+### DIA
+
+已同步 handover；registry 无需更新。
+
+### HLG
+
+本条以 continuity: close 关闭 macos-floating-widget 工作流；后续若重开沿用同一 continuity-key。
