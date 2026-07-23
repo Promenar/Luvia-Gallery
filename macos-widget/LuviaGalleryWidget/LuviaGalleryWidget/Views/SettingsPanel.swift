@@ -136,12 +136,12 @@ struct SettingsPanel: View {
             sectionLabel("窗口")
 
             // 置顶开关
-            Toggle("悬浮在所有窗口之上", isOn: $floatingOnTop)
+            Toggle("置于顶层", isOn: $floatingOnTop)
                 .toggleStyle(.checkbox)
                 .font(.caption)
 
-            // 开机自动启动（SMAppService，系统侧记录；失败时回滚并报错）
-            Toggle("开机自动启动", isOn: Binding(
+            // 开机自启（SMAppService，系统侧记录；失败时回滚并报错）
+            Toggle("开机自启", isOn: Binding(
                 get: { launchAtLogin },
                 set: { newValue in
                     // 先记录用户意图
@@ -158,18 +158,19 @@ struct SettingsPanel: View {
             .font(.caption)
 
             // 拖动松手后吸附桌面图标网格
-            Toggle("拖动后吸附桌面网格", isOn: $snapToGrid)
+            Toggle("吸附网格", isOn: $snapToGrid)
                 .toggleStyle(.checkbox)
                 .font(.caption)
 
-            // 网格 cell 大小滑块（Finder gridSpacing 换算不公开，交给用户校准）
+            // 网格 cell 大小滑块（Finder gridSpacing 换算不公开，交给用户校准；
+            // 范围 20–240px、步进 10px，覆盖细网格精调需求）
             if snapToGrid {
                 HStack(spacing: 8) {
                     Text("网格大小 \(Int(gridCellSize)) px")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .frame(width: 90, alignment: .leading)
-                    Slider(value: $gridCellSize, in: 60...140, step: 2)
+                    Slider(value: $gridCellSize, in: 20...240, step: 10)
                 }
             }
 
