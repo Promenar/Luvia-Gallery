@@ -21,6 +21,14 @@ enum CarouselItem: Identifiable, Hashable {
         case .local(let url): return "local_\(url.path)"
         }
     }
+
+    /// 是否视频（远程用服务端 mediaType，本地按扩展名）
+    var isVideo: Bool {
+        switch self {
+        case .remote(let file): return file.mediaType == "video"
+        case .local(let url): return LocalImageSource.isVideoFile(url)
+        }
+    }
 }
 
 // MARK: - CarouselViewModel
@@ -64,8 +72,34 @@ final class CarouselViewModel: ObservableObject {
 
     /// 当前配置对应的 API 客户端（图片 URL 构造需要 token；本地模式为 nil）
     private(set) var client: APIClient?
+    /// 未过滤的完整媒体列表（媒体过滤的原始数据）
+    private var allItems: [CarouselItem] = []
     /// 计时任务
     private var ticker: Task<Void, Never>?
+
+    // MARK: - 媒体过滤
+
+    /// 媒体过滤："all" / "image" / "video"，由视图层从 @AppStorage 同步
+    var mediaFilter: String = "all" {
+        didSet { applyMediaFilter() }
+    }
+
+    /// 按当前过滤设置刷新可见列表（过滤后不足一屏时显示已有数量即可）
+    private func applyMediaFilter() {
+        let filtered: [CarouselItem]
+        switch mediaFilter {
+        case "image": filtered = allItems.filter { !$0.isVideo }
+        case "video": filtered = allItems.filter { $0.isVideo }
+        default: filtered = allItems
+        }
+        guard filtered != items else { return }
+        items = filtered
+        // 过滤后列表变短，索引回绕
+        if items.isEmpty || currentIndex >= items.count {
+            currentIndex = 0
+            progress = 0
+        }
+    }
 
     // MARK: - 派生数据
 
@@ -115,7 +149,8 @@ final class CarouselViewModel: ObservableObject {
 
             self.client = api
             self.sourceIsLocal = false
-            self.items = media.map { .remote($0) }
+            self.allItems = media.map { .remote($0) }
+            applyMediaFilter()
             self.currentIndex = 0
             self.progress = 0
             statusIsError = false
@@ -157,7 +192,8 @@ final class CarouselViewModel: ObservableObject {
 
         self.client = nil
         self.sourceIsLocal = true
-        self.items = images.map { .local($0) }
+        self.allItems = images.map { .local($0) }
+        applyMediaFilter()
         self.currentIndex = 0
         self.progress = 0
         statusIsError = false

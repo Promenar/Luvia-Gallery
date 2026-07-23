@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import AppKit
 
 // MARK: - CarouselCard
 
@@ -26,6 +27,8 @@ struct CarouselCard: View {
 
     /// 浮光水平位置系数：-1.4 左侧屏幕外 → 1.4 右侧屏幕外
     @State private var shineX: CGFloat = -1.4
+    /// 鼠标是否悬停（控制"打开网页"按钮显隐）
+    @State private var isHoveringCard = false
 
     /// 品牌蓝（当前卡编号）
     private let accentBlue = Color(red: 0x3f / 255, green: 0x7b / 255, blue: 0xff / 255)
@@ -62,11 +65,31 @@ struct CarouselCard: View {
                     .offset(x: shineX * geo.size.width, y: -geo.size.height * 0.6)
                     .allowsHitTesting(false)
             }
+            // 右上角"打开网页"按钮：仅在线来源、悬停时显示
+            // （本地目录来源没有对应网页位置，隐藏）
+            .overlay(alignment: .topTrailing) {
+                if case .remote(let file) = item, isHoveringCard {
+                    Button {
+                        openInWeb(file)
+                    } label: {
+                        Image(systemName: "arrow.up.forward.square")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.85))
+                            .padding(5)
+                            .background(.black.opacity(0.45), in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("在浏览器中打开所在文件夹")
+                    .padding(8)
+                    .transition(.opacity)
+                }
+            }
         }
         .clipShape(RoundedRectangle(cornerRadius: 13))
         .contentShape(RoundedRectangle(cornerRadius: 13))
-        // 卡片内部自管理浮光：鼠标进入时扫一次
+        // 卡片内部自管理浮光：鼠标进入时扫一次；同时追踪悬停显隐按钮
         .onHover { hovering in
+            isHoveringCard = hovering
             guard hovering, !reduceMotion else { return }
             shineX = -1.4
             withAnimation(.linear(duration: 0.9)) {
@@ -113,6 +136,27 @@ struct CarouselCard: View {
                     reduceMotion: reduceMotion
                 )
             }
+        }
+    }
+
+    /// 在默认浏览器打开 Luvia 网页前端，深链定位到该媒体所在文件夹视图。
+    /// URL 格式：{服务器地址}/?token={壁纸令牌}#folder={文件夹路径}
+    /// （token 是 JWT，前端启动时读取写入 localStorage；#folder= 为前端已有深链）
+    private func openInWeb(_ file: MediaFile) {
+        Task {
+            guard let client else { return }
+            let base = await client.serverUrl
+            let token = await client.token
+
+            // 与 JS encodeURIComponent 对齐的编码字符集
+            var allowed = CharacterSet.urlQueryAllowed
+            allowed.remove(charactersIn: ";/?:@&=+$,#")
+            let encodedToken = token.addingPercentEncoding(withAllowedCharacters: allowed) ?? token
+            let encodedFolder = file.folderPath.addingPercentEncoding(withAllowedCharacters: allowed) ?? ""
+
+            let urlString = "\(base)/?token=\(encodedToken)#folder=\(encodedFolder)"
+            guard let url = URL(string: urlString) else { return }
+            await NSWorkspace.shared.open(url)
         }
     }
 }
