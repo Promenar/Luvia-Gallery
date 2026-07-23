@@ -35,7 +35,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             backing: .buffered,
             defer: false
         )
-        window.minSize = NSSize(width: 480, height: 260)
+        // 最小尺寸：允许缩到窄条形 / 小方块形态（卡片过窄时等比裁切即可）
+        window.minSize = NSSize(width: 260, height: 180)
         window.delegate = self
         window.contentView = NSHostingView(rootView: ContentView())
         window.center()
