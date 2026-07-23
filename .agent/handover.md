@@ -313,3 +313,46 @@ continuity-key: macos-floating-widget
 ### HLG
 
 本条为 macos-floating-widget 工作流追加记录，保持 continuity 可续。
+
+
+## 2026-07-23T13:30:00+08:00 · 悬浮窗 App 排列方向 / 最小尺寸 / 位置锁定 / frame 记忆
+
+type: feature
+scope: macos-widget/layout-lock-memory
+status: done
+tags: [macos, vertical-layout, min-size, position-lock, frame-persist]
+continuity: resume
+continuity-key: macos-floating-widget
+
+### Summary
+
+悬浮窗 App 连续四轮体验迭代：纵向排列切换、最小尺寸下调、一键锁定坐标（替换右上角置顶按钮）、退出时窗口位置与尺寸记忆。
+
+### Changed
+
+- `f4c4e72` 纵向排列：设置面板「播放」组新增横向/纵向 Segmented Picker（@AppStorage 持久化）；carouselRow 主轴抽象，同一套权重与 CarouselCard 外壳复用，hover 沿轴展开；切换方向慢速弹簧过渡；入场动画按轴适配。
+- `301441e` 最小尺寸：窗口 minSize 480×260 → 260×180，内容下限 244×164，卡片区 minHeight 60；网格吸附只算位置不受影响。
+- `6b38478` 位置锁定：右上角图钉按钮替换为锁定按钮（lock.open/lock.fill，锁定时主题蓝高亮）；@AppStorage("positionLocked") 持久化；锁定禁用拖动层 performDrag、动态移除 styleMask .resizable、吸附兜底跳过；置顶功能仅保留在设置面板。
+- `d3fbb63` frame 记忆：手动 UserDefaults 方案（弃用 setFrameAutosaveName，避免与吸附冲突）；windowDidMove/Resize 0.5s 节流落盘；启动恢复前做屏幕可见性校验（任一屏幕 visibleFrame 内 ≥80×40 才恢复，否则回退居中），拔屏不丢窗。
+- dist Release 打包逐轮刷新，最终 App 1.4 MB / zip 544 KB，codesign 校验通过，不入库。
+
+### Validation
+
+- 各轮 Debug BUILD SUCCEEDED、Release ARCHIVE SUCCEEDED。
+- 真机验证由用户逐轮进行：纵向排列与最小尺寸已确认「大问题没有」；锁定与 frame 记忆验证点已给出（锁定禁拖/禁缩放/重启保持、frame 恢复与拔屏回退）。
+
+### Next
+
+用户确认锁定与 frame 记忆后本工作流可收官；后续新需求以 continuity-key `macos-floating-widget` 续接。
+
+### Risks
+
+极小窗口（260×180）下 6 卡横向排列卡片较窄，为可接受的等比裁切表现；无其它新增风险。
+
+### DIA
+
+已同步 handover；服务端与看板 Widget 无变更，registry 无需更新。
+
+### HLG
+
+本条为 macos-floating-widget 工作流追加记录，保持 continuity 可续。
