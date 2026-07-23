@@ -217,6 +217,11 @@ export default function App() {
         let restoredPath = '';
         if (window.location.hash.startsWith('#folder=')) {
             restoredPath = decodeURIComponent(window.location.hash.substring(8));
+            // 深链定位文件夹时强制进入文件夹视图
+            if (restoredPath) {
+                setViewMode('folders');
+                setStorageItem(VIEW_MODE_KEY, 'folders', LEGACY_KEYS.viewMode);
+            }
         } else {
             const savedPath = getStorageItem(CURRENT_PATH_KEY, LEGACY_KEYS.currentPath);
             if (savedPath && savedViewMode === 'folders') {
@@ -437,6 +442,15 @@ export default function App() {
     };
 
     const initApp = async () => {
+        // 深链免登录：macOS 悬浮窗等外部入口通过 ?token=<JWT> 打开时，
+        // 先把 token 写入 localStorage（与登录成功后的存储键一致），
+        // 再从地址栏移除，避免泄露到历史记录/截图
+        const urlToken = new URLSearchParams(window.location.search).get('token');
+        if (urlToken) {
+            setStorageItem(TOKEN_STORAGE_KEY, urlToken, LEGACY_KEYS.token);
+            window.history.replaceState({}, '', window.location.pathname + window.location.hash);
+        }
+
         let loadedUsers: User[] = [];
         let loadedData: Record<string, UserData> = {};
         let loadedTitle = 'Luvia Gallery';
@@ -621,6 +635,9 @@ export default function App() {
             if (hashPath) {
                 setCurrentPath(hashPath);
                 currentPathRef.current = hashPath; // Sync ref immediately
+                // 深链定位文件夹时强制进入文件夹视图
+                setViewMode('folders');
+                setStorageItem(VIEW_MODE_KEY, 'folders', LEGACY_KEYS.viewMode);
             }
         }
     }, []);
