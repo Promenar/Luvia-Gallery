@@ -17,9 +17,10 @@ final class ImageLoader: @unchecked Sendable {
 
     // MARK: - 配置
 
-    /// 专用会话：请求级 15s 超时（无新字节即失败），资源级 30s 兜底，
+    /// 专用会话：请求级 30s 超时（无新字节即失败），资源级 120s 兜底，
     /// 每主机最多 4 连接（默认配置的 resource 超时长达 7 天，
-    /// 连接 stall 时会永久挂起，是卡片无限转圈的直接原因）
+    /// 连接 stall 时会永久挂起，是卡片无限转圈的直接原因；
+    /// 实测 Tailscale 链路偶发整条连接无响应，15s 在抖动期过于敏感）
     private let session: URLSession
     /// 最大并发下载数（换批瞬间多卡并发时防止互相饿死）
     private let maxConcurrent = 4
@@ -37,8 +38,8 @@ final class ImageLoader: @unchecked Sendable {
 
     private init() {
         let config = URLSessionConfiguration.default
-        config.timeoutIntervalForRequest = 15
-        config.timeoutIntervalForResource = 30
+        config.timeoutIntervalForRequest = 30
+        config.timeoutIntervalForResource = 120
         config.httpMaximumConnectionsPerHost = 4
         // 磁盘缓存由 ImageCache 自行管理，不走 URLCache
         config.requestCachePolicy = .reloadIgnoringLocalCacheData
@@ -80,16 +81,18 @@ final class ImageLoader: @unchecked Sendable {
         return result
     }
 
-    // MARK: - 下载（限流 + 重试一次）
+    // MARK: - 下载（限流 + 指数退避重试两次）
 
     private func download(key: String, url: URL) async -> NSImage? {
         await acquirePermit()
         defer { releasePermit() }
 
-        for attempt in 0...1 {
+        // 实测 Tailscale 链路偶发整条连接无响应（-1001），
+        // 重试两次、1s/3s 指数退避可覆盖大多数瞬时抖动
+        for attempt in 0...2 {
             if attempt > 0 {
-                // 重试前退避 1 秒
-                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                let backoff: UInt64 = attempt == 1 ? 1_000_000_000 : 3_000_000_000
+                try? await Task.sleep(nanoseconds: backoff)
             }
             do {
                 let (data, response) = try await session.data(from: url)
