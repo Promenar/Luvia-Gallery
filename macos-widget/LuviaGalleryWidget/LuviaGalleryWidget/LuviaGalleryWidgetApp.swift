@@ -39,7 +39,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         window.minSize = NSSize(width: 260, height: 180)
         window.delegate = self
         window.contentView = NSHostingView(rootView: ContentView())
-        window.center()
+
+        // 恢复上次退出时的窗口 frame；落在屏幕可见区域外（拔屏/多屏变化）
+        // 时回退到居中默认位置，防止窗口"丢"在屏幕外
+        if let saved = UserDefaults.standard.string(forKey: Self.windowFrameKey),
+           Self.isFrameVisible(NSRectFromString(saved)) {
+            window.setFrame(NSRectFromString(saved), display: false)
+        } else {
+            window.center()
+        }
 
         // 注册到窗口控制器，供 SwiftUI 侧操作（置顶/关闭/重开）
         WindowController.shared.attach(window)
@@ -53,6 +61,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         return false
     }
 
+    // MARK: - 窗口 frame 记忆
+
+    /// 持久化 key（手动方案：比 setFrameAutosaveName 更可控，
+    /// 避免与网格吸附 / 程序化 setFrame 的时序冲突）
+    private static let windowFrameKey = "windowFrame"
+
+    /// 节流保存任务：拖动/缩放中频繁触发 delegate，frame 稳定 0.5s 后才落盘
+    private var frameSaveWorkItem: DispatchWorkItem?
+
+    /// 节流保存窗口 frame
+    private func scheduleFrameSave(_ window: NSWindow) {
+        frameSaveWorkItem?.cancel()
+        let frame = window.frame
+        let item = DispatchWorkItem {
+            UserDefaults.standard.set(NSStringFromRect(frame), forKey: Self.windowFrameKey)
+        }
+        frameSaveWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: item)
+    }
+
+    /// 屏幕边界校验：窗口至少在某个屏幕的可见区域内有
+    /// 80x40 以上的可见部分才认为可恢复
+    private static func isFrameVisible(_ rect: NSRect) -> Bool {
+        guard rect.width > 0, rect.height > 0 else { return false }
+        for screen in NSScreen.screens {
+            let intersection = rect.intersection(screen.visibleFrame)
+            if !intersection.isNull, intersection.width >= 80, intersection.height >= 40 {
+                return true
+            }
+        }
+        return false
+    }
+
+    func windowDidResize(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow else { return }
+        scheduleFrameSave(window)
+    }
+
     // MARK: - 桌面网格吸附
 
     /// 防抖任务：拖动中 windowDidMove 频繁触发，frame 稳定 0.2s 后才吸附
@@ -60,6 +106,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func windowDidMove(_ notification: Notification) {
         guard let window = notification.object as? NSWindow else { return }
+        // 记忆 frame（吸附动画结束后的最终位置也会再次触发本回调，最终落盘值正确）
+        scheduleFrameSave(window)
         // 开关关闭时完全不吸附（@AppStorage("snapToGrid")，缺省视为开）
         let defaults = UserDefaults.standard
         guard defaults.object(forKey: "snapToGrid") == nil || defaults.bool(forKey: "snapToGrid") else { return }
