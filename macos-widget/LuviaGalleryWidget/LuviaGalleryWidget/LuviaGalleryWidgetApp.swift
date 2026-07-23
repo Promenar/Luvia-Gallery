@@ -61,6 +61,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let floatingOnTop = UserDefaults.standard.object(forKey: "floatingOnTop") as? Bool ?? true
         WindowController.shared.applyLevel(floatingOnTop: floatingOnTop)
 
+        // 启动即按持久化的锁定设置禁用拖动/缩放：
+        // 与置顶同理，ContentView.onAppear 的 setLocked 时机不可控（实测启动后
+        // onAppear 可能迟迟不触发，窗口在已解锁状态下暴露数秒甚至更久），
+        // 在窗口显示前直接读 UserDefaults 应用；与 onAppear/onChange 的
+        // 后续重复调用幂等兼容。
+        let positionLocked = UserDefaults.standard.bool(forKey: "positionLocked")
+        WindowController.shared.setLocked(positionLocked)
+
         window.makeKeyAndOrderFront(nil)
         NSApp.activate()
     }

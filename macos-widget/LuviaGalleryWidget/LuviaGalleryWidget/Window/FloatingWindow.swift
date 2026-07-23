@@ -84,9 +84,14 @@ final class WindowController {
     }
 
     /// 锁定/解锁窗口位置与尺寸：
-    /// 锁定 = 禁止拖动 + 禁止边缘缩放（坐标和尺寸都固定）
+    /// 锁定 = 禁止拖动 + 禁止边缘缩放（坐标和尺寸都固定）。
+    /// 除移除 .resizable 外必须同步关闭 isMovable：
+    /// titled + fullSizeContentView 窗口的标题栏区域存在 AppKit 原生拖动路径，
+    /// 不经过 WindowDragView 的事件守卫；实测锁→开→锁循环后该路径仍可拖窗，
+    /// 仅 isMovable=false 能彻底关闭。
     func setLocked(_ locked: Bool) {
         guard let window else { return }
+        window.isMovable = !locked
         if locked {
             window.styleMask.remove(.resizable)
         } else {
