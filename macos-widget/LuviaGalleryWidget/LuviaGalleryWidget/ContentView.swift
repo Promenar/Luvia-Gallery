@@ -36,6 +36,8 @@ struct ContentView: View {
     @AppStorage("displayCount") private var displayCount: Double = 6
     /// 卡片排列方向："horizontal"（横向手风琴）/ "vertical"（纵向）
     @AppStorage("layoutDirection") private var layoutDirection: String = "horizontal"
+    /// 一键锁定坐标：锁定后禁止拖动与边缘缩放
+    @AppStorage("positionLocked") private var positionLocked: Bool = false
 
     // MARK: - 状态
 
@@ -76,8 +78,9 @@ struct ContentView: View {
 
     var body: some View {
         ZStack {
-            // 最底层：空白区域拖动层（按钮/滑块/输入框/卡片在其上方，事件优先到达控件）
-            WindowDragView()
+            // 最底层：空白区域拖动层（按钮/滑块/输入框/卡片在其上方，事件优先到达控件；
+            // 锁定位置后不再触发拖窗）
+            WindowDragView(isLocked: positionLocked)
 
             // 极轻深色 tint：叠在玻璃材质之上保证文字对比度，
             // 同时仍能透出桌面壁纸（窗口本身 isOpaque=false + clear 背景）。
@@ -106,6 +109,8 @@ struct ContentView: View {
             viewModel.intervalSeconds = intervalSeconds
             viewModel.visibleCount = Int(displayCount)
             WindowController.shared.applyLevel(floatingOnTop: floatingOnTop)
+            // 恢复上次的锁定状态（禁止拖动/缩放）
+            WindowController.shared.setLocked(positionLocked)
             // 开机启动开关以系统侧真实状态为准回显
             launchAtLogin = LoginItemManager.isEnabled
             // 已配置则自动加载
@@ -122,6 +127,10 @@ struct ContentView: View {
         }
         .onChange(of: floatingOnTop) { _, newValue in
             WindowController.shared.applyLevel(floatingOnTop: newValue)
+        }
+        .onChange(of: positionLocked) { _, newValue in
+            // 锁定/解锁：即时切换窗口可缩放性
+            WindowController.shared.setLocked(newValue)
         }
     }
 
@@ -193,13 +202,13 @@ struct ContentView: View {
 
             Spacer()
 
-            // 置顶切换：置顶时实心图钉高亮，非置顶线框灰色
+            // 锁定位置：锁定后实心锁高亮，禁止拖动与边缘缩放
             titleBarButton(
-                icon: floatingOnTop ? "pin.fill" : "pin",
-                help: floatingOnTop ? "取消置顶" : "置顶到所有窗口之上",
-                color: floatingOnTop ? accentBlue : nil
+                icon: positionLocked ? "lock.fill" : "lock.open",
+                help: positionLocked ? "解锁位置" : "锁定位置",
+                color: positionLocked ? accentBlue : nil
             ) {
-                floatingOnTop.toggle()
+                positionLocked.toggle()
             }
 
             // 播放/暂停
