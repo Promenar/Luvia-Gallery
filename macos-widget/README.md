@@ -45,6 +45,18 @@ open LuviaGalleryWidget.xcodeproj
 2. 搜索 **Luvia Gallery**
 3. 选择尺寸并添加到桌面
 
+## 打包发布
+
+悬浮窗 App 的 Release 打包已固化为脚本（仓库任意位置均可执行）：
+
+```bash
+bash macos-widget/scripts/package_release.sh
+```
+
+- 流程：Release archive → 导出 .app 到临时目录 → codesign 校验 → ditto 打包 zip。
+- 产物为 `dist/LuviaGalleryWidget.app.zip`；**dist 不保留 .app 本体**（避免启动台索引出多个图标），安装时解压 zip 拖入 `/Applications`。
+- 详见 `dist/README.md`。
+
 ## 文件结构
 
 ```
