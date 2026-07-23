@@ -36,6 +36,8 @@ struct ContentView: View {
     @AppStorage("displayCount") private var displayCount: Double = 6
     /// 卡片排列方向："horizontal"（横向手风琴）/ "vertical"（纵向）
     @AppStorage("layoutDirection") private var layoutDirection: String = "horizontal"
+    /// 媒体过滤："all"（全部）/ "image"（仅图片）/ "video"（仅视频）
+    @AppStorage("mediaFilter") private var mediaFilter: String = "all"
     /// 一键锁定坐标：锁定后禁止拖动与边缘缩放
     @AppStorage("positionLocked") private var positionLocked: Bool = false
 
@@ -108,6 +110,7 @@ struct ContentView: View {
             reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
             viewModel.intervalSeconds = intervalSeconds
             viewModel.visibleCount = Int(displayCount)
+            viewModel.mediaFilter = mediaFilter
             WindowController.shared.applyLevel(floatingOnTop: floatingOnTop)
             // 恢复上次的锁定状态（禁止拖动/缩放）
             WindowController.shared.setLocked(positionLocked)
@@ -124,6 +127,10 @@ struct ContentView: View {
         .onChange(of: displayCount) { _, newValue in
             // 同时呈现数量变化，权重布局即时动画过渡
             viewModel.visibleCount = Int(newValue)
+        }
+        .onChange(of: mediaFilter) { _, newValue in
+            // 媒体过滤即时生效（从已加载的完整列表重新过滤，无需重新请求）
+            viewModel.mediaFilter = newValue
         }
         .onChange(of: floatingOnTop) { _, newValue in
             WindowController.shared.applyLevel(floatingOnTop: newValue)
@@ -166,6 +173,7 @@ struct ContentView: View {
                             localRecursive: $localRecursive,
                             displayCount: $displayCount,
                             layoutDirection: $layoutDirection,
+                            mediaFilter: $mediaFilter,
                             viewModel: viewModel,
                             onLoad: performLoad,
                             onChooseLocalFolder: chooseLocalFolder,

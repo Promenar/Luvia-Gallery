@@ -27,6 +27,7 @@ struct SettingsPanel: View {
     @Binding var localRecursive: Bool
     @Binding var displayCount: Double
     @Binding var layoutDirection: String
+    @Binding var mediaFilter: String
 
     /// 视图模型（状态文字、加载动作）
     @ObservedObject var viewModel: CarouselViewModel
@@ -110,6 +111,16 @@ struct SettingsPanel: View {
                     .frame(width: 90, alignment: .leading)
                 Slider(value: $displayCount, in: 1...6, step: 1)
             }
+
+            // 媒体过滤：全部 / 仅图片 / 仅视频（网络不佳时切"仅图片"保障体验，
+            // 在线与本地来源均生效）
+            Picker("媒体过滤", selection: $mediaFilter) {
+                Text("全部").tag("all")
+                Text("仅图片").tag("image")
+                Text("仅视频").tag("video")
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
 
             // 排列方向：横向手风琴 / 纵向
             Picker("排列方向", selection: $layoutDirection) {
