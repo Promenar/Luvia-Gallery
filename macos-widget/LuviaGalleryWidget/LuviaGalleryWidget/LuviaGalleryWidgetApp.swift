@@ -26,6 +26,19 @@ struct LuviaGalleryWidgetApp: App {
 /// 负责创建悬浮窗、接管关闭/重开行为
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
+    /// 按持久化值应用 Dock 图标可见性：
+    /// - 隐藏（默认）：.accessory，不占 Dock 位、无应用主菜单；
+    ///   本 App 是浮动窗口工具，窗口自身可成为 key，交互不受影响
+    /// - 显示：.regular，Dock 图标恢复，并主动 activate 让窗口获得焦点
+    /// 启动时（applicationDidFinishLaunching）与运行时（ContentView.onChange）
+    /// 共用此入口，重复调用幂等。
+    static func applyDockVisibility(hidden: Bool) {
+        NSApp.setActivationPolicy(hidden ? .accessory : .regular)
+        if !hidden {
+            NSApp.activate()
+        }
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // 创建悬浮窗：titled + fullSizeContentView，隐藏标题栏与红绿灯按钮，
         // 视觉上是圆角浮窗，但原生边缘缩放与整窗拖动全部保留
@@ -68,6 +81,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // 后续重复调用幂等兼容。
         let positionLocked = UserDefaults.standard.bool(forKey: "positionLocked")
         WindowController.shared.setLocked(positionLocked)
+
+        // 启动即按持久化值应用 Dock 图标可见性（缺省 true = 隐藏，
+        // 新用户首次启动也不占 Dock 位），在窗口显示前设置好 activationPolicy
+        let hideDockIcon = UserDefaults.standard.object(forKey: "hideDockIcon") as? Bool ?? true
+        Self.applyDockVisibility(hidden: hideDockIcon)
 
         window.makeKeyAndOrderFront(nil)
         NSApp.activate()

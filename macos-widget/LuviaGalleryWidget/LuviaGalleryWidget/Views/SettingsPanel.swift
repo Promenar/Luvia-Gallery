@@ -28,6 +28,7 @@ struct SettingsPanel: View {
     @Binding var displayCount: Double
     @Binding var layoutDirection: String
     @Binding var mediaFilter: String
+    @Binding var hideDockIcon: Bool
 
     /// 视图模型（状态文字、加载动作）
     @ObservedObject var viewModel: CarouselViewModel
@@ -173,6 +174,11 @@ struct SettingsPanel: View {
                     Slider(value: $gridCellSize, in: 20...240, step: 10)
                 }
             }
+
+            // 隐藏 Dock 图标（默认开：accessory 模式运行，不占 Dock 位）
+            Toggle("隐藏 Dock 图标", isOn: $hideDockIcon)
+                .toggleStyle(.checkbox)
+                .font(.caption)
 
             Divider().opacity(0.3)
 
