@@ -97,7 +97,8 @@ struct ContentView: View {
         .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         // 给窗口阴影留出呼吸空间
         .padding(8)
-        .frame(minWidth: 464, minHeight: 244)
+        // 内容最小尺寸（比窗口 minSize 小一圈阴影 padding，跟随窗口下限调整）
+        .frame(minWidth: 244, minHeight: 164)
         // 内容延伸到标题栏区域（标题栏已透明隐藏）
         .ignoresSafeArea()
         .onAppear {
@@ -288,7 +289,8 @@ struct ContentView: View {
             // hover 手风琴：保持较快手感
             .animation(hoverSpring, value: hoveredOffset)
         }
-        .frame(minHeight: 120)
+        // 卡片区最小高度压低，保证窗口缩到最小尺寸时不溢出
+        .frame(minHeight: 60)
     }
 
     /// 生成一组卡片视图（横向驱动宽度、纵向驱动高度，其余交互完全一致）
