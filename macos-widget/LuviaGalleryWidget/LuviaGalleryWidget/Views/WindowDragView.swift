@@ -12,22 +12,37 @@ import AppKit
 
 // MARK: - WindowDragView
 
-/// 铺在内容最底层的拖动层：mouseDown 直接转交 window.performDrag
+/// 铺在内容最底层的拖动层：mouseDown 直接转交 window.performDrag。
+/// 锁定状态下不响应拖动（performDrag 不触发）。
 struct WindowDragView: NSViewRepresentable {
 
+    /// 位置是否已锁定
+    var isLocked: Bool = false
+
     func makeNSView(context: Context) -> WindowDragNSView {
-        WindowDragNSView()
+        let view = WindowDragNSView()
+        view.isLocked = isLocked
+        return view
     }
 
-    func updateNSView(_ nsView: WindowDragNSView, context: Context) {}
+    func updateNSView(_ nsView: WindowDragNSView, context: Context) {
+        nsView.isLocked = isLocked
+    }
 }
 
 // MARK: - WindowDragNSView
 
 final class WindowDragNSView: NSView {
 
+    /// 位置是否已锁定（锁定时不拖窗）
+    var isLocked = false
+
     /// 鼠标按下即进入系统拖窗循环（.stationary / 桌面层级均不影响 performDrag）
     override func mouseDown(with event: NSEvent) {
+        guard !isLocked else {
+            super.mouseDown(with: event)
+            return
+        }
         window?.performDrag(with: event)
     }
 

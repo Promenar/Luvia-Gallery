@@ -63,6 +63,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // 开关关闭时完全不吸附（@AppStorage("snapToGrid")，缺省视为开）
         let defaults = UserDefaults.standard
         guard defaults.object(forKey: "snapToGrid") == nil || defaults.bool(forKey: "snapToGrid") else { return }
+        // 位置锁定期间不吸附（窗口已禁止拖动，此处双保险）
+        guard !defaults.bool(forKey: "positionLocked") else { return }
         // 窗口缩放期间（含左/上边缘缩放引起的原点移动）不吸附
         guard !window.inLiveResize else { return }
 
