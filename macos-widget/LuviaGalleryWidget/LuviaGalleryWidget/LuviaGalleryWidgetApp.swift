@@ -51,6 +51,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         // 注册到窗口控制器，供 SwiftUI 侧操作（置顶/关闭/重开）
         WindowController.shared.attach(window)
+
+        // 启动即按持久化的置顶设置校正窗口层级：
+        // FloatingWindow 默认 .floating，此前仅靠 ContentView.onAppear 校正，
+        // 时机不可控（onAppear 依赖视图可见性，可能晚于窗口显示甚至不触发），
+        // 导致设置面板里已关闭置顶、但每次启动窗口仍浮顶，需手动开关一次才恢复。
+        // 这里在窗口显示前直接读 UserDefaults 应用，与 onAppear/onChange 的
+        // 后续重复调用幂等兼容；非置顶时沉到桌面图标层级 +1（台前调度不收编）。
+        let floatingOnTop = UserDefaults.standard.object(forKey: "floatingOnTop") as? Bool ?? true
+        WindowController.shared.applyLevel(floatingOnTop: floatingOnTop)
+
         window.makeKeyAndOrderFront(nil)
         NSApp.activate()
     }
