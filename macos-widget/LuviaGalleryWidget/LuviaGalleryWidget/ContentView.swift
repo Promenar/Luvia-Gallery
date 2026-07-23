@@ -34,6 +34,8 @@ struct ContentView: View {
     @AppStorage("localRecursive") private var localRecursive: Bool = true
     /// 同时呈现的卡片数量（1–6）
     @AppStorage("displayCount") private var displayCount: Double = 6
+    /// 卡片排列方向："horizontal"（横向手风琴）/ "vertical"（纵向）
+    @AppStorage("layoutDirection") private var layoutDirection: String = "horizontal"
 
     // MARK: - 状态
 
@@ -153,6 +155,7 @@ struct ContentView: View {
                             localFolderPath: $localFolderPath,
                             localRecursive: $localRecursive,
                             displayCount: $displayCount,
+                            layoutDirection: $layoutDirection,
                             viewModel: viewModel,
                             onLoad: performLoad,
                             onChooseLocalFolder: chooseLocalFolder,
@@ -248,49 +251,95 @@ struct ContentView: View {
         return offset == 0 ? 2.1 : 1.0
     }
 
+    /// 是否为纵向排列
+    private var isVerticalLayout: Bool {
+        layoutDirection == "vertical"
+    }
+
     private var carouselRow: some View {
         GeometryReader { geo in
             let visible = viewModel.visibleItems
             let weights = (0..<max(visible.count, 1)).map { weight(for: $0) }
             let totalWeight = weights.reduce(0, +)
-            let available = geo.size.width - cardSpacing * CGFloat(max(visible.count - 1, 0))
+            // 按当前排列轴取可用主轴长度
+            let available = (isVerticalLayout ? geo.size.height : geo.size.width)
+                - cardSpacing * CGFloat(max(visible.count - 1, 0))
 
-            HStack(spacing: cardSpacing) {
-                ForEach(Array(visible.enumerated()), id: \.element.id) { offset, item in
-                    CarouselCard(
-                        item: item,
-                        number: offset + 1,
-                        isCurrent: offset == 0,
-                        client: viewModel.client,
-                        reduceMotion: reduceMotion,
-                        // 手风琴收缩态暂停视频；设置面板覆盖时全部暂停
-                        isPlaying: !showSettings && (hoveredOffset == nil || hoveredOffset == offset)
-                    )
-                    .frame(width: max(available * weights[offset] / totalWeight, 0))
-                    // 新进入可见窗口的卡片：0.4s 淡入 + 从右轻微滑入，避免"闪现"
-                    .transition(
-                        reduceMotion
-                            ? .identity
-                            : .opacity.combined(with: .offset(x: 20, y: 0))
-                    )
-                    .onHover { hovering in
-                        handleHover(hovering, offset: offset)
+            Group {
+                if isVerticalLayout {
+                    // 纵向：VStack，权重驱动高度
+                    VStack(spacing: cardSpacing) {
+                        cardViews(visible: visible, weights: weights, available: available, totalWeight: totalWeight)
                     }
-                    .onTapGesture {
-                        // 点击任意卡片立即跳转并重置计时
-                        viewModel.jump(toVisibleOffset: offset)
+                } else {
+                    // 横向：HStack，权重驱动宽度
+                    HStack(spacing: cardSpacing) {
+                        cardViews(visible: visible, weights: weights, available: available, totalWeight: totalWeight)
                     }
                 }
             }
-            .frame(height: geo.size.height)
+            .frame(width: geo.size.width, height: geo.size.height)
             // 轮播换批：慢速弹簧过渡权重与新卡入场
             .animation(shuffleSpring, value: viewModel.currentIndex)
             // 同时呈现数量变化：权重布局即时动画过渡
             .animation(shuffleSpring, value: displayCount)
+            // 排列方向切换：平滑过渡到新布局
+            .animation(shuffleSpring, value: layoutDirection)
             // hover 手风琴：保持较快手感
             .animation(hoverSpring, value: hoveredOffset)
         }
         .frame(minHeight: 120)
+    }
+
+    /// 生成一组卡片视图（横向驱动宽度、纵向驱动高度，其余交互完全一致）
+    @ViewBuilder
+    private func cardViews(visible: [CarouselItem], weights: [CGFloat], available: CGFloat, totalWeight: CGFloat) -> some View {
+        ForEach(Array(visible.enumerated()), id: \.element.id) { offset, item in
+            CarouselCard(
+                item: item,
+                number: offset + 1,
+                isCurrent: offset == 0,
+                client: viewModel.client,
+                reduceMotion: reduceMotion,
+                // 手风琴收缩态暂停视频；设置面板覆盖时全部暂停
+                isPlaying: !showSettings && (hoveredOffset == nil || hoveredOffset == offset)
+            )
+            .modifier(CardSizeModifier(
+                isVertical: isVerticalLayout,
+                length: max(available * weights[offset] / totalWeight, 0)
+            ))
+            // 新进入可见窗口的卡片：淡入 + 沿主轴轻微滑入，避免"闪现"
+            // （横向从右滑入，纵向从下滑入）
+            .transition(
+                reduceMotion
+                    ? .identity
+                    : .opacity.combined(with: .offset(
+                        x: isVerticalLayout ? 0 : 20,
+                        y: isVerticalLayout ? 20 : 0
+                    ))
+            )
+            .onHover { hovering in
+                handleHover(hovering, offset: offset)
+            }
+            .onTapGesture {
+                // 点击任意卡片立即跳转并重置计时
+                viewModel.jump(toVisibleOffset: offset)
+            }
+        }
+    }
+
+    /// 按排列方向约束卡片主轴尺寸的修饰器
+    private struct CardSizeModifier: ViewModifier {
+        let isVertical: Bool
+        let length: CGFloat
+
+        func body(content: Content) -> some View {
+            if isVertical {
+                content.frame(maxWidth: .infinity).frame(height: length)
+            } else {
+                content.frame(width: length).frame(maxHeight: .infinity)
+            }
+        }
     }
 
     /// 悬停处理：展开手风琴 + 暂停轮播（浮光由卡片内部自管理）

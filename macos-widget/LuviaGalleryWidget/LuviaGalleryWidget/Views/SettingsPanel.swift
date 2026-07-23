@@ -26,6 +26,7 @@ struct SettingsPanel: View {
     @Binding var localFolderPath: String
     @Binding var localRecursive: Bool
     @Binding var displayCount: Double
+    @Binding var layoutDirection: String
 
     /// 视图模型（状态文字、加载动作）
     @ObservedObject var viewModel: CarouselViewModel
@@ -109,6 +110,14 @@ struct SettingsPanel: View {
                     .frame(width: 90, alignment: .leading)
                 Slider(value: $displayCount, in: 1...6, step: 1)
             }
+
+            // 排列方向：横向手风琴 / 纵向
+            Picker("排列方向", selection: $layoutDirection) {
+                Text("横向").tag("horizontal")
+                Text("纵向").tag("vertical")
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
 
             Divider().opacity(0.3)
 
