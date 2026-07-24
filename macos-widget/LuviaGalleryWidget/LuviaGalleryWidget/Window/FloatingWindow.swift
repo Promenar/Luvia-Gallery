@@ -109,4 +109,19 @@ final class WindowController {
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate()
     }
+
+    /// 窗口当前是否可见（菜单栏菜单动态标题用）
+    var isWindowVisible: Bool {
+        window?.isVisible ?? false
+    }
+
+    /// 切换窗口可见性（菜单栏"显示/隐藏悬浮窗"）：
+    /// 隐藏走 orderOut；显示复用 showWindow，按既有层级/位置恢复
+    func toggleVisibility() {
+        if isWindowVisible {
+            closeWindow()
+        } else {
+            showWindow()
+        }
+    }
 }

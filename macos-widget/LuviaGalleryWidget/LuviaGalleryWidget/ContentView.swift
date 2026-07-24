@@ -145,6 +145,10 @@ struct ContentView: View {
             // 隐藏/显示 Dock 图标：运行时切换 activationPolicy
             AppDelegate.applyDockVisibility(hidden: newValue)
         }
+        // 菜单栏"打开设置"：显示窗口后展开设置面板
+        .onReceive(NotificationCenter.default.publisher(for: .luviaShowSettings)) { _ in
+            showSettings = true
+        }
     }
 
     // MARK: - 主内容
