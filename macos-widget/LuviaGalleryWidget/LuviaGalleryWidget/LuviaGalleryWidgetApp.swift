@@ -40,6 +40,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // 菜单栏常驻图标：Dock 图标默认隐藏后的主要找回入口
+        StatusBarController.shared.setup()
+
         // 创建悬浮窗：titled + fullSizeContentView，隐藏标题栏与红绿灯按钮，
         // 视觉上是圆角浮窗，但原生边缘缩放与整窗拖动全部保留
         let window = FloatingWindow(
