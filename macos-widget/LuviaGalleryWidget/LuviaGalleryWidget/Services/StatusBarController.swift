@@ -60,6 +60,16 @@ final class StatusBarController: NSObject {
         settingsItem.target = self
         menu.addItem(settingsItem)
 
+        // 点击穿透开关：带勾选状态，穿透开启时这是找回控制的主要路径
+        // （窗口已忽略鼠标事件，设置面板里的开关点不到）
+        let clickThroughItem = NSMenuItem(
+            title: "点击穿透",
+            action: #selector(toggleClickThrough),
+            keyEquivalent: ""
+        )
+        clickThroughItem.target = self
+        menu.addItem(clickThroughItem)
+
         menu.addItem(.separator())
 
         let quitItem = NSMenuItem(
@@ -92,6 +102,13 @@ final class StatusBarController: NSObject {
     @objc private func quitApp() {
         NSApp.terminate(nil)
     }
+
+    @objc private func toggleClickThrough() {
+        // 写持久化值：ContentView 的 @AppStorage 监听变化并应用，
+        // 与设置面板开关共享同一状态
+        let current = UserDefaults.standard.bool(forKey: "clickThrough")
+        UserDefaults.standard.set(!current, forKey: "clickThrough")
+    }
 }
 
 // MARK: - NSMenuDelegate（动态标题：随窗口可见性切换）
@@ -101,6 +118,9 @@ extension StatusBarController: NSMenuDelegate {
         MainActor.assumeIsolated {
             let visible = WindowController.shared.isWindowVisible
             menu.item(at: 0)?.title = visible ? "隐藏悬浮窗" : "显示悬浮窗"
+            // 点击穿透项（索引 2）勾选状态
+            let through = UserDefaults.standard.bool(forKey: "clickThrough")
+            menu.item(at: 2)?.state = through ? .on : .off
         }
     }
 }
