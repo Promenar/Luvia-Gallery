@@ -95,9 +95,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let hideDockIcon = UserDefaults.standard.object(forKey: "hideDockIcon") as? Bool ?? true
         Self.applyDockVisibility(hidden: hideDockIcon)
 
-        // 启动即按持久化值应用点击穿透（缺省 false），在窗口显示前设置好
+        // 启动即按持久化值应用点击穿透开关（缺省 false）；
+        // 启动时设置面板必然收起，开关为开则穿透直接生效
         let clickThrough = UserDefaults.standard.bool(forKey: "clickThrough")
-        WindowController.shared.setClickThrough(clickThrough)
+        WindowController.shared.setClickThroughSwitch(clickThrough)
 
         window.makeKeyAndOrderFront(nil)
         NSApp.activate()
