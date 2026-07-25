@@ -119,8 +119,8 @@ struct ContentView: View {
             WindowController.shared.applyLevel(floatingOnTop: floatingOnTop)
             // 恢复上次的锁定状态（禁止拖动/缩放）
             WindowController.shared.setLocked(positionLocked)
-            // 恢复上次的点击穿透状态（桌面摆件模式）
-            WindowController.shared.setClickThrough(clickThrough)
+            // 恢复上次的点击穿透状态（开关值；面板默认收起，符合状态机）
+            WindowController.shared.setClickThroughSwitch(clickThrough)
             // 开机启动开关以系统侧真实状态为准回显
             launchAtLogin = LoginItemManager.isEnabled
             // 已配置则自动加载
@@ -151,8 +151,13 @@ struct ContentView: View {
             AppDelegate.applyDockVisibility(hidden: newValue)
         }
         .onChange(of: clickThrough) { _, newValue in
-            // 点击穿透：窗口忽略/恢复鼠标事件（菜单栏菜单切换也会走到这里）
-            WindowController.shared.setClickThrough(newValue)
+            // 穿透开关变化（设置面板/菜单栏共用）：实际生效与否由状态机决定
+            WindowController.shared.setClickThroughSwitch(newValue)
+        }
+        .onChange(of: showSettings) { _, newValue in
+            // 设置面板展开/收起是穿透状态机的另一输入：
+            // 展开期间穿透挂起（保证面板可操作），收起后按开关恢复
+            WindowController.shared.setSettingsPanelOpen(newValue)
         }
         // 菜单栏"打开设置"：显示窗口后展开设置面板
         .onReceive(NotificationCenter.default.publisher(for: .luviaShowSettings)) { _ in

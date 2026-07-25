@@ -7,6 +7,7 @@
 
 import AppKit
 import CoreGraphics
+import OSLog
 
 // MARK: - FloatingWindow
 
@@ -50,6 +51,9 @@ final class FloatingWindow: NSWindow {
 final class WindowController {
 
     static let shared = WindowController()
+
+    /// 诊断日志（穿透状态机验证用，unified log 可查）
+    private static let ctLogger = Logger(subsystem: "com.luvia.LuviaGalleryWidget", category: "WindowController")
 
     private weak var window: NSWindow?
 
@@ -125,10 +129,32 @@ final class WindowController {
         }
     }
 
-    /// 点击穿透：开启后窗口忽略所有鼠标事件，完全当桌面摆件
-    /// （鼠标穿透到下层桌面/窗口）。找回控制走菜单栏图标菜单，
-    /// 不受 ignoresMouseEvents 影响
-    func setClickThrough(_ enabled: Bool) {
-        window?.ignoresMouseEvents = enabled
+    // MARK: - 点击穿透（复合状态机）
+
+    /// 穿透开关值（@AppStorage 持久化，设置面板/菜单栏共同控制）
+    private var clickThroughSwitch = false
+    /// 设置面板是否展开（ContentView 的 showSettings 是唯一权威来源，
+    /// 经 onChange 单向同步到这里，避免绑定环路）
+    private var settingsPanelOpen = false
+
+    /// 穿透实际生效 ⟺（开关开 ∧ 设置面板收起）。
+    /// 设置面板展开期间穿透自动挂起：面板里打开开关后窗口保持可交互，
+    /// 收起那一刻生效；穿透中从菜单栏「打开设置」临时解除，收起自动恢复。
+    private func applyClickThroughState() {
+        let effective = clickThroughSwitch && !settingsPanelOpen
+        window?.ignoresMouseEvents = effective
+        Self.ctLogger.log("穿透生效=\(effective)（开关=\(self.clickThroughSwitch)，设置面板展开=\(self.settingsPanelOpen)）")
+    }
+
+    /// 更新穿透开关值（启动恢复 / onChange 调用）
+    func setClickThroughSwitch(_ on: Bool) {
+        clickThroughSwitch = on
+        applyClickThroughState()
+    }
+
+    /// 同步设置面板展开状态（ContentView.onChange(showSettings) 调用）
+    func setSettingsPanelOpen(_ open: Bool) {
+        settingsPanelOpen = open
+        applyClickThroughState()
     }
 }
