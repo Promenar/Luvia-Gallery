@@ -55,15 +55,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         window.minSize = NSSize(width: 260, height: 180)
         window.delegate = self
         window.contentView = NSHostingView(rootView: ContentView())
+        self.window = window
 
-        // 恢复上次退出时的窗口 frame；落在屏幕可见区域外（拔屏/多屏变化）
-        // 时回退到居中默认位置，防止窗口"丢"在屏幕外
-        if let saved = UserDefaults.standard.string(forKey: Self.windowFrameKey),
-           Self.isFrameVisible(NSRectFromString(saved)) {
-            window.setFrame(NSRectFromString(saved), display: false)
-        } else {
-            window.center()
-        }
+        // 恢复窗口 frame：按当前所在屏的 displayID 查存档；
+        // 该屏无存档时迁移旧的单档 windowFrame（存到其所在屏 key 下），
+        // 再不行回退居中；始终保留 80×40 可见性校验
+        restoreWindowFrame(on: window)
+
+        // 显示器插拔/切换时：按新所在屏的存档恢复（无存档则保持现状不乱跳）
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(screenParametersChanged),
+            name: NSApplication.didChangeScreenParametersNotification,
+            object: nil
+        )
 
         // 注册到窗口控制器，供 SwiftUI 侧操作（置顶/关闭/重开）
         WindowController.shared.attach(window)
@@ -102,21 +107,117 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     // MARK: - 窗口 frame 记忆
 
-    /// 持久化 key（手动方案：比 setFrameAutosaveName 更可控，
-    /// 避免与网格吸附 / 程序化 setFrame 的时序冲突）
-    private static let windowFrameKey = "windowFrame"
+    /// 每屏存档字典 key：displayFrames: [displayID: NSStringFromRect]
+    /// displayID 取 NSScreen.deviceDescription["NSScreenNumber"]
+    /// （CGDirectDisplayID，跨重启稳定）
+    private static let displayFramesKey = "displayFrames"
+    /// 旧的单档 key（d3fbb63），启动时迁移后删除
+    private static let legacyWindowFrameKey = "windowFrame"
+
+    /// 窗口弱引用（屏幕参数变化时恢复用）
+    private weak var window: NSWindow?
 
     /// 节流保存任务：拖动/缩放中频繁触发 delegate，frame 稳定 0.5s 后才落盘
     private var frameSaveWorkItem: DispatchWorkItem?
 
-    /// 节流保存窗口 frame
+    /// 屏幕参数变化防抖任务（插拔瞬间系统可能连发多次通知）
+    private var screenChangeWorkItem: DispatchWorkItem?
+
+    /// 屏幕的跨重启稳定 ID（CGDirectDisplayID 字符串化）
+    private static func displayID(for screen: NSScreen) -> String? {
+        (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.stringValue
+    }
+
+    /// 读取全部显示器存档
+    private static func savedFrames() -> [String: String] {
+        UserDefaults.standard.dictionary(forKey: Self.displayFramesKey) as? [String: String] ?? [:]
+    }
+
+    /// 节流保存窗口 frame 到"窗口当前所在屏"的 key 下
     private func scheduleFrameSave(_ window: NSWindow) {
         frameSaveWorkItem?.cancel()
-        let frame = window.frame
-        let item = DispatchWorkItem {
-            UserDefaults.standard.set(NSStringFromRect(frame), forKey: Self.windowFrameKey)
+        let item = DispatchWorkItem { [weak window] in
+            guard let window,
+                  let screen = window.screen ?? NSScreen.main,
+                  let id = Self.displayID(for: screen) else { return }
+            var frames = Self.savedFrames()
+            frames[id] = NSStringFromRect(window.frame)
+            UserDefaults.standard.set(frames, forKey: Self.displayFramesKey)
         }
         frameSaveWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: item)
+    }
+
+    /// 恢复窗口 frame（启动 / 屏幕参数变化共用）：
+    /// - 优先按窗口所在屏的 displayID 查存档；
+    /// - 该屏无存档且存在旧单档时迁移：旧档写到"其 frame 所在屏"的 key 下，
+    ///   若旧档就在当前屏则同时恢复；
+    /// - 屏幕参数变化场景下该屏无存档时保持现状（centerAtLaunch 为 false 不乱跳）；
+    /// - 启动场景下最后回退居中
+    private func restoreWindowFrame(on window: NSWindow, centerAtLaunch: Bool = true) {
+        guard let screen = window.screen ?? NSScreen.main,
+              let id = Self.displayID(for: screen) else {
+            if centerAtLaunch { window.center() }
+            return
+        }
+
+        let frames = Self.savedFrames()
+        if let saved = frames[id] {
+            let rect = NSRectFromString(saved)
+            if Self.isFrameVisible(rect) {
+                window.setFrame(rect, display: false)
+                return
+            }
+        }
+
+        // 旧单档迁移（只执行一次：迁移后删除旧 key）
+        if let legacy = UserDefaults.standard.string(forKey: Self.legacyWindowFrameKey) {
+            let rect = NSRectFromString(legacy)
+            UserDefaults.standard.removeObject(forKey: Self.legacyWindowFrameKey)
+            if Self.isFrameVisible(rect) {
+                // 存到旧 frame 实际所在屏的 key 下
+                var frames = Self.savedFrames()
+                let legacyScreen = Self.screenContaining(rect) ?? screen
+                let legacyID = Self.displayID(for: legacyScreen)
+                if let legacyID {
+                    frames[legacyID] = legacy
+                    UserDefaults.standard.set(frames, forKey: Self.displayFramesKey)
+                }
+                if legacyID == id {
+                    window.setFrame(rect, display: false)
+                    return
+                }
+            }
+        }
+
+        if centerAtLaunch {
+            window.center()
+        }
+    }
+
+    /// 与 rect 交集面积最大的屏幕（判断存档 frame 属于哪台显示器）
+    private static func screenContaining(_ rect: NSRect) -> NSScreen? {
+        var best: NSScreen?
+        var bestArea: CGFloat = 0
+        for screen in NSScreen.screens {
+            let intersection = rect.intersection(screen.visibleFrame)
+            let area = intersection.isNull ? 0 : intersection.width * intersection.height
+            if area > bestArea {
+                bestArea = area
+                best = screen
+            }
+        }
+        return best
+    }
+
+    /// 显示器插拔/切换：防抖后按新所在屏的存档恢复；无存档保持现状
+    @objc private func screenParametersChanged() {
+        screenChangeWorkItem?.cancel()
+        let item = DispatchWorkItem { [weak self, weak window] in
+            guard let self, let window else { return }
+            self.restoreWindowFrame(on: window, centerAtLaunch: false)
+        }
+        screenChangeWorkItem = item
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: item)
     }
 
