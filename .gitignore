@@ -35,3 +35,5 @@ media_test/
 
 # Secure Environment
 secure_env/
+# Xcode 用户态
+**/*.xcodeproj/**/xcuserdata/
