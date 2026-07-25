@@ -29,6 +29,7 @@ struct SettingsPanel: View {
     @Binding var layoutDirection: String
     @Binding var mediaFilter: String
     @Binding var hideDockIcon: Bool
+    @Binding var clickThrough: Bool
 
     /// 视图模型（状态文字、加载动作）
     @ObservedObject var viewModel: CarouselViewModel
@@ -177,6 +178,12 @@ struct SettingsPanel: View {
 
             // 隐藏 Dock 图标（默认开：accessory 模式运行，不占 Dock 位）
             Toggle("隐藏 Dock 图标", isOn: $hideDockIcon)
+                .toggleStyle(.checkbox)
+                .font(.caption)
+
+            // 点击穿透（默认关：开启后窗口忽略鼠标事件当桌面摆件，
+            // 找回控制走菜单栏图标菜单，菜单栏操作不受影响）
+            Toggle("点击穿透", isOn: $clickThrough)
                 .toggleStyle(.checkbox)
                 .font(.caption)
 

@@ -124,4 +124,11 @@ final class WindowController {
             showWindow()
         }
     }
+
+    /// 点击穿透：开启后窗口忽略所有鼠标事件，完全当桌面摆件
+    /// （鼠标穿透到下层桌面/窗口）。找回控制走菜单栏图标菜单，
+    /// 不受 ignoresMouseEvents 影响
+    func setClickThrough(_ enabled: Bool) {
+        window?.ignoresMouseEvents = enabled
+    }
 }

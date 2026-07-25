@@ -42,6 +42,9 @@ struct ContentView: View {
     @AppStorage("positionLocked") private var positionLocked: Bool = false
     /// 隐藏 Dock 图标（默认隐藏：accessory 模式运行，不在 Dock 占位）
     @AppStorage("hideDockIcon") private var hideDockIcon: Bool = true
+    /// 点击穿透：窗口忽略所有鼠标事件当桌面摆件（默认关；
+    /// 开启后找回控制走菜单栏图标菜单）
+    @AppStorage("clickThrough") private var clickThrough: Bool = false
 
     // MARK: - 状态
 
@@ -116,6 +119,8 @@ struct ContentView: View {
             WindowController.shared.applyLevel(floatingOnTop: floatingOnTop)
             // 恢复上次的锁定状态（禁止拖动/缩放）
             WindowController.shared.setLocked(positionLocked)
+            // 恢复上次的点击穿透状态（桌面摆件模式）
+            WindowController.shared.setClickThrough(clickThrough)
             // 开机启动开关以系统侧真实状态为准回显
             launchAtLogin = LoginItemManager.isEnabled
             // 已配置则自动加载
@@ -144,6 +149,10 @@ struct ContentView: View {
         .onChange(of: hideDockIcon) { _, newValue in
             // 隐藏/显示 Dock 图标：运行时切换 activationPolicy
             AppDelegate.applyDockVisibility(hidden: newValue)
+        }
+        .onChange(of: clickThrough) { _, newValue in
+            // 点击穿透：窗口忽略/恢复鼠标事件（菜单栏菜单切换也会走到这里）
+            WindowController.shared.setClickThrough(newValue)
         }
         // 菜单栏"打开设置"：显示窗口后展开设置面板
         .onReceive(NotificationCenter.default.publisher(for: .luviaShowSettings)) { _ in
@@ -185,6 +194,7 @@ struct ContentView: View {
                             layoutDirection: $layoutDirection,
                             mediaFilter: $mediaFilter,
                             hideDockIcon: $hideDockIcon,
+                            clickThrough: $clickThrough,
                             viewModel: viewModel,
                             onLoad: performLoad,
                             onChooseLocalFolder: chooseLocalFolder,
