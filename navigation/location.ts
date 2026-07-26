@@ -4,6 +4,8 @@ import {
   type GalleryLocation,
   type GallerySortOption,
   type GalleryViewMode,
+  type GalleryLocationRoot,
+  type LocationSegment,
 } from './types';
 
 export const DEFAULT_VIEW: GalleryViewMode = 'all';
@@ -77,6 +79,42 @@ const normalizeFolderPath = (raw: string): string => {
   return hasLeadingSlash ? `/${normalizedParts.join('/')}` : normalizedParts.join('/');
 };
 
+export const normalizeGalleryFolderPath = (
+  folderPath: string,
+  view: GalleryViewMode,
+): string => (view === 'folders' ? normalizeFolderPath(folderPath) : '');
+
+const normalizeGalleryLocationFields = (location: GalleryLocation): GalleryLocation => {
+  const normalizedFolderPath = normalizeGalleryFolderPath(location.folderPath, location.view);
+  return {
+    ...location,
+    folderPath: normalizedFolderPath,
+  };
+};
+
+const createLocationKeyFromNormalizedLocation = (location: GalleryLocation): string => {
+  const components = [
+    `view=${location.view}`,
+    `folder=${location.folderPath}`,
+    `search=${location.search || ''}`,
+    `sort=${location.sort}`,
+    `filter=${location.filter}`,
+    `layout=${location.layout}`,
+    `seed=${location.randomSeed ?? ''}`,
+    `media=${location.mediaId ?? ''}`,
+  ];
+
+  return components.map((value) => hashToken(value)).join('|');
+};
+
+export const buildNormalizedGalleryLocation = (location: GalleryLocation): GalleryLocation => {
+  const normalizedLocation = normalizeGalleryLocationFields(location);
+  return {
+    ...normalizedLocation,
+    key: createLocationKeyFromNormalizedLocation(normalizedLocation),
+  };
+};
+
 export const getParentFolderPath = (folderPath: string): string => {
   const normalized = normalizeFolderPath(folderPath);
   if (!normalized) return '';
@@ -97,19 +135,8 @@ export const getParentFolderPath = (folderPath: string): string => {
 };
 
 export const createLocationKey = (location: GalleryLocation): string => {
-  const normalizedPath = normalizeFolderPath(location.folderPath);
-  const components = [
-    `view=${location.view}`,
-    `folder=${normalizedPath || '/'}`,
-    `search=${location.search || ''}`,
-    `sort=${location.sort}`,
-    `filter=${location.filter}`,
-    `layout=${location.layout}`,
-    `seed=${location.randomSeed ?? ''}`,
-    `media=${location.mediaId ?? ''}`,
-  ];
-
-  return components.map((value) => hashToken(value)).join('|');
+  const normalizedLocation = normalizeGalleryLocationFields(location);
+  return createLocationKeyFromNormalizedLocation(normalizedLocation);
 };
 
 const parseParams = (input: string): URLSearchParams => {
@@ -160,19 +187,16 @@ export const parseGalleryUrl = (input: string): GalleryLocation => {
   }
 
   const folderInHash = params.get(SEARCH_PARAMS.FOLDER);
-  if (folderInHash !== null) {
-    location = {
-      ...location,
-      folderPath: normalizeFolderPath(folderInHash),
-      view: 'folders',
-    };
-  }
-
   const view = params.get(SEARCH_PARAMS.VIEW);
+  const hasFolder = folderInHash !== null;
   if (isGalleryViewMode(view)) {
     location.view = view;
-  } else if (!folderInHash && location.folderPath) {
+  } else if (hasFolder) {
     location.view = 'folders';
+  }
+
+  if (hasFolder) {
+    location.folderPath = normalizeGalleryFolderPath(folderInHash, location.view);
   }
 
   const search = params.get(SEARCH_PARAMS.SEARCH);
@@ -205,15 +229,29 @@ export const parseGalleryUrl = (input: string): GalleryLocation => {
     location.mediaId = mediaId;
   }
 
-  location.key = createLocationKey(location);
-  return location;
+  const normalizedLocation = buildNormalizedGalleryLocation(location);
+  return normalizedLocation;
 }
 
-export const serializeGalleryUrl = (location: GalleryLocation): string => {
-  const normalized = {
-    ...location,
-    folderPath: normalizeFolderPath(location.folderPath),
+export const getLocationRouteSegments = (location: GalleryLocation): readonly GalleryLocationRoot[] | readonly LocationSegment[] => {
+  const normalizedLocation = buildNormalizedGalleryLocation(location);
+  if (normalizedLocation.view === 'folders') {
+    const result: LocationSegment[] = [{ type: 'folders' }];
+    if (normalizedLocation.folderPath) {
+      result.push({ type: 'folderName', value: normalizedLocation.folderPath });
+    }
+    return result;
+  }
+
+  const root: GalleryLocationRoot = {
+    type: 'root',
+    view: normalizedLocation.view,
   };
+  return [root];
+};
+
+export const serializeGalleryUrl = (location: GalleryLocation): string => {
+  const normalized = buildNormalizedGalleryLocation(location);
   const params = buildParams(normalized);
   const pathParam = normalized.folderPath ? `folder=${hashToken(normalized.folderPath)}` : '';
   const query = params.toString();

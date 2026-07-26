@@ -3,6 +3,16 @@ export type GallerySortOption = 'dateDesc' | 'dateAsc' | 'nameAsc' | 'nameDesc' 
 export type GalleryFilterOption = 'all' | 'image' | 'video' | 'audio';
 export type GalleryLayout = 'grid' | 'masonry' | 'timeline';
 
+export type LocationSegmentType = 'root' | 'folders' | 'folderName';
+export interface LocationSegment {
+  type: LocationSegmentType;
+  value?: string;
+}
+export interface GalleryLocationRoot {
+  type: 'root';
+  view: Exclude<GalleryViewMode, 'folders'>;
+}
+
 export interface GalleryLocation {
   key: string;
   view: GalleryViewMode;

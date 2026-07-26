@@ -19,7 +19,7 @@ import { ScanReportModal } from './components/ScanReportModal';
 import { useQueryClient } from '@tanstack/react-query';
 import { useGalleryNavigation } from './hooks/useGalleryNavigation';
 import { createGalleryQueryKey } from './navigation/query-key';
-import { GalleryNavigationBar } from './components/navigation/GalleryNavigationBar';
+import { GalleryNavigationBar, type GalleryNavigationBarProps } from './components/navigation/GalleryNavigationBar';
 import type { GalleryLocation, ViewportSnapshot } from './navigation/types';
 
 type GalleryPageCache = {
@@ -82,6 +82,60 @@ export const activateGalleryLocation = (
 
 export const shouldSyncSearchDraft = (lastLocationKey: string | null, locationKey: string) =>
     lastLocationKey !== locationKey;
+
+export const shouldRenderUnifiedGalleryToolbar = (viewMode: ViewMode) => viewMode !== 'home';
+
+type UnifiedToolbarLocationUpdate = Partial<Pick<GalleryLocation, 'search' | 'sort' | 'filter' | 'layout' | 'mediaId'>>;
+type UnifiedGalleryToolbarProps = Omit<
+    GalleryNavigationBarProps,
+    'compact' | 'className' | 'enableSearchShortcut' | 'location' | 'view' | 'folderPath' | 'currentPath'
+    | 'search' | 'onSearch' | 'sort' | 'sortOption' | 'onSortChange'
+    | 'layout' | 'layoutMode' | 'onLayoutChange' | 'filter' | 'onFilterChange'
+> & {
+    viewMode: ViewMode;
+    location: GalleryLocation;
+    onLocationChange: (update: UnifiedToolbarLocationUpdate, mode: 'push' | 'replace') => void;
+};
+
+export const UnifiedGalleryToolbar: React.FC<UnifiedGalleryToolbarProps> = ({
+    viewMode,
+    location,
+    onLocationChange,
+    ...navigationProps
+}) => {
+    if (!shouldRenderUnifiedGalleryToolbar(viewMode)) return null;
+
+    const sharedProps: GalleryNavigationBarProps = {
+        ...navigationProps,
+        location,
+        onSearch: (search) => {
+            if (search !== location.search) onLocationChange({ search, mediaId: undefined }, 'push');
+        },
+        sortOption: location.sort,
+        onSortChange: (sort) => {
+            if (sort !== location.sort) onLocationChange({ sort, mediaId: undefined }, 'replace');
+        },
+        layoutMode: location.layout,
+        onLayoutChange: (layout) => {
+            if (layout !== location.layout) onLocationChange({ layout, mediaId: undefined }, 'replace');
+        },
+        filter: location.filter,
+        onFilterChange: (filter) => {
+            if (filter !== location.filter) onLocationChange({ filter, mediaId: undefined }, 'replace');
+        },
+    };
+
+    return (
+        <div className="px-3 pb-3 md:px-8 md:pt-4 md:pb-4 shrink-0" data-testid="unified-gallery-toolbar">
+            <div className="lg:hidden" data-testid="gallery-toolbar-compact-slot">
+                <GalleryNavigationBar {...sharedProps} compact />
+            </div>
+            <div className="hidden lg:block" data-testid="gallery-toolbar-desktop-slot">
+                <GalleryNavigationBar {...sharedProps} compact={false} />
+            </div>
+        </div>
+    );
+};
 
 type GalleryCacheBudgetEntry = {
     queryKey: readonly unknown[];
@@ -290,7 +344,6 @@ export default function App() {
     // 已提交搜索属于 URL；输入框草稿只在位置实际改变时才同步。
     const [sortOption, setSortOption] = useState<SortOption>(() => galleryNavigation.location.sort);
     const [filterOption, setFilterOption] = useState<FilterOption>(() => galleryNavigation.location.filter);
-    const [searchQuery, setSearchQuery] = useState(() => galleryNavigation.location.search);
     const [activeSearch, setActiveSearch] = useState(() => galleryNavigation.location.search);
     const activeSearchRef = useRef(activeSearch);
     const lastSearchLocationKeyRef = useRef<string | null>(null);
@@ -330,7 +383,6 @@ export default function App() {
         if (filterOption !== location.filter) setFilterOption(location.filter);
         if (shouldSyncSearchDraft(lastSearchLocationKeyRef.current, location.key)) {
             lastSearchLocationKeyRef.current = location.key;
-            setSearchQuery(location.search);
             setActiveSearch(location.search);
         }
 
@@ -1780,39 +1832,6 @@ export default function App() {
         }
     };
 
-    const toggleLayoutMode = () => {
-        let newMode: GridLayout = 'grid';
-        if (layoutMode === 'grid') newMode = 'masonry';
-        else if (layoutMode === 'masonry') newMode = 'timeline';
-        else if (layoutMode === 'timeline') newMode = 'grid';
-
-        cacheCurrentGallery();
-        navigationRequestEpochRef.current += 1;
-        setStorageItem(LAYOUT_MODE_KEY, newMode, LEGACY_KEYS.layoutMode);
-        galleryNavigation.updateLocation({ layout: newMode }, 'replace');
-    };
-
-    const handleSearchSubmit = () => {
-        if (searchQuery === galleryNavigation.location.search) return;
-        cacheCurrentGallery();
-        navigationRequestEpochRef.current += 1;
-        galleryNavigation.updateLocation({ search: searchQuery, mediaId: undefined }, 'push');
-    };
-
-    const handleSortChange = (sort: SortOption) => {
-        if (sort === galleryNavigation.location.sort) return;
-        cacheCurrentGallery();
-        navigationRequestEpochRef.current += 1;
-        galleryNavigation.updateLocation({ sort, mediaId: undefined }, 'replace');
-    };
-
-    const handleFilterChange = (filter: FilterOption) => {
-        if (filter === galleryNavigation.location.filter) return;
-        cacheCurrentGallery();
-        navigationRequestEpochRef.current += 1;
-        galleryNavigation.updateLocation({ filter, mediaId: undefined }, 'replace');
-    };
-
     const handleOpenMedia = (item: MediaItem) => {
         setSelectedItem(item);
         galleryNavigation.updateLocation({ mediaId: item.id }, 'push');
@@ -2274,125 +2293,30 @@ export default function App() {
                 onOpenSettings={() => setIsSettingsOpen(true)}
             />
 
-            <main className="flex-1 flex flex-col min-w-0 relative h-full pt-16 md:pt-0">
-                {viewMode === 'folders' && (
-                    <div className="px-4 pt-3 md:px-8 md:pt-4">
-                        <div className="md:hidden">
-                            <GalleryNavigationBar
-                                currentPath={currentPath}
-                                canGoBack={galleryNavigation.canGoBack}
-                                canGoForward={galleryNavigation.canGoForward}
-                                onBack={() => { cacheCurrentGallery(); navigationRequestEpochRef.current += 1; galleryNavigation.back(); }}
-                                onForward={() => { cacheCurrentGallery(); navigationRequestEpochRef.current += 1; galleryNavigation.forward(); }}
-                                onUp={handleGoBackFolder}
-                                onNavigatePath={handleFolderClick}
-                                onScrollToTop={handleScrollToTop}
-                                compact={true}
-                            />
-                        </div>
-                        <div className="hidden md:block">
-                            <GalleryNavigationBar
-                                currentPath={currentPath}
-                                canGoBack={galleryNavigation.canGoBack}
-                                canGoForward={galleryNavigation.canGoForward}
-                                onBack={() => { cacheCurrentGallery(); navigationRequestEpochRef.current += 1; galleryNavigation.back(); }}
-                                onForward={() => { cacheCurrentGallery(); navigationRequestEpochRef.current += 1; galleryNavigation.forward(); }}
-                                onUp={handleGoBackFolder}
-                                onNavigatePath={handleFolderClick}
-                                onScrollToTop={handleScrollToTop}
-                                compact={false}
-                            />
-                        </div>
-                    </div>
-                )}
-                {/* Toolbar */}
-                {viewMode === 'folders' && (
-                    <header className="h-16 flex items-center justify-between px-4 md:px-8 border-b border-white/5 bg-surface-primary z-20 shrink-0 absolute md:relative top-0 left-0 right-0 md:top-auto md:left-auto md:right-auto">
-                        <div className="flex items-center gap-3 md:hidden">
-                            <button onClick={() => setIsSidebarOpen(true)} className="p-2 -ml-2 text-gray-600 dark:text-gray-300">
-                                <Icons.Menu size={24} />
-                            </button>
-                            <span className="font-bold text-lg truncate">{appTitle}</span>
-                        </div>
-
-                        <div className="hidden md:flex items-center gap-4">
-                            {false && (
-                                <div className="flex items-center gap-2">
-                                    <button onClick={handleGoBackFolder} className="flex items-center gap-2 text-gray-500 hover:text-gray-800 dark:hover:text-white transition-colors">
-                                        <Icons.Back size={20} />
-                                        <span className="font-medium text-lg">{currentPath.split('/').pop()}</span>
-                                    </button>
-                                    {isServerMode && (
-                                        <div />
-                                    )}
-                                </div>
-                            )}
-                            {(viewMode === 'all' || viewMode === 'favorites' || (viewMode === 'folders' && !currentPath)) && (
-                                <h2 className="text-xl font-bold">{t(viewMode === 'all' ? 'all_photos' : (viewMode === 'favorites' ? 'favorites' : 'folders'))}</h2>
-                            )}
-                        </div>
-
-                        <div className="flex items-center gap-2">
-                            {/* Search Bar */}
-                            <div className="relative hidden md:flex items-center mr-2">
-                                <div className="absolute left-3 text-gray-400">
-                                    <Icons.Search size={16} />
-                                </div>
-                                <input
-                                    type="text"
-                                    placeholder="Search..."
-                                    value={searchQuery}
-                                    onChange={(e) => setSearchQuery(e.target.value)}
-                                    onKeyDown={(e) => {
-                                        if (e.key === 'Enter') handleSearchSubmit();
-                                    }}
-                                    className="pl-9 pr-8 py-1.5 bg-white/5 border border-white/10 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-accent-500 focus:bg-white/10 transition-all text-gray-800 dark:text-gray-200 placeholder-gray-500 w-48 lg:w-64"
-                                />
-                                {searchQuery && (
-                                    <button
-                                        onClick={() => {
-                                            setSearchQuery('');
-                                            galleryNavigation.updateLocation({ search: '', mediaId: undefined }, 'push');
-                                        }}
-                                        className="absolute right-2 p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 rounded-full"
-                                    >
-                                        <Icons.Close size={14} />
-                                    </button>
-                                )}
-                            </div>
-
-                            {/* View/Sort Controls */}
-                            {viewMode !== 'folders' && (
-                                <div className="flex items-center bg-white/5 rounded-lg p-1 border border-white/5">
-                                    <button onClick={() => handleFilterChange('all')} className={`p-1.5 rounded-md ${filterOption === 'all' ? 'bg-white/10 shadow-sm' : 'text-text-tertiary'}`} title={t('all_types')}><Icons.Grid size={16} /></button>
-                                    <button onClick={() => handleFilterChange('video')} className={`p-1.5 rounded-md ${filterOption === 'video' ? 'bg-white/10 shadow-sm' : 'text-text-tertiary'}`} title={t('videos_only')}><Icons.Video size={16} /></button>
-                                    <button onClick={() => handleFilterChange('audio')} className={`p-1.5 rounded-md ${filterOption === 'audio' ? 'bg-white/10 shadow-sm' : 'text-text-tertiary'}`} title={t('audio_only')}><Icons.Music size={16} /></button>
-                                </div>
-                            )}
-
-                            <div className="relative group">
-                                <button className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg text-gray-600 dark:text-gray-300">
-                                    <Icons.Sort size={20} />
-                                </button>
-                                {/* Invisible bridge to prevent menu closing */}
-                                <div className="absolute left-0 right-0 top-full h-2 bg-transparent" />
-                                <div className="absolute right-0 top-full mt-2 w-48 bg-surface-secondary backdrop-blur-xl rounded-xl shadow-2xl border border-white/10 p-1 hidden group-hover:block z-50">
-                                    <button onClick={() => handleSortChange('dateDesc')} className={`w-full text-left px-3 py-2 rounded-lg text-sm ${sortOption === 'dateDesc' ? 'bg-accent-500/10 text-accent-400' : 'text-text-secondary hover:bg-white/5'}`}>{t('newest_first')}</button>
-                                    <button onClick={() => handleSortChange('dateAsc')} className={`w-full text-left px-3 py-2 rounded-lg text-sm ${sortOption === 'dateAsc' ? 'bg-accent-500/10 text-accent-400' : 'text-text-secondary hover:bg-white/5'}`}>{t('oldest_first')}</button>
-                                    <button onClick={() => handleSortChange('nameAsc')} className={`w-full text-left px-3 py-2 rounded-lg text-sm ${sortOption === 'nameAsc' ? 'bg-accent-500/10 text-accent-400' : 'text-text-secondary hover:bg-white/5'}`}>{nameAscLabel}</button>
-                                    <button onClick={() => handleSortChange('nameDesc')} className={`w-full text-left px-3 py-2 rounded-lg text-sm ${sortOption === 'nameDesc' ? 'bg-accent-500/10 text-accent-400' : 'text-text-secondary hover:bg-white/5'}`}>{nameDescLabel}</button>
-                                    <button onClick={() => handleSortChange('random')} className={`w-full text-left px-3 py-2 rounded-lg text-sm ${sortOption === 'random' ? 'bg-accent-500/10 text-accent-400' : 'text-text-secondary hover:bg-white/5'}`}>{t('shuffle_random')}</button>
-                                </div>
-                            </div>
-
-                            {(viewMode === 'all' || viewMode === 'favorites' || viewMode === 'folders') && (
-                                <button onClick={toggleLayoutMode} className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg text-gray-600 dark:text-gray-300" title="Toggle Layout">
-                                    {layoutMode === 'masonry' ? <Icons.Masonry size={20} /> : (layoutMode === 'timeline' ? <Icons.List size={20} /> : <Icons.Grid size={20} />)}
-                                </button>
-                            )}
-                        </div>
-                    </header>
-                )}
+            <main className={`flex-1 flex flex-col min-w-0 relative h-full ${viewMode === 'home' ? 'pt-16 md:pt-0' : 'pt-3 md:pt-0'}`}>
+                <UnifiedGalleryToolbar
+                    viewMode={viewMode}
+                    location={galleryNavigation.location}
+                    canGoBack={galleryNavigation.canGoBack}
+                    canGoForward={galleryNavigation.canGoForward}
+                    onBack={() => { cacheCurrentGallery(); navigationRequestEpochRef.current += 1; galleryNavigation.back(); }}
+                    onForward={() => { cacheCurrentGallery(); navigationRequestEpochRef.current += 1; galleryNavigation.forward(); }}
+                    onUp={handleGoBackFolder}
+                    onNavigatePath={handleFolderClick}
+                    onNavigateView={(mode) => handleSetViewMode(mode as ViewMode)}
+                    onOpenMenu={() => setIsSidebarOpen(true)}
+                    onScrollToTop={handleScrollToTop}
+                    onLocationChange={(update, mode) => {
+                        cacheCurrentGallery();
+                        navigationRequestEpochRef.current += 1;
+                        if (typeof update.search === 'string') setActiveSearch(update.search);
+                        if (update.layout) {
+                            setLayoutMode(update.layout);
+                            setStorageItem(LAYOUT_MODE_KEY, update.layout, LEGACY_KEYS.layoutMode);
+                        }
+                        galleryNavigation.updateLocation(update, mode);
+                    }}
+                />
 
                 {/* Content Area */}
                 {viewMode === 'home' ? (

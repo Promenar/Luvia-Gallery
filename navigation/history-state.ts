@@ -1,5 +1,5 @@
 import { type GalleryLocation, type ViewportSnapshot } from './types';
-import { createLocationKey } from './location';
+import { buildNormalizedGalleryLocation } from './location';
 
 export interface GalleryHistoryState {
   location: GalleryLocation;
@@ -11,10 +11,7 @@ export const createHistoryState = (
   location: GalleryLocation,
   snapshot?: Omit<ViewportSnapshot, 'locationKey'>
 ): GalleryHistoryState => {
-  const normalizedLocation = {
-    ...location,
-    key: createLocationKey(location),
-  };
+  const normalizedLocation = buildNormalizedGalleryLocation(location);
 
   if (snapshot) {
     const normalizedSnapshot: ViewportSnapshot = {
