@@ -16,6 +16,114 @@ import { AudioPlayer } from './components/AudioPlayer';
 import { UserModal } from './components/UserModal';
 import { SettingsModal } from './components/SettingsModal';
 import { ScanReportModal } from './components/ScanReportModal';
+import { useQueryClient } from '@tanstack/react-query';
+import { useGalleryNavigation } from './hooks/useGalleryNavigation';
+import { createGalleryQueryKey } from './navigation/query-key';
+import { GalleryNavigationBar } from './components/navigation/GalleryNavigationBar';
+import type { GalleryLocation, ViewportSnapshot } from './navigation/types';
+
+type GalleryPageCache = {
+    files: MediaItem[];
+    serverFolders: any[];
+    serverOffset: number;
+    serverTotal: number;
+    hasMoreServer: boolean;
+};
+
+export const isNavigationRequestCurrent = (activeEpoch: number, requestEpoch: number) => activeEpoch === requestEpoch;
+
+export const isActiveGalleryRequest = (
+    activeEpoch: number,
+    requestEpoch: number,
+    activeLocationKey: string,
+    requestLocationKey: string | undefined,
+) => isNavigationRequestCurrent(activeEpoch, requestEpoch) && activeLocationKey === requestLocationKey;
+
+export type GalleryRequestGuard = {
+    epoch: number;
+    locationKey: string;
+    signal?: AbortSignal;
+};
+
+export const resolveGalleryRequestGuard = (
+    navigationEpoch: number | undefined,
+    locationKey: string | undefined,
+    signal: AbortSignal | undefined,
+    activeEpoch: number,
+    activeLocationKey: string,
+    activeSignal?: AbortSignal,
+): GalleryRequestGuard => ({
+    epoch: navigationEpoch ?? activeEpoch,
+    locationKey: locationKey ?? activeLocationKey,
+    signal: signal ?? activeSignal,
+});
+
+export const isGalleryRequestGuardActive = (
+    guard: GalleryRequestGuard,
+    activeEpoch: number,
+    activeLocationKey: string,
+) => !guard.signal?.aborted && isActiveGalleryRequest(activeEpoch, guard.epoch, activeLocationKey, guard.locationKey);
+
+export const shouldUpdateGalleryFetchingState = (
+    activeRequestId: number,
+    requestId: number,
+    guardIsActive: boolean,
+) => activeRequestId === requestId && guardIsActive;
+
+export const activateGalleryLocation = (
+    epochRef: { current: number },
+    locationKeyRef: { current: string },
+    locationKey: string,
+) => {
+    epochRef.current += 1;
+    locationKeyRef.current = locationKey;
+    return epochRef.current;
+};
+
+export const shouldSyncSearchDraft = (lastLocationKey: string | null, locationKey: string) =>
+    lastLocationKey !== locationKey;
+
+type GalleryCacheBudgetEntry = {
+    queryKey: readonly unknown[];
+    itemCount: number;
+    updatedAt: number;
+};
+
+export const getGalleryCacheEvictionKeys = (
+    entries: GalleryCacheBudgetEntry[],
+    maxEntries = 12,
+    maxItems = 5_000,
+    protectedQueryKey?: readonly unknown[],
+) => {
+    const newestFirst = [...entries].sort((left, right) => right.updatedAt - left.updatedAt);
+    const sameQueryKey = (left: readonly unknown[], right: readonly unknown[]) => JSON.stringify(left) === JSON.stringify(right);
+    const protectedEntry = protectedQueryKey
+        ? newestFirst.find((entry) => sameQueryKey(entry.queryKey, protectedQueryKey))
+        : newestFirst[0];
+    let retainedItems = protectedEntry?.itemCount || 0;
+    let retainedEntries = protectedEntry ? 1 : 0;
+    return newestFirst.flatMap((entry, index) => {
+        if (protectedEntry && sameQueryKey(entry.queryKey, protectedEntry.queryKey)) {
+            return [];
+        }
+        const exceedsEntryLimit = retainedEntries >= maxEntries;
+        const exceedsItemLimit = retainedItems + entry.itemCount > maxItems;
+        if (exceedsEntryLimit || exceedsItemLimit) return [entry.queryKey];
+        retainedItems += entry.itemCount;
+        retainedEntries += 1;
+        return [];
+    });
+};
+
+export const getAdjacentMediaId = (
+    items: Pick<MediaItem, 'id'>[],
+    currentId: string,
+    direction: 'next' | 'previous',
+) => {
+    const currentIndex = items.findIndex((item) => item.id === currentId);
+    const targetIndex = direction === 'next' ? currentIndex + 1 : currentIndex - 1;
+    return currentIndex >= 0 ? items[targetIndex]?.id : undefined;
+};
 
 const STORAGE_KEYS = {
     configFile: 'lumina-config.json', // keep filename stable for server compatibility
@@ -81,6 +189,8 @@ const removeStorageItem = (key: string, legacyKey?: string) => {
 
 export default function App() {
     const { t, language, setLanguage } = useLanguage();
+    const queryClient = useQueryClient();
+    const galleryNavigation = useGalleryNavigation();
 
     // --- Visual Polish ---
     // Inject noise texture globally
@@ -147,6 +257,10 @@ export default function App() {
     const scanStatusRef = useRef<ScanStatus>('idle');
     const thumbStatusRef = useRef<'idle' | 'scanning' | 'paused' | 'error'>('idle');
     const scanTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const navigationRequestEpochRef = useRef(0);
+    const activeLocationKeyRef = useRef(galleryNavigation.location.key);
+    const galleryAbortControllerRef = useRef<AbortController | null>(null);
+    const activeGalleryFetchRequestIdRef = useRef(0);
 
 
 
@@ -170,9 +284,16 @@ export default function App() {
     );
 
     // --- View State ---
-    const [viewMode, setViewMode] = useState<ViewMode>('home');
-    const [layoutMode, setLayoutMode] = useState<GridLayout>('timeline'); // Default to timeline
-    const [currentPath, setCurrentPath] = useState<string>('');
+    const [viewMode, setViewMode] = useState<ViewMode>(() => galleryNavigation.location.view);
+    const [layoutMode, setLayoutMode] = useState<GridLayout>(() => galleryNavigation.location.layout);
+    const [currentPath, setCurrentPath] = useState<string>(() => galleryNavigation.location.folderPath);
+    // 已提交搜索属于 URL；输入框草稿只在位置实际改变时才同步。
+    const [sortOption, setSortOption] = useState<SortOption>(() => galleryNavigation.location.sort);
+    const [filterOption, setFilterOption] = useState<FilterOption>(() => galleryNavigation.location.filter);
+    const [searchQuery, setSearchQuery] = useState(() => galleryNavigation.location.search);
+    const [activeSearch, setActiveSearch] = useState(() => galleryNavigation.location.search);
+    const activeSearchRef = useRef(activeSearch);
+    const lastSearchLocationKeyRef = useRef<string | null>(null);
     const [isSidebarOpen, setIsSidebarOpen] = useState(false);
     const [isDesktopSidebarOpen, setIsDesktopSidebarOpen] = useState(() => {
         const stored = localStorage.getItem(IS_DESKTOP_SIDEBAR_OPEN_KEY);
@@ -200,39 +321,31 @@ export default function App() {
         else if (viewMode === 'home' || viewMode === 'all') removeStorageItem(CURRENT_PATH_KEY, LEGACY_KEYS.currentPath);
     }, [currentPath, viewMode]);
 
+    useEffect(() => {
+        const location = galleryNavigation.location;
+        if (viewMode !== location.view) setViewMode(location.view);
+        if (currentPath !== location.folderPath) setCurrentPath(location.folderPath);
+        if (layoutMode !== location.layout) setLayoutMode(location.layout);
+        if (sortOption !== location.sort) setSortOption(location.sort);
+        if (filterOption !== location.filter) setFilterOption(location.filter);
+        if (shouldSyncSearchDraft(lastSearchLocationKeyRef.current, location.key)) {
+            lastSearchLocationKeyRef.current = location.key;
+            setSearchQuery(location.search);
+            setActiveSearch(location.search);
+        }
 
-    // 1. Initial Load & Mode Detection
+        if (!location.mediaId) {
+            setSelectedItem((item) => item ? null : item);
+            return;
+        }
+        const openedItem = files.find((item) => item.id === location.mediaId);
+        if (openedItem) setSelectedItem(openedItem);
+    }, [currentPath, files, filterOption, galleryNavigation.location, layoutMode, sortOption, viewMode]);
+
+
+    // 导航控制器负责 URL 与历史初始化，应用只保留渲染镜像。
     useEffect(() => {
         initApp();
-
-        const savedViewMode = getStorageItem(VIEW_MODE_KEY, LEGACY_KEYS.viewMode) as ViewMode;
-        if (savedViewMode) setViewMode(savedViewMode);
-
-        const savedLayout = getStorageItem(LAYOUT_MODE_KEY, LEGACY_KEYS.layoutMode) as GridLayout;
-        if (savedLayout) setLayoutMode(savedLayout);
-
-        // Restore path Strategy:
-        // 1. Priority: URL Hash (Deep linking)
-        // 2. Fallback: LocalStorage (Refresh restoration)
-        let restoredPath = '';
-        if (window.location.hash.startsWith('#folder=')) {
-            restoredPath = decodeURIComponent(window.location.hash.substring(8));
-            // 深链定位文件夹时强制进入文件夹视图
-            if (restoredPath) {
-                setViewMode('folders');
-                setStorageItem(VIEW_MODE_KEY, 'folders', LEGACY_KEYS.viewMode);
-            }
-        } else {
-            const savedPath = getStorageItem(CURRENT_PATH_KEY, LEGACY_KEYS.currentPath);
-            if (savedPath && savedViewMode === 'folders') {
-                restoredPath = savedPath;
-            }
-        }
-
-        if (restoredPath) {
-            setCurrentPath(restoredPath);
-            currentPathRef.current = restoredPath;
-        }
     }, []);
     useEffect(() => { currentUserRef.current = currentUser; }, [currentUser]);
 
@@ -245,14 +358,7 @@ export default function App() {
     // --- Theme State ---
     const [theme, setTheme] = useState<'light' | 'dark' | 'system'>('system');
 
-    // --- Sort & Filter State ---
-    const [sortOption, setSortOption] = useState<SortOption>('dateDesc');
-    const [filterOption, setFilterOption] = useState<FilterOption>('all');
-    const [searchQuery, setSearchQuery] = useState('');
-    const [activeSearch, setActiveSearch] = useState('');
-
     // Refs to combat stale closures
-    const activeSearchRef = useRef('');
     useEffect(() => {
         activeSearchRef.current = activeSearch;
     }, [activeSearch]);
@@ -339,6 +445,7 @@ export default function App() {
     };
 
     const handleLogout = () => {
+        queryClient.removeQueries({ queryKey: ['galleryFiles'] });
         removeStorageItem(TOKEN_STORAGE_KEY, LEGACY_KEYS.token);
         removeStorageItem(AUTH_USER_KEY, LEGACY_KEYS.authUser);
         setCurrentUser(null);
@@ -619,81 +726,18 @@ export default function App() {
         setAuthStep('login');
     };
 
-    // 1. Initial Load & Mode Detection
-    useEffect(() => {
-        initApp();
-
-        const savedViewMode = getStorageItem(VIEW_MODE_KEY, LEGACY_KEYS.viewMode) as ViewMode;
-        if (savedViewMode) setViewMode(savedViewMode);
-
-        const savedLayout = getStorageItem(LAYOUT_MODE_KEY, LEGACY_KEYS.layoutMode) as GridLayout;
-        if (savedLayout) setLayoutMode(savedLayout);
-
-        // Restore path from URL hash if present
-        if (window.location.hash.startsWith('#folder=')) {
-            const hashPath = decodeURIComponent(window.location.hash.substring(8));
-            if (hashPath) {
-                setCurrentPath(hashPath);
-                currentPathRef.current = hashPath; // Sync ref immediately
-                // 深链定位文件夹时强制进入文件夹视图
-                setViewMode('folders');
-                setStorageItem(VIEW_MODE_KEY, 'folders', LEGACY_KEYS.viewMode);
-            }
-        }
-    }, []);
-
-    // 1.5 Initial Data Fetch (When App Ready)
-    useEffect(() => {
-        if (authStep === 'app' && currentUser && isServerMode) {
-            console.log("App Ready: Triggering initial fetch for", viewMode);
-            // Small delay to ensure state is settled
-            setTimeout(() => {
-                if (viewMode === 'all') fetchServerFiles(currentUser.username, allUserData, 0, true, null);
-                else if (viewMode === 'folders') {
-                    // Use ref to ensure we get the path restored from hash even if closure is stale
-                    const path = currentPathRef.current || currentPath;
-                    fetchServerFiles(currentUser.username, allUserData, 0, true, path);
-                    fetchServerFolders(path);
-                }
-                else if (viewMode === 'favorites') {
-                    fetchServerFavorites().then(() => {
-                        fetchServerFiles(currentUser.username, allUserData, 0, true, null, true);
-                        fetchServerFolders(null, true);
-                    });
-                }
-            }, 100);
-        }
-    }, [authStep, currentUser?.username, isServerMode]); // Run once when user becomes available
-
-    // --- Browser History Integration ---
-    useEffect(() => {
-        const onPopState = (event: PopStateEvent) => {
-            if (event.state && typeof event.state.path === 'string') {
-                const path = event.state.path;
-                setCurrentPath(path);
-                if (viewMode === 'folders' && isServerMode && currentUser) {
-                    fetchServerFiles(currentUser.username, allUserData, 0, true, path);
-                    fetchServerFolders(path); // Update subfolders
-                }
-            } else {
-                if (currentPath !== '') {
-                    setCurrentPath('');
-                    if (isServerMode && currentUser) {
-                        fetchServerFiles(currentUser.username, allUserData, 0, true, '');
-                        fetchServerFolders('');
-                    }
-                }
-            }
-        };
-
-        window.addEventListener('popstate', onPopState);
-        return () => window.removeEventListener('popstate', onPopState);
-    }, [viewMode, currentPath, isServerMode, currentUser, allUserData]);
-
-
     // --- Server Logic: Scan & Poll ---
 
-    const fetchServerFolders = async (parentPath: string | null = null, favoritesOnly = false) => {
+    const fetchServerFolders = async (parentPath: string | null = null, favoritesOnly = false, navigationEpoch?: number, locationKey?: string, signal?: AbortSignal) => {
+        const guard = resolveGalleryRequestGuard(
+            navigationEpoch,
+            locationKey,
+            signal,
+            navigationRequestEpochRef.current,
+            activeLocationKeyRef.current,
+            galleryAbortControllerRef.current?.signal,
+        );
+        if (!isGalleryRequestGuardActive(guard, navigationRequestEpochRef.current, activeLocationKeyRef.current)) return;
         try {
             let url = `/api/library/folders`;
             const params = [];
@@ -703,12 +747,12 @@ export default function App() {
 
             if (params.length > 0) url += `?${params.join('&')}`;
 
-            const res = await apiFetch(url);
+            const res = await apiFetch(url, { signal: guard.signal });
             if (res.ok) {
                 const text = await res.text();
                 try {
                     const data = JSON.parse(text);
-                    if (data && data.folders) {
+                    if (data && data.folders && isGalleryRequestGuardActive(guard, navigationRequestEpochRef.current, activeLocationKeyRef.current)) {
                         setServerFolders(data.folders);
                     }
                 } catch (e) { }
@@ -749,8 +793,21 @@ export default function App() {
         favoritesOnly: boolean = false,
         favoriteIdsOverride?: { files: string[], folders: string[] },
         recursiveFavorites: boolean = false,
-        searchQuery?: string
+        searchQuery?: string,
+        navigationEpoch?: number,
+        locationKey?: string,
+        signal?: AbortSignal,
     ) => {
+        const guard = resolveGalleryRequestGuard(
+            navigationEpoch,
+            locationKey,
+            signal,
+            navigationRequestEpochRef.current,
+            activeLocationKeyRef.current,
+            galleryAbortControllerRef.current?.signal,
+        );
+        if (!isGalleryRequestGuardActive(guard, navigationRequestEpochRef.current, activeLocationKeyRef.current)) return;
+        const requestId = ++activeGalleryFetchRequestIdRef.current;
         try {
             setIsFetchingMore(true);
             const limit = 500;
@@ -786,7 +843,7 @@ export default function App() {
                 url += `&search=${encodeURIComponent(effectiveSearch)}`;
             }
 
-            const res = await apiFetch(url);
+            const res = await apiFetch(url, { signal: guard.signal });
             if (!res.ok) throw new Error(`API Error: ${res.status}`);
 
             const text = await res.text();
@@ -798,6 +855,7 @@ export default function App() {
             }
 
             if (!data) throw new Error("Empty response data");
+            if (!isGalleryRequestGuardActive(guard, navigationRequestEpochRef.current, activeLocationKeyRef.current)) return;
 
             // Map isFavorite property - Trust server provided isFavorite
             // But if we have an explicit override (optimistic UI), we could check it. 
@@ -857,9 +915,94 @@ export default function App() {
         } catch (e) {
             console.error("Fetch files failed", e);
         } finally {
-            setIsFetchingMore(false);
+            if (shouldUpdateGalleryFetchingState(
+                activeGalleryFetchRequestIdRef.current,
+                requestId,
+                isGalleryRequestGuardActive(guard, navigationRequestEpochRef.current, activeLocationKeyRef.current),
+            )) {
+                setIsFetchingMore(false);
+            }
         }
     };
+
+    const getGalleryQueryKey = useCallback((location: GalleryLocation) => createGalleryQueryKey({
+        username: currentUser?.username || '',
+        view: location.view,
+        folderPath: location.folderPath,
+        search: location.search,
+        sort: location.sort,
+        filter: location.filter,
+        randomSeed: Number(location.randomSeed) || 0,
+        layout: location.layout,
+    }), [currentUser?.username]);
+
+    const pruneGalleryCache = useCallback((protectedQueryKey?: readonly unknown[]) => {
+        const entries = queryClient.getQueryCache().findAll({ queryKey: ['galleryFiles'] }).map((query) => {
+            const page = query.state.data as GalleryPageCache | undefined;
+            return {
+                queryKey: query.queryKey,
+                itemCount: page?.files.length || 0,
+                updatedAt: query.state.dataUpdatedAt,
+            };
+        });
+        getGalleryCacheEvictionKeys(entries, 12, 5_000, protectedQueryKey).forEach((queryKey) => {
+            queryClient.removeQueries({ queryKey, exact: true });
+        });
+    }, [queryClient]);
+
+    const cacheCurrentGallery = useCallback(() => {
+        if (!currentUser) return;
+        const queryKey = getGalleryQueryKey(galleryNavigation.location);
+        const cached: GalleryPageCache = {
+            files: allUserData[currentUser.username]?.files || [],
+            serverFolders,
+            serverOffset,
+            serverTotal,
+            hasMoreServer,
+        };
+        queryClient.setQueryData(queryKey, cached);
+        pruneGalleryCache(queryKey);
+    }, [allUserData, currentUser, galleryNavigation.location, getGalleryQueryKey, hasMoreServer, pruneGalleryCache, queryClient, serverFolders, serverOffset, serverTotal]);
+
+    useEffect(() => {
+        queryClient.removeQueries({ queryKey: ['galleryFiles'] });
+    }, [currentUser?.username, currentUser?.allowedPaths?.join('\n'), queryClient]);
+
+    useEffect(() => {
+        if (authStep !== 'app' || !currentUser || !isServerMode) return;
+        const location = galleryNavigation.location;
+        galleryAbortControllerRef.current?.abort();
+        const abortController = new AbortController();
+        galleryAbortControllerRef.current = abortController;
+        const epoch = activateGalleryLocation(navigationRequestEpochRef, activeLocationKeyRef, location.key);
+        activeGalleryFetchRequestIdRef.current += 1;
+        setIsFetchingMore(false);
+        const cached = queryClient.getQueryData<GalleryPageCache>(getGalleryQueryKey(location));
+        if (cached) {
+            setAllUserData((data) => ({
+                ...data,
+                [currentUser.username]: { ...data[currentUser.username], files: cached.files },
+            }));
+            setServerFolders(cached.serverFolders);
+            setServerOffset(cached.serverOffset);
+            setServerTotal(cached.serverTotal);
+            setHasMoreServer(cached.hasMoreServer);
+            return;
+        }
+
+        const folderFilter = location.view === 'folders' ? location.folderPath : null;
+        const favoritesOnly = location.view === 'favorites';
+        const load = async () => {
+            const favoriteIds = favoritesOnly ? await fetchServerFavorites() : undefined;
+            if (!isActiveGalleryRequest(navigationRequestEpochRef.current, epoch, activeLocationKeyRef.current, location.key)) return;
+            await Promise.all([
+                fetchServerFiles(currentUser.username, allUserData, 0, true, folderFilter, favoritesOnly, favoriteIds, false, location.search, epoch, location.key, abortController.signal),
+                fetchServerFolders(folderFilter, favoritesOnly, epoch, location.key, abortController.signal),
+            ]);
+        };
+        void load();
+        return () => abortController.abort();
+    }, [authStep, currentUser?.username, galleryNavigation.location.key, getGalleryQueryKey, isServerMode, queryClient]);
 
     const endReachedLockRef = useRef(false);
 
@@ -871,7 +1014,9 @@ export default function App() {
         if (endReachedLockRef.current) return;
         endReachedLockRef.current = true;
 
-        await fetchServerFiles(currentUser.username, allUserData, serverOffset, false, filter, favs);
+        const requestEpoch = navigationRequestEpochRef.current;
+        const requestLocationKey = activeLocationKeyRef.current;
+        await fetchServerFiles(currentUser.username, allUserData, serverOffset, false, filter, favs, undefined, false, galleryNavigation.location.search, requestEpoch, requestLocationKey, galleryAbortControllerRef.current?.signal);
     };
 
     // Home favorites mode: fetch recursive favorites (parity with mobile carousel)
@@ -883,18 +1028,7 @@ export default function App() {
     }, [isServerMode, currentUser, viewMode, homeConfig.mode, sortOption, serverFavoriteIds]);
 
     // Re-fetch from server when sort changes to get globally ordered pages
-    useEffect(() => {
-        if (!isServerMode || !currentUser) return;
-
-        // Home favorites mode relies on the dedicated recursive fetch; avoid overwriting it with a full-library fetch.
-        if (viewMode === 'home' && homeConfig.mode === 'favorites') return;
-
-        setServerOffset(0);
-        setHasMoreServer(true);
-        const filter = viewMode === 'folders' ? currentPath : null;
-        const favs = viewMode === 'favorites';
-        fetchServerFiles(currentUser.username, allUserData, 0, true, filter, favs);
-    }, [sortOption, isServerMode, currentUser, viewMode, currentPath, homeConfig.mode, activeSearch]);
+    // 排序、筛选和搜索均由 GalleryLocation 变更触发加载，避免与 History 形成第二入口。
 
     const stopPolling = () => {
         if (scanTimeoutRef.current) {
@@ -1279,88 +1413,25 @@ export default function App() {
 
 
     const handleSetViewMode = async (mode: ViewMode) => {
-        setViewMode(mode);
+        cacheCurrentGallery();
+        navigationRequestEpochRef.current += 1;
         setStorageItem(VIEW_MODE_KEY, mode, LEGACY_KEYS.viewMode);
-        setCurrentPath('');
-
-        if (isServerMode && currentUser) {
-            // Clear current files to avoid "flash" of old content when switching views
-            // OPTIMIZED: Try to load from cache for 'home'/'all' views
-            let initialFiles: MediaItem[] = [];
-            if (mode === 'all' || mode === 'home') {
-                try {
-                    const cached = getStorageItem(CACHE_HOME_KEY, LEGACY_KEYS.cacheHome);
-                    if (cached) {
-                        const cData = JSON.parse(cached);
-                        if (cData && Array.isArray(cData.files)) {
-                            initialFiles = cData.files;
-                            console.log('Loaded from cache:', initialFiles.length);
-                        }
-                    }
-                } catch (e) { }
-            }
-
-            const clearedData = {
-                ...allUserData,
-                [currentUser.username]: {
-                    ...allUserData[currentUser.username],
-                    files: initialFiles
-                }
-            };
-            setAllUserData(clearedData);
-
-            // CRITICAL: Fetch favorites IDs first and get the data
-            const favoriteIds = await fetchServerFavorites();
-            console.log('[DEBUG] handleSetViewMode - got favoriteIds:', favoriteIds);
-
-            if (mode === 'all' || mode === 'home') {
-                fetchServerFiles(currentUser.username, clearedData, 0, true, null, false, favoriteIds);
-                fetchServerFolders(null, false); // Get all folders usually not needed for 'all', but if needed
-            } else if (mode === 'favorites') {
-                fetchServerFiles(currentUser.username, clearedData, 0, true, null, true, favoriteIds);
-                fetchServerFolders(null, true); // Get favorite folders
-            } else if (mode === 'folders') {
-                fetchServerFolders('', false); // Get ROOT folders
-                fetchServerFiles(currentUser.username, clearedData, 0, true, '', false, favoriteIds); // Get ROOT files
-            } else {
-                fetchServerFolders('', false);
-            }
-        }
+        galleryNavigation.updateLocation({ view: mode, folderPath: '', mediaId: undefined }, 'push');
     };
 
-    const handleFolderClick = (path: string, pushState = true) => {
-        setCurrentPath(path);
-        if (pushState) {
-            window.history.pushState({ path }, '', '#folder=' + encodeURIComponent(path));
-        }
-        if (isServerMode && currentUser) {
-            fetchServerFiles(currentUser.username, allUserData, 0, true, path);
-            fetchServerFolders(path); // Fetch sub-folders for the new path
-        }
+    const handleFolderClick = (path: string) => {
+        cacheCurrentGallery();
+        navigationRequestEpochRef.current += 1;
+        galleryNavigation.navigatePath(path);
     };
 
     const handleGoBackFolder = () => {
-        // Flattened Navigation:
-        // If the current path corresponds to one of the configured library roots,
-        // pressing "Back" should return to the top-level view, skipping intermediate folders.
-        if (libraryPaths && libraryPaths.some(lp => {
-            const normalizedLp = lp.replace(/\\/g, '/');
-            const normalizedCurrent = currentPath.replace(/\\/g, '/');
-            return normalizedLp === normalizedCurrent || normalizedLp === normalizedCurrent + '/';
-        })) {
-            handleFolderClick('');
-            return;
-        }
-
-        const parts = currentPath.split('/');
-        parts.pop();
-        const parentPath = parts.join('/');
-        handleFolderClick(parentPath);
+        cacheCurrentGallery();
+        navigationRequestEpochRef.current += 1;
+        galleryNavigation.up();
     };
 
     const handleJumpToFolder = (item: MediaItem) => {
-        setViewMode('folders');
-        setStorageItem(VIEW_MODE_KEY, 'folders', LEGACY_KEYS.viewMode);
         handleFolderClick(item.folderPath);
     };
 
@@ -1715,8 +1786,56 @@ export default function App() {
         else if (layoutMode === 'masonry') newMode = 'timeline';
         else if (layoutMode === 'timeline') newMode = 'grid';
 
-        setLayoutMode(newMode);
+        cacheCurrentGallery();
+        navigationRequestEpochRef.current += 1;
         setStorageItem(LAYOUT_MODE_KEY, newMode, LEGACY_KEYS.layoutMode);
+        galleryNavigation.updateLocation({ layout: newMode }, 'replace');
+    };
+
+    const handleSearchSubmit = () => {
+        if (searchQuery === galleryNavigation.location.search) return;
+        cacheCurrentGallery();
+        navigationRequestEpochRef.current += 1;
+        galleryNavigation.updateLocation({ search: searchQuery, mediaId: undefined }, 'push');
+    };
+
+    const handleSortChange = (sort: SortOption) => {
+        if (sort === galleryNavigation.location.sort) return;
+        cacheCurrentGallery();
+        navigationRequestEpochRef.current += 1;
+        galleryNavigation.updateLocation({ sort, mediaId: undefined }, 'replace');
+    };
+
+    const handleFilterChange = (filter: FilterOption) => {
+        if (filter === galleryNavigation.location.filter) return;
+        cacheCurrentGallery();
+        navigationRequestEpochRef.current += 1;
+        galleryNavigation.updateLocation({ filter, mediaId: undefined }, 'replace');
+    };
+
+    const handleOpenMedia = (item: MediaItem) => {
+        setSelectedItem(item);
+        galleryNavigation.updateLocation({ mediaId: item.id }, 'push');
+    };
+
+    const handleCloseMedia = () => {
+        setSelectedItem(null);
+        if (!galleryNavigation.location.mediaId || !galleryNavigation.back()) {
+            galleryNavigation.updateLocation({ mediaId: undefined }, 'replace');
+        }
+    };
+
+    const handleScrollToTop = () => {
+        galleryNavigation.requestRestore({
+            anchorIndex: 0,
+            offsetWithinItem: 0,
+            fallbackScrollTop: 0,
+            loadedOffset: serverOffset,
+        });
+    };
+
+    const handleViewportSnapshot = (snapshot: ViewportSnapshot) => {
+        galleryNavigation.captureSnapshot({ ...snapshot, loadedOffset: serverOffset });
     };
 
     const handleUpdateTitle = (newTitle: string) => {
@@ -2156,6 +2275,36 @@ export default function App() {
             />
 
             <main className="flex-1 flex flex-col min-w-0 relative h-full pt-16 md:pt-0">
+                {viewMode !== 'home' && (
+                    <div className="px-4 pt-3 md:px-8 md:pt-4">
+                        <div className="md:hidden">
+                            <GalleryNavigationBar
+                                currentPath={currentPath}
+                                canGoBack={galleryNavigation.canGoBack}
+                                canGoForward={galleryNavigation.canGoForward}
+                                onBack={() => { cacheCurrentGallery(); navigationRequestEpochRef.current += 1; galleryNavigation.back(); }}
+                                onForward={() => { cacheCurrentGallery(); navigationRequestEpochRef.current += 1; galleryNavigation.forward(); }}
+                                onUp={handleGoBackFolder}
+                                onNavigatePath={handleFolderClick}
+                                onScrollToTop={handleScrollToTop}
+                                compact={true}
+                            />
+                        </div>
+                        <div className="hidden md:block">
+                            <GalleryNavigationBar
+                                currentPath={currentPath}
+                                canGoBack={galleryNavigation.canGoBack}
+                                canGoForward={galleryNavigation.canGoForward}
+                                onBack={() => { cacheCurrentGallery(); navigationRequestEpochRef.current += 1; galleryNavigation.back(); }}
+                                onForward={() => { cacheCurrentGallery(); navigationRequestEpochRef.current += 1; galleryNavigation.forward(); }}
+                                onUp={handleGoBackFolder}
+                                onNavigatePath={handleFolderClick}
+                                onScrollToTop={handleScrollToTop}
+                                compact={false}
+                            />
+                        </div>
+                    </div>
+                )}
                 {/* Toolbar */}
                 {viewMode !== 'home' && (
                     <header className="h-16 flex items-center justify-between px-4 md:px-8 border-b border-white/5 bg-surface-primary z-20 shrink-0 absolute md:relative top-0 left-0 right-0 md:top-auto md:left-auto md:right-auto">
@@ -2195,7 +2344,7 @@ export default function App() {
                                     value={searchQuery}
                                     onChange={(e) => setSearchQuery(e.target.value)}
                                     onKeyDown={(e) => {
-                                        if (e.key === 'Enter') setActiveSearch(searchQuery);
+                                        if (e.key === 'Enter') handleSearchSubmit();
                                     }}
                                     className="pl-9 pr-8 py-1.5 bg-white/5 border border-white/10 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-accent-500 focus:bg-white/10 transition-all text-gray-800 dark:text-gray-200 placeholder-gray-500 w-48 lg:w-64"
                                 />
@@ -2203,7 +2352,7 @@ export default function App() {
                                     <button
                                         onClick={() => {
                                             setSearchQuery('');
-                                            setActiveSearch('');
+                                            galleryNavigation.updateLocation({ search: '', mediaId: undefined }, 'push');
                                         }}
                                         className="absolute right-2 p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 rounded-full"
                                     >
@@ -2215,9 +2364,9 @@ export default function App() {
                             {/* View/Sort Controls */}
                             {viewMode !== 'folders' && (
                                 <div className="flex items-center bg-white/5 rounded-lg p-1 border border-white/5">
-                                    <button onClick={() => setFilterOption('all')} className={`p-1.5 rounded-md ${filterOption === 'all' ? 'bg-white/10 shadow-sm' : 'text-text-tertiary'}`} title={t('all_types')}><Icons.Grid size={16} /></button>
-                                    <button onClick={() => setFilterOption('video')} className={`p-1.5 rounded-md ${filterOption === 'video' ? 'bg-white/10 shadow-sm' : 'text-text-tertiary'}`} title={t('videos_only')}><Icons.Video size={16} /></button>
-                                    <button onClick={() => setFilterOption('audio')} className={`p-1.5 rounded-md ${filterOption === 'audio' ? 'bg-white/10 shadow-sm' : 'text-text-tertiary'}`} title={t('audio_only')}><Icons.Music size={16} /></button>
+                                    <button onClick={() => handleFilterChange('all')} className={`p-1.5 rounded-md ${filterOption === 'all' ? 'bg-white/10 shadow-sm' : 'text-text-tertiary'}`} title={t('all_types')}><Icons.Grid size={16} /></button>
+                                    <button onClick={() => handleFilterChange('video')} className={`p-1.5 rounded-md ${filterOption === 'video' ? 'bg-white/10 shadow-sm' : 'text-text-tertiary'}`} title={t('videos_only')}><Icons.Video size={16} /></button>
+                                    <button onClick={() => handleFilterChange('audio')} className={`p-1.5 rounded-md ${filterOption === 'audio' ? 'bg-white/10 shadow-sm' : 'text-text-tertiary'}`} title={t('audio_only')}><Icons.Music size={16} /></button>
                                 </div>
                             )}
 
@@ -2228,11 +2377,11 @@ export default function App() {
                                 {/* Invisible bridge to prevent menu closing */}
                                 <div className="absolute left-0 right-0 top-full h-2 bg-transparent" />
                                 <div className="absolute right-0 top-full mt-2 w-48 bg-surface-secondary backdrop-blur-xl rounded-xl shadow-2xl border border-white/10 p-1 hidden group-hover:block z-50">
-                                    <button onClick={() => setSortOption('dateDesc')} className={`w-full text-left px-3 py-2 rounded-lg text-sm ${sortOption === 'dateDesc' ? 'bg-accent-500/10 text-accent-400' : 'text-text-secondary hover:bg-white/5'}`}>{t('newest_first')}</button>
-                                    <button onClick={() => setSortOption('dateAsc')} className={`w-full text-left px-3 py-2 rounded-lg text-sm ${sortOption === 'dateAsc' ? 'bg-accent-500/10 text-accent-400' : 'text-text-secondary hover:bg-white/5'}`}>{t('oldest_first')}</button>
-                                    <button onClick={() => setSortOption('nameAsc')} className={`w-full text-left px-3 py-2 rounded-lg text-sm ${sortOption === 'nameAsc' ? 'bg-accent-500/10 text-accent-400' : 'text-text-secondary hover:bg-white/5'}`}>{nameAscLabel}</button>
-                                    <button onClick={() => setSortOption('nameDesc')} className={`w-full text-left px-3 py-2 rounded-lg text-sm ${sortOption === 'nameDesc' ? 'bg-accent-500/10 text-accent-400' : 'text-text-secondary hover:bg-white/5'}`}>{nameDescLabel}</button>
-                                    <button onClick={() => setSortOption('random')} className={`w-full text-left px-3 py-2 rounded-lg text-sm ${sortOption === 'random' ? 'bg-accent-500/10 text-accent-400' : 'text-text-secondary hover:bg-white/5'}`}>{t('shuffle_random')}</button>
+                                    <button onClick={() => handleSortChange('dateDesc')} className={`w-full text-left px-3 py-2 rounded-lg text-sm ${sortOption === 'dateDesc' ? 'bg-accent-500/10 text-accent-400' : 'text-text-secondary hover:bg-white/5'}`}>{t('newest_first')}</button>
+                                    <button onClick={() => handleSortChange('dateAsc')} className={`w-full text-left px-3 py-2 rounded-lg text-sm ${sortOption === 'dateAsc' ? 'bg-accent-500/10 text-accent-400' : 'text-text-secondary hover:bg-white/5'}`}>{t('oldest_first')}</button>
+                                    <button onClick={() => handleSortChange('nameAsc')} className={`w-full text-left px-3 py-2 rounded-lg text-sm ${sortOption === 'nameAsc' ? 'bg-accent-500/10 text-accent-400' : 'text-text-secondary hover:bg-white/5'}`}>{nameAscLabel}</button>
+                                    <button onClick={() => handleSortChange('nameDesc')} className={`w-full text-left px-3 py-2 rounded-lg text-sm ${sortOption === 'nameDesc' ? 'bg-accent-500/10 text-accent-400' : 'text-text-secondary hover:bg-white/5'}`}>{nameDescLabel}</button>
+                                    <button onClick={() => handleSortChange('random')} className={`w-full text-left px-3 py-2 rounded-lg text-sm ${sortOption === 'random' ? 'bg-accent-500/10 text-accent-400' : 'text-text-secondary hover:bg-white/5'}`}>{t('shuffle_random')}</button>
                                 </div>
                             </div>
 
@@ -2288,8 +2437,6 @@ export default function App() {
                                         items={mixedItems.filter(Boolean)}
                                         onItemClick={(item) => {
                                             if (item.mediaType === 'folder') {
-                                                setViewMode('folders');
-                                                setStorageItem(VIEW_MODE_KEY, 'folders', LEGACY_KEYS.viewMode);
                                                 handleFolderClick(item.path);
                                             } else if (item.mediaType === 'audio') {
                                                 // Create playlist from all audio files in effective list
@@ -2301,7 +2448,7 @@ export default function App() {
                                                 setCurrentAudio(item);
                                                 setIsPlayerMinimized(false);
                                             } else {
-                                                setSelectedItem(item);
+                                                handleOpenMedia(item);
                                             }
                                         }}
                                         hasNextPage={isServerMode && hasMoreServer}
@@ -2309,6 +2456,10 @@ export default function App() {
                                         loadNextPage={() => loadMoreServerFiles()}
                                         itemCount={isServerMode ? serverTotal + visibleFolders.length : mixedItems.length}
                                         layout={viewMode === 'folders' && layoutMode === 'timeline' ? 'masonry' : layoutMode}
+                                        viewKey={galleryNavigation.location.key}
+                                        restoreSnapshot={galleryNavigation.restoreSnapshot}
+                                        onSnapshotChange={handleViewportSnapshot}
+                                        onRestoreComplete={galleryNavigation.consumeRestoreSnapshot}
                                         onToggleFavorite={handleToggleFavorite}
                                         onRename={handleFolderRename}
                                         onDelete={handleFolderDelete}
@@ -2335,8 +2486,6 @@ export default function App() {
                                                             coverMedia: folder.coverMedia || folder.coverItem
                                                         }}
                                                         onClick={(path) => {
-                                                            setViewMode('folders');
-                                                            setStorageItem(VIEW_MODE_KEY, 'folders', LEGACY_KEYS.viewMode);
                                                             handleFolderClick(path);
                                                         }}
                                                         isFavorite={true}
@@ -2370,8 +2519,8 @@ export default function App() {
                                                     setCurrentAudioIndex(clickedIndex >= 0 ? clickedIndex : 0);
                                                     setCurrentAudio(item);
                                                     setIsPlayerMinimized(false); // Show full player initially
-                                                } else {
-                                                    setSelectedItem(item);
+                                            } else {
+                                                    handleOpenMedia(item);
                                                 }
                                             }}
                                             hasNextPage={isServerMode && hasMoreServer}
@@ -2379,6 +2528,10 @@ export default function App() {
                                             loadNextPage={loadMoreServerFiles}
                                             itemCount={isServerMode ? serverTotal : processedFiles.filter(Boolean).length}
                                             layout={layoutMode}
+                                            viewKey={galleryNavigation.location.key}
+                                            restoreSnapshot={galleryNavigation.restoreSnapshot}
+                                            onSnapshotChange={handleViewportSnapshot}
+                                            onRestoreComplete={galleryNavigation.consumeRestoreSnapshot}
                                             onRegenerate={handleRegenerateFolder}
                                         />
                                     )}
@@ -2483,16 +2636,24 @@ export default function App() {
 
             <ImageViewer
                 item={selectedItem}
-                onClose={() => setSelectedItem(null)}
+                onClose={handleCloseMedia}
                 onNext={() => {
                     if (!selectedItem) return;
-                    const idx = processedFiles.findIndex(f => f.id === selectedItem.id);
-                    if (idx !== -1 && idx < processedFiles.length - 1) setSelectedItem(processedFiles[idx + 1]);
+                    const mediaId = getAdjacentMediaId(processedFiles, selectedItem.id, 'next');
+                    const nextItem = mediaId ? processedFiles.find((item) => item.id === mediaId) : undefined;
+                    if (nextItem) {
+                        setSelectedItem(nextItem);
+                        galleryNavigation.updateLocation({ mediaId }, 'replace');
+                    }
                 }}
                 onPrev={() => {
                     if (!selectedItem) return;
-                    const idx = processedFiles.findIndex(f => f.id === selectedItem.id);
-                    if (idx > 0) setSelectedItem(processedFiles[idx - 1]);
+                    const mediaId = getAdjacentMediaId(processedFiles, selectedItem.id, 'previous');
+                    const previousItem = mediaId ? processedFiles.find((item) => item.id === mediaId) : undefined;
+                    if (previousItem) {
+                        setSelectedItem(previousItem);
+                        galleryNavigation.updateLocation({ mediaId }, 'replace');
+                    }
                 }}
                 onDelete={handleDelete}
                 onRename={handleRename}
