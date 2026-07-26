@@ -333,6 +333,151 @@ describe('GalleryNavigationBar 组件测试 (Unified Toolbar Phase 2)', () => {
     expect(onLayoutChange).toHaveBeenCalledWith('masonry');
   });
 
+  it('桌面模式下弹层可由外部点击和 Escape 一并关闭，且点击内部控制不被当作外部点击', () => {
+    render(
+      <GalleryNavigationBar
+        {...defaultProps}
+        filter="all"
+        sortOption="dateDesc"
+        layoutMode="grid"
+        onFilterChange={vi.fn()}
+        onSortChange={vi.fn()}
+        onLayoutChange={vi.fn()}
+      />
+    );
+
+    const filterButton = screen.getByLabelText('当前筛选：全部类型');
+    fireEvent.click(filterButton);
+    expect(screen.getByText('视频')).toBeDefined();
+
+    const searchButton = screen.getByLabelText('进入搜索');
+    fireEvent.click(searchButton);
+
+    expect(screen.queryByText('视频')).toBeNull();
+    expect(screen.queryByLabelText('搜索输入框')).toBeDefined();
+
+    fireEvent.keyDown(window, { key: 'Escape' });
+    fireEvent.click(filterButton);
+    expect(screen.getByText('视频')).toBeDefined();
+    fireEvent.pointerDown(document.body);
+    expect(screen.queryByText('视频')).toBeNull();
+  });
+
+  it('打开任一瞬时态会关闭其它瞬时态，关闭后保持设置值', () => {
+    const onFilterChange = vi.fn();
+    const onSortChange = vi.fn();
+    const onLayoutChange = vi.fn();
+
+    const { rerender } = render(
+      <GalleryNavigationBar
+        {...defaultProps}
+        filter="all"
+        onFilterChange={onFilterChange}
+        onSortChange={onSortChange}
+        onLayoutChange={onLayoutChange}
+      />
+    );
+
+    const filterButton = screen.getByLabelText('当前筛选：全部类型');
+    fireEvent.click(filterButton);
+    fireEvent.click(screen.getByText('视频'));
+    expect(onFilterChange).toHaveBeenCalledWith('video');
+    rerender(
+      <GalleryNavigationBar
+        {...defaultProps}
+        filter="video"
+        onFilterChange={onFilterChange}
+        onSortChange={onSortChange}
+        onLayoutChange={onLayoutChange}
+      />,
+    );
+    expect(screen.getByLabelText('当前筛选：视频')).toBeDefined();
+
+    const sortButton = screen.getByLabelText(/当前排序：/);
+    fireEvent.click(sortButton);
+    fireEvent.click(screen.getByText('最早优先'));
+    expect(onSortChange).toHaveBeenCalledWith('dateAsc');
+    rerender(
+      <GalleryNavigationBar
+        {...defaultProps}
+        filter="video"
+        sortOption="dateAsc"
+        onFilterChange={onFilterChange}
+        onSortChange={onSortChange}
+        onLayoutChange={onLayoutChange}
+      />,
+    );
+    expect(screen.getByLabelText(/当前排序：最早优先/)).toBeDefined();
+
+    const layoutButton = screen.getByLabelText(/切换布局/);
+    fireEvent.click(layoutButton);
+    fireEvent.click(screen.getByText('瀑布流'));
+    expect(onLayoutChange).toHaveBeenCalledWith('masonry');
+    rerender(
+      <GalleryNavigationBar
+        {...defaultProps}
+        filter="video"
+        sortOption="dateAsc"
+        layoutMode="masonry"
+        onFilterChange={onFilterChange}
+        onSortChange={onSortChange}
+        onLayoutChange={onLayoutChange}
+      />,
+    );
+    expect(screen.getByLabelText(/切换布局（当前：瀑布流）/)).toBeDefined();
+  });
+
+  it('ESC 会关闭搜索、筛选、排序、布局与移动更多弹层', () => {
+    const onSortChange = vi.fn();
+    const onLayoutChange = vi.fn();
+    const onFilterChange = vi.fn();
+
+    const { rerender } = render(
+      <GalleryNavigationBar
+        {...defaultProps}
+        onSortChange={onSortChange}
+        onLayoutChange={onLayoutChange}
+        onFilterChange={onFilterChange}
+      />,
+    );
+
+    fireEvent.click(screen.getByLabelText('进入搜索'));
+    expect(screen.getByLabelText('搜索输入框')).toBeDefined();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByLabelText('搜索输入框')).toBeNull();
+
+    fireEvent.click(screen.getByLabelText(/当前筛选：/));
+    expect(screen.getByText('视频')).toBeDefined();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByText('视频')).toBeNull();
+
+    fireEvent.click(screen.getByLabelText(/当前排序：/));
+    expect(screen.getByText('最早优先')).toBeDefined();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByText('最早优先')).toBeNull();
+
+    fireEvent.click(screen.getByLabelText(/切换布局/));
+    expect(screen.getByText('瀑布流')).toBeDefined();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByText('瀑布流')).toBeNull();
+
+    rerender(
+      <GalleryNavigationBar
+        {...defaultProps}
+        onSearch={vi.fn()}
+        compact={true}
+        filter="all"
+        onFilterChange={onFilterChange}
+        onSortChange={onSortChange}
+        onLayoutChange={onLayoutChange}
+      />,
+    );
+    fireEvent.click(screen.getByLabelText('更多选项'));
+    expect(screen.getByTestId('mobile-more-dismiss-overlay')).toBeDefined();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByTestId('mobile-more-dismiss-overlay')).toBeNull();
+  });
+
   it('桌面筛选使用单一菜单入口，md-lg 宽度下保持可达', () => {
     const onFilterChange = vi.fn();
     render(<GalleryNavigationBar {...defaultProps} filter="all" onFilterChange={onFilterChange} />);
@@ -466,6 +611,42 @@ describe('GalleryNavigationBar 组件测试 (Unified Toolbar Phase 2)', () => {
     expect(within(screen.getByTestId('gallery-nav-bar-desktop')).getByLabelText('搜索输入框')).toBeDefined();
     expect(within(screen.getByTestId('gallery-nav-bar-compact')).queryByLabelText('搜索输入框')).toBeNull();
     expect(matchMedia).toHaveBeenCalledWith('(min-width: 1024px)');
+  });
+
+  it('快捷键打开搜索会关闭筛选弹层并复用统一入口', () => {
+    render(
+      <GalleryNavigationBar
+        {...defaultProps}
+        onFilterChange={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByLabelText(/当前筛选：/));
+    expect(screen.getByText('视频')).toBeDefined();
+
+    fireEvent.keyDown(window, { key: 'k', metaKey: true });
+    expect(screen.queryByText('视频')).toBeNull();
+    expect(screen.getByLabelText('搜索输入框')).toBeDefined();
+  });
+
+  it('外部 pointerdown 关闭瞬时态时会清除导航根内的焦点', () => {
+    render(
+      <GalleryNavigationBar
+        {...defaultProps}
+        onSortChange={vi.fn()}
+        onLayoutChange={vi.fn()}
+        onFilterChange={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByLabelText('进入搜索'));
+    const searchInput = screen.getByLabelText('搜索输入框');
+    expect(document.activeElement).toBe(searchInput);
+
+    fireEvent.pointerDown(document.body);
+
+    expect(screen.queryByLabelText('搜索输入框')).toBeNull();
+    expect(document.activeElement).not.toBe(searchInput);
   });
 
   it('长路径保持单行并折叠中间节点，当前节点始终可见', () => {
