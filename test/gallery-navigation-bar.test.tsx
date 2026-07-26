@@ -317,6 +317,11 @@ describe('GalleryNavigationBar 组件测试 (Unified Toolbar Phase 2)', () => {
     // 1. 触发排序菜单
     const sortBtn = screen.getByLabelText(/当前排序：/);
     fireEvent.click(sortBtn);
+    const sortMenu = screen.getByRole('listbox');
+    expect(sortMenu.className).toContain('bg-surface-secondary');
+    expect(sortMenu.className).toContain('backdrop-blur-2xl');
+    expect(sortMenu.className).not.toContain('bg-surface-secondary/90');
+    expect(sortMenu.className).not.toContain('bg-surface-secondary/95');
 
     // 点击最早优先
     const dateAscOpt = screen.getByText('最早优先');
@@ -326,6 +331,11 @@ describe('GalleryNavigationBar 组件测试 (Unified Toolbar Phase 2)', () => {
     // 2. 触发布局菜单
     const layoutBtn = screen.getByLabelText(/切换布局/);
     fireEvent.click(layoutBtn);
+    const layoutMenu = screen.getByRole('listbox');
+    expect(layoutMenu.className).toContain('bg-surface-secondary');
+    expect(layoutMenu.className).toContain('backdrop-blur-2xl');
+    expect(layoutMenu.className).not.toContain('bg-surface-secondary/90');
+    expect(layoutMenu.className).not.toContain('bg-surface-secondary/95');
 
     // 点击瀑布流
     const masonryOpt = screen.getByText('瀑布流');
@@ -348,7 +358,12 @@ describe('GalleryNavigationBar 组件测试 (Unified Toolbar Phase 2)', () => {
     expect(desktopBar.className).not.toContain('z-[');
 
     fireEvent.click(screen.getByLabelText(/当前筛选：/));
-    expect(screen.getByRole('listbox').className).toContain('z-20');
+    const filterMenu = screen.getByRole('listbox');
+    expect(filterMenu.className).toContain('bg-surface-secondary');
+    expect(filterMenu.className).toContain('backdrop-blur-2xl');
+    expect(filterMenu.className).not.toContain('bg-surface-secondary/90');
+    expect(filterMenu.className).not.toContain('bg-surface-secondary/95');
+    expect(filterMenu.className).toContain('z-20');
     expect(document.querySelector('.fixed.inset-0.z-10')).not.toBeNull();
     fireEvent.keyDown(window, { key: 'Escape' });
 
@@ -369,7 +384,12 @@ describe('GalleryNavigationBar 组件测试 (Unified Toolbar Phase 2)', () => {
 
     const mobileOverlay = compactRender.getByTestId('mobile-more-dismiss-overlay');
     expect(mobileOverlay.className).toContain('z-10');
-    expect(within(compactBar).getByRole('menu').className).toContain('z-20');
+    const mobileMenu = within(compactBar).getByRole('menu');
+    expect(mobileMenu.className).toContain('bg-surface-secondary');
+    expect(mobileMenu.className).toContain('backdrop-blur-2xl');
+    expect(mobileMenu.className).not.toContain('bg-surface-secondary/90');
+    expect(mobileMenu.className).not.toContain('bg-surface-secondary/95');
+    expect(mobileMenu.className).toContain('z-20');
 
     compactRender.unmount();
   });
