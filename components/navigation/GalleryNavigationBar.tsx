@@ -107,6 +107,7 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
   const [isSortMenuOpen, setIsSortMenuOpen] = useState(false);
   const [isLayoutMenuOpen, setIsLayoutMenuOpen] = useState(false);
   const [isMobileMoreOpen, setIsMobileMoreOpen] = useState(false);
+  const navRootRef = useRef<HTMLDivElement>(null);
 
   const searchInputRef = useRef<HTMLInputElement>(null);
   const searchContextKey = location?.key ?? `${activeView}:${activeFolderPath}`;
@@ -114,6 +115,54 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
     setSearchDraft(activeSearch);
     setIsSearchMode(false);
   }, [activeSearch]);
+
+  const closeTransientPanels = useCallback(() => {
+    closeSearchMode();
+    setIsFilterMenuOpen(false);
+    setIsSortMenuOpen(false);
+    setIsLayoutMenuOpen(false);
+    setIsMobileMoreOpen(false);
+  }, [closeSearchMode]);
+
+  const openSearchMode = useCallback(() => {
+    setIsFilterMenuOpen(false);
+    setIsSortMenuOpen(false);
+    setIsLayoutMenuOpen(false);
+    setIsMobileMoreOpen(false);
+    setIsSearchMode(true);
+  }, []);
+
+  const openFilterMenu = useCallback(() => {
+    closeSearchMode();
+    setIsSortMenuOpen(false);
+    setIsLayoutMenuOpen(false);
+    setIsMobileMoreOpen(false);
+    setIsFilterMenuOpen((prev) => !prev);
+  }, [closeSearchMode]);
+
+  const openSortMenu = useCallback(() => {
+    closeSearchMode();
+    setIsFilterMenuOpen(false);
+    setIsLayoutMenuOpen(false);
+    setIsMobileMoreOpen(false);
+    setIsSortMenuOpen((prev) => !prev);
+  }, [closeSearchMode]);
+
+  const openLayoutMenu = useCallback(() => {
+    closeSearchMode();
+    setIsFilterMenuOpen(false);
+    setIsSortMenuOpen(false);
+    setIsMobileMoreOpen(false);
+    setIsLayoutMenuOpen((prev) => !prev);
+  }, [closeSearchMode]);
+
+  const openMobileMoreMenu = useCallback(() => {
+    closeSearchMode();
+    setIsFilterMenuOpen(false);
+    setIsSortMenuOpen(false);
+    setIsLayoutMenuOpen(false);
+    setIsMobileMoreOpen((prev) => !prev);
+  }, [closeSearchMode]);
 
   // A location transition owns a fresh draft even when the submitted query is unchanged.
   useEffect(() => {
@@ -133,27 +182,41 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
         const isVisibleShortcutOwner = compact ? !desktopMatches : desktopMatches;
         if (!isVisibleShortcutOwner) return;
         e.preventDefault();
-        setIsSearchMode(true);
+        openSearchMode();
       }
     };
     window.addEventListener('keydown', handleGlobalKeyDown);
     return () => {
       window.removeEventListener('keydown', handleGlobalKeyDown);
     };
-  }, [compact, enableSearchShortcut]);
+  }, [compact, enableSearchShortcut, openSearchMode]);
+
+  useEffect(() => {
+    const handlePointerDown = (event: PointerEvent) => {
+      const root = navRootRef.current;
+      if (!root) return;
+      const target = event.target as Node | null;
+      if (!target || root.contains(target)) return;
+      const activeElement = document.activeElement;
+      if (activeElement && root.contains(activeElement) && activeElement instanceof HTMLElement) {
+        activeElement.blur();
+      }
+      closeTransientPanels();
+    };
+    document.addEventListener('pointerdown', handlePointerDown);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+    };
+  }, [closeTransientPanels]);
 
   useEffect(() => {
     const handleEscape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
-      setIsFilterMenuOpen(false);
-      setIsSortMenuOpen(false);
-      setIsLayoutMenuOpen(false);
-      setIsMobileMoreOpen(false);
-      if (isSearchMode) closeSearchMode();
+      closeTransientPanels();
     };
     window.addEventListener('keydown', handleEscape);
     return () => window.removeEventListener('keydown', handleEscape);
-  }, [closeSearchMode, isSearchMode]);
+  }, [closeTransientPanels]);
 
   // Text localizations
   const backText = isZh ? '后退' : 'Go back';
@@ -283,10 +346,11 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
   // --- MOBILE COMPACT MODE ---
   if (compact) {
     return (
-      <div
-        className={`flex items-center justify-between gap-2 p-2 rounded-2xl glass-1 border border-white/5 shadow-lg transition-all duration-300 relative ${className}`}
-        data-testid="gallery-nav-bar-compact"
-      >
+    <div
+      ref={navRootRef}
+      className={`flex items-center justify-between gap-2 p-2 rounded-2xl glass-1 border border-white/5 shadow-lg transition-all duration-300 relative ${className}`}
+      data-testid="gallery-nav-bar-compact"
+    >
         {isSearchMode ? (
           <div className="flex items-center gap-2 w-full" onClick={(e) => e.stopPropagation()}>
             <span
@@ -368,19 +432,19 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
             {/* Right: Search & More buttons (44px target) */}
             <div className="flex items-center gap-1 shrink-0">
               <button
-                onClick={() => setIsSearchMode(true)}
+                onClick={openSearchMode}
                 className="w-11 h-11 flex items-center justify-center rounded-full text-text-secondary hover:text-text-primary hover:bg-white/5 transition-colors focus:outline-none focus:ring-2 focus:ring-accent-500/30"
                 aria-label={isZh ? '进入搜索' : 'Enter search'}
               >
                 <Icons.Search size={20} />
               </button>
 
-              <div className="relative">
-                <button
-                  onClick={() => setIsMobileMoreOpen(!isMobileMoreOpen)}
-                  className="w-11 h-11 flex items-center justify-center rounded-full text-text-secondary hover:text-text-primary hover:bg-white/5 transition-colors focus:outline-none focus:ring-2 focus:ring-accent-500/30"
-                  aria-label={isZh ? '更多选项' : 'More options'}
-                  aria-haspopup="true"
+                <div className="relative">
+                  <button
+                    onClick={openMobileMoreMenu}
+                    className="w-11 h-11 flex items-center justify-center rounded-full text-text-secondary hover:text-text-primary hover:bg-white/5 transition-colors focus:outline-none focus:ring-2 focus:ring-accent-500/30"
+                    aria-label={isZh ? '更多选项' : 'More options'}
+                    aria-haspopup="true"
                   aria-expanded={isMobileMoreOpen}
                 >
                   <Icons.More size={20} />
@@ -388,7 +452,7 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
 
                 {isMobileMoreOpen && (
                   <>
-                    <div className="fixed inset-0 z-40" onClick={() => setIsMobileMoreOpen(false)} data-testid="mobile-more-dismiss-overlay" />
+                    <div className="fixed inset-0 z-40" onClick={closeTransientPanels} data-testid="mobile-more-dismiss-overlay" />
                     <div
                       className="absolute right-0 top-full mt-2 w-56 bg-surface-secondary/95 backdrop-blur-xl rounded-2xl shadow-2xl border border-white/10 p-2 z-50 flex flex-col gap-1 max-h-[80vh] overflow-y-auto"
                       role="menu"
@@ -398,7 +462,7 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
                         <button
                           onClick={() => {
                             onUp();
-                            setIsMobileMoreOpen(false);
+                            closeTransientPanels();
                           }}
                           className="flex items-center gap-3 w-full text-left px-3 py-2.5 rounded-xl text-sm text-text-secondary hover:bg-white/5 hover:text-text-primary transition-colors min-h-[44px] focus:outline-none"
                           role="menuitem"
@@ -409,11 +473,11 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
                       )}
 
                       {/* Scroll to Top */}
-                      <button
-                        onClick={() => {
-                          onScrollToTop();
-                          setIsMobileMoreOpen(false);
-                        }}
+                        <button
+                          onClick={() => {
+                            onScrollToTop();
+                            closeTransientPanels();
+                          }}
                         className="flex items-center gap-3 w-full text-left px-3 py-2.5 rounded-xl text-sm text-text-secondary hover:bg-white/5 hover:text-text-primary transition-colors min-h-[44px] focus:outline-none"
                         role="menuitem"
                       >
@@ -433,7 +497,7 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
                               key={value}
                               onClick={() => {
                                 onFilterChange(value);
-                                setIsMobileMoreOpen(false);
+                                closeTransientPanels();
                               }}
                               className={`flex items-center gap-3 w-full text-left px-3 py-2.5 rounded-xl text-sm transition-colors min-h-[44px] focus:outline-none ${
                                 currentFilter === value ? 'bg-accent-500/10 text-accent-400 font-medium' : 'text-text-secondary hover:bg-white/5'
@@ -454,12 +518,12 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
                         {isZh ? '排序' : 'Sort'}
                       </div>
                       {(['dateDesc', 'dateAsc', 'nameAsc', 'nameDesc', 'random'] as GallerySortOption[]).map((opt) => (
-                        <button
-                          key={opt}
-                          onClick={() => {
-                            onSortChange?.(opt);
-                            setIsMobileMoreOpen(false);
-                          }}
+                            <button
+                              key={opt}
+                              onClick={() => {
+                                onSortChange?.(opt);
+                                closeTransientPanels();
+                              }}
                           className={`flex items-center justify-between w-full text-left px-3 py-2.5 rounded-xl text-sm transition-colors min-h-[44px] focus:outline-none ${
                             currentSort === opt ? 'bg-accent-500/10 text-accent-400 font-medium' : 'text-text-secondary hover:bg-white/5'
                           }`}
@@ -478,12 +542,12 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
                         {isZh ? '布局' : 'Layout'}
                       </div>
                       {(['grid', 'masonry', 'timeline'] as GalleryLayout[]).map((mode) => (
-                        <button
-                          key={mode}
-                          onClick={() => {
-                            onLayoutChange?.(mode);
-                            setIsMobileMoreOpen(false);
-                          }}
+                            <button
+                              key={mode}
+                              onClick={() => {
+                                onLayoutChange?.(mode);
+                                closeTransientPanels();
+                              }}
                           className={`flex items-center justify-between w-full text-left px-3 py-2.5 rounded-xl text-sm transition-colors min-h-[44px] focus:outline-none ${
                             currentLayout === mode ? 'bg-accent-500/10 text-accent-400 font-medium' : 'text-text-secondary hover:bg-white/5'
                           }`}
@@ -513,6 +577,7 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
 
   return (
     <div
+      ref={navRootRef}
       className={`flex flex-nowrap items-center gap-2 xl:gap-4 w-full min-w-0 p-3 rounded-2xl glass-1 border border-white/5 shadow-md transition-all duration-300 relative ${className}`}
       data-testid="gallery-nav-bar-desktop"
     >
@@ -564,7 +629,7 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
         data-testid="gallery-omnibox"
         onClick={() => {
           if (!isSearchMode) {
-            setIsSearchMode(true);
+            openSearchMode();
           }
         }}
       >
@@ -629,9 +694,9 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
             )}
             <IconButton
               icon={<Icons.Search size={18} />}
-              onClick={(e) => {
+                onClick={(e) => {
                 e.stopPropagation();
-                setIsSearchMode(true);
+                openSearchMode();
               }}
               tooltip={isZh ? '搜索 (Ctrl+K)' : 'Search (Ctrl+K)'}
               aria-label={isZh ? '进入搜索' : 'Enter search'}
@@ -647,8 +712,8 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
       <div className="flex items-center gap-2 shrink-0 relative">
         {onFilterChange && (
           <div className="relative">
-            <button
-              onClick={() => setIsFilterMenuOpen(!isFilterMenuOpen)}
+          <button
+              onClick={openFilterMenu}
               className="flex items-center justify-center h-10 w-10 hover:bg-white/10 rounded-xl text-text-secondary hover:text-text-primary transition-all duration-200 border border-white/5 focus:outline-none focus:ring-2 focus:ring-accent-500/30"
               aria-label={isZh ? `当前筛选：${getFilterLabel(currentFilter)}` : `Current filter: ${getFilterLabel(currentFilter)}`}
               aria-haspopup="listbox"
@@ -658,15 +723,15 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
             </button>
             {isFilterMenuOpen && (
               <>
-                <div className="fixed inset-0 z-40" onClick={() => setIsFilterMenuOpen(false)} />
+                <div className="fixed inset-0 z-40" onClick={closeTransientPanels} />
                 <div className="absolute right-0 top-full mt-2 w-40 bg-surface-secondary/90 backdrop-blur-xl rounded-xl shadow-2xl border border-white/10 p-1 z-50" role="listbox">
                   {(['all', 'image', 'video', 'audio'] as GalleryFilterOption[]).map((value) => (
                     <button
                       key={value}
-                      onClick={() => {
-                        onFilterChange(value);
-                        setIsFilterMenuOpen(false);
-                      }}
+                    onClick={() => {
+                      onFilterChange(value);
+                      closeTransientPanels();
+                    }}
                       className={`flex items-center gap-2 w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
                         currentFilter === value ? 'bg-accent-500/10 text-accent-400 font-medium' : 'text-text-secondary hover:bg-white/5'
                       }`}
@@ -685,7 +750,7 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
         {/* Sort Menu */}
         <div className="relative">
           <button
-            onClick={() => setIsSortMenuOpen(!isSortMenuOpen)}
+            onClick={openSortMenu}
             className="flex items-center justify-center gap-1.5 h-10 w-10 xl:w-auto xl:px-3 hover:bg-white/10 rounded-xl text-text-secondary hover:text-text-primary transition-all duration-200 border border-white/5 focus:outline-none focus:ring-2 focus:ring-accent-500/30"
             aria-label={isZh ? `当前排序：${getSortLabel(currentSort)}` : `Sort by: ${getSortLabel(currentSort)}`}
             aria-haspopup="listbox"
@@ -697,7 +762,7 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
 
           {isSortMenuOpen && (
             <>
-              <div className="fixed inset-0 z-40" onClick={() => setIsSortMenuOpen(false)} />
+              <div className="fixed inset-0 z-40" onClick={closeTransientPanels} />
               <div
                 className="absolute right-0 top-full mt-2 w-48 bg-surface-secondary/90 backdrop-blur-xl rounded-xl shadow-2xl border border-white/10 p-1 z-50 animate-in fade-in slide-in-from-top-2 duration-200"
                 role="listbox"
@@ -707,7 +772,7 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
                     key={opt}
                     onClick={() => {
                       onSortChange?.(opt);
-                      setIsSortMenuOpen(false);
+                      closeTransientPanels();
                     }}
                     className={`flex items-center justify-between w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
                       currentSort === opt ? 'bg-accent-500/10 text-accent-400 font-medium' : 'text-text-secondary hover:bg-white/5'
@@ -727,7 +792,7 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
         {/* Layout Menu */}
         <div className="relative">
           <button
-            onClick={() => setIsLayoutMenuOpen(!isLayoutMenuOpen)}
+            onClick={openLayoutMenu}
             className="flex items-center justify-center h-10 w-10 hover:bg-white/10 rounded-xl text-text-secondary hover:text-text-primary transition-all duration-200 border border-white/5 focus:outline-none focus:ring-2 focus:ring-accent-500/30"
             aria-label={isZh ? `切换布局（当前：${getLayoutLabel(currentLayout)}）` : `Change layout (current: ${getLayoutLabel(currentLayout)})`}
             aria-haspopup="listbox"
@@ -738,7 +803,7 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
 
           {isLayoutMenuOpen && (
             <>
-              <div className="fixed inset-0 z-40" onClick={() => setIsLayoutMenuOpen(false)} />
+              <div className="fixed inset-0 z-40" onClick={closeTransientPanels} />
               <div
                 className="absolute right-0 top-full mt-2 w-40 bg-surface-secondary/90 backdrop-blur-xl rounded-xl shadow-2xl border border-white/10 p-1 z-50 animate-in fade-in slide-in-from-top-2 duration-200"
                 role="listbox"
@@ -748,7 +813,7 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
                     key={mode}
                     onClick={() => {
                       onLayoutChange?.(mode);
-                      setIsLayoutMenuOpen(false);
+                      closeTransientPanels();
                     }}
                     className={`flex items-center gap-2 w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
                       currentLayout === mode ? 'bg-accent-500/10 text-accent-400 font-medium' : 'text-text-secondary hover:bg-white/5'
