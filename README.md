@@ -16,7 +16,7 @@ Luvia Gallery 专为"已有归档媒体"设计：它不搬动、不重命名、�
 - 🛡️ **零侵入存储**: 纯读取模式，不对原始文件进行任何改动。
 - 🔌 **即插即用**: 通过 Docker 卷映射 `/media` 即可入库，无需复杂的迁移过程。
 - 🚀 **极速响应**: 异步流式扫描、有界文件 I/O 与虚拟滚动技术，避免超大媒体库后台扫描阻塞浏览请求。
-- 🧭 **可恢复导航**: WebUI 支持后退、前进、上一级和面包屑导航，进出子目录、打开媒体或刷新页面后可恢复已浏览位置。
+- 🧭 **统一可恢复导航**: WebUI 使用浏览器式单行工具栏整合地址、作用域搜索、排序和布局；媒体库、收藏夹与文件夹地址互不污染，进出目录、打开媒体或刷新后可恢复浏览位置。
 - 📱 **全端覆盖**: 统一的 Web (React) 与 移动端 (React Native) 体验。
 - 🧭 **非同步工具**: 专注"浏览"而非"同步/备份"，不具备上传功能，确保文件系统纯净。
 - 🔐 **用户认证**: 多用户支持，JWT 安全认证，用户级别路径访问控制。
@@ -97,7 +97,7 @@ Luvia Gallery is a non-destructive media browser for pre-archived libraries. It 
 - 🛡️ **Non-Destructive**: Read-only core—no moves, renames, or modifications.
 - 🔌 **Volume-First**: Map your library to `/media` and start browsing instantly.
 - 🚀 **Performance**: Streaming scans, bounded filesystem I/O, and virtualized grids keep browsing responsive on large libraries.
-- 🧭 **Restorable Navigation**: WebUI back, forward, up, and breadcrumb navigation restore the browsing position across folders, media viewing, and page refreshes.
+- 🧭 **Unified Restorable Navigation**: A browser-style toolbar combines location, scoped search, sorting, and layout controls while keeping library, favorites, and folder locations isolated and restorable.
 - 📱 **Cross-Platform**: Seamless experience on both Web and Mobile.
 - 🧭 **Library Focused**: Designed for browsing archives; no upload features to keep your filesystem clean.
 - 🔐 **Authentication**: Multi-user support with JWT security and path-based access control.

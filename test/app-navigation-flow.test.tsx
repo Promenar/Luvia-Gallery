@@ -2,8 +2,9 @@ import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
-import { describe, expect, it, vi } from 'vitest';
-import App, { activateGalleryLocation, getAdjacentMediaId, getGalleryCacheEvictionKeys, isActiveGalleryRequest, isGalleryRequestGuardActive, resolveGalleryRequestGuard, shouldSyncSearchDraft, shouldUpdateGalleryFetchingState } from '../App';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import App, { activateGalleryLocation, getAdjacentMediaId, getGalleryCacheEvictionKeys, isActiveGalleryRequest, isGalleryRequestGuardActive, resolveGalleryRequestGuard, shouldRenderUnifiedGalleryToolbar, shouldSyncSearchDraft, shouldUpdateGalleryFetchingState, UnifiedGalleryToolbar } from '../App';
 import { LanguageProvider } from '../contexts/LanguageContext';
 import { useGalleryNavigation, type GalleryNavigationApi } from '../hooks/useGalleryNavigation';
 import { GalleryNavigationController, type NavigationEnvironment } from '../navigation/navigation-controller';
@@ -36,6 +37,114 @@ const createEnvironment = (hash = '#folder=parent') => {
 };
 
 describe('应用导航最小闭环', () => {
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+  });
+
+  it('统一工具栏仅在媒体库、收藏夹和文件夹内容视图显示', () => {
+    expect(shouldRenderUnifiedGalleryToolbar('home')).toBe(false);
+    expect(shouldRenderUnifiedGalleryToolbar('all')).toBe(true);
+    expect(shouldRenderUnifiedGalleryToolbar('favorites')).toBe(true);
+    expect(shouldRenderUnifiedGalleryToolbar('folders')).toBe(true);
+  });
+
+  it('真实统一工具栏边界覆盖三视图、隔离陈旧路径并按契约提交位置更新', () => {
+    const storedValues = new Map<string, string>();
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => storedValues.get(key) ?? null,
+      setItem: (key: string, value: string) => storedValues.set(key, value),
+      removeItem: (key: string) => storedValues.delete(key),
+    });
+    vi.stubGlobal('matchMedia', vi.fn(() => ({
+      matches: true,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+    })));
+    const onLocationChange = vi.fn();
+    const baseLocation = {
+      key: 'all',
+      view: 'all' as const,
+      folderPath: 'stale/folder',
+      search: '',
+      sort: 'dateDesc' as const,
+      filter: 'all' as const,
+      layout: 'grid' as const,
+    };
+    const commonProps = {
+      canGoBack: true,
+      canGoForward: true,
+      onBack: vi.fn(),
+      onForward: vi.fn(),
+      onUp: vi.fn(),
+      onNavigatePath: vi.fn(),
+      onNavigateView: vi.fn(),
+      onScrollToTop: vi.fn(),
+      onLocationChange,
+      labels: { home: '首页', all: '媒体库', favorites: '收藏夹', folders: '文件夹' },
+    };
+    const { rerender } = render(
+      <LanguageProvider>
+        <UnifiedGalleryToolbar {...commonProps} viewMode="home" location={{ ...baseLocation, view: 'home', key: 'home' }} />
+      </LanguageProvider>,
+    );
+    expect(screen.queryByTestId('unified-gallery-toolbar')).toBeNull();
+
+    rerender(
+      <LanguageProvider>
+        <UnifiedGalleryToolbar {...commonProps} viewMode="all" location={baseLocation} />
+      </LanguageProvider>,
+    );
+    const compactSlot = screen.getByTestId('gallery-toolbar-compact-slot');
+    const desktopSlot = screen.getByTestId('gallery-toolbar-desktop-slot');
+    expect(compactSlot.className).toContain('lg:hidden');
+    expect(compactSlot.className).not.toContain('md:hidden');
+    expect(desktopSlot.className).toContain('hidden');
+    expect(desktopSlot.className).toContain('lg:block');
+    expect(desktopSlot.className).not.toContain('md:block');
+    const desktop = within(screen.getByTestId('gallery-nav-bar-desktop'));
+    expect(desktop.getByText('媒体库')).toBeDefined();
+    expect(desktop.queryByText('stale')).toBeNull();
+
+    fireEvent.click(desktop.getByLabelText(/进入搜索|Enter search/));
+    const searchInput = desktop.getByLabelText(/搜索输入框|Search input/);
+    fireEvent.change(searchInput, { target: { value: '人物' } });
+    fireEvent.keyDown(searchInput, { key: 'Enter' });
+    expect(onLocationChange).toHaveBeenLastCalledWith({ search: '人物', mediaId: undefined }, 'push');
+    expect(onLocationChange).toHaveBeenCalledTimes(1);
+
+    onLocationChange.mockClear();
+    fireEvent.click(desktop.getByLabelText(/当前排序：|Sort by:/));
+    fireEvent.click(desktop.getByText(/最早优先|Oldest/));
+    expect(onLocationChange).toHaveBeenCalledWith({ sort: 'dateAsc', mediaId: undefined }, 'replace');
+
+    onLocationChange.mockClear();
+    fireEvent.click(desktop.getByLabelText(/切换布局|Change layout/));
+    fireEvent.click(desktop.getByText(/瀑布流|Masonry/));
+    expect(onLocationChange).toHaveBeenCalledWith({ layout: 'masonry', mediaId: undefined }, 'replace');
+
+    onLocationChange.mockClear();
+    fireEvent.click(desktop.getByLabelText(/当前筛选：|Current filter:/));
+    fireEvent.click(desktop.getByText(/视频|Video/));
+    expect(onLocationChange).toHaveBeenCalledWith({ filter: 'video', mediaId: undefined }, 'replace');
+
+    rerender(
+      <LanguageProvider>
+        <UnifiedGalleryToolbar {...commonProps} viewMode="favorites" location={{ ...baseLocation, key: 'favorites', view: 'favorites' }} />
+      </LanguageProvider>,
+    );
+    expect(within(screen.getByTestId('gallery-nav-bar-desktop')).getByText('收藏夹')).toBeDefined();
+
+    rerender(
+      <LanguageProvider>
+        <UnifiedGalleryToolbar {...commonProps} viewMode="folders" location={{ ...baseLocation, key: 'folders', view: 'folders', folderPath: '相册/一级/二级/当前目录' }} />
+      </LanguageProvider>,
+    );
+    expect(within(screen.getByTestId('gallery-toolbar-desktop-slot')).getByText('当前目录')).toBeDefined();
+    expect(screen.getByTestId('gallery-toolbar-desktop-slot').className).toContain('hidden lg:block');
+    expect(screen.getByTestId('gallery-toolbar-compact-slot').className).toContain('lg:hidden');
+  });
+
   it('真实首渲染不会在读取排序、筛选或搜索状态前触发 TDZ', () => {
     const client = new QueryClient();
     const host = document.createElement('div');

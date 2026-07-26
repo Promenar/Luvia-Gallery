@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createHistoryState } from '../navigation/history-state';
-import { createLocationKey, getParentFolderPath, parseGalleryUrl, serializeGalleryUrl } from '../navigation/location';
+import { createLocationKey, getLocationRouteSegments, getParentFolderPath, parseGalleryUrl, serializeGalleryUrl } from '../navigation/location';
 
 describe('导航领域模型', () => {
   it('解析旧版 #folder 深链并兼容 Windows 风格路径', () => {
@@ -128,5 +128,134 @@ describe('导航领域模型', () => {
     expect(serialized.includes('mediaFiles')).toBe(false);
     expect(state.location.key).toBe(createLocationKey(location));
     expect(state.snapshot?.locationKey).toBe(state.location.key);
+  });
+
+  it.each(['all', 'favorites'] as const)(
+    'createHistoryState 在 %s 视图清理陈旧路径并重建一致的 key',
+    (view) => {
+      const state = createHistoryState({
+        key: 'stale-key',
+        view,
+        folderPath: 'stale\\folder',
+        search: '',
+        sort: 'dateDesc',
+        filter: 'all',
+        layout: 'grid',
+      });
+
+      expect(state.location.folderPath).toBe('');
+      expect(state.path).toBe('');
+      expect(state.location.key).not.toBe('stale-key');
+      expect(state.location.key).toBe(createLocationKey(state.location));
+    },
+  );
+
+  it('createHistoryState 在 folders 视图保留标准化路径并重建一致的 key', () => {
+    const state = createHistoryState({
+      key: 'stale-key',
+      view: 'folders',
+      folderPath: 'Albums\\2026',
+      search: '',
+      sort: 'dateDesc',
+      filter: 'all',
+      layout: 'grid',
+    });
+
+    expect(state.location.folderPath).toBe('Albums/2026');
+    expect(state.path).toBe('Albums/2026');
+    expect(state.location.key).not.toBe('stale-key');
+    expect(state.location.key).toBe(createLocationKey(state.location));
+  });
+
+  it('buildNormalizedGalleryLocation 同步重建标准化字段对应的 key', async () => {
+    const { buildNormalizedGalleryLocation } = await import('../navigation/location');
+    const normalized = buildNormalizedGalleryLocation({
+      key: 'stale-key',
+      view: 'favorites',
+      folderPath: 'stale/path',
+      search: 'cat',
+      sort: 'nameAsc',
+      filter: 'image',
+      layout: 'masonry',
+    });
+
+    expect(normalized.folderPath).toBe('');
+    expect(normalized.key).toBe(createLocationKey(normalized));
+  });
+
+  it('非 folders 视图下清理残留 folderPath 并重建 key', () => {
+    const allWithFolder = parseGalleryUrl('#view=all&folder=%2Fmedia%2Fx');
+    expect(allWithFolder.view).toBe('all');
+    expect(allWithFolder.folderPath).toBe('');
+    expect(serializeGalleryUrl(allWithFolder)).toBe('#');
+
+    const keyAll = createLocationKey(allWithFolder);
+    const keyAll2 = createLocationKey({
+      key: '',
+      view: 'all',
+      folderPath: '/media/x',
+      search: '',
+      sort: 'dateDesc',
+      filter: 'all',
+      layout: 'grid',
+    });
+    expect(keyAll).toBe(keyAll2);
+    expect(keyAll).toContain(encodeURIComponent('view=all'));
+    expect(keyAll).not.toContain(encodeURIComponent('folder=/media/x'));
+  });
+
+  it('收藏夹下清理残留 folderPath 并保持语义键', () => {
+    const favoritesWithFolder = parseGalleryUrl('#view=favorites&folder=Vacation%2F2026');
+    expect(favoritesWithFolder.view).toBe('favorites');
+    expect(favoritesWithFolder.folderPath).toBe('');
+    expect(serializeGalleryUrl(favoritesWithFolder)).toBe('#view=favorites');
+
+    const keyFavorites = createLocationKey(favoritesWithFolder);
+    const keyFavorites2 = createLocationKey({
+      key: '',
+      view: 'favorites',
+      folderPath: 'stale/path',
+      search: '',
+      sort: 'dateDesc',
+      filter: 'all',
+      layout: 'grid',
+    });
+    expect(keyFavorites).toBe(keyFavorites2);
+  });
+
+  it('folders 模式保留 folderPath 并支持旧 #folder 深链', () => {
+    const foldersLocation = parseGalleryUrl('#folder=%E7%94%9F%E6%B4%BB%2FC%3A%5CPictures');
+    expect(foldersLocation.view).toBe('folders');
+    expect(foldersLocation.folderPath).toBe('生活/C:/Pictures');
+
+    const back = serializeGalleryUrl(foldersLocation);
+    expect(back).toContain('#folder=%E7%94%9F%E6%B4%BB%2FC%3A%2FPictures&view=folders');
+    expect(parseGalleryUrl(back).folderPath).toBe('生活/C:/Pictures');
+  });
+
+  it('parse/serialize 往返不被旧 folderPath 污染 key', () => {
+    const url = '#view=all&folder=life%2Ftest';
+    const parsed = parseGalleryUrl(url);
+    const serial = serializeGalleryUrl(parsed);
+    const reparsed = parseGalleryUrl(serial);
+    expect(reparsed.view).toBe('all');
+    expect(reparsed.folderPath).toBe('');
+    expect(createLocationKey(reparsed)).toBe(createLocationKey(parsed));
+    expect(reparsed.key).toBe(createLocationKey(reparsed));
+  });
+
+  it('提供可用于面包屑映射的标准路由片段', () => {
+    const foldersSegments = getLocationRouteSegments(
+      parseGalleryUrl('#view=folders&folder=Home%2F2026'),
+    );
+    expect(foldersSegments.length).toBe(2);
+    expect(foldersSegments[0]).toMatchObject({ type: 'folders' });
+    expect(foldersSegments[1]).toMatchObject({ type: 'folderName', value: 'Home/2026' });
+
+    const favoritesSegments = getLocationRouteSegments(
+      parseGalleryUrl('#view=favorites&folder=Home%2F2026'),
+    );
+    expect(favoritesSegments.length).toBe(1);
+    expect(favoritesSegments[0]).toMatchObject({ type: 'root', view: 'favorites' });
   });
 });
