@@ -454,7 +454,7 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
                   <>
                     <div className="fixed inset-0 z-10" onClick={closeTransientPanels} data-testid="mobile-more-dismiss-overlay" />
                     <div
-                      className="absolute right-0 top-full mt-2 w-56 bg-surface-secondary/95 backdrop-blur-xl rounded-2xl shadow-2xl border border-white/10 p-2 z-20 flex flex-col gap-1 max-h-[80vh] overflow-y-auto"
+                      className="absolute right-0 top-full mt-2 w-56 bg-surface-secondary backdrop-blur-2xl rounded-2xl shadow-2xl border border-white/10 p-2 z-20 flex flex-col gap-1 max-h-[80vh] overflow-y-auto"
                       role="menu"
                     >
                       {/* Go Up Action */}
@@ -724,7 +724,7 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
             {isFilterMenuOpen && (
               <>
               <div className="fixed inset-0 z-10" onClick={closeTransientPanels} />
-              <div className="absolute right-0 top-full mt-2 w-40 bg-surface-secondary/90 backdrop-blur-xl rounded-xl shadow-2xl border border-white/10 p-1 z-20" role="listbox">
+              <div className="absolute right-0 top-full mt-2 w-40 bg-surface-secondary backdrop-blur-2xl rounded-xl shadow-2xl border border-white/10 p-1 z-20" role="listbox">
                   {(['all', 'image', 'video', 'audio'] as GalleryFilterOption[]).map((value) => (
                     <button
                       key={value}
@@ -764,7 +764,7 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
             <>
               <div className="fixed inset-0 z-10" onClick={closeTransientPanels} />
               <div
-                className="absolute right-0 top-full mt-2 w-48 bg-surface-secondary/90 backdrop-blur-xl rounded-xl shadow-2xl border border-white/10 p-1 z-20 animate-in fade-in slide-in-from-top-2 duration-200"
+                className="absolute right-0 top-full mt-2 w-48 bg-surface-secondary backdrop-blur-2xl rounded-xl shadow-2xl border border-white/10 p-1 z-20 animate-in fade-in slide-in-from-top-2 duration-200"
                 role="listbox"
               >
                 {(['dateDesc', 'dateAsc', 'nameAsc', 'nameDesc', 'random'] as GallerySortOption[]).map((opt) => (
@@ -805,7 +805,7 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
             <>
               <div className="fixed inset-0 z-10" onClick={closeTransientPanels} />
               <div
-                className="absolute right-0 top-full mt-2 w-40 bg-surface-secondary/90 backdrop-blur-xl rounded-xl shadow-2xl border border-white/10 p-1 z-20 animate-in fade-in slide-in-from-top-2 duration-200"
+                className="absolute right-0 top-full mt-2 w-40 bg-surface-secondary backdrop-blur-2xl rounded-xl shadow-2xl border border-white/10 p-1 z-20 animate-in fade-in slide-in-from-top-2 duration-200"
                 role="listbox"
               >
                 {(['grid', 'masonry', 'timeline'] as GalleryLayout[]).map((mode) => (
