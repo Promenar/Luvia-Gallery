@@ -9,6 +9,7 @@ import { FolderCard } from './components/FolderCard';
 import { ImageViewer } from './components/ImageViewer';
 import { UnifiedProgressModal } from './components/UnifiedProgressModal';
 import { VirtualGallery } from './components/VirtualGallery';
+import type { ViewportCaptureHandle } from './components/gallery/viewport-types';
 import { DirectoryPicker } from './components/DirectoryPicker';
 import { Home } from './components/Home';
 import { useLanguage } from './contexts/LanguageContext';
@@ -245,6 +246,7 @@ export default function App() {
     const { t, language, setLanguage } = useLanguage();
     const queryClient = useQueryClient();
     const galleryNavigation = useGalleryNavigation();
+    const galleryViewportRef = useRef<ViewportCaptureHandle>(null);
 
     // --- Visual Polish ---
     // Inject noise texture globally
@@ -1833,6 +1835,10 @@ export default function App() {
     };
 
     const handleOpenMedia = (item: MediaItem) => {
+        const snapshot = galleryViewportRef.current?.captureSnapshot();
+        if (snapshot?.locationKey === galleryNavigation.location.key) {
+            galleryNavigation.captureImmediateSnapshot({ ...snapshot, loadedOffset: serverOffset });
+        }
         setSelectedItem(item);
         galleryNavigation.updateLocation({ mediaId: item.id }, 'push');
     };
@@ -1854,6 +1860,7 @@ export default function App() {
     };
 
     const handleViewportSnapshot = (snapshot: ViewportSnapshot) => {
+        if (snapshot.locationKey !== galleryNavigation.location.key) return;
         galleryNavigation.captureSnapshot({ ...snapshot, loadedOffset: serverOffset });
     };
 
@@ -2358,6 +2365,7 @@ export default function App() {
                             (viewMode === 'folders' || currentPath) && (
                                 <div className="flex-1 w-full h-full p-4 md:p-8 flex flex-col min-h-0">
                                     <VirtualGallery
+                                        ref={galleryViewportRef}
                                         items={mixedItems.filter(Boolean)}
                                         onItemClick={(item) => {
                                             if (item.mediaType === 'folder') {
@@ -2382,6 +2390,7 @@ export default function App() {
                                         layout={viewMode === 'folders' && layoutMode === 'timeline' ? 'masonry' : layoutMode}
                                         viewKey={galleryNavigation.location.key}
                                         restoreSnapshot={galleryNavigation.restoreSnapshot}
+                                        restoreCommand={galleryNavigation.restoreCommand}
                                         onSnapshotChange={handleViewportSnapshot}
                                         onRestoreComplete={galleryNavigation.consumeRestoreSnapshot}
                                         onToggleFavorite={handleToggleFavorite}
@@ -2433,6 +2442,7 @@ export default function App() {
                                         </div>
                                     ) : (
                                         <VirtualGallery
+                                            ref={galleryViewportRef}
                                             items={processedFiles.filter(Boolean)}
                                             onItemClick={(item) => {
                                                 if (item.mediaType === 'audio') {
@@ -2454,6 +2464,7 @@ export default function App() {
                                             layout={layoutMode}
                                             viewKey={galleryNavigation.location.key}
                                             restoreSnapshot={galleryNavigation.restoreSnapshot}
+                                            restoreCommand={galleryNavigation.restoreCommand}
                                             onSnapshotChange={handleViewportSnapshot}
                                             onRestoreComplete={galleryNavigation.consumeRestoreSnapshot}
                                             onRegenerate={handleRegenerateFolder}

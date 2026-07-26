@@ -310,7 +310,7 @@ describe('应用导航最小闭环', () => {
     expect(api!.restoreSnapshot).toBeUndefined();
     act(() => api!.requestRestore(snapshot));
     expect(api!.restoreSnapshot).toMatchObject({ anchorIndex: 0, fallbackScrollTop: 0 });
-    act(() => api!.consumeRestoreSnapshot());
+    act(() => api!.consumeRestoreSnapshot(api!.restoreCommand!.token));
     expect(api!.restoreSnapshot).toBeUndefined();
     act(() => root.unmount());
   });

@@ -2,7 +2,7 @@
 import React from 'react';
 import { describe, expect, it, vi, afterEach, beforeEach } from 'vitest';
 import { render, fireEvent, cleanup, act } from '@testing-library/react';
-import { resolveAnchorIndex, createViewportSnapshot, ViewportSnapshot } from '../components/gallery/viewport-types';
+import { resolveAnchorIndex, createViewportSnapshot, ViewportCaptureHandle, ViewportSnapshot } from '../components/gallery/viewport-types';
 import { VirtualGallery } from '../components/VirtualGallery';
 import { MediaItem } from '../types';
 
@@ -24,6 +24,7 @@ vi.mock('react-window', async () => {
       };
       ReactActual.useImperativeHandle(ref, () => mockGrid);
       (globalThis as any).lastGridInstance = mockGrid;
+      (globalThis as any).lastGridProps = props;
 
       // Simulate rendering items to trigger onItemsRendered
       ReactActual.useEffect(() => {
@@ -46,6 +47,7 @@ vi.mock('react-window', async () => {
       };
       ReactActual.useImperativeHandle(ref, () => mockList);
       (globalThis as any).lastListInstance = mockList;
+      (globalThis as any).lastListProps = props;
 
       // Simulate rendering items to trigger onItemsRendered
       ReactActual.useEffect(() => {
@@ -113,10 +115,14 @@ describe('resolveAnchorIndex 纯函数与共享快照字段测试', () => {
 describe('VirtualGallery 视口与协议流转测试', () => {
   const originalGetBoundingClientRect = Element.prototype.getBoundingClientRect;
   const originalScrollTopDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollTop');
+  let elementFromPointDescriptor: PropertyDescriptor | undefined;
 
   beforeEach(() => {
     (globalThis as any).lastGridInstance = null;
     (globalThis as any).lastListInstance = null;
+    (globalThis as any).lastGridProps = null;
+    (globalThis as any).lastListProps = null;
+    elementFromPointDescriptor = Object.getOwnPropertyDescriptor(document, 'elementFromPoint');
   });
 
   afterEach(() => {
@@ -127,6 +133,11 @@ describe('VirtualGallery 视口与协议流转测试', () => {
       Object.defineProperty(HTMLElement.prototype, 'scrollTop', originalScrollTopDescriptor);
     } else {
       delete (HTMLElement.prototype as any).scrollTop;
+    }
+    if (elementFromPointDescriptor) {
+      Object.defineProperty(document, 'elementFromPoint', elementFromPointDescriptor);
+    } else {
+      delete (document as Document & { elementFromPoint?: unknown }).elementFromPoint;
     }
   });
 
@@ -269,6 +280,227 @@ describe('VirtualGallery 视口与协议流转测试', () => {
       vi.advanceTimersByTime(200);
     });
     expect(onRestoreComplete).toHaveBeenCalledTimes(2);
+  });
+
+  it('三种 viewport 的 reset 命令会回顶，Grid token 事务不会被 items 更新或旧回调打断', () => {
+    vi.useFakeTimers();
+    const onGridRestoreComplete = vi.fn();
+    const onGridSnapshotChange = vi.fn();
+    const { rerender: rerenderGrid } = render(React.createElement(VirtualGallery, {
+      ...defaultProps,
+      layout: 'grid',
+      viewKey: 'folder:reset',
+      restoreCommand: { token: 1, entryId: 'session:1' },
+      onRestoreComplete: onGridRestoreComplete,
+      onSnapshotChange: onGridSnapshotChange,
+    }));
+    expect((globalThis as any).lastGridInstance.scrollTo).toHaveBeenCalledWith({ scrollTop: 0 });
+
+    rerenderGrid(React.createElement(VirtualGallery, {
+      ...defaultProps,
+      items: [...mockItems],
+      layout: 'grid',
+      viewKey: 'folder:reset',
+      restoreCommand: { token: 2, entryId: 'session:2' },
+      onRestoreComplete: onGridRestoreComplete,
+      onSnapshotChange: onGridSnapshotChange,
+    }));
+    rerenderGrid(React.createElement(VirtualGallery, {
+      ...defaultProps,
+      items: [...mockItems],
+      layout: 'grid',
+      viewKey: 'folder:reset',
+      restoreCommand: { token: 2, entryId: 'session:2' },
+      onRestoreComplete: onGridRestoreComplete,
+      onSnapshotChange: onGridSnapshotChange,
+    }));
+    act(() => vi.advanceTimersByTime(150));
+    expect(onGridRestoreComplete).toHaveBeenCalledTimes(1);
+    expect(onGridRestoreComplete).toHaveBeenLastCalledWith(2);
+    act(() => {
+      (globalThis as any).lastGridProps.onItemsRendered({ visibleRowStartIndex: 0, visibleRowStopIndex: 1 });
+      (globalThis as any).lastGridProps.onScroll({ scrollTop: 40 });
+      vi.advanceTimersByTime(250);
+    });
+    expect(onGridSnapshotChange).toHaveBeenCalled();
+
+    const onTimelineRestoreComplete = vi.fn();
+    const { unmount: unmountTimeline } = render(React.createElement(VirtualGallery, {
+      ...defaultProps,
+      layout: 'timeline',
+      viewKey: 'folder:timeline-reset',
+      restoreCommand: { token: 3, entryId: 'session:3' },
+      onRestoreComplete: onTimelineRestoreComplete,
+    }));
+    expect((globalThis as any).lastListInstance.scrollTo).toHaveBeenCalledWith(0);
+    act(() => vi.advanceTimersByTime(150));
+    expect(onTimelineRestoreComplete).toHaveBeenLastCalledWith(3);
+    unmountTimeline();
+
+    let resetScrollTop = -1;
+    Object.defineProperty(HTMLElement.prototype, 'scrollTop', {
+      get: () => resetScrollTop,
+      set: (value: number) => { resetScrollTop = value; },
+      configurable: true,
+    });
+    const onMasonryRestoreComplete = vi.fn();
+    render(React.createElement(VirtualGallery, {
+      ...defaultProps,
+      layout: 'masonry',
+      viewKey: 'folder:masonry-reset',
+      restoreCommand: { token: 4, entryId: 'session:4' },
+      onRestoreComplete: onMasonryRestoreComplete,
+    }));
+    expect(resetScrollTop).toBe(0);
+    act(() => vi.advanceTimersByTime(150));
+    expect(onMasonryRestoreComplete).toHaveBeenLastCalledWith(4);
+  });
+
+  it('Grid 同步捕获会取消待发节流样本，并在 viewKey 切换后清除旧锚点', () => {
+    vi.useFakeTimers();
+    const galleryRef = React.createRef<ViewportCaptureHandle>();
+    const onSnapshotChange = vi.fn();
+    const { rerender } = render(
+      React.createElement(VirtualGallery, {
+        ...defaultProps,
+        ref: galleryRef,
+        layout: 'grid',
+        viewKey: 'folder:albums',
+        onSnapshotChange,
+      })
+    );
+
+    act(() => {
+      (globalThis as any).lastGridProps.onItemsRendered({ visibleRowStartIndex: 1, visibleRowStopIndex: 3 });
+      (globalThis as any).lastGridProps.onScroll({ scrollTop: 650 });
+    });
+
+    expect(galleryRef.current?.captureSnapshot()).toMatchObject({
+      locationKey: 'folder:albums',
+      anchorItemId: '5',
+      anchorIndex: 4,
+      fallbackScrollTop: 650,
+    });
+    act(() => vi.advanceTimersByTime(250));
+    expect(onSnapshotChange).not.toHaveBeenCalled();
+
+    rerender(React.createElement(VirtualGallery, {
+      ...defaultProps,
+      items: [],
+      itemCount: 0,
+      ref: galleryRef,
+      layout: 'grid',
+      viewKey: 'folder:albums:media',
+      onSnapshotChange,
+    }));
+    expect(galleryRef.current?.captureSnapshot()).toMatchObject({
+      locationKey: 'folder:albums:media',
+      anchorItemId: undefined,
+      fallbackScrollTop: 0,
+    });
+  });
+
+  it('Timeline 同步捕获取消待发节流样本，并在目录-media-目录切换时清除旧状态', () => {
+    vi.useFakeTimers();
+    const galleryRef = React.createRef<ViewportCaptureHandle>();
+    const onSnapshotChange = vi.fn();
+    const { rerender } = render(React.createElement(VirtualGallery, {
+      ...defaultProps,
+      ref: galleryRef,
+      layout: 'timeline',
+      viewKey: 'folder:timeline',
+      onSnapshotChange,
+    }));
+
+    act(() => {
+      (globalThis as any).lastListProps.onItemsRendered({ visibleStartIndex: 1, visibleStopIndex: 2 });
+      (globalThis as any).lastListProps.onScroll({ scrollTop: 420 });
+    });
+
+    expect(galleryRef.current?.captureSnapshot()).toMatchObject({
+      locationKey: 'folder:timeline',
+      anchorItemId: '1',
+      anchorIndex: 0,
+      fallbackScrollTop: 420,
+    });
+    act(() => vi.advanceTimersByTime(250));
+    expect(onSnapshotChange).not.toHaveBeenCalled();
+
+    rerender(React.createElement(VirtualGallery, { ...defaultProps, items: [], itemCount: 0, ref: galleryRef, layout: 'timeline', viewKey: 'folder:timeline:media', onSnapshotChange }));
+    expect(galleryRef.current?.captureSnapshot()).toMatchObject({ locationKey: 'folder:timeline:media', anchorItemId: undefined, fallbackScrollTop: 0 });
+    rerender(React.createElement(VirtualGallery, { ...defaultProps, items: [], itemCount: 0, ref: galleryRef, layout: 'timeline', viewKey: 'folder:timeline', onSnapshotChange }));
+    expect(galleryRef.current?.captureSnapshot()).toMatchObject({ locationKey: 'folder:timeline', anchorItemId: undefined, fallbackScrollTop: 0 });
+  });
+
+  it('Masonry 优先使用 elementFromPoint，深度滚动采样失败时不复用旧锚点', () => {
+    vi.useFakeTimers();
+    let samplingAvailable = true;
+    Element.prototype.getBoundingClientRect = function(this: HTMLElement) {
+      if (this.classList.contains('overflow-y-auto')) {
+        return { top: 0, bottom: 800, left: 0, right: 1000, width: 1000, height: 800 } as DOMRect;
+      }
+      if (this.hasAttribute('data-item-id')) {
+        const id = this.getAttribute('data-item-id');
+        const top = samplingAvailable && id === '2' ? 30 : 1_800;
+        return { top, bottom: top + 200, left: 0, right: 200, width: 200, height: 200 } as DOMRect;
+      }
+      return { top: 0, bottom: 0, left: 0, right: 0, width: 0, height: 0 } as DOMRect;
+    };
+    const galleryRef = React.createRef<ViewportCaptureHandle>();
+    const onSnapshotChange = vi.fn();
+    const { rerender } = render(React.createElement(VirtualGallery, {
+      ...defaultProps,
+      ref: galleryRef,
+      layout: 'masonry',
+      viewKey: 'folder:masonry',
+      onSnapshotChange,
+    }));
+
+    const container = document.querySelector('.overflow-y-auto') as HTMLDivElement;
+    const sampledItem = container.querySelector('[data-item-id="2"]');
+    Object.defineProperty(document, 'elementFromPoint', {
+      configurable: true,
+      value: vi.fn(() => samplingAvailable ? sampledItem : null),
+    });
+    fireEvent.scroll(container);
+
+    expect(galleryRef.current?.captureSnapshot()).toMatchObject({
+      locationKey: 'folder:masonry',
+      anchorItemId: '2',
+      anchorIndex: 1,
+      fallbackScrollTop: 0,
+    });
+    expect(document.elementFromPoint).toHaveBeenCalled();
+    act(() => vi.advanceTimersByTime(250));
+    expect(onSnapshotChange).not.toHaveBeenCalled();
+
+    samplingAvailable = false;
+    container.scrollTop = 1_200;
+    expect(galleryRef.current?.captureSnapshot()).toMatchObject({
+      locationKey: 'folder:masonry',
+      anchorItemId: undefined,
+      anchorIndex: undefined,
+      offsetWithinItem: 0,
+      fallbackScrollTop: 1_200,
+    });
+
+    rerender(React.createElement(VirtualGallery, {
+      ...defaultProps,
+      items: [],
+      itemCount: 0,
+      ref: galleryRef,
+      layout: 'masonry',
+      viewKey: 'folder:masonry:media',
+      onSnapshotChange,
+    }));
+    expect(galleryRef.current?.captureSnapshot()).toMatchObject({
+      locationKey: 'folder:masonry:media',
+      anchorItemId: undefined,
+      offsetWithinItem: 0,
+      fallbackScrollTop: 1200,
+    });
+    rerender(React.createElement(VirtualGallery, { ...defaultProps, items: [], itemCount: 0, ref: galleryRef, layout: 'masonry', viewKey: 'folder:masonry', onSnapshotChange }));
+    expect(galleryRef.current?.captureSnapshot()).toMatchObject({ locationKey: 'folder:masonry', anchorItemId: undefined, fallbackScrollTop: 1200 });
   });
 
   it('Masonry 正负号语义与滚动恢复测试', async () => {

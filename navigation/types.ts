@@ -35,6 +35,16 @@ export interface ViewportSnapshot {
   capturedAt: number;
 }
 
+/** 视口恢复是一次性命令；token 区分同一路径、同时间戳的不同 History 条目。 */
+export interface ViewportRestoreCommand {
+  token: number;
+  entryId?: string;
+  snapshot?: ViewportSnapshot;
+}
+
+export type ViewportSnapshotInput = Omit<ViewportSnapshot, 'locationKey' | 'capturedAt'>
+  & Partial<Pick<ViewportSnapshot, 'locationKey' | 'capturedAt'>>;
+
 export interface HistoryState {
   location: GalleryLocation;
   snapshot?: ViewportSnapshot;

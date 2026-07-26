@@ -1,9 +1,10 @@
 import React from 'react';
 import { MediaItem } from '../types';
-import { ViewportSnapshot } from './gallery/viewport-types';
+import { ViewportRestoreCommand, ViewportSnapshot } from './gallery/viewport-types';
 import { GridViewport } from './gallery/GridViewport';
 import { TimelineViewport } from './gallery/TimelineViewport';
 import { MasonryViewport } from './gallery/MasonryViewport';
+import type { ViewportCaptureHandle } from './gallery/viewport-types';
 
 export interface VirtualGalleryProps {
     items: MediaItem[];
@@ -23,15 +24,17 @@ export interface VirtualGalleryProps {
     // 可捕获、可恢复位置协议属性
     viewKey?: string;
     restoreSnapshot?: ViewportSnapshot;
+    restoreCommand?: ViewportRestoreCommand;
     onSnapshotChange?: (snapshot: ViewportSnapshot) => void;
-    onRestoreComplete?: () => void;
+    onRestoreComplete?: (token: number) => void;
 }
 
-export const VirtualGallery: React.FC<VirtualGalleryProps> = (props) => {
+export const VirtualGallery = React.forwardRef<ViewportCaptureHandle, VirtualGalleryProps>((props, ref) => {
     const {
         layout,
         viewKey = layout,
         restoreSnapshot,
+        restoreCommand,
         onSnapshotChange,
         onRestoreComplete,
         ...rest
@@ -41,17 +44,18 @@ export const VirtualGallery: React.FC<VirtualGalleryProps> = (props) => {
         ...rest,
         viewKey,
         restoreSnapshot,
+        restoreCommand,
         onSnapshotChange,
         onRestoreComplete
     };
 
     if (layout === 'masonry') {
-        return <MasonryViewport {...commonProps} />;
+        return <MasonryViewport ref={ref} {...commonProps} />;
     }
 
     if (layout === 'timeline') {
-        return <TimelineViewport {...commonProps} />;
+        return <TimelineViewport ref={ref} {...commonProps} />;
     }
 
-    return <GridViewport {...commonProps} />;
-};
+    return <GridViewport ref={ref} {...commonProps} />;
+});

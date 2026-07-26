@@ -1,7 +1,7 @@
 import React, { useMemo, useRef, useEffect } from 'react';
 import * as ReactWindow from 'react-window';
 import AutoSizer from 'react-virtualized-auto-sizer';
-import { CommonViewportProps, resolveAnchorIndex, createViewportSnapshot } from './viewport-types';
+import { CommonViewportProps, ViewportCaptureHandle, resolveAnchorIndex, createViewportSnapshot } from './viewport-types';
 import { MediaCard } from '../PhotoCard';
 import { groupMediaByDate } from '../../utils/fileUtils';
 import { TimelineScrubber } from '../TimelineScrubber';
@@ -19,7 +19,7 @@ interface InnerProps extends CommonViewportProps {
   height: number;
 }
 
-const TimelineViewportInner: React.FC<InnerProps> = ({
+const TimelineViewportInner = React.forwardRef<ViewportCaptureHandle, InnerProps>(({
   width,
   height,
   items,
@@ -29,9 +29,10 @@ const TimelineViewportInner: React.FC<InnerProps> = ({
   loadNextPage,
   viewKey,
   restoreSnapshot,
+  restoreCommand,
   onSnapshotChange,
   onRestoreComplete
-}) => {
+}, ref) => {
   const listRef = useRef<any>(null);
   const loadLockRef = useRef(false);
 
@@ -41,10 +42,26 @@ const TimelineViewportInner: React.FC<InnerProps> = ({
   const currentScrollTopRef = useRef(0);
   const lastAnchorItemRef = useRef<{ id: string; index: number } | null>(null);
   const activeVisualRowIndexRef = useRef<number>(-1);
+  const positionIdentityViewKeyRef = useRef(viewKey);
+  const restoreCompletionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const activeRestoreTokenRef = useRef<number | null>(null);
 
   // 快照节流上报
   const pendingSnapshotRef = useRef<any>(null);
   const throttleTimerRef = useRef<any>(null);
+
+  const cancelPendingSnapshot = () => {
+    if (throttleTimerRef.current) clearTimeout(throttleTimerRef.current);
+    throttleTimerRef.current = null;
+    pendingSnapshotRef.current = null;
+  };
+
+  const cancelRestoreTransaction = () => {
+    if (restoreCompletionTimerRef.current) clearTimeout(restoreCompletionTimerRef.current);
+    restoreCompletionTimerRef.current = null;
+    activeRestoreTokenRef.current = null;
+    isRestoringRef.current = false;
+  };
 
   const reportSnapshot = (snapshot: any) => {
     if (isRestoringRef.current) return;
@@ -64,9 +81,12 @@ const TimelineViewportInner: React.FC<InnerProps> = ({
     }
   };
 
-  // 视图或快照发生变化时，重置“已恢复”状态，允许重新恢复
-  // 统一去重比较 locationKey + capturedAt 字符串
-  const snapshotKey = restoreSnapshot ? `${restoreSnapshot.locationKey}_${restoreSnapshot.capturedAt}` : null;
+  // 命令 token 优先于快照内容，避免同一路径同毫秒的不同 History 条目被去重。
+  const snapshotKey = restoreCommand
+    ? `command:${restoreCommand.token}`
+    : restoreSnapshot
+      ? `snapshot:${restoreSnapshot.locationKey}:${restoreSnapshot.capturedAt}:${restoreSnapshot.anchorItemId ?? ''}:${restoreSnapshot.anchorIndex ?? ''}:${restoreSnapshot.offsetWithinItem}:${restoreSnapshot.fallbackScrollTop}`
+      : null;
   const lastRestoredSnapshotKeyRef = useRef<string | null>(null);
   const lastViewKeyRef = useRef(viewKey);
 
@@ -75,6 +95,7 @@ const TimelineViewportInner: React.FC<InnerProps> = ({
     lastViewKeyRef.current = viewKey;
     lastRestoredSnapshotKeyRef.current = snapshotKey;
   }
+  const restoreToken = restoreCommand?.token ?? -1;
 
   // 基础布局常量与动态列数计算
   const GUTTER_SIZE = 2; // Mobile-friendly tighter gap
@@ -126,6 +147,41 @@ const TimelineViewportInner: React.FC<InnerProps> = ({
     return top;
   };
 
+  const captureCurrentSnapshot = () => {
+    cancelPendingSnapshot();
+    const anchor = lastAnchorItemRef.current;
+    if (!anchor) return createViewportSnapshot(viewKey, undefined, undefined, 0, currentScrollTopRef.current, items.length);
+    const rowIndex = activeVisualRowIndexRef.current;
+    const rowTop = rowIndex >= 0 ? getRowTop(rowIndex) : 0;
+    return createViewportSnapshot(
+      viewKey,
+      anchor.id,
+      anchor.index,
+      currentScrollTopRef.current - rowTop,
+      currentScrollTopRef.current,
+      items.length,
+    );
+  };
+
+  React.useImperativeHandle(ref, () => ({ captureSnapshot: captureCurrentSnapshot }), [viewKey, items.length, visualRows, safeCols, cellHeight]);
+
+  useEffect(() => {
+    if (positionIdentityViewKeyRef.current !== viewKey) {
+      cancelPendingSnapshot();
+      currentScrollTopRef.current = 0;
+      lastAnchorItemRef.current = null;
+      activeVisualRowIndexRef.current = -1;
+      isRestoringRef.current = false;
+      positionIdentityViewKeyRef.current = viewKey;
+    }
+    return cancelPendingSnapshot;
+  }, [viewKey]);
+
+  // 完成事务只由命令身份或视图身份终止，items 更新不能中断已经执行的恢复。
+  useEffect(() => {
+    cancelRestoreTransaction();
+  }, [viewKey, snapshotKey]);
+
   // Critical: Reset cached row measurements when width/layout changes.
   useEffect(() => {
     if (listRef.current) {
@@ -137,8 +193,8 @@ const TimelineViewportInner: React.FC<InnerProps> = ({
   useEffect(() => {
     if (isRestoredRef.current) return;
     if (!listRef.current) return;
-    if (items.length === 0) return;
-    if (visualRows.length === 0) return;
+    if (!restoreSnapshot && !restoreCommand) return;
+    if ((items.length === 0 || visualRows.length === 0) && !restoreCommand) return;
     if (width <= 0 || height <= 0) return;
 
     isRestoredRef.current = true;
@@ -166,24 +222,31 @@ const TimelineViewportInner: React.FC<InnerProps> = ({
           listRef.current.scrollTo(targetScrollTop);
         }
       }
+    } else {
+      cancelPendingSnapshot();
+      cancelRestoreTransaction();
+      currentScrollTopRef.current = 0;
+      lastAnchorItemRef.current = null;
+      activeVisualRowIndexRef.current = -1;
+      listRef.current.scrollTo(0);
     }
 
-    const timer = setTimeout(() => {
+    activeRestoreTokenRef.current = restoreToken;
+    isRestoringRef.current = true;
+    restoreCompletionTimerRef.current = setTimeout(() => {
+      if (activeRestoreTokenRef.current !== restoreToken) return;
+      restoreCompletionTimerRef.current = null;
+      activeRestoreTokenRef.current = null;
       isRestoringRef.current = false;
-      onRestoreComplete?.();
+      onRestoreComplete?.(restoreToken);
     }, 150);
-
-    return () => {
-      clearTimeout(timer);
-    };
-  }, [items, visualRows, restoreSnapshot, viewKey, width, height, safeCols]);
+  }, [items, visualRows, restoreSnapshot, restoreCommand?.token, viewKey, width, height, safeCols]);
 
   // 组件卸载时清理定时器
   useEffect(() => {
     return () => {
-      if (throttleTimerRef.current) {
-        clearTimeout(throttleTimerRef.current);
-      }
+      cancelPendingSnapshot();
+      cancelRestoreTransaction();
     };
   }, []);
 
@@ -323,9 +386,9 @@ const TimelineViewportInner: React.FC<InnerProps> = ({
       />
     </>
   );
-};
+});
 
-export const TimelineViewport: React.FC<CommonViewportProps> = (props) => {
+export const TimelineViewport = React.forwardRef<ViewportCaptureHandle, CommonViewportProps>((props, ref) => {
   return (
     <div className="w-full h-full relative">
       <AutoSizer>
@@ -333,9 +396,9 @@ export const TimelineViewport: React.FC<CommonViewportProps> = (props) => {
           if (!height || !width || height <= 0 || width <= 0) {
             return null;
           }
-          return <TimelineViewportInner {...props} width={width} height={height} />;
+          return <TimelineViewportInner ref={ref} {...props} width={width} height={height} />;
         }}
       </AutoSizer>
     </div>
   );
-};
+});

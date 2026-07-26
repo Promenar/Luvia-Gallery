@@ -5,7 +5,12 @@ import {
   type LocationUpdate,
   type NavigationWriteMode,
 } from '../navigation/navigation-controller';
-import type { GalleryLocation, ViewportSnapshot } from '../navigation/types';
+import type {
+  GalleryLocation,
+  ViewportRestoreCommand,
+  ViewportSnapshot,
+  ViewportSnapshotInput,
+} from '../navigation/types';
 
 export interface UseGalleryNavigationOptions extends GalleryNavigationControllerOptions {
   controller?: GalleryNavigationController;
@@ -16,6 +21,7 @@ export interface GalleryNavigationApi {
   canGoBack: boolean;
   canGoForward: boolean;
   restoreSnapshot?: ViewportSnapshot;
+  restoreCommand?: ViewportRestoreCommand;
   currentSnapshot?: ViewportSnapshot;
   back: () => boolean;
   forward: () => boolean;
@@ -23,14 +29,12 @@ export interface GalleryNavigationApi {
   navigate: (location: GalleryLocation, mode?: NavigationWriteMode) => GalleryLocation;
   navigatePath: (folderPath: string) => GalleryLocation;
   updateLocation: (update: LocationUpdate, mode?: NavigationWriteMode) => GalleryLocation;
-  captureSnapshot: (snapshot: Omit<ViewportSnapshot, 'locationKey' | 'capturedAt'> & Partial<Pick<ViewportSnapshot, 'capturedAt'>>) => ViewportSnapshot;
-  requestRestore: (snapshot: Omit<ViewportSnapshot, 'locationKey' | 'capturedAt'> & Partial<Pick<ViewportSnapshot, 'capturedAt'>>) => ViewportSnapshot;
-  consumeRestoreSnapshot: () => void;
+  captureSnapshot: (snapshot: ViewportSnapshotInput) => ViewportSnapshot | undefined;
+  captureImmediateSnapshot: (snapshot: ViewportSnapshotInput) => ViewportSnapshot | undefined;
+  requestRestore: (snapshot: ViewportSnapshotInput) => ViewportSnapshot | undefined;
+  consumeRestoreSnapshot: (token: number) => void;
   getSnapshot: (locationKey?: string) => ViewportSnapshot | undefined;
 }
-
-const hasSameSnapshotVersion = (left: ViewportSnapshot | undefined, right: ViewportSnapshot | undefined): boolean =>
-  left === right || (left?.locationKey === right?.locationKey && left?.capturedAt === right?.capturedAt);
 
 export const useGalleryNavigation = (options: UseGalleryNavigationOptions = {}): GalleryNavigationApi => {
   const controllerRef = useRef<GalleryNavigationController>();
@@ -38,29 +42,52 @@ export const useGalleryNavigation = (options: UseGalleryNavigationOptions = {}):
   const controller = controllerRef.current;
   const [location, setLocation] = useState<GalleryLocation>(() => controller.initialize());
   const [historyVersion, setHistoryVersion] = useState(0);
-  const [restoreSnapshot, setRestoreSnapshot] = useState<ViewportSnapshot | undefined>(() =>
-    controller.getSnapshot(controller.getLocation().key)
-  );
-  const publishedSnapshotRef = useRef<ViewportSnapshot | undefined>(restoreSnapshot);
+  const [restoreCommand, setRestoreCommand] = useState<ViewportRestoreCommand | undefined>(() => {
+    const snapshot = controller.getSnapshot(controller.getLocation().key);
+    return snapshot
+      ? { token: 0, entryId: controller.getCurrentEntryIdentity(), snapshot }
+      : undefined;
+  });
+  const publishedSnapshotRef = useRef<ViewportSnapshot | undefined>(restoreCommand?.snapshot);
+  const restoreCommandTokenRef = useRef(restoreCommand?.token ?? 0);
   const locationRef = useRef(location);
+  const restoreSnapshot = restoreCommand?.snapshot;
 
-  const publishRestoreSnapshot = useCallback((snapshot: ViewportSnapshot | undefined) => {
-    if (hasSameSnapshotVersion(publishedSnapshotRef.current, snapshot)) return;
+  const publishRestoreCommand = useCallback((
+    snapshot: ViewportSnapshot | undefined,
+    entryId: string,
+  ) => {
     publishedSnapshotRef.current = snapshot;
-    setRestoreSnapshot(snapshot);
+    restoreCommandTokenRef.current += 1;
+    setRestoreCommand({
+      token: restoreCommandTokenRef.current,
+      entryId,
+      snapshot,
+    });
   }, []);
 
-  const syncLocation = useCallback((nextLocation: GalleryLocation) => {
+  const syncLocation = useCallback((nextLocation: GalleryLocation, publishRestore = true) => {
     const locationChanged = locationRef.current.key !== nextLocation.key;
     locationRef.current = nextLocation;
     setLocation(nextLocation);
-    if (locationChanged) publishRestoreSnapshot(controller.getSnapshot(nextLocation.key));
+    if (locationChanged && publishRestore) {
+      // 跨位置即使两侧都没有快照，也必须发出 reset，不能让旧视口位置残留。
+      publishRestoreCommand(controller.getSnapshot(nextLocation.key), controller.getCurrentEntryIdentity());
+    }
     setHistoryVersion((version) => version + 1);
     return nextLocation;
-  }, [controller, publishRestoreSnapshot]);
+  }, [controller, publishRestoreCommand]);
 
   useEffect(() => {
-    const onPopState = (event: PopStateEvent) => syncLocation(controller.applyPopState(event.state));
+    const onPopState = (event: PopStateEvent) => {
+      const nextLocation = controller.applyPopState(event.state);
+      syncLocation(nextLocation, false);
+      // 每次 popstate 都是独立的恢复命令：即使路径和 capturedAt 相同也不能去重。
+      publishRestoreCommand(
+        controller.getSnapshot(nextLocation.key),
+        controller.getCurrentEntryIdentity(),
+      );
+    };
     const onPageHide = () => controller.flush();
     window.addEventListener('popstate', onPopState);
     window.addEventListener('pagehide', onPageHide);
@@ -69,7 +96,7 @@ export const useGalleryNavigation = (options: UseGalleryNavigationOptions = {}):
       window.removeEventListener('popstate', onPopState);
       window.removeEventListener('pagehide', onPageHide);
     };
-  }, [controller, syncLocation]);
+  }, [controller, publishRestoreCommand, syncLocation]);
 
   const apply = useCallback((action: () => GalleryLocation) => syncLocation(action()), [syncLocation]);
   const back = useCallback(() => controller.back(), [controller]);
@@ -78,21 +105,33 @@ export const useGalleryNavigation = (options: UseGalleryNavigationOptions = {}):
     const nextLocation = controller.up();
     return nextLocation ? syncLocation(nextLocation) : undefined;
   }, [controller, syncLocation]);
-  const captureSnapshot = useCallback((snapshot: Omit<ViewportSnapshot, 'locationKey' | 'capturedAt'> & Partial<Pick<ViewportSnapshot, 'capturedAt'>>) => {
+  const captureSnapshot = useCallback((snapshot: ViewportSnapshotInput) => {
     return controller.captureSnapshot(snapshot);
   }, [controller]);
-  const requestRestore = useCallback((snapshot: Omit<ViewportSnapshot, 'locationKey' | 'capturedAt'> & Partial<Pick<ViewportSnapshot, 'capturedAt'>>) => {
+  const captureImmediateSnapshot = useCallback((snapshot: ViewportSnapshotInput) => {
+    return controller.captureImmediateSnapshot(snapshot);
+  }, [controller]);
+  const requestRestore = useCallback((snapshot: ViewportSnapshotInput) => {
     const nextSnapshot = controller.captureSnapshot(snapshot);
-    publishRestoreSnapshot(nextSnapshot);
+    if (nextSnapshot) {
+      publishRestoreCommand(nextSnapshot, controller.getCurrentEntryIdentity());
+    }
     return nextSnapshot;
-  }, [controller, publishRestoreSnapshot]);
-  const consumeRestoreSnapshot = useCallback(() => publishRestoreSnapshot(undefined), [publishRestoreSnapshot]);
+  }, [controller, publishRestoreCommand]);
+  const consumeRestoreSnapshot = useCallback((token: number) => {
+    setRestoreCommand((current) => {
+      if (!current || current.token !== token) return current;
+      publishedSnapshotRef.current = undefined;
+      return undefined;
+    });
+  }, []);
 
   return {
     location,
     canGoBack: controller.canGoBack(),
     canGoForward: controller.canGoForward(),
     restoreSnapshot,
+    restoreCommand,
     currentSnapshot: restoreSnapshot,
     back,
     forward,
@@ -101,6 +140,7 @@ export const useGalleryNavigation = (options: UseGalleryNavigationOptions = {}):
     navigatePath: useCallback((folderPath) => apply(() => controller.navigatePath(folderPath)), [apply, controller]),
     updateLocation: useCallback((update, mode) => apply(() => controller.updateLocation(update, mode)), [apply, controller]),
     captureSnapshot,
+    captureImmediateSnapshot,
     requestRestore,
     consumeRestoreSnapshot,
     getSnapshot: useCallback((locationKey) => controller.getSnapshot(locationKey), [controller]),

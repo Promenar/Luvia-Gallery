@@ -1,10 +1,10 @@
 import React, { useMemo, useRef, useEffect, useState } from 'react';
-import { CommonViewportProps, resolveAnchorIndex, createViewportSnapshot } from './viewport-types';
+import { CommonViewportProps, ViewportCaptureHandle, resolveAnchorIndex, createViewportSnapshot } from './viewport-types';
 import { MediaCard } from '../PhotoCard';
 import { FolderCard } from '../FolderCard';
 import { Button } from '../ui/Button';
 
-export const MasonryViewport: React.FC<CommonViewportProps> = ({
+export const MasonryViewport = React.forwardRef<ViewportCaptureHandle, CommonViewportProps>(({
   items,
   onItemClick,
   hasNextPage,
@@ -16,9 +16,10 @@ export const MasonryViewport: React.FC<CommonViewportProps> = ({
   onRegenerate,
   viewKey,
   restoreSnapshot,
+  restoreCommand,
   onSnapshotChange,
   onRestoreComplete
-}) => {
+}, ref) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const loadLockRef = useRef(false);
 
@@ -26,10 +27,26 @@ export const MasonryViewport: React.FC<CommonViewportProps> = ({
   const isRestoredRef = useRef(false);
   const isRestoringRef = useRef(false);
   const currentScrollTopRef = useRef(0);
+  const positionIdentityViewKeyRef = useRef(viewKey);
+  const restoreCompletionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const activeRestoreTokenRef = useRef<number | null>(null);
 
   // 快照节流上报
   const pendingSnapshotRef = useRef<any>(null);
   const throttleTimerRef = useRef<any>(null);
+
+  const cancelPendingSnapshot = () => {
+    if (throttleTimerRef.current) clearTimeout(throttleTimerRef.current);
+    throttleTimerRef.current = null;
+    pendingSnapshotRef.current = null;
+  };
+
+  const cancelRestoreTransaction = () => {
+    if (restoreCompletionTimerRef.current) clearTimeout(restoreCompletionTimerRef.current);
+    restoreCompletionTimerRef.current = null;
+    activeRestoreTokenRef.current = null;
+    isRestoringRef.current = false;
+  };
 
   const reportSnapshot = (snapshot: any) => {
     if (isRestoringRef.current) return;
@@ -49,9 +66,12 @@ export const MasonryViewport: React.FC<CommonViewportProps> = ({
     }
   };
 
-  // 视图或快照发生变化时，重置恢复标记
-  // 统一去重比较 locationKey + capturedAt 字符串
-  const snapshotKey = restoreSnapshot ? `${restoreSnapshot.locationKey}_${restoreSnapshot.capturedAt}` : null;
+  // 命令 token 优先于快照内容，避免同一路径同毫秒的不同 History 条目被去重。
+  const snapshotKey = restoreCommand
+    ? `command:${restoreCommand.token}`
+    : restoreSnapshot
+      ? `snapshot:${restoreSnapshot.locationKey}:${restoreSnapshot.capturedAt}:${restoreSnapshot.anchorItemId ?? ''}:${restoreSnapshot.anchorIndex ?? ''}:${restoreSnapshot.offsetWithinItem}:${restoreSnapshot.fallbackScrollTop}`
+      : null;
   const lastRestoredSnapshotKeyRef = useRef<string | null>(null);
   const lastViewKeyRef = useRef(viewKey);
 
@@ -60,6 +80,7 @@ export const MasonryViewport: React.FC<CommonViewportProps> = ({
     lastViewKeyRef.current = viewKey;
     lastRestoredSnapshotKeyRef.current = snapshotKey;
   }
+  const restoreToken = restoreCommand?.token ?? -1;
 
   // 动态分栏列数计算
   const [columnCount, setColumnCount] = useState(3);
@@ -94,33 +115,133 @@ export const MasonryViewport: React.FC<CommonViewportProps> = ({
     return { columns: cols, itemIndices: indices };
   }, [items, columnCount]);
 
+  const findVisibleAnchorElement = (container: HTMLDivElement) => {
+    const containerRect = container.getBoundingClientRect();
+    let element: HTMLElement | undefined;
+    let rect: DOMRect | undefined;
+    const samplePointsX = [0.1, 0.3, 0.5, 0.7, 0.9].map((ratio) => containerRect.left + containerRect.width * ratio);
+    const samplePointsY = [15, 45].map((offset) => containerRect.top + offset);
+
+    if (typeof document !== 'undefined' && typeof document.elementFromPoint === 'function') {
+      outerLoop: for (const y of samplePointsY) {
+        for (const x of samplePointsX) {
+          if (x < 0 || y < 0) continue;
+          const sampled = document.elementFromPoint(x, y);
+          const item = sampled?.closest('[data-item-id]') as HTMLElement | null;
+          if (item && container.contains(item)) {
+            element = item;
+            rect = item.getBoundingClientRect();
+            break outerLoop;
+          }
+        }
+      }
+    }
+
+    if (!element) {
+      const candidates = container.querySelectorAll<HTMLElement>('[data-item-id]');
+      const maxCheck = Math.min(candidates.length, 30);
+      for (let index = 0; index < maxCheck; index += 1) {
+        const candidate = candidates[index];
+        const candidateRect = candidate.getBoundingClientRect();
+      if (
+        candidateRect.bottom > containerRect.top &&
+        candidateRect.top < containerRect.bottom
+      ) {
+          element = candidate;
+          rect = candidateRect;
+          break;
+        }
+      }
+    }
+
+    return element && rect ? { element, rect, containerRect } : undefined;
+  };
+
+  const readLiveAnchor = () => {
+    const container = containerRef.current;
+    if (!container) return undefined;
+    const visible = findVisibleAnchorElement(container);
+    if (!visible) return undefined;
+    const id = visible.element.getAttribute('data-item-id') || undefined;
+    const index = id ? itemIndices[id] : undefined;
+    if (id === undefined || index === undefined) return undefined;
+    const relativeTop = visible.rect.top - visible.containerRect.top;
+    return { id, index, offsetWithinItem: -relativeTop };
+  };
+
+  const createCurrentSnapshot = (anchor?: { id: string; index: number; offsetWithinItem: number }) => {
+    const scrollTop = containerRef.current?.scrollTop ?? currentScrollTopRef.current;
+    currentScrollTopRef.current = scrollTop;
+    if (!anchor) return createViewportSnapshot(viewKey, undefined, undefined, 0, scrollTop, items.length);
+    return createViewportSnapshot(viewKey, anchor.id, anchor.index, anchor.offsetWithinItem, scrollTop, items.length);
+  };
+
+  const captureCurrentSnapshot = () => {
+    cancelPendingSnapshot();
+    return createCurrentSnapshot(readLiveAnchor());
+  };
+
+  React.useImperativeHandle(ref, () => ({ captureSnapshot: captureCurrentSnapshot }), [viewKey, items.length, itemIndices]);
+
+  useEffect(() => {
+    if (positionIdentityViewKeyRef.current !== viewKey) {
+      cancelPendingSnapshot();
+      currentScrollTopRef.current = 0;
+      isRestoringRef.current = false;
+      positionIdentityViewKeyRef.current = viewKey;
+    }
+    return cancelPendingSnapshot;
+  }, [viewKey]);
+
+  // 完成或重试定时器只由命令身份或视图身份终止，items 更新不能打断当前事务。
+  useEffect(() => {
+    cancelRestoreTransaction();
+  }, [viewKey, snapshotKey]);
+
   // 执行恢复
   useEffect(() => {
-    if (isRestoredRef.current) return;
+    if (isRestoredRef.current || isRestoringRef.current) return;
     if (!containerRef.current) return;
-    if (items.length === 0) return;
+    if (!restoreSnapshot && !restoreCommand) return;
+    if (items.length === 0 && !restoreCommand) return;
 
     let retryCount = 0;
-    let timerId: any = null;
+    activeRestoreTokenRef.current = restoreToken;
+    isRestoringRef.current = true;
+
+    const scheduleCompletion = () => {
+      restoreCompletionTimerRef.current = setTimeout(() => {
+        if (activeRestoreTokenRef.current !== restoreToken) return;
+        restoreCompletionTimerRef.current = null;
+        activeRestoreTokenRef.current = null;
+        isRestoringRef.current = false;
+        onRestoreComplete?.(restoreToken);
+      }, 150);
+    };
 
     const tryRestore = () => {
       const container = containerRef.current;
-      if (!container) return;
+      if (!container || activeRestoreTokenRef.current !== restoreToken) return;
 
       if (!restoreSnapshot) {
-        // 无快照需要恢复，直接标记完成
+        // 受管 History 的空快照是明确 reset 命令，不能保留上一条目的滚动位置。
+        cancelPendingSnapshot();
+        cancelRestoreTransaction();
+        activeRestoreTokenRef.current = restoreToken;
+        isRestoringRef.current = true;
+        container.scrollTop = 0;
+        currentScrollTopRef.current = 0;
         isRestoredRef.current = true;
-        onRestoreComplete?.();
+        scheduleCompletion();
         return;
       }
 
-      const { anchorItemId, scrollTop, offsetWithinItem = 0 } = restoreSnapshot;
+      const { anchorItemId, fallbackScrollTop, offsetWithinItem = 0 } = restoreSnapshot;
 
       if (anchorItemId) {
         const el = container.querySelector(`[data-item-id="${anchorItemId}"]`) as HTMLElement;
         if (el) {
           isRestoredRef.current = true;
-          isRestoringRef.current = true;
 
           const containerRect = container.getBoundingClientRect();
           const elRect = el.getBoundingClientRect();
@@ -129,65 +250,39 @@ export const MasonryViewport: React.FC<CommonViewportProps> = ({
           // 统一正号语义，修复符号相反
           container.scrollTop = container.scrollTop + currentRelativeTop + offsetWithinItem;
 
-          timerId = setTimeout(() => {
-            isRestoringRef.current = false;
-            onRestoreComplete?.();
-          }, 150);
+          scheduleCompletion();
         } else {
           // 如果没找到，并且重试次数小于 5 次，则隔 50ms 再试
           if (retryCount < 5) {
             retryCount++;
-            timerId = setTimeout(tryRestore, 50);
+            restoreCompletionTimerRef.current = setTimeout(tryRestore, 50);
           } else {
             // 实在找不到，以 scrollTop 兜底
             isRestoredRef.current = true;
-            isRestoringRef.current = true;
-            if (scrollTop !== undefined) {
-              container.scrollTop = scrollTop;
-            } else if (restoreSnapshot.fallbackScrollTop !== undefined) {
-              container.scrollTop = restoreSnapshot.fallbackScrollTop;
-            }
-            timerId = setTimeout(() => {
-              isRestoringRef.current = false;
-              onRestoreComplete?.();
-            }, 150);
+            container.scrollTop = fallbackScrollTop;
+            currentScrollTopRef.current = fallbackScrollTop;
+            scheduleCompletion();
           }
         }
-      } else if (scrollTop !== undefined && scrollTop > 0) {
+      } else if (fallbackScrollTop > 0) {
         isRestoredRef.current = true;
-        isRestoringRef.current = true;
-        container.scrollTop = scrollTop;
-        timerId = setTimeout(() => {
-          isRestoringRef.current = false;
-          onRestoreComplete?.();
-        }, 150);
-      } else if (restoreSnapshot.fallbackScrollTop !== undefined && restoreSnapshot.fallbackScrollTop > 0) {
-        isRestoredRef.current = true;
-        isRestoringRef.current = true;
-        container.scrollTop = restoreSnapshot.fallbackScrollTop;
-        timerId = setTimeout(() => {
-          isRestoringRef.current = false;
-          onRestoreComplete?.();
-        }, 150);
+        container.scrollTop = fallbackScrollTop;
+        currentScrollTopRef.current = fallbackScrollTop;
+        scheduleCompletion();
       } else {
         isRestoredRef.current = true;
-        onRestoreComplete?.();
+        scheduleCompletion();
       }
     };
 
     tryRestore();
-
-    return () => {
-      if (timerId) clearTimeout(timerId);
-    };
-  }, [items, restoreSnapshot, viewKey]);
+  }, [items, restoreSnapshot, restoreCommand?.token, viewKey]);
 
   // 组件卸载时清理定时器
   useEffect(() => {
     return () => {
-      if (throttleTimerRef.current) {
-        clearTimeout(throttleTimerRef.current);
-      }
+      cancelPendingSnapshot();
+      cancelRestoreTransaction();
     };
   }, []);
 
@@ -223,73 +318,8 @@ export const MasonryViewport: React.FC<CommonViewportProps> = ({
       loadLockRef.current = false;
     }
 
-    // 2. 捕获首个可见带 data-item-id 元素
-    const containerRect = container.getBoundingClientRect();
-    let firstVisibleEl: HTMLElement | null = null;
-
-    // 优先使用 elementFromPoint/closest 在容器顶部有限采样找到锚点 (O(1))
-    const samplePointsX = [
-      containerRect.left + containerRect.width * 0.1,
-      containerRect.left + containerRect.width * 0.3,
-      containerRect.left + containerRect.width * 0.5,
-      containerRect.left + containerRect.width * 0.7,
-      containerRect.left + containerRect.width * 0.9,
-    ];
-    const samplePointsY = [
-      containerRect.top + 15,
-      containerRect.top + 45
-    ];
-
-    if (typeof document !== 'undefined' && typeof document.elementFromPoint === 'function') {
-      outerLoop: for (const y of samplePointsY) {
-        for (const x of samplePointsX) {
-          if (x >= 0 && y >= 0) {
-            const el = document.elementFromPoint(x, y);
-            if (el) {
-              const itemEl = el.closest('[data-item-id]') as HTMLElement;
-              if (itemEl && container.contains(itemEl)) {
-                firstVisibleEl = itemEl;
-                break outerLoop;
-              }
-            }
-          }
-        }
-      }
-    }
-
-    // JSDOM / elementFromPoint 失败时的有限 fallback，绝对不 O(N) 遍历所有节点
-    if (!firstVisibleEl) {
-      const allElements = container.querySelectorAll('[data-item-id]');
-      const maxCheck = Math.min(allElements.length, 30);
-      for (let i = 0; i < maxCheck; i++) {
-        const el = allElements[i] as HTMLElement;
-        const elRect = el.getBoundingClientRect();
-        const relativeBottom = elRect.bottom - containerRect.top;
-        if (relativeBottom > 0) {
-          firstVisibleEl = el;
-          break;
-        }
-      }
-    }
-
-    if (firstVisibleEl) {
-      const elRect = firstVisibleEl.getBoundingClientRect();
-      const relativeTop = elRect.top - containerRect.top;
-      // 捕获与恢复统一正号语义，相对顶部 relativeTop 为负数时，偏移量 offset 应为正数（即 scrollTop - itemTop）
-      const offset = -relativeTop;
-      const id = firstVisibleEl.getAttribute('data-item-id') || undefined;
-      const index = id ? itemIndices[id] : undefined;
-
-      const snapshot = createViewportSnapshot(
-        viewKey,
-        id,
-        index,
-        offset,
-        scrollTop,
-        items.length
-      );
-      triggerSnapshotUpdate(snapshot);
-    }
+    // 2. 采样失败时只上报当前 scrollTop 兜底，绝不复用旧锚点或旧偏移。
+    triggerSnapshotUpdate(createCurrentSnapshot(readLiveAnchor()));
   };
 
   return (
@@ -359,4 +389,4 @@ export const MasonryViewport: React.FC<CommonViewportProps> = ({
       )}
     </div>
   );
-};
+});

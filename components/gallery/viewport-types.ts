@@ -1,13 +1,19 @@
 import { MediaItem } from '../../types';
-import { ViewportSnapshot } from '../../navigation/types';
+import { ViewportRestoreCommand, ViewportSnapshot } from '../../navigation/types';
 
-export type { ViewportSnapshot };
+export type { ViewportRestoreCommand, ViewportSnapshot };
+
+/** 当前挂载视口的同步取样能力，用于打开查看器前固化目录位置。 */
+export interface ViewportCaptureHandle {
+  captureSnapshot: () => ViewportSnapshot | undefined;
+}
 
 export interface CommonViewportProps {
   viewKey: string;
   restoreSnapshot?: ViewportSnapshot;
+  restoreCommand?: ViewportRestoreCommand;
   onSnapshotChange?: (snapshot: ViewportSnapshot) => void;
-  onRestoreComplete?: () => void;
+  onRestoreComplete?: (token: number) => void;
   items: MediaItem[];
   onItemClick: (item: MediaItem) => void;
   // Infinite scroll props
