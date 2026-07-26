@@ -95,6 +95,7 @@ describe('应用导航最小闭环', () => {
         <UnifiedGalleryToolbar {...commonProps} viewMode="all" location={baseLocation} />
       </LanguageProvider>,
     );
+    expect(screen.getByTestId('unified-gallery-toolbar').className).toContain('z-[35]');
     const compactSlot = screen.getByTestId('gallery-toolbar-compact-slot');
     const desktopSlot = screen.getByTestId('gallery-toolbar-desktop-slot');
     expect(compactSlot.className).toContain('lg:hidden');

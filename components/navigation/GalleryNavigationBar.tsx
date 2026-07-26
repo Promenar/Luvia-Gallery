@@ -348,7 +348,7 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
     return (
     <div
       ref={navRootRef}
-      className={`flex items-center justify-between gap-2 p-2 rounded-2xl glass-1 border border-white/5 shadow-lg transition-all duration-300 relative ${className}`}
+      className={`flex items-center justify-between gap-2 p-2 rounded-2xl glass-1 border border-white/5 shadow-lg transition-all duration-300 relative isolate ${className}`}
       data-testid="gallery-nav-bar-compact"
     >
         {isSearchMode ? (
@@ -452,9 +452,9 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
 
                 {isMobileMoreOpen && (
                   <>
-                    <div className="fixed inset-0 z-40" onClick={closeTransientPanels} data-testid="mobile-more-dismiss-overlay" />
+                    <div className="fixed inset-0 z-10" onClick={closeTransientPanels} data-testid="mobile-more-dismiss-overlay" />
                     <div
-                      className="absolute right-0 top-full mt-2 w-56 bg-surface-secondary/95 backdrop-blur-xl rounded-2xl shadow-2xl border border-white/10 p-2 z-50 flex flex-col gap-1 max-h-[80vh] overflow-y-auto"
+                      className="absolute right-0 top-full mt-2 w-56 bg-surface-secondary/95 backdrop-blur-xl rounded-2xl shadow-2xl border border-white/10 p-2 z-20 flex flex-col gap-1 max-h-[80vh] overflow-y-auto"
                       role="menu"
                     >
                       {/* Go Up Action */}
@@ -578,7 +578,7 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
   return (
     <div
       ref={navRootRef}
-      className={`flex flex-nowrap items-center gap-2 xl:gap-4 w-full min-w-0 p-3 rounded-2xl glass-1 border border-white/5 shadow-md transition-all duration-300 relative ${className}`}
+      className={`flex flex-nowrap items-center gap-2 xl:gap-4 w-full min-w-0 p-3 rounded-2xl glass-1 border border-white/5 shadow-md transition-all duration-300 relative isolate ${className}`}
       data-testid="gallery-nav-bar-desktop"
     >
       {/* 1. Left Nav buttons: back, forward, go-up */}
@@ -619,12 +619,12 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
 
       {/* 2. Center: Dual-mode Address / Search container */}
       {isSearchMode && (
-        <div className="fixed inset-0 z-40 bg-transparent" onClick={closeSearchMode} data-testid="search-dismiss-overlay" />
+        <div className="fixed inset-0 z-10 bg-transparent" onClick={closeSearchMode} data-testid="search-dismiss-overlay" />
       )}
 
       <div
         className={`flex-1 min-w-[12rem] bg-white/5 border border-white/10 rounded-xl hover:bg-white/10 hover:border-white/20 transition-all duration-200 h-10 px-2 xl:px-3 py-1 flex flex-nowrap items-center justify-between cursor-text focus-within:bg-white/10 focus-within:border-accent-500/50 ${
-          isSearchMode ? 'relative z-50 shadow-lg' : ''
+          isSearchMode ? 'shadow-lg' : ''
         }`}
         data-testid="gallery-omnibox"
         onClick={() => {
@@ -723,8 +723,8 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
             </button>
             {isFilterMenuOpen && (
               <>
-                <div className="fixed inset-0 z-40" onClick={closeTransientPanels} />
-                <div className="absolute right-0 top-full mt-2 w-40 bg-surface-secondary/90 backdrop-blur-xl rounded-xl shadow-2xl border border-white/10 p-1 z-50" role="listbox">
+              <div className="fixed inset-0 z-10" onClick={closeTransientPanels} />
+              <div className="absolute right-0 top-full mt-2 w-40 bg-surface-secondary/90 backdrop-blur-xl rounded-xl shadow-2xl border border-white/10 p-1 z-20" role="listbox">
                   {(['all', 'image', 'video', 'audio'] as GalleryFilterOption[]).map((value) => (
                     <button
                       key={value}
@@ -762,9 +762,9 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
 
           {isSortMenuOpen && (
             <>
-              <div className="fixed inset-0 z-40" onClick={closeTransientPanels} />
+              <div className="fixed inset-0 z-10" onClick={closeTransientPanels} />
               <div
-                className="absolute right-0 top-full mt-2 w-48 bg-surface-secondary/90 backdrop-blur-xl rounded-xl shadow-2xl border border-white/10 p-1 z-50 animate-in fade-in slide-in-from-top-2 duration-200"
+                className="absolute right-0 top-full mt-2 w-48 bg-surface-secondary/90 backdrop-blur-xl rounded-xl shadow-2xl border border-white/10 p-1 z-20 animate-in fade-in slide-in-from-top-2 duration-200"
                 role="listbox"
               >
                 {(['dateDesc', 'dateAsc', 'nameAsc', 'nameDesc', 'random'] as GallerySortOption[]).map((opt) => (
@@ -803,9 +803,9 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
 
           {isLayoutMenuOpen && (
             <>
-              <div className="fixed inset-0 z-40" onClick={closeTransientPanels} />
+              <div className="fixed inset-0 z-10" onClick={closeTransientPanels} />
               <div
-                className="absolute right-0 top-full mt-2 w-40 bg-surface-secondary/90 backdrop-blur-xl rounded-xl shadow-2xl border border-white/10 p-1 z-50 animate-in fade-in slide-in-from-top-2 duration-200"
+                className="absolute right-0 top-full mt-2 w-40 bg-surface-secondary/90 backdrop-blur-xl rounded-xl shadow-2xl border border-white/10 p-1 z-20 animate-in fade-in slide-in-from-top-2 duration-200"
                 role="listbox"
               >
                 {(['grid', 'masonry', 'timeline'] as GalleryLayout[]).map((mode) => (

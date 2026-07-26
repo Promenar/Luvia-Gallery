@@ -333,6 +333,47 @@ describe('GalleryNavigationBar 组件测试 (Unified Toolbar Phase 2)', () => {
     expect(onLayoutChange).toHaveBeenCalledWith('masonry');
   });
 
+  it('统一导航栏悬浮菜单与遮罩层具备高于媒体区域的层级', () => {
+    render(
+      <GalleryNavigationBar
+        {...defaultProps}
+        filter="all"
+        onFilterChange={vi.fn()}
+        onSortChange={vi.fn()}
+      />
+    );
+
+    const desktopBar = screen.getByTestId('gallery-nav-bar-desktop');
+    expect(desktopBar.className).toContain('isolate');
+    expect(desktopBar.className).not.toContain('z-[');
+
+    fireEvent.click(screen.getByLabelText(/当前筛选：/));
+    expect(screen.getByRole('listbox').className).toContain('z-20');
+    expect(document.querySelector('.fixed.inset-0.z-10')).not.toBeNull();
+    fireEvent.keyDown(window, { key: 'Escape' });
+
+    const compactRender = render(
+      <GalleryNavigationBar
+        {...defaultProps}
+        compact={true}
+        onSearch={vi.fn()}
+        onSortChange={vi.fn()}
+        onLayoutChange={vi.fn()}
+        onFilterChange={vi.fn()}
+      />,
+    );
+
+    const compactBar = compactRender.getByTestId('gallery-nav-bar-compact');
+    expect(compactBar.className).toContain('isolate');
+    fireEvent.click(within(compactBar).getByLabelText('更多选项'));
+
+    const mobileOverlay = compactRender.getByTestId('mobile-more-dismiss-overlay');
+    expect(mobileOverlay.className).toContain('z-10');
+    expect(within(compactBar).getByRole('menu').className).toContain('z-20');
+
+    compactRender.unmount();
+  });
+
   it('桌面模式下弹层可由外部点击和 Escape 一并关闭，且点击内部控制不被当作外部点击', () => {
     render(
       <GalleryNavigationBar
