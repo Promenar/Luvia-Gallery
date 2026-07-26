@@ -2275,7 +2275,7 @@ export default function App() {
             />
 
             <main className="flex-1 flex flex-col min-w-0 relative h-full pt-16 md:pt-0">
-                {viewMode !== 'home' && (
+                {viewMode === 'folders' && (
                     <div className="px-4 pt-3 md:px-8 md:pt-4">
                         <div className="md:hidden">
                             <GalleryNavigationBar
@@ -2306,7 +2306,7 @@ export default function App() {
                     </div>
                 )}
                 {/* Toolbar */}
-                {viewMode !== 'home' && (
+                {viewMode === 'folders' && (
                     <header className="h-16 flex items-center justify-between px-4 md:px-8 border-b border-white/5 bg-surface-primary z-20 shrink-0 absolute md:relative top-0 left-0 right-0 md:top-auto md:left-auto md:right-auto">
                         <div className="flex items-center gap-3 md:hidden">
                             <button onClick={() => setIsSidebarOpen(true)} className="p-2 -ml-2 text-gray-600 dark:text-gray-300">
@@ -2316,7 +2316,7 @@ export default function App() {
                         </div>
 
                         <div className="hidden md:flex items-center gap-4">
-                            {viewMode === 'folders' && currentPath && (
+                            {false && (
                                 <div className="flex items-center gap-2">
                                     <button onClick={handleGoBackFolder} className="flex items-center gap-2 text-gray-500 hover:text-gray-800 dark:hover:text-white transition-colors">
                                         <Icons.Back size={20} />
