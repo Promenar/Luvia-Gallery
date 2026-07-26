@@ -1,7 +1,7 @@
 import React, { useRef, useEffect } from 'react';
 import * as ReactWindow from 'react-window';
 import AutoSizer from 'react-virtualized-auto-sizer';
-import { CommonViewportProps, resolveAnchorIndex, createViewportSnapshot } from './viewport-types';
+import { CommonViewportProps, ViewportCaptureHandle, resolveAnchorIndex, createViewportSnapshot } from './viewport-types';
 import { MediaCard } from '../PhotoCard';
 import { FolderCard } from '../FolderCard';
 import { Icons } from '../ui/Icon';
@@ -13,7 +13,7 @@ interface InnerProps extends CommonViewportProps {
   height: number;
 }
 
-const GridViewportInner: React.FC<InnerProps> = ({
+const GridViewportInner = React.forwardRef<ViewportCaptureHandle, InnerProps>(({
   width,
   height,
   items,
@@ -28,9 +28,10 @@ const GridViewportInner: React.FC<InnerProps> = ({
   onRegenerate,
   viewKey,
   restoreSnapshot,
+  restoreCommand,
   onSnapshotChange,
   onRestoreComplete
-}) => {
+}, ref) => {
   const gridRef = useRef<any>(null);
   const loadLockRef = useRef(false);
 
@@ -40,10 +41,26 @@ const GridViewportInner: React.FC<InnerProps> = ({
   const currentScrollTopRef = useRef(0);
   const lastAnchorItemRef = useRef<{ id: string; index: number } | null>(null);
   const activeRowIndexRef = useRef<number>(-1);
+  const positionIdentityViewKeyRef = useRef(viewKey);
+  const restoreCompletionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const activeRestoreTokenRef = useRef<number | null>(null);
 
   // 快照节流上报
   const pendingSnapshotRef = useRef<any>(null);
   const throttleTimerRef = useRef<any>(null);
+
+  const cancelPendingSnapshot = () => {
+    if (throttleTimerRef.current) clearTimeout(throttleTimerRef.current);
+    throttleTimerRef.current = null;
+    pendingSnapshotRef.current = null;
+  };
+
+  const cancelRestoreTransaction = () => {
+    if (restoreCompletionTimerRef.current) clearTimeout(restoreCompletionTimerRef.current);
+    restoreCompletionTimerRef.current = null;
+    activeRestoreTokenRef.current = null;
+    isRestoringRef.current = false;
+  };
 
   const reportSnapshot = (snapshot: any) => {
     if (isRestoringRef.current) return;
@@ -63,9 +80,12 @@ const GridViewportInner: React.FC<InnerProps> = ({
     }
   };
 
-  // 视图或快照发生变化时，重置“已恢复”状态，允许重新恢复
-  // 统一去重比较 locationKey + capturedAt 字符串
-  const snapshotKey = restoreSnapshot ? `${restoreSnapshot.locationKey}_${restoreSnapshot.capturedAt}` : null;
+  // 命令 token 优先于快照内容，避免同一路径同毫秒的不同 History 条目被去重。
+  const snapshotKey = restoreCommand
+    ? `command:${restoreCommand.token}`
+    : restoreSnapshot
+      ? `snapshot:${restoreSnapshot.locationKey}:${restoreSnapshot.capturedAt}:${restoreSnapshot.anchorItemId ?? ''}:${restoreSnapshot.anchorIndex ?? ''}:${restoreSnapshot.offsetWithinItem}:${restoreSnapshot.fallbackScrollTop}`
+      : null;
   const lastRestoredSnapshotKeyRef = useRef<string | null>(null);
   const lastViewKeyRef = useRef(viewKey);
 
@@ -74,6 +94,7 @@ const GridViewportInner: React.FC<InnerProps> = ({
     lastViewKeyRef.current = viewKey;
     lastRestoredSnapshotKeyRef.current = snapshotKey;
   }
+  const restoreToken = restoreCommand?.token ?? -1;
 
   // 基础布局常量与动态计算
   const GUTTER_SIZE = 16;
@@ -87,11 +108,49 @@ const GridViewportInner: React.FC<InnerProps> = ({
 
   const isItemLoaded = (index: number) => !hasNextPage || index < items.length;
 
+  const captureCurrentSnapshot = () => {
+    cancelPendingSnapshot();
+    const anchor = lastAnchorItemRef.current;
+    if (!anchor) return createViewportSnapshot(viewKey, undefined, undefined, 0, currentScrollTopRef.current, items.length);
+    const rowIndex = activeRowIndexRef.current >= 0
+      ? activeRowIndexRef.current
+      : Math.floor(anchor.index / safeColumnCount);
+    const rowTop = rowIndex * (cellHeight + GUTTER_SIZE);
+    return createViewportSnapshot(
+      viewKey,
+      anchor.id,
+      anchor.index,
+      currentScrollTopRef.current - rowTop,
+      currentScrollTopRef.current,
+      items.length,
+    );
+  };
+
+  React.useImperativeHandle(ref, () => ({ captureSnapshot: captureCurrentSnapshot }), [viewKey, items.length, safeColumnCount, cellHeight]);
+
+  useEffect(() => {
+    if (positionIdentityViewKeyRef.current !== viewKey) {
+      cancelPendingSnapshot();
+      currentScrollTopRef.current = 0;
+      lastAnchorItemRef.current = null;
+      activeRowIndexRef.current = -1;
+      isRestoringRef.current = false;
+      positionIdentityViewKeyRef.current = viewKey;
+    }
+    return cancelPendingSnapshot;
+  }, [viewKey]);
+
+  // 完成事务只由命令身份或视图身份终止，items 更新不能中断已经执行的恢复。
+  useEffect(() => {
+    cancelRestoreTransaction();
+  }, [viewKey, snapshotKey]);
+
   // 执行恢复
   useEffect(() => {
     if (isRestoredRef.current) return;
     if (!gridRef.current) return;
-    if (items.length === 0) return;
+    if (!restoreSnapshot && !restoreCommand) return;
+    if (items.length === 0 && !restoreCommand) return;
     if (width <= 0 || height <= 0) return;
 
     isRestoredRef.current = true;
@@ -104,24 +163,31 @@ const GridViewportInner: React.FC<InnerProps> = ({
       const targetScrollTop = rowTop + (restoreSnapshot.offsetWithinItem || 0);
 
       gridRef.current.scrollTo({ scrollTop: targetScrollTop });
+    } else {
+      cancelPendingSnapshot();
+      cancelRestoreTransaction();
+      currentScrollTopRef.current = 0;
+      lastAnchorItemRef.current = null;
+      activeRowIndexRef.current = -1;
+      gridRef.current.scrollTo({ scrollTop: 0 });
     }
 
-    const timer = setTimeout(() => {
+    activeRestoreTokenRef.current = restoreToken;
+    isRestoringRef.current = true;
+    restoreCompletionTimerRef.current = setTimeout(() => {
+      if (activeRestoreTokenRef.current !== restoreToken) return;
+      restoreCompletionTimerRef.current = null;
+      activeRestoreTokenRef.current = null;
       isRestoringRef.current = false;
-      onRestoreComplete?.();
+      onRestoreComplete?.(restoreToken);
     }, 150);
-
-    return () => {
-      clearTimeout(timer);
-    };
-  }, [items, restoreSnapshot, viewKey, width, height, safeColumnCount]);
+  }, [items, restoreSnapshot, restoreCommand?.token, viewKey, width, height, safeColumnCount]);
 
   // 组件卸载时清理定时器
   useEffect(() => {
     return () => {
-      if (throttleTimerRef.current) {
-        clearTimeout(throttleTimerRef.current);
-      }
+      cancelPendingSnapshot();
+      cancelRestoreTransaction();
     };
   }, []);
 
@@ -244,9 +310,9 @@ const GridViewportInner: React.FC<InnerProps> = ({
       }}
     </FixedSizeGrid>
   );
-};
+});
 
-export const GridViewport: React.FC<CommonViewportProps> = (props) => {
+export const GridViewport = React.forwardRef<ViewportCaptureHandle, CommonViewportProps>((props, ref) => {
   return (
     <div className="flex-1 w-full h-full">
       <AutoSizer>
@@ -254,9 +320,9 @@ export const GridViewport: React.FC<CommonViewportProps> = (props) => {
           if (!height || !width || height <= 0 || width <= 0) {
             return <div className="flex items-center justify-center h-full text-gray-400">Loading...</div>;
           }
-          return <GridViewportInner {...props} width={width} height={height} />;
+          return <GridViewportInner ref={ref} {...props} width={width} height={height} />;
         }}
       </AutoSizer>
     </div>
   );
-};
+});

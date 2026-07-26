@@ -2,17 +2,35 @@ import type { ViewportSnapshot } from './types';
 
 const STORAGE_KEY = 'luvia.gallery.viewport-snapshots.v1';
 export const MAX_VIEWPORT_SNAPSHOTS = 40;
+const MAX_SAFE_VIEWPORT_VALUE = Number.MAX_SAFE_INTEGER;
 
 export type StorageLike = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
 
 const isSnapshot = (value: unknown): value is ViewportSnapshot => {
   if (!value || typeof value !== 'object') return false;
   const snapshot = value as Partial<ViewportSnapshot>;
+
+  // Masonry 以 -relativeTop 记录锚点偏移：卡片顶部仍在视口内下方时该值可以为负，
+  // 同时浏览器滚动坐标允许子像素，所以 offset 不要求整数。
+  const isFiniteOffset = typeof snapshot.offsetWithinItem === 'number'
+    && Number.isFinite(snapshot.offsetWithinItem)
+    && Math.abs(snapshot.offsetWithinItem) <= MAX_SAFE_VIEWPORT_VALUE;
+  const isFiniteScrollTop = typeof snapshot.fallbackScrollTop === 'number'
+    && Number.isFinite(snapshot.fallbackScrollTop)
+    && snapshot.fallbackScrollTop >= 0
+    && snapshot.fallbackScrollTop <= MAX_SAFE_VIEWPORT_VALUE;
+  const isNonNegativeInteger = (candidate: unknown): candidate is number =>
+    typeof candidate === 'number'
+    && Number.isSafeInteger(candidate)
+    && candidate >= 0;
+
   return typeof snapshot.locationKey === 'string'
-    && typeof snapshot.offsetWithinItem === 'number'
-    && typeof snapshot.fallbackScrollTop === 'number'
-    && typeof snapshot.loadedOffset === 'number'
-    && typeof snapshot.capturedAt === 'number';
+    && (snapshot.anchorItemId === undefined || typeof snapshot.anchorItemId === 'string')
+    && (snapshot.anchorIndex === undefined || isNonNegativeInteger(snapshot.anchorIndex))
+    && isFiniteOffset
+    && isFiniteScrollTop
+    && isNonNegativeInteger(snapshot.loadedOffset)
+    && isNonNegativeInteger(snapshot.capturedAt);
 };
 
 const getSessionStorage = (): StorageLike | undefined => {
@@ -57,6 +75,19 @@ export class SnapshotStore {
   save(snapshot: ViewportSnapshot): void {
     this.saveMemory(snapshot);
     this.flush();
+  }
+
+  /** History 目标条目自带的快照是该次回退/前进的恢复权威；缺失或错 key 同样会清除旧缓存。 */
+  restoreAuthoritative(locationKey: string, snapshot?: unknown): ViewportSnapshot | undefined {
+    if (!isSnapshot(snapshot) || snapshot.locationKey !== locationKey) {
+      if (this.snapshots.delete(locationKey)) this.dirty = true;
+      return undefined;
+    }
+    const stableSnapshot: ViewportSnapshot = { ...snapshot };
+    this.snapshots.set(locationKey, stableSnapshot);
+    this.trim();
+    this.dirty = true;
+    return stableSnapshot;
   }
 
   flush(): void {

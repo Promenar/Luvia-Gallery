@@ -123,6 +123,98 @@ describe('GalleryNavigationController', () => {
     expect(window.history.state.location.folderPath).toBe('Albums/child');
   });
 
+  it('普通异步捕获拒绝来源 locationKey 与当前目录不一致的样本', () => {
+    const controller = createController();
+    controller.initialize();
+
+    expect(controller.captureSnapshot({ ...makeSnapshot(300), locationKey: 'folders:stale' })).toBeUndefined();
+    expect(controller.captureImmediateSnapshot({ ...makeSnapshot(300), locationKey: 'folders:stale' })).toBeUndefined();
+    expect(controller.getSnapshot()).toBeUndefined();
+  });
+
+  it('受管 History 空快照或错 key 会清除目标路径的旧缓存', () => {
+    const controller = createController();
+    controller.initialize();
+    controller.captureSnapshot(makeSnapshot(800));
+    controller.flush();
+    const state = window.history.state;
+
+    controller.applyPopState({ ...state, snapshot: undefined });
+    expect(controller.getSnapshot()).toBeUndefined();
+
+    controller.captureSnapshot(makeSnapshot(900));
+    controller.applyPopState({ ...state, snapshot: { ...state.snapshot, locationKey: 'folders:wrong' } });
+    expect(controller.getSnapshot()).toBeUndefined();
+  });
+
+  it('受管 History 初始化覆盖 sessionStorage 的较新快照并立即持久化', () => {
+    const storage = new MemoryStorage();
+    const original = createController(storage);
+    const location = original.initialize();
+    original.captureSnapshot(makeSnapshot(100));
+    original.flush();
+    const historyState = window.history.state;
+    new SnapshotStore(storage).save({ ...makeSnapshot(900), locationKey: location.key });
+
+    const refreshed = createController(storage);
+    refreshed.initialize();
+    expect(refreshed.getSnapshot()).toMatchObject({ capturedAt: 100 });
+
+    const reloaded = createController(storage);
+    reloaded.initialize();
+    expect(reloaded.getSnapshot()).toMatchObject({ capturedAt: 100 });
+    expect(historyState.snapshot.capturedAt).toBe(100);
+  });
+
+  it('popstate 使用目标 History 条目的快照覆盖同 key 的较新全局样本', () => {
+    const controller = createController();
+    controller.initialize();
+    controller.captureSnapshot(makeSnapshot(100));
+    controller.flush();
+    const targetState = window.history.state;
+    controller.captureSnapshot(makeSnapshot(900));
+    expect(controller.getSnapshot()?.capturedAt).toBe(900);
+
+    controller.applyPopState(targetState);
+    expect(controller.getSnapshot()).toMatchObject({ capturedAt: 100, fallbackScrollTop: 420 });
+  });
+
+  it('同一路径两次打开查看器分别恢复打开前位置，旧节流快照不能覆盖第二次捕获', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(1_000));
+    const controller = createController();
+    const directory = controller.initialize();
+    const replace = vi.spyOn(window.history, 'replaceState');
+
+    controller.captureImmediateSnapshot({ ...makeSnapshot(1_000), anchorItemId: 'media-a', fallbackScrollTop: 120 });
+    controller.updateLocation({ mediaId: 'viewer-a' }, 'push');
+    const firstDirectoryState = replace.mock.calls.at(-1)![0];
+    controller.applyPopState(firstDirectoryState);
+    expect(controller.getSnapshot(directory.key)).toMatchObject({ anchorItemId: 'media-a', fallbackScrollTop: 120 });
+
+    controller.captureImmediateSnapshot({ ...makeSnapshot(1_000), anchorItemId: 'media-b', fallbackScrollTop: 860 });
+    controller.captureSnapshot({ ...makeSnapshot(1_000), anchorItemId: 'stale-media', fallbackScrollTop: 420 });
+    controller.updateLocation({ mediaId: 'viewer-b' }, 'push');
+    const secondDirectoryState = replace.mock.calls.at(-1)![0];
+    controller.applyPopState(secondDirectoryState);
+
+    expect(controller.getSnapshot(directory.key)).toMatchObject({ anchorItemId: 'media-b', fallbackScrollTop: 860 });
+    expect((secondDirectoryState as { snapshot?: { anchorItemId?: string } }).snapshot?.anchorItemId).toBe('media-b');
+  });
+
+  it('首次即时捕获即使没有现存快照，也会领先同毫秒的旧节流样本', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2_000));
+    const controller = createController();
+    controller.initialize();
+
+    const immediate = controller.captureImmediateSnapshot({ ...makeSnapshot(2_000), anchorItemId: 'opened-media', fallbackScrollTop: 720 });
+    controller.captureSnapshot({ ...makeSnapshot(2_000), anchorItemId: 'pending-media', fallbackScrollTop: 360 });
+
+    expect(immediate).toMatchObject({ capturedAt: 2_001 });
+    expect(controller.getSnapshot()).toMatchObject({ anchorItemId: 'opened-media', fallbackScrollTop: 720, capturedAt: 2_001 });
+  });
+
   it('连续捕获快照不会发布恢复命令或触发 Hook 重渲染，并在卸载时清理监听和 flush', () => {
     let api: GalleryNavigationApi | undefined;
     let renders = 0;
@@ -153,7 +245,7 @@ describe('GalleryNavigationController', () => {
     expect(removeListener).toHaveBeenCalledWith('pagehide', expect.any(Function));
   });
 
-  it('popstate 命中旧快照只发布一次，消费后清空恢复命令', () => {
+  it('每次 popstate 都发布独立恢复命令，消费后清空恢复命令', () => {
     let api: GalleryNavigationApi | undefined;
     const controller = createController();
     controller.initialize();
@@ -172,10 +264,12 @@ describe('GalleryNavigationController', () => {
     expect(api!.restoreSnapshot).toBeUndefined();
     act(() => window.dispatchEvent(new PopStateEvent('popstate', { state })));
     const restored = api!.restoreSnapshot;
+    const firstCommand = api!.restoreCommand;
     expect(restored?.capturedAt).toBe(600);
     act(() => window.dispatchEvent(new PopStateEvent('popstate', { state })));
-    expect(api!.restoreSnapshot).toBe(restored);
-    act(() => api!.consumeRestoreSnapshot());
+    expect(api!.restoreSnapshot).toMatchObject({ capturedAt: 600 });
+    expect(api!.restoreCommand?.token).toBeGreaterThan(firstCommand!.token);
+    act(() => api!.consumeRestoreSnapshot(api!.restoreCommand!.token));
     expect(api!.restoreSnapshot).toBeUndefined();
     expect(api!.currentSnapshot).toBeUndefined();
     act(() => root.unmount());
@@ -193,12 +287,107 @@ describe('GalleryNavigationController', () => {
 
     act(() => root.render(createElement(Probe)));
     act(() => api!.requestRestore(makeSnapshot(700)));
+    const firstCommand = api!.restoreCommand;
+    act(() => api!.requestRestore({ ...makeSnapshot(700), fallbackScrollTop: 999 }));
     const requested = api!.restoreSnapshot;
-    expect(requested?.capturedAt).toBe(700);
-    act(() => api!.requestRestore(makeSnapshot(700)));
+    expect(requested).toMatchObject({ capturedAt: 700, fallbackScrollTop: 999 });
+    expect(api!.restoreCommand?.token).toBeGreaterThan(firstCommand!.token);
+    act(() => api!.consumeRestoreSnapshot(firstCommand!.token));
     expect(api!.restoreSnapshot).toBe(requested);
     act(() => api!.captureSnapshot(makeSnapshot(701)));
     expect(api!.restoreSnapshot).toBe(requested);
+    expect(api!.requestRestore({ ...makeSnapshot(702), locationKey: 'folders:stale' })).toBeUndefined();
+    expect(api!.restoreSnapshot).toBe(requested);
+    act(() => root.unmount());
+  });
+
+  it('普通跨目录进入无快照位置时仍发布 reset 命令', () => {
+    let api: GalleryNavigationApi | undefined;
+    const controller = createController();
+    const host = document.createElement('div');
+    const root: Root = createRoot(host);
+    const Probe = () => {
+      api = useGalleryNavigation({ controller });
+      return null;
+    };
+    act(() => root.render(createElement(Probe)));
+
+    act(() => api!.navigatePath('Albums/empty-child'));
+    expect(api!.restoreCommand).toMatchObject({
+      entryId: expect.stringContaining(':1'),
+      snapshot: undefined,
+    });
+    expect(api!.restoreSnapshot).toBeUndefined();
+    act(() => root.unmount());
+  });
+
+  it('SnapshotStore 拒绝损坏数值字段并保留合法的小数与负偏移', () => {
+    const store = new SnapshotStore(new MemoryStorage());
+    const valid = {
+      locationKey: 'folders:valid',
+      anchorIndex: 2,
+      offsetWithinItem: -12.5,
+      fallbackScrollTop: 420.25,
+      loadedOffset: 100,
+      capturedAt: 800,
+    };
+    expect(store.saveMemory(valid)).toMatchObject(valid);
+    expect(store.saveMemory({ ...valid, capturedAt: Number.NaN })).toBeUndefined();
+    expect(store.saveMemory({ ...valid, fallbackScrollTop: Infinity })).toBeUndefined();
+    expect(store.saveMemory({ ...valid, anchorIndex: -1 })).toBeUndefined();
+    expect(store.saveMemory({ ...valid, anchorIndex: 1.5 })).toBeUndefined();
+    expect(store.saveMemory({ ...valid, loadedOffset: -1 })).toBeUndefined();
+    expect(store.saveMemory({ ...valid, loadedOffset: 1.5 })).toBeUndefined();
+    expect(store.saveMemory({ ...valid, capturedAt: -1 })).toBeUndefined();
+    expect(store.saveMemory({ ...valid, capturedAt: 1.5 })).toBeUndefined();
+  });
+
+  it('同一路径的不同受管 History 条目在 popstate 时分别恢复，空快照发布 reset 命令', () => {
+    let api: GalleryNavigationApi | undefined;
+    const controller = createController();
+    const location = controller.initialize();
+    controller.captureSnapshot({ ...makeSnapshot(800), anchorItemId: 'entry-a', fallbackScrollTop: 120 });
+    controller.flush();
+    const firstEntry = window.history.state;
+
+    controller.navigate(controller.getLocation(), 'push');
+    controller.captureSnapshot({ ...makeSnapshot(800), anchorItemId: 'entry-b', fallbackScrollTop: 880 });
+    controller.flush();
+    const secondEntry = window.history.state;
+    expect(firstEntry.location.key).toBe(secondEntry.location.key);
+
+    const host = document.createElement('div');
+    const root: Root = createRoot(host);
+    const Probe = () => {
+      api = useGalleryNavigation({ controller });
+      return null;
+    };
+    act(() => root.render(createElement(Probe)));
+
+    act(() => window.dispatchEvent(new PopStateEvent('popstate', { state: firstEntry })));
+    const firstCommand = api!.restoreCommand;
+    expect(firstCommand).toMatchObject({
+      entryId: `${firstEntry.sessionId}:${firstEntry.sessionIndex}`,
+      snapshot: { locationKey: location.key, anchorItemId: 'entry-a', fallbackScrollTop: 120 },
+    });
+
+    act(() => window.dispatchEvent(new PopStateEvent('popstate', { state: secondEntry })));
+    const secondCommand = api!.restoreCommand;
+    expect(secondCommand).toMatchObject({
+      entryId: `${secondEntry.sessionId}:${secondEntry.sessionIndex}`,
+      snapshot: { locationKey: location.key, anchorItemId: 'entry-b', fallbackScrollTop: 880 },
+    });
+    expect(secondCommand!.token).toBeGreaterThan(firstCommand!.token);
+
+    act(() => window.dispatchEvent(new PopStateEvent('popstate', {
+      state: { ...firstEntry, snapshot: undefined },
+    })));
+    expect(api!.restoreCommand).toMatchObject({
+      entryId: `${firstEntry.sessionId}:${firstEntry.sessionIndex}`,
+      snapshot: undefined,
+    });
+    expect(api!.restoreCommand!.token).toBeGreaterThan(secondCommand!.token);
+    expect(api!.restoreSnapshot).toBeUndefined();
     act(() => root.unmount());
   });
 });

@@ -1,7 +1,7 @@
 import { createHistoryState, type GalleryHistoryState } from './history-state';
 import { getParentFolderPath, parseGalleryUrl, serializeGalleryUrl } from './location';
 import { SnapshotStore, type StorageLike } from './snapshot-store';
-import type { GalleryLocation, ViewportSnapshot } from './types';
+import type { GalleryLocation, ViewportSnapshot, ViewportSnapshotInput } from './types';
 
 const NAVIGATION_STATE_MARKER = '__luviaGalleryNavigation';
 const NAVIGATION_SESSION_STORAGE_KEY = 'luvia.gallery.navigation-session.v1';
@@ -106,7 +106,8 @@ export class GalleryNavigationController {
       const metadata = this.readSessionMetadata(this.sessionId);
       this.sessionMaxIndex = Math.max(this.sessionIndex, metadata?.maxIndex ?? 0, currentState.sessionMaxIndex);
       this.knownLocations.set(this.sessionIndex, cloneLocation(this.location));
-      if (currentState.snapshot) this.snapshotStore.saveMemory(currentState.snapshot);
+      this.snapshotStore.restoreAuthoritative(this.location.key, currentState.snapshot);
+      this.snapshotStore.flush();
       this.persistSessionMetadata();
       return cloneLocation(this.location);
     }
@@ -123,6 +124,12 @@ export class GalleryNavigationController {
 
   getLocation(): GalleryLocation {
     return cloneLocation(this.requireLocation());
+  }
+
+  /** 同一 locationKey 下仍可区分不同的受管浏览器 History 条目。 */
+  getCurrentEntryIdentity(): string {
+    this.requireLocation();
+    return `${this.sessionId}:${this.sessionIndex}`;
   }
 
   canGoBack(): boolean {
@@ -209,7 +216,8 @@ export class GalleryNavigationController {
       const metadata = this.readSessionMetadata(this.sessionId);
       this.sessionMaxIndex = Math.max(this.sessionIndex, metadata?.maxIndex ?? 0, state.sessionMaxIndex);
       this.knownLocations.set(this.sessionIndex, cloneLocation(nextLocation));
-      if (state.snapshot) this.snapshotStore.saveMemory(state.snapshot);
+      this.snapshotStore.restoreAuthoritative(nextLocation.key, state.snapshot);
+      this.snapshotStore.flush();
       this.persistSessionMetadata();
       return cloneLocation(nextLocation);
     }
@@ -220,7 +228,28 @@ export class GalleryNavigationController {
     return cloneLocation(fallback);
   }
 
-  captureSnapshot(snapshot: Omit<ViewportSnapshot, 'locationKey' | 'capturedAt'> & Partial<Pick<ViewportSnapshot, 'capturedAt'>>): ViewportSnapshot {
+  captureSnapshot(snapshot: ViewportSnapshotInput): ViewportSnapshot | undefined {
+    const location = this.requireLocation();
+    if (snapshot.locationKey && snapshot.locationKey !== location.key) return undefined;
+    return this.saveSnapshot(snapshot);
+  }
+
+  /**
+   * 查看器打开前使用的同步捕获。它必须胜过已经在节流队列中的旧滚动样本，
+   * 因此版本严格领先于调用方时间、当前时钟和现存快照；普通滚动上报仍保持
+   * 同时间戳后写覆盖的既有语义。
+   */
+  captureImmediateSnapshot(snapshot: ViewportSnapshotInput): ViewportSnapshot | undefined {
+    const location = this.requireLocation();
+    if (snapshot.locationKey && snapshot.locationKey !== location.key) return undefined;
+    const existing = this.snapshotStore.get(location.key);
+    return this.saveSnapshot({
+      ...snapshot,
+      capturedAt: Math.max(snapshot.capturedAt ?? -1, Date.now(), existing?.capturedAt ?? -1) + 1,
+    });
+  }
+
+  private saveSnapshot(snapshot: ViewportSnapshotInput): ViewportSnapshot {
     const location = this.requireLocation();
     const stableSnapshot = this.snapshotStore.saveMemory({
       ...snapshot,
