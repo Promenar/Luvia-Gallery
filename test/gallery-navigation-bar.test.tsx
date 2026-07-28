@@ -226,7 +226,10 @@ describe('GalleryNavigationBar 组件测试 (Unified Toolbar Phase 2)', () => {
     expect(document.activeElement).toBe(screen.getByLabelText('搜索输入框'));
 
     // 应该显示作用域标签: "文件夹: vacation"
-    expect(screen.getByText('文件夹: vacation')).toBeDefined();
+    const scopeChip = screen.getByText('文件夹: vacation');
+    expect(scopeChip).toBeDefined();
+    expect(scopeChip.className).toContain('bg-accent-500/10');
+    expect(scopeChip.className).not.toContain('border');
 
     // 2. 键盘 Ctrl+K 也能触发搜索模式 (我们先退出，再尝试 Ctrl+K)
     fireEvent.keyDown(screen.getByLabelText('搜索输入框'), { key: 'Escape' });
@@ -316,12 +319,19 @@ describe('GalleryNavigationBar 组件测试 (Unified Toolbar Phase 2)', () => {
 
     // 1. 触发排序菜单
     const sortBtn = screen.getByLabelText(/当前排序：/);
+    expect(sortBtn.className).toContain('focus-visible:ring-2');
+    expect(sortBtn.className).not.toContain('focus:ring-2');
     fireEvent.click(sortBtn);
     const sortMenu = screen.getByRole('listbox');
     expect(sortMenu.className).toContain('bg-surface-secondary');
     expect(sortMenu.className).toContain('backdrop-blur-2xl');
     expect(sortMenu.className).not.toContain('bg-surface-secondary/90');
     expect(sortMenu.className).not.toContain('bg-surface-secondary/95');
+    const selectedSort = within(sortMenu).getByText('最新优先').closest('button');
+    expect(selectedSort?.className).toContain('bg-accent-500/10');
+    expect(selectedSort?.className).toContain('ring-inset');
+    expect(selectedSort?.className).toContain('ring-accent-500/20');
+    expect(selectedSort?.className).not.toContain('ring-white');
 
     // 点击最早优先
     const dateAscOpt = screen.getByText('最早优先');

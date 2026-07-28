@@ -23,6 +23,14 @@ function getScanResultsRoute() {
     return serverSource.slice(start, end);
 }
 
+function getLibraryFoldersRoute() {
+    const start = serverSource.indexOf("app.get('/api/library/folders'");
+    const end = serverSource.indexOf('\n});', start) + 4;
+    assert.notEqual(start, -1, 'Missing /api/library/folders route');
+    assert.ok(end > 3, 'Unable to isolate /api/library/folders route');
+    return serverSource.slice(start, end);
+}
+
 test('scan results rejects invalid decimal pagination with HTTP 400', () => {
     const parseScanPagination = loadHelper('parseScanPagination');
     const invalidQueries = [
@@ -64,4 +72,83 @@ test('path containment rejects a sibling that only shares the root prefix', () =
     assert.equal(isPathWithin(root, root), true);
     assert.equal(isPathWithin(path.resolve('/media/library-copy/photo.jpg'), root), false);
     assert.equal(isPathWithin(path.parse(root).root, path.parse(root).root), true);
+});
+
+test('folder search limit only accepts integers from 1 through 100', () => {
+    const parseFolderSearchLimit = loadHelper('parseFolderSearchLimit');
+
+    assert.equal(parseFolderSearchLimit(undefined), 100);
+    assert.equal(parseFolderSearchLimit('1'), 1);
+    assert.equal(parseFolderSearchLimit('100'), 100);
+    for (const value of ['0', '101', '1.5', '1e2', '10px']) {
+        assert.equal(parseFolderSearchLimit(value), null);
+    }
+});
+
+test('folder cover uses recursive database selection and URL-safe base64 id', () => {
+    const queryCalls = [];
+    const getFolderCoverMedia = loadHelper('getFolderCoverMedia', {
+        database: {
+            queryFiles(options) {
+                queryCalls.push(options);
+                return [{
+                    id: 'folder/+=',
+                    path: '/library/folder/photo.gif',
+                    name: 'photo.gif',
+                    type: 'image/gif',
+                    mediaType: 'image'
+                }];
+            }
+        },
+        crypto: require('node:crypto'),
+        encodeURIComponent,
+        fs: {
+            existsSync: () => true,
+            statSync: () => ({ mtimeMs: 123 })
+        },
+        getCachedPath: filename => `/cache/${filename}`
+    });
+
+    const cover = getFolderCoverMedia('/library/folder');
+
+    assert.equal(queryCalls.length, 1);
+    assert.equal(queryCalls[0].folderPath, '/library/folder');
+    assert.equal(queryCalls[0].recursive, true);
+    assert.deepEqual(Array.from(queryCalls[0].mediaType), ['image', 'video']);
+    assert.equal(queryCalls[0].limit, 1);
+    assert.equal(queryCalls[0].sortOption, 'dateDesc');
+    assert.equal(cover.id, 'folder/+=');
+    assert.equal(cover.url, '/api/thumb/folder%2F%2B%3D?t=123');
+    assert.equal(cover.type, 'image/gif');
+    assert.equal(cover.path, '/library/folder/photo.gif');
+});
+
+test('folder route narrows searched and historical favorite paths to current permissions', () => {
+    const route = getLibraryFoldersRoute();
+
+    assert.match(route, /database\.queryFolderPaths\(\{[\s\S]*?parentPath: resolvedParentPath,[\s\S]*?allowedPaths: userLibraryPaths,[\s\S]*?search,[\s\S]*?limit/);
+    assert.match(route, /\.filter\(folderPath => isCurrentlyAllowed\(folderPath\)\)/);
+    assert.match(route, /favoriteIds\.folders \|\| \[\]\)\.filter\(folderPath => isCurrentlyAllowed\(folderPath\)\)/);
+    assert.match(route, /isPathWithin\(path\.resolve\(folderPath\), allowedPath\)/);
+});
+
+test('folder route cover selection never calls recursive filesystem cover discovery', () => {
+    const route = getLibraryFoldersRoute();
+    const coverHelper = serverSource.slice(
+        serverSource.indexOf('function getFolderCoverMedia('),
+        serverSource.indexOf('function buildFolderResult(')
+    );
+
+    assert.match(coverHelper, /database\.queryFiles\(\{[\s\S]*?recursive: true,[\s\S]*?mediaType: \['image', 'video'\],[\s\S]*?limit: 1/);
+    assert.doesNotMatch(route, /findCoverMedia/);
+    assert.doesNotMatch(coverHelper, /findCoverMedia|readdirSync/);
+});
+
+test('folder media count requires a dotted extension and includes GIF', () => {
+    const helper = serverSource.slice(
+        serverSource.indexOf('function buildFolderResult('),
+        serverSource.indexOf("app.get('/api/library/folders'")
+    );
+
+    assert.match(helper, /\\\.\(jpg\|jpeg\|png\|gif\|webp\|mp4\|mov\|webm\)\$/);
 });

@@ -119,6 +119,25 @@ export const appendGalleryScanScopeQuery = (
     return scopedUrl;
 };
 
+export const appendGalleryFolderQuery = (
+    url: string,
+    parentPath: string | null,
+    favoritesOnly: boolean,
+    searchQuery: string,
+) => {
+    const params: string[] = [];
+    const effectiveSearch = searchQuery.trim();
+
+    if (favoritesOnly) params.push('favorites=true');
+    if (parentPath !== null && !favoritesOnly) params.push(`parent=${encodeURIComponent(parentPath)}`);
+    if (effectiveSearch) {
+        params.push(`search=${encodeURIComponent(effectiveSearch)}`);
+        params.push('limit=100');
+    }
+
+    return params.length > 0 ? `${url}?${params.join('&')}` : url;
+};
+
 export const resolveVisibleGalleryFolders = (
     viewMode: ViewMode,
     activeSearch: string,
@@ -126,8 +145,17 @@ export const resolveVisibleGalleryFolders = (
     serverFolders: any[],
     clientSubfolders: any[],
 ) => viewMode === 'folders' && activeSearch.trim()
-    ? []
+    ? serverFolders
     : (isServerMode ? serverFolders : clientSubfolders);
+
+export const hasVisibleGallerySearchResults = (
+    viewMode: ViewMode,
+    visibleFolderCount: number,
+    mediaCount: number,
+    favoriteFolderCount: number,
+) => viewMode === 'folders'
+    ? visibleFolderCount > 0 || mediaCount > 0
+    : mediaCount > 0 || (viewMode === 'favorites' && favoriteFolderCount > 0);
 
 export const resolveScopedGalleryLayout = (
     storage: LayoutPreferenceStorage | undefined,
@@ -892,7 +920,7 @@ export default function App() {
 
     // --- Server Logic: Scan & Poll ---
 
-    const fetchServerFolders = async (parentPath: string | null = null, favoritesOnly = false, navigationEpoch?: number, locationKey?: string, signal?: AbortSignal) => {
+    const fetchServerFolders = async (parentPath: string | null = null, favoritesOnly = false, navigationEpoch?: number, locationKey?: string, signal?: AbortSignal, searchQuery = '') => {
         const guard = resolveGalleryRequestGuard(
             navigationEpoch,
             locationKey,
@@ -903,13 +931,7 @@ export default function App() {
         );
         if (!isGalleryRequestGuardActive(guard, navigationRequestEpochRef.current, activeLocationKeyRef.current)) return;
         try {
-            let url = `/api/library/folders`;
-            const params = [];
-            if (favoritesOnly) params.push('favorites=true');
-            // Only append parent if we are not in favorites mode (favorites shows flat list of fav folders)
-            if (parentPath !== null && !favoritesOnly) params.push(`parent=${encodeURIComponent(parentPath)}`);
-
-            if (params.length > 0) url += `?${params.join('&')}`;
+            const url = appendGalleryFolderQuery('/api/library/folders', parentPath, favoritesOnly, searchQuery);
 
             const res = await apiFetch(url, { signal: guard.signal });
             if (res.ok) {
@@ -1153,7 +1175,7 @@ export default function App() {
             if (!isActiveGalleryRequest(navigationRequestEpochRef.current, epoch, activeLocationKeyRef.current, location.key)) return;
             await Promise.all([
                 fetchServerFiles(currentUser.username, allUserData, 0, true, folderFilter, favoritesOnly, favoriteIds, false, location.search, epoch, location.key, abortController.signal),
-                fetchServerFolders(folderFilter, favoritesOnly, epoch, location.key, abortController.signal),
+                fetchServerFolders(folderFilter, favoritesOnly, epoch, location.key, abortController.signal, location.search),
             ]);
         };
         void load();
@@ -2233,10 +2255,12 @@ export default function App() {
         return sortCombinedItems([...folderItems, ...processedFiles]);
     }, [visibleFolders, processedFiles, isServerMode, serverFavoriteIds, allUserData, currentUser, sortCombinedItems]);
 
-    const hasVisibleSearchResults = viewMode === 'folders'
-        ? mixedItems.filter(Boolean).length > 0
-        : processedFiles.filter(Boolean).length > 0
-            || (viewMode === 'favorites' && serverFavoriteIds.folders.length > 0);
+    const hasVisibleSearchResults = hasVisibleGallerySearchResults(
+        viewMode,
+        visibleFolders.length,
+        processedFiles.filter(Boolean).length,
+        serverFavoriteIds.folders.length,
+    );
     const shouldShowSearchEmptyState = activeSearch.trim().length > 0
         && !isFetchingMore
         && !hasVisibleSearchResults;

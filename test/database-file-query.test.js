@@ -183,3 +183,66 @@ test('特殊 FTS 输入按普通文本搜索，空白搜索不启用 MATCH', () 
     );
     assert.equal(database.countFiles({ search: '  \t\n ' }), 1);
 });
+
+test('目录搜索可从命中媒体提取名称匹配的祖先目录', () => {
+    addFile({
+        id: 'nested-media',
+        path: '/library/Family Trips/2026/Beach/photo.jpg',
+        name: 'photo.jpg',
+        folderPath: '/library/Family Trips/2026/Beach'
+    });
+
+    assert.deepEqual(
+        database.queryFolderPaths({
+            parentPath: '/library',
+            allowedPaths: ['/library'],
+            search: 'Family Trips'
+        }),
+        ['/library/Family Trips']
+    );
+});
+
+test('目录搜索同时限制 parent、allowedPaths、limit 和最多 100 条', () => {
+    for (let index = 0; index < 105; index += 1) {
+        const folder = `/library/allowed/Match ${String(index).padStart(3, '0')}`;
+        addFile({
+            id: `allowed-${index}`,
+            path: `${folder}/photo.jpg`,
+            name: 'photo.jpg',
+            folderPath: folder
+        });
+    }
+    addFile({
+        id: 'outside-parent',
+        path: '/library/other/Match Outside/photo.jpg',
+        name: 'photo.jpg',
+        folderPath: '/library/other/Match Outside'
+    });
+    addFile({
+        id: 'outside-permission',
+        path: '/private/Match Private/photo.jpg',
+        name: 'photo.jpg',
+        folderPath: '/private/Match Private'
+    });
+
+    const scoped = database.queryFolderPaths({
+        parentPath: '/library/allowed',
+        allowedPaths: ['/library/allowed'],
+        search: 'Match',
+        limit: 2
+    });
+    assert.deepEqual(scoped, [
+        '/library/allowed/Match 000',
+        '/library/allowed/Match 001'
+    ]);
+
+    const capped = database.queryFolderPaths({
+        parentPath: '/library',
+        allowedPaths: ['/library'],
+        search: 'Match',
+        limit: 1000
+    });
+    assert.equal(capped.length, 100);
+    assert.equal(capped.every(folder => folder.startsWith('/library/')), true);
+    assert.equal(capped.some(folder => folder.startsWith('/private')), false);
+});

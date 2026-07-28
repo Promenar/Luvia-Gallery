@@ -157,7 +157,7 @@ export const Breadcrumbs: React.FC<BreadcrumbsProps> = ({
                   e.stopPropagation();
                   node.onClick();
                 }}
-                className="shrink-0 flex items-center gap-1 hover:text-accent-500 hover:bg-white/5 rounded px-1 py-0.5 transition-colors duration-200 focus:outline-none focus:text-accent-500 truncate max-w-[120px] sm:max-w-[180px]"
+                className="shrink-0 flex items-center gap-1 hover:text-accent-500 hover:bg-white/5 rounded px-1 py-0.5 transition-colors duration-200 focus:outline-none focus-visible:text-accent-500 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-500/40 truncate max-w-[120px] sm:max-w-[180px]"
                 title={node.label}
                 aria-label={node.label}
               >

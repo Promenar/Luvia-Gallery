@@ -79,7 +79,7 @@ export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(
       'relative inline-flex items-center justify-center',
       'rounded-full',
       'transition-all duration-200 ease-out',
-      'focus:outline-none focus:ring-2 focus:ring-accent-500/30',
+      'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/30',
       'disabled:opacity-50 disabled:cursor-not-allowed',
       variantStyle.base,
       active && variantStyle.active,

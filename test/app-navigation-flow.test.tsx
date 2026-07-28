@@ -2,9 +2,10 @@ import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import App, { activateGalleryLocation, appendGalleryScanScopeQuery, createTopLevelViewLocationUpdate, getAdjacentMediaId, getGalleryCacheEvictionKeys, isActiveGalleryRequest, isGalleryRequestGuardActive, resolveGalleryRequestGuard, resolveScopedGalleryLayout, resolveVisibleGalleryFolders, SearchEmptyState, shouldRenderUnifiedGalleryToolbar, shouldSyncSearchDraft, shouldUpdateGalleryFetchingState, UnifiedGalleryToolbar } from '../App';
+import App, { activateGalleryLocation, appendGalleryFolderQuery, appendGalleryScanScopeQuery, createTopLevelViewLocationUpdate, getAdjacentMediaId, getGalleryCacheEvictionKeys, hasVisibleGallerySearchResults, isActiveGalleryRequest, isGalleryRequestGuardActive, resolveGalleryRequestGuard, resolveScopedGalleryLayout, resolveVisibleGalleryFolders, SearchEmptyState, shouldRenderUnifiedGalleryToolbar, shouldSyncSearchDraft, shouldUpdateGalleryFetchingState, UnifiedGalleryToolbar } from '../App';
+import { FolderCard } from '../components/FolderCard';
 import { LanguageProvider } from '../contexts/LanguageContext';
 import { useGalleryNavigation, type GalleryNavigationApi } from '../hooks/useGalleryNavigation';
 import { GalleryNavigationController, type NavigationEnvironment } from '../navigation/navigation-controller';
@@ -366,13 +367,39 @@ describe('应用导航最小闭环', () => {
     expect(favoritesSearch.get('recursive')).toBeNull();
   });
 
+  it('目录搜索请求同时发送裁剪后的搜索词和固定上限', () => {
+    const params = new URLSearchParams(
+      appendGalleryFolderQuery('/api/library/folders', '相册/旅行', false, ' 人物 ').split('?')[1],
+    );
+
+    expect(params.get('parent')).toBe('相册/旅行');
+    expect(params.get('search')).toBe('人物');
+    expect(params.get('limit')).toBe('100');
+  });
+
+  it('文件夹搜索合并后端目录与递归媒体结果，并让仅目录命中保持非空态', () => {
+    const folders = resolveVisibleGalleryFolders(
+      'folders',
+      ' 人物 ',
+      true,
+      [{ path: '相册/人物摄影', name: '人物摄影' }],
+      [{ path: '相册/直属目录', name: '直属目录' }],
+    );
+    const media = [{ id: 'media-1', name: '人物.jpg' }];
+
+    expect([...folders, ...media].map(item => item.name)).toEqual(['人物摄影', '人物.jpg']);
+    expect(hasVisibleGallerySearchResults('folders', folders.length, media.length, 0)).toBe(true);
+    expect(hasVisibleGallerySearchResults('folders', folders.length, 0, 0)).toBe(true);
+    expect(hasVisibleGallerySearchResults('folders', 0, 0, 0)).toBe(false);
+  });
+
   it('搜索无结果空态区分当前目录并通过现有位置更新链路清除搜索', () => {
     const onLocationChange = vi.fn();
     expect(resolveVisibleGalleryFolders(
       'folders',
       ' 人物 ',
       true,
-      [{ path: '相册/未经过搜索筛选的目录' }],
+      [],
       [],
     )).toEqual([]);
 
@@ -389,6 +416,43 @@ describe('应用导航最小闭环', () => {
     expect(screen.getByTestId('search-empty-state').textContent).toContain('旅行');
     fireEvent.click(screen.getByRole('button', { name: /清除搜索|Clear search/ }));
     expect(onLocationChange).toHaveBeenCalledWith({ search: '', mediaId: undefined }, 'push');
+  });
+
+  it('FolderCard 封面 URL 变化后复位图片错误并恢复新封面', async () => {
+    const folder = {
+      name: '人物相册',
+      path: '相册/人物',
+      children: {},
+      mediaCount: 1,
+      coverMedia: {
+        id: '',
+        name: '封面',
+        path: '相册/人物/封面.jpg',
+        folderPath: '相册/人物',
+        url: '/old-cover.jpg',
+        type: 'image/jpeg',
+        mediaType: 'image' as const,
+        size: 1,
+        lastModified: 1,
+        sourceId: 'test',
+      },
+    };
+    const { rerender } = render(<FolderCard folder={folder} onClick={vi.fn()} animate={false} />);
+
+    fireEvent.error(screen.getByRole('img', { name: '人物相册' }));
+    expect(screen.queryByRole('img', { name: '人物相册' })).toBeNull();
+
+    rerender(
+      <FolderCard
+        folder={{ ...folder, coverMedia: { ...folder.coverMedia, url: '/new-cover.jpg' } }}
+        onClick={vi.fn()}
+        animate={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole('img', { name: '人物相册' }).getAttribute('src')).toContain('/new-cover.jpg');
+    });
   });
 
   it('媒体条目回退后恢复无 mediaId 的目录位置', () => {
