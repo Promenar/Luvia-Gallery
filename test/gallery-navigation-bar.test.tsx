@@ -539,6 +539,16 @@ describe('GalleryNavigationBar 组件测试 (Unified Toolbar Phase 2)', () => {
     expect(screen.queryByTestId('mobile-more-dismiss-overlay')).toBeNull();
   });
 
+  it('布局菜单和键盘可达入口只暴露网格与瀑布流，并把旧 timeline 状态显示为网格', () => {
+    render(<GalleryNavigationBar {...defaultProps} layoutMode="timeline" onLayoutChange={vi.fn()} />);
+    const layoutButton = screen.getByLabelText(/切换布局/);
+    expect(layoutButton.getAttribute('aria-label')).toContain('网格');
+    fireEvent.click(layoutButton);
+    expect(screen.getByText('网格')).toBeDefined();
+    expect(screen.getByText('瀑布流')).toBeDefined();
+    expect(screen.queryByText('时间线')).toBeNull();
+  });
+
   it('桌面筛选使用单一菜单入口，md-lg 宽度下保持可达', () => {
     const onFilterChange = vi.fn();
     render(<GalleryNavigationBar {...defaultProps} filter="all" onFilterChange={onFilterChange} />);

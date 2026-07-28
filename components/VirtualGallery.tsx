@@ -2,7 +2,6 @@ import React from 'react';
 import { MediaItem } from '../types';
 import { ViewportRestoreCommand, ViewportSnapshot } from './gallery/viewport-types';
 import { GridViewport } from './gallery/GridViewport';
-import { TimelineViewport } from './gallery/TimelineViewport';
 import { MasonryViewport } from './gallery/MasonryViewport';
 import type { ViewportCaptureHandle } from './gallery/viewport-types';
 
@@ -51,10 +50,6 @@ export const VirtualGallery = React.forwardRef<ViewportCaptureHandle, VirtualGal
 
     if (layout === 'masonry') {
         return <MasonryViewport ref={ref} {...commonProps} />;
-    }
-
-    if (layout === 'timeline') {
-        return <TimelineViewport ref={ref} {...commonProps} />;
     }
 
     return <GridViewport ref={ref} {...commonProps} />;

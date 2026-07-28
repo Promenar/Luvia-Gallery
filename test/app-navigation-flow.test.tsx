@@ -4,11 +4,12 @@ import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import App, { activateGalleryLocation, getAdjacentMediaId, getGalleryCacheEvictionKeys, isActiveGalleryRequest, isGalleryRequestGuardActive, resolveGalleryRequestGuard, shouldRenderUnifiedGalleryToolbar, shouldSyncSearchDraft, shouldUpdateGalleryFetchingState, UnifiedGalleryToolbar } from '../App';
+import App, { activateGalleryLocation, getAdjacentMediaId, getGalleryCacheEvictionKeys, isActiveGalleryRequest, isGalleryRequestGuardActive, resolveGalleryRequestGuard, resolveScopedGalleryLayout, shouldRenderUnifiedGalleryToolbar, shouldSyncSearchDraft, shouldUpdateGalleryFetchingState, UnifiedGalleryToolbar } from '../App';
 import { LanguageProvider } from '../contexts/LanguageContext';
 import { useGalleryNavigation, type GalleryNavigationApi } from '../hooks/useGalleryNavigation';
 import { GalleryNavigationController, type NavigationEnvironment } from '../navigation/navigation-controller';
 import { createGalleryQueryKey } from '../navigation/query-key';
+import { writeGalleryLayoutPreference } from '../navigation/layout-preference';
 
 const createEnvironment = (hash = '#folder=parent') => {
   const entries: Array<{ state: unknown; url: string }> = [{ state: null, url: hash }];
@@ -351,5 +352,36 @@ describe('应用导航最小闭环', () => {
     controller.initialize();
 
     expect(fake.replaceCalls).toBe(1);
+  });
+
+  it('异步用户恢复后按 all/favorites/folders 偏好创建新条目，回退只恢复 History 条目布局', () => {
+    const values = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => values.set(key, value),
+      removeItem: (key: string) => values.delete(key),
+    };
+    const serverId = 'https://gallery.example';
+    writeGalleryLayoutPreference(storage, { serverId, userId: 'alice', view: 'all' }, 'grid');
+    writeGalleryLayoutPreference(storage, { serverId, userId: 'alice', view: 'favorites' }, 'masonry');
+    writeGalleryLayoutPreference(storage, { serverId, userId: 'alice', view: 'folders' }, 'grid');
+
+    const fake = createEnvironment('#');
+    const controller = new GalleryNavigationController({ environment: fake.environment });
+    controller.initialize();
+    // 模拟用户异步恢复后，在 Gallery 首次可见前由 useLayoutEffect 应用 all 偏好。
+    controller.applyInitialLayoutPreference(resolveScopedGalleryLayout(storage, serverId, 'alice', 'all'));
+    const allEntry = fake.environment.history.state;
+    controller.updateLocation({ view: 'favorites', folderPath: '', mediaId: undefined, layout: resolveScopedGalleryLayout(storage, serverId, 'alice', 'favorites') }, 'push');
+    const favoritesEntry = fake.environment.history.state;
+    controller.updateLocation({ view: 'folders', folderPath: 'Trips/2026', mediaId: undefined, layout: resolveScopedGalleryLayout(storage, serverId, 'alice', 'folders') }, 'push');
+
+    expect(controller.getLocation()).toMatchObject({ view: 'folders', layout: 'grid' });
+    fake.environment.history.back();
+    expect(controller.applyPopState(fake.environment.history.state)).toMatchObject({ view: 'favorites', layout: 'masonry' });
+    fake.environment.history.back();
+    expect(controller.applyPopState(fake.environment.history.state)).toMatchObject({ view: 'all', layout: 'grid' });
+    expect(allEntry).toBeDefined();
+    expect(favoritesEntry).toBeDefined();
   });
 });
