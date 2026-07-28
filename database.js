@@ -334,114 +334,158 @@ function insertFilesBatch(files, shouldSave = false) {
 /**
  * Query files with pagination
  */
-function queryFiles(options = {}) {
+function buildFtsQuery(search) {
+    if (search === null || search === undefined) return null;
+
+    const terms = String(search).trim().split(/\s+/).filter(Boolean);
+    if (terms.length === 0) return null;
+
+    return terms
+        .map(term => `"${term.replace(/"/g, '""')}"`)
+        .join(' ');
+}
+
+function escapeLikePattern(value) {
+    return String(value)
+        .replace(/\\/g, '\\\\')
+        .replace(/%/g, '\\%')
+        .replace(/_/g, '\\_');
+}
+
+function buildDescendantPattern(value) {
+    const escaped = escapeLikePattern(value);
+    const withoutTrailingSlash = escaped.replace(/\/+$/, '');
+    return withoutTrailingSlash ? `${withoutTrailingSlash}/%` : '/%';
+}
+
+function buildFileQueryParts(options = {}) {
     const {
-        offset = 0,
-        limit = 500,
         folderPath = null,
-        mediaType = null,
-        sourceId = null,
-        userId = null,
-        random = false,
-        excludeMediaType = null,
+        recursive = false,
+        alternativeFolderPath = null,
         allowedPaths = null,
-        sortOption = 'dateDesc',
-        search = null
+        search = null,
+        mediaType = null,
+        excludeMediaType = null,
+        favoritesOnly = false,
+        userId = null,
+        sourceId = null
     } = options;
 
-    let query = 'SELECT f.*, fav.id as is_fav FROM files f';
-
-    if (search) {
-        query += ' JOIN files_fts fts ON f.rowid = fts.rowid';
-    }
-
-    if (userId) {
-        query += ' LEFT JOIN favorites fav ON f.id = fav.item_id AND fav.user_id = ?';
-    } else {
-        query += ' LEFT JOIN favorites fav ON 1=0';
-    }
-
-    query += ' WHERE 1=1';
+    const joins = [];
+    const conditions = [];
     const params = [];
-    if (userId) params.push(userId);
+    const ftsQuery = buildFtsQuery(search);
 
-    if (search) {
-        query += ' AND fts.files_fts MATCH ?';
-        params.push(search);
+    if (ftsQuery) {
+        joins.push('JOIN files_fts fts ON f.rowid = fts.rowid');
+    }
+
+    if (favoritesOnly) {
+        joins.push("INNER JOIN favorites fav ON (fav.item_id = f.id OR fav.item_id = f.path) AND fav.user_id = ? AND fav.item_type = 'file'");
+        params.push(userId);
+    } else if (userId !== null && userId !== undefined) {
+        joins.push("LEFT JOIN favorites fav ON (fav.item_id = f.id OR fav.item_id = f.path) AND fav.user_id = ? AND fav.item_type = 'file'");
+        params.push(userId);
+    } else {
+        joins.push('LEFT JOIN favorites fav ON 1=0');
+    }
+
+    if (ftsQuery) {
+        conditions.push('fts.files_fts MATCH ?');
+        params.push(ftsQuery);
     }
 
     if (folderPath !== null) {
-        if (options.recursive) {
-            // Try both normalized and original path for backward compatibility
-            if (options.alternativeFolderPath) {
-                query += ' AND ((f.folder_path = ? OR f.folder_path LIKE ?) OR (f.folder_path = ? OR f.folder_path LIKE ?))';
-                params.push(folderPath, folderPath + '/%', options.alternativeFolderPath, options.alternativeFolderPath + '/%');
-            } else {
-                query += ' AND (f.folder_path = ? OR f.folder_path LIKE ?)';
-                params.push(folderPath, folderPath + '/%');
-            }
+        const folderPaths = [folderPath];
+        if (alternativeFolderPath !== null) {
+            folderPaths.push(alternativeFolderPath);
+        }
+
+        if (recursive) {
+            const clauses = folderPaths.map(() => "(f.folder_path = ? OR f.folder_path LIKE ? ESCAPE '\\')").join(' OR ');
+            conditions.push(`(${clauses})`);
+            folderPaths.forEach(folder => {
+                params.push(folder, buildDescendantPattern(folder));
+            });
         } else {
-            // Try both normalized and original path for backward compatibility
-            if (options.alternativeFolderPath) {
-                query += ' AND (f.folder_path = ? OR f.folder_path = ?)';
-                params.push(folderPath, options.alternativeFolderPath);
-            } else {
-                query += ' AND f.folder_path = ?';
-                params.push(folderPath);
-            }
+            const clauses = folderPaths.map(() => 'f.folder_path = ?').join(' OR ');
+            conditions.push(`(${clauses})`);
+            params.push(...folderPaths);
         }
     }
 
-    if (mediaType) {
-        if (Array.isArray(mediaType)) {
-            const placeholders = mediaType.map(() => '?').join(',');
-            query += ` AND f.media_type IN (${placeholders})`;
-            params.push(...mediaType);
+    if (mediaType !== null && mediaType !== undefined) {
+        const mediaTypes = Array.isArray(mediaType) ? mediaType : [mediaType];
+        if (mediaTypes.length === 0) {
+            conditions.push('1=0');
         } else {
-            query += ' AND f.media_type = ?';
-            params.push(mediaType);
+            const placeholders = mediaTypes.map(() => '?').join(',');
+            conditions.push(`f.media_type IN (${placeholders})`);
+            params.push(...mediaTypes);
         }
     }
 
-    if (excludeMediaType) {
-        if (Array.isArray(excludeMediaType)) {
-            const placeholders = excludeMediaType.map(() => '?').join(',');
-            query += ` AND f.media_type NOT IN (${placeholders})`;
-            params.push(...excludeMediaType);
-        } else {
-            query += ' AND f.media_type != ?';
-            params.push(excludeMediaType);
+    if (excludeMediaType !== null && excludeMediaType !== undefined) {
+        const excludedMediaTypes = Array.isArray(excludeMediaType) ? excludeMediaType : [excludeMediaType];
+        if (excludedMediaTypes.length > 0) {
+            const placeholders = excludedMediaTypes.map(() => '?').join(',');
+            conditions.push(`f.media_type NOT IN (${placeholders})`);
+            params.push(...excludedMediaTypes);
         }
     }
 
-    if (sourceId) {
-        query += ' AND f.source_id = ?';
+    if (sourceId !== null && sourceId !== undefined) {
+        conditions.push('f.source_id = ?');
         params.push(sourceId);
     }
 
     if (allowedPaths !== null) {
-        if (allowedPaths.length > 0) {
-            const clauses = allowedPaths.map(() => '(f.path = ? OR f.path LIKE ? || "/%" OR f.folder_path = ? OR f.folder_path LIKE ? || "/%")').join(' OR ');
-            query += ` AND (${clauses})`;
-            allowedPaths.forEach(p => params.push(p, p, p, p));
+        if (allowedPaths.length === 0) {
+            conditions.push('1=0');
         } else {
-            query += ' AND 1=0';
+            const clauses = allowedPaths.map(() => (
+                "(f.path = ? OR f.path LIKE ? ESCAPE '\\' OR f.folder_path = ? OR f.folder_path LIKE ? ESCAPE '\\')"
+            )).join(' OR ');
+            conditions.push(`(${clauses})`);
+            allowedPaths.forEach(allowedPath => {
+                const descendantPattern = buildDescendantPattern(allowedPath);
+                params.push(allowedPath, descendantPattern, allowedPath, descendantPattern);
+            });
         }
     }
+
+    return {
+        joins: joins.join(' '),
+        where: conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '',
+        params
+    };
+}
+
+function queryFiles(options = {}) {
+    const {
+        offset = 0,
+        limit = 500,
+        random = false,
+        sortOption = 'dateDesc'
+    } = options;
+    const queryParts = buildFileQueryParts(options);
+    let query = `SELECT DISTINCT f.*, CASE WHEN fav.id IS NULL THEN 0 ELSE 1 END AS is_fav
+        FROM files f ${queryParts.joins} ${queryParts.where}`;
 
     if (random) {
-        query += ' ORDER BY RANDOM() LIMIT ? OFFSET ?';
+        query += ' ORDER BY RANDOM(), f.id ASC LIMIT ? OFFSET ?';
     } else {
         switch (sortOption) {
-            case 'dateAsc': query += ' ORDER BY f.last_modified ASC LIMIT ? OFFSET ?'; break;
-            case 'nameAsc': query += ' ORDER BY f.name COLLATE NOCASE ASC LIMIT ? OFFSET ?'; break;
-            case 'nameDesc': query += ' ORDER BY f.name COLLATE NOCASE DESC LIMIT ? OFFSET ?'; break;
+            case 'dateAsc': query += ' ORDER BY f.last_modified ASC, f.id ASC LIMIT ? OFFSET ?'; break;
+            case 'nameAsc': query += ' ORDER BY f.name COLLATE NOCASE ASC, f.id ASC LIMIT ? OFFSET ?'; break;
+            case 'nameDesc': query += ' ORDER BY f.name COLLATE NOCASE DESC, f.id ASC LIMIT ? OFFSET ?'; break;
             case 'dateDesc':
-            default: query += ' ORDER BY f.last_modified DESC LIMIT ? OFFSET ?';
+            default: query += ' ORDER BY f.last_modified DESC, f.id ASC LIMIT ? OFFSET ?';
         }
     }
 
-    params.push(limit, offset);
+    const params = [...queryParts.params, limit, offset];
 
     const stmt = db.prepare(query);
     const results = stmt.all(...params);
@@ -467,48 +511,11 @@ function queryFiles(options = {}) {
  * Count total files
  */
 function countFiles(options = {}) {
-    const { folderPath = null, mediaType = null, recursive = false, allowedPaths = null, search = null } = options;
-
-    let query = 'SELECT COUNT(*) as count FROM files f';
-    if (search) {
-        query += ' JOIN files_fts fts ON f.rowid = fts.rowid';
-    }
-
-    query += ' WHERE 1=1';
-    const params = [];
-
-    if (search) {
-        query += ' AND fts.files_fts MATCH ?';
-        params.push(search);
-    }
-
-    if (folderPath !== null) {
-        if (recursive) {
-            query += ' AND (f.folder_path = ? OR f.folder_path LIKE ?)';
-            params.push(folderPath, folderPath + '/%');
-        } else {
-            query += ' AND f.folder_path = ?';
-            params.push(folderPath);
-        }
-    }
-
-    if (mediaType) {
-        query += ' AND f.media_type = ?';
-        params.push(mediaType);
-    }
-
-    if (allowedPaths !== null) {
-        if (allowedPaths.length > 0) {
-            const clauses = allowedPaths.map(() => '(f.path = ? OR f.path LIKE ? || "/%" OR f.folder_path = ? OR f.folder_path LIKE ? || "/%")').join(' OR ');
-            query += ` AND (${clauses})`;
-            allowedPaths.forEach(p => params.push(p, p, p, p));
-        } else {
-            query += ' AND 1=0';
-        }
-    }
-
+    const queryParts = buildFileQueryParts(options);
+    const query = `SELECT COUNT(DISTINCT f.id) as count
+        FROM files f ${queryParts.joins} ${queryParts.where}`;
     const stmt = db.prepare(query);
-    const result = stmt.get(...params);
+    const result = stmt.get(...queryParts.params);
     return result.count || 0;
 }
 
