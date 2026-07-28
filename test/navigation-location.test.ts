@@ -103,6 +103,13 @@ describe('导航领域模型', () => {
     expect(location.folderPath.length).toBeGreaterThan(0);
   });
 
+  it('旧 timeline URL 与 History 位置统一规范化为 grid', () => {
+    expect(parseGalleryUrl('#layout=timeline').layout).toBe('grid');
+    expect(createHistoryState({
+      key: '', view: 'all', folderPath: '', search: '', sort: 'dateDesc', filter: 'all', layout: 'timeline',
+    }).location.layout).toBe('grid');
+  });
+
   it('createHistoryState 不应包含媒体数组等不可序列化数据', () => {
     const location = {
       key: '',

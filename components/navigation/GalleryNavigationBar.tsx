@@ -5,6 +5,8 @@ import { useLanguage } from '../../contexts/LanguageContext';
 import { Breadcrumbs } from './Breadcrumbs';
 import { GalleryLocation, GalleryViewMode, GallerySortOption, GalleryLayout, GalleryFilterOption } from '../../navigation/types';
 
+const VISIBLE_LAYOUTS: readonly Extract<GalleryLayout, 'grid' | 'masonry'>[] = ['grid', 'masonry'];
+
 export interface NavigationLabels {
   home?: string;
   all?: string;
@@ -97,7 +99,7 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
     : (search !== undefined ? search : '');
 
   const currentSort = location?.sort || sortOption || sort || 'dateDesc';
-  const currentLayout = location?.layout || layoutMode || layout || 'grid';
+  const currentLayout = (location?.layout || layoutMode || layout) === 'masonry' ? 'masonry' : 'grid';
   const currentFilter = location?.filter || filter || 'all';
 
   // Dropdown & Search state
@@ -541,7 +543,7 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
                       <div className="px-3 py-1 text-xs font-semibold text-text-muted select-none">
                         {isZh ? '布局' : 'Layout'}
                       </div>
-                      {(['grid', 'masonry', 'timeline'] as GalleryLayout[]).map((mode) => (
+                      {VISIBLE_LAYOUTS.map((mode) => (
                             <button
                               key={mode}
                               onClick={() => {
@@ -808,7 +810,7 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
                 className="absolute right-0 top-full mt-2 w-40 bg-surface-secondary backdrop-blur-2xl rounded-xl shadow-2xl border border-white/10 p-1 z-20 animate-in fade-in slide-in-from-top-2 duration-200"
                 role="listbox"
               >
-                {(['grid', 'masonry', 'timeline'] as GalleryLayout[]).map((mode) => (
+                {VISIBLE_LAYOUTS.map((mode) => (
                   <button
                     key={mode}
                     onClick={() => {

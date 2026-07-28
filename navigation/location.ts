@@ -43,7 +43,7 @@ const isGalleryFilterOption = (value: string | null): value is GalleryFilterOpti
   value === 'all' || value === 'image' || value === 'video' || value === 'audio';
 
 const isGalleryLayout = (value: string | null): value is GalleryLayout =>
-  value === 'grid' || value === 'masonry' || value === 'timeline';
+  value === 'grid' || value === 'masonry';
 
 const normalizeFolderPath = (raw: string): string => {
   if (!raw) return '';
@@ -89,6 +89,7 @@ const normalizeGalleryLocationFields = (location: GalleryLocation): GalleryLocat
   return {
     ...location,
     folderPath: normalizedFolderPath,
+    layout: location.layout === 'masonry' ? 'masonry' : 'grid',
   };
 };
 
@@ -153,6 +154,13 @@ const parseParams = (input: string): URLSearchParams => {
     }
     return fallback;
   }
+};
+
+export const hasExplicitGalleryLayout = (input: string): boolean => {
+  const hashIndex = input.indexOf('#');
+  const hash = hashIndex >= 0 ? input.slice(hashIndex + 1) : input;
+  const params = parseParams(hash.includes('?') ? hash.split('?').pop() ?? '' : hash);
+  return params.has(SEARCH_PARAMS.LAYOUT);
 };
 
 const buildParams = (location: GalleryLocation): URLSearchParams => {

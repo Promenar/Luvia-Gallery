@@ -73,6 +73,22 @@ describe('GalleryNavigationController', () => {
     expect(replace).toHaveBeenCalledTimes(8);
   });
 
+  it('仅无受管 History 且 URL 未显式指定布局的冷启动可应用偏好', () => {
+    window.history.replaceState(null, '', '#');
+    const coldStart = createController();
+    coldStart.initialize();
+    expect(coldStart.applyInitialLayoutPreference('masonry').layout).toBe('masonry');
+
+    const managed = createController();
+    managed.initialize();
+    expect(managed.applyInitialLayoutPreference('grid').layout).toBe('masonry');
+
+    window.history.replaceState(null, '', '#layout=masonry');
+    const explicitUrl = createController();
+    explicitUrl.initialize();
+    expect(explicitUrl.applyInitialLayoutPreference('grid').layout).toBe('masonry');
+  });
+
   it('上一级的上一条是父目录时优先使用浏览器后退', () => {
     window.history.replaceState(null, '', '#folder=A');
     const controller = createController();

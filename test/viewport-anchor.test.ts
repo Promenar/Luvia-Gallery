@@ -188,7 +188,7 @@ describe('VirtualGallery 视口与协议流转测试', () => {
     expect(gridInstance.scrollTo).toHaveBeenCalledWith({ scrollTop: 284 });
   });
 
-  it('Timeline精确offset公式测试：应累加视觉行前缀高度滚动到精确位置', async () => {
+  it('旧 timeline 输入规范化为 Grid 视口，时间线列表不再可达', async () => {
     vi.useFakeTimers();
     const onRestoreComplete = vi.fn();
 
@@ -209,9 +209,8 @@ describe('VirtualGallery 视口与协议流转测试', () => {
     });
 
     expect(onRestoreComplete).toHaveBeenCalled();
-    const listInstance = (globalThis as any).lastListInstance;
-    expect(listInstance).not.toBeNull();
-    expect(listInstance.scrollTo).toHaveBeenCalledWith(70);
+    expect((globalThis as any).lastGridInstance).not.toBeNull();
+    expect((globalThis as any).lastListInstance).toBeNull();
   });
 
   it('相同快照内容不同引用只恢复一次，且当 locationKey 变化时允许重新恢复', async () => {
@@ -324,18 +323,19 @@ describe('VirtualGallery 视口与协议流转测试', () => {
     });
     expect(onGridSnapshotChange).toHaveBeenCalled();
 
-    const onTimelineRestoreComplete = vi.fn();
-    const { unmount: unmountTimeline } = render(React.createElement(VirtualGallery, {
+    const onLegacyTimelineRestoreComplete = vi.fn();
+    const { unmount: unmountLegacyTimeline } = render(React.createElement(VirtualGallery, {
       ...defaultProps,
       layout: 'timeline',
       viewKey: 'folder:timeline-reset',
       restoreCommand: { token: 3, entryId: 'session:3' },
-      onRestoreComplete: onTimelineRestoreComplete,
+      onRestoreComplete: onLegacyTimelineRestoreComplete,
     }));
-    expect((globalThis as any).lastListInstance.scrollTo).toHaveBeenCalledWith(0);
+    expect((globalThis as any).lastGridInstance).not.toBeNull();
+    expect((globalThis as any).lastListInstance).toBeNull();
     act(() => vi.advanceTimersByTime(150));
-    expect(onTimelineRestoreComplete).toHaveBeenLastCalledWith(3);
-    unmountTimeline();
+    expect(onLegacyTimelineRestoreComplete).toHaveBeenLastCalledWith(3);
+    unmountLegacyTimeline();
 
     let resetScrollTop = -1;
     Object.defineProperty(HTMLElement.prototype, 'scrollTop', {
@@ -400,7 +400,7 @@ describe('VirtualGallery 视口与协议流转测试', () => {
     });
   });
 
-  it('Timeline 同步捕获取消待发节流样本，并在目录-media-目录切换时清除旧状态', () => {
+  it('旧 timeline 输入使用 Grid 的同步捕获与 reset 协议', () => {
     vi.useFakeTimers();
     const galleryRef = React.createRef<ViewportCaptureHandle>();
     const onSnapshotChange = vi.fn();
@@ -413,14 +413,12 @@ describe('VirtualGallery 视口与协议流转测试', () => {
     }));
 
     act(() => {
-      (globalThis as any).lastListProps.onItemsRendered({ visibleStartIndex: 1, visibleStopIndex: 2 });
-      (globalThis as any).lastListProps.onScroll({ scrollTop: 420 });
+      (globalThis as any).lastGridProps.onItemsRendered({ visibleRowStartIndex: 1, visibleRowStopIndex: 2 });
+      (globalThis as any).lastGridProps.onScroll({ scrollTop: 420 });
     });
 
     expect(galleryRef.current?.captureSnapshot()).toMatchObject({
       locationKey: 'folder:timeline',
-      anchorItemId: '1',
-      anchorIndex: 0,
       fallbackScrollTop: 420,
     });
     act(() => vi.advanceTimersByTime(250));

@@ -13,6 +13,9 @@ interface MediaCardProps {
   isVirtual?: boolean;
 }
 
+export const getMediaCardContainerClasses = (isGrid: boolean): string =>
+  `relative group cursor-pointer overflow-hidden rounded-2xl glass-1 glass-hover ${isGrid ? 'w-full h-full aspect-square ring-1 ring-white/10 dark:ring-white/5' : 'w-full break-inside-avoid ring-1 ring-white/10 dark:ring-white/5'}`;
+
 export const MediaCard: React.FC<MediaCardProps> = React.memo(({ item, onClick, layout, isVirtual }) => {
   const { t } = useLanguage();
 
@@ -131,8 +134,7 @@ export const MediaCard: React.FC<MediaCardProps> = React.memo(({ item, onClick, 
 
   const isGrid = layout === 'grid' || isVirtual;
 
-  const containerClasses = `relative group cursor-pointer overflow-hidden rounded-2xl glass-1 glass-hover 
-    ${isGrid ? 'w-full h-full aspect-square ring-1 ring-white/10 dark:ring-white/5' : 'w-full mb-6 break-inside-avoid ring-1 ring-white/10 dark:ring-white/5'}`;
+  const containerClasses = getMediaCardContainerClasses(isGrid);
 
   return (
     <motion.div

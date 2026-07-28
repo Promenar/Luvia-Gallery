@@ -6,6 +6,7 @@ import {
   type NavigationWriteMode,
 } from '../navigation/navigation-controller';
 import type {
+  GalleryLayout,
   GalleryLocation,
   ViewportRestoreCommand,
   ViewportSnapshot,
@@ -34,6 +35,8 @@ export interface GalleryNavigationApi {
   requestRestore: (snapshot: ViewportSnapshotInput) => ViewportSnapshot | undefined;
   consumeRestoreSnapshot: (token: number) => void;
   getSnapshot: (locationKey?: string) => ViewportSnapshot | undefined;
+  canApplyLayoutPreference: () => boolean;
+  applyInitialLayoutPreference: (layout: GalleryLayout) => GalleryLocation;
 }
 
 export const useGalleryNavigation = (options: UseGalleryNavigationOptions = {}): GalleryNavigationApi => {
@@ -144,5 +147,7 @@ export const useGalleryNavigation = (options: UseGalleryNavigationOptions = {}):
     requestRestore,
     consumeRestoreSnapshot,
     getSnapshot: useCallback((locationKey) => controller.getSnapshot(locationKey), [controller]),
+    canApplyLayoutPreference: useCallback(() => controller.canApplyLayoutPreference(), [controller]),
+    applyInitialLayoutPreference: useCallback((layout) => apply(() => controller.applyInitialLayoutPreference(layout)), [apply, controller]),
   };
 };

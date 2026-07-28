@@ -1,7 +1,7 @@
 import { createHistoryState, type GalleryHistoryState } from './history-state';
-import { getParentFolderPath, parseGalleryUrl, serializeGalleryUrl } from './location';
+import { getParentFolderPath, hasExplicitGalleryLayout, parseGalleryUrl, serializeGalleryUrl } from './location';
 import { SnapshotStore, type StorageLike } from './snapshot-store';
-import type { GalleryLocation, ViewportSnapshot, ViewportSnapshotInput } from './types';
+import type { GalleryLayout, GalleryLocation, ViewportSnapshot, ViewportSnapshotInput } from './types';
 
 const NAVIGATION_STATE_MARKER = '__luviaGalleryNavigation';
 const NAVIGATION_SESSION_STORAGE_KEY = 'luvia.gallery.navigation-session.v1';
@@ -89,6 +89,7 @@ export class GalleryNavigationController {
   private sessionIndex = 0;
   private sessionMaxIndex = 0;
   private snapshotFlushTimer: ReturnType<typeof setTimeout> | undefined;
+  private canApplyInitialLayoutPreference = false;
 
   constructor(options: GalleryNavigationControllerOptions = {}) {
     this.environment = options.environment ?? getBrowserEnvironment();
@@ -100,6 +101,7 @@ export class GalleryNavigationController {
   initialize(): GalleryLocation {
     const currentState = this.environment.history.state;
     if (isNavigationState(currentState)) {
+      this.canApplyInitialLayoutPreference = false;
       this.location = normalizeLocation(currentState.location);
       this.sessionId = typeof currentState.sessionId === 'string' ? currentState.sessionId : createSessionId();
       this.sessionIndex = Math.max(0, currentState.sessionIndex);
@@ -113,6 +115,7 @@ export class GalleryNavigationController {
     }
 
     this.location = parseGalleryUrl(this.environment.location.hash);
+    this.canApplyInitialLayoutPreference = !hasExplicitGalleryLayout(this.environment.location.hash);
     this.sessionId = createSessionId();
     this.sessionIndex = 0;
     this.sessionMaxIndex = 0;
@@ -124,6 +127,18 @@ export class GalleryNavigationController {
 
   getLocation(): GalleryLocation {
     return cloneLocation(this.requireLocation());
+  }
+
+  canApplyLayoutPreference(): boolean {
+    return this.canApplyInitialLayoutPreference;
+  }
+
+  /** 仅纯 URL 冷启动可用；受管 History 和显式深链必须保持条目自身的布局。 */
+  applyInitialLayoutPreference(layout: GalleryLayout): GalleryLocation {
+    const current = this.requireLocation();
+    if (!this.canApplyInitialLayoutPreference || (layout !== 'grid' && layout !== 'masonry')) return cloneLocation(current);
+    this.canApplyInitialLayoutPreference = false;
+    return this.replace({ ...current, key: '', layout });
   }
 
   /** 同一 locationKey 下仍可区分不同的受管浏览器 History 条目。 */
@@ -141,6 +156,7 @@ export class GalleryNavigationController {
   }
 
   push(location: GalleryLocation): GalleryLocation {
+    this.canApplyInitialLayoutPreference = false;
     this.flushCurrentEntry();
     const nextLocation = normalizeLocation(location);
     this.sessionIndex += 1;
@@ -155,6 +171,7 @@ export class GalleryNavigationController {
   }
 
   replace(location: GalleryLocation): GalleryLocation {
+    this.canApplyInitialLayoutPreference = false;
     this.flushCurrentEntry();
     const nextLocation = normalizeLocation(location);
     this.location = nextLocation;
@@ -207,6 +224,7 @@ export class GalleryNavigationController {
   }
 
   applyPopState(state: unknown): GalleryLocation {
+    this.canApplyInitialLayoutPreference = false;
     this.flushSnapshotStorageOnly();
     if (isNavigationState(state)) {
       const nextLocation = normalizeLocation(state.location);

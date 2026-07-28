@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useMemo, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { MediaItem, ViewMode, GridLayout, User, UserData, SortOption, FilterOption, AppConfig, FolderNode, SystemStatus, HomeScreenConfig, ExtendedSystemStatus, SettingsTab, ScanStatus } from './types';
 import { buildFolderTree, generateId, isVideo, isAudio, sortMedia, getImmediateSubfolders } from './utils/fileUtils';
@@ -20,6 +20,7 @@ import { ScanReportModal } from './components/ScanReportModal';
 import { useQueryClient } from '@tanstack/react-query';
 import { useGalleryNavigation } from './hooks/useGalleryNavigation';
 import { createGalleryQueryKey } from './navigation/query-key';
+import { getLayoutPreferenceView, resolveGalleryLayoutPreference, type LayoutPreferenceStorage, writeGalleryLayoutPreference } from './navigation/layout-preference';
 import { GalleryNavigationBar, type GalleryNavigationBarProps } from './components/navigation/GalleryNavigationBar';
 import type { GalleryLocation, ViewportSnapshot } from './navigation/types';
 
@@ -85,6 +86,16 @@ export const shouldSyncSearchDraft = (lastLocationKey: string | null, locationKe
     lastLocationKey !== locationKey;
 
 export const shouldRenderUnifiedGalleryToolbar = (viewMode: ViewMode) => viewMode !== 'home';
+
+export const resolveScopedGalleryLayout = (
+    storage: LayoutPreferenceStorage | undefined,
+    serverId: string,
+    userId: string | undefined,
+    view: GalleryLocation['view'],
+): GridLayout => {
+    if (!userId || !getLayoutPreferenceView(view)) return 'grid';
+    return resolveGalleryLayoutPreference(storage, { serverId, userId, view }) ?? 'grid';
+};
 
 type UnifiedToolbarLocationUpdate = Partial<Pick<GalleryLocation, 'search' | 'sort' | 'filter' | 'layout' | 'mediaId'>>;
 type UnifiedGalleryToolbarProps = Omit<
@@ -184,7 +195,6 @@ const STORAGE_KEYS = {
     configFile: 'lumina-config.json', // keep filename stable for server compatibility
     users: 'luvia_users',
     viewMode: 'luvia_view_mode',
-    layoutMode: 'luvia_layout_mode',
     appTitle: 'luvia_app_title',
     appSubtitle: 'luvia_app_subtitle',
     sources: 'luvia_sources',
@@ -199,7 +209,6 @@ const STORAGE_KEYS = {
 const LEGACY_KEYS = {
     users: 'lumina_users',
     viewMode: 'lumina_view_mode',
-    layoutMode: 'lumina_layout_mode',
     appTitle: 'lumina_app_title',
     appSubtitle: 'lumina_app_subtitle',
     sources: 'lumina_sources',
@@ -213,7 +222,6 @@ const LEGACY_KEYS = {
 const CONFIG_FILE_NAME = STORAGE_KEYS.configFile;
 const USERS_STORAGE_KEY = STORAGE_KEYS.users;
 const VIEW_MODE_KEY = STORAGE_KEYS.viewMode;
-const LAYOUT_MODE_KEY = STORAGE_KEYS.layoutMode;
 const APP_TITLE_KEY = STORAGE_KEYS.appTitle;
 const APP_SUBTITLE_KEY = STORAGE_KEYS.appSubtitle;
 const SOURCES_STORAGE_KEY = STORAGE_KEYS.sources;
@@ -246,6 +254,7 @@ export default function App() {
     const { t, language, setLanguage } = useLanguage();
     const queryClient = useQueryClient();
     const galleryNavigation = useGalleryNavigation();
+    const { canApplyLayoutPreference, applyInitialLayoutPreference } = galleryNavigation;
     const galleryViewportRef = useRef<ViewportCaptureHandle>(null);
 
     // --- Visual Polish ---
@@ -317,6 +326,7 @@ export default function App() {
     const activeLocationKeyRef = useRef(galleryNavigation.location.key);
     const galleryAbortControllerRef = useRef<AbortController | null>(null);
     const activeGalleryFetchRequestIdRef = useRef(0);
+    const resolvedLayoutPreferenceScopeRef = useRef<string | null>(null);
 
 
 
@@ -395,6 +405,19 @@ export default function App() {
         const openedItem = files.find((item) => item.id === location.mediaId);
         if (openedItem) setSelectedItem(openedItem);
     }, [currentPath, files, filterOption, galleryNavigation.location, layoutMode, sortOption, viewMode]);
+
+    useLayoutEffect(() => {
+        const view = galleryNavigation.location.view;
+        if (!currentUser || !getLayoutPreferenceView(view)) return;
+        const scopeKey = `${window.location.origin}:${currentUser.username}:${view}`;
+        if (resolvedLayoutPreferenceScopeRef.current === scopeKey) return;
+        resolvedLayoutPreferenceScopeRef.current = scopeKey;
+        const preferredLayout = resolveScopedGalleryLayout(localStorage, window.location.origin, currentUser.username, view);
+        // 即使当前条目不能应用偏好，也必须在真实用户与有效 scope 到位时消费旧全局键。
+        if (!canApplyLayoutPreference()) return;
+        const nextLocation = applyInitialLayoutPreference(preferredLayout);
+        if (layoutMode !== nextLocation.layout) setLayoutMode(nextLocation.layout);
+    }, [applyInitialLayoutPreference, canApplyLayoutPreference, currentUser?.username, galleryNavigation.location.view, layoutMode]);
 
 
     // 导航控制器负责 URL 与历史初始化，应用只保留渲染镜像。
@@ -1466,17 +1489,26 @@ export default function App() {
     };
 
 
+    const resolveTargetLayout = useCallback((view: GalleryLocation['view']): GridLayout =>
+        resolveScopedGalleryLayout(localStorage, window.location.origin, currentUser?.username, view),
+    [currentUser?.username]);
+
     const handleSetViewMode = async (mode: ViewMode) => {
         cacheCurrentGallery();
         navigationRequestEpochRef.current += 1;
         setStorageItem(VIEW_MODE_KEY, mode, LEGACY_KEYS.viewMode);
-        galleryNavigation.updateLocation({ view: mode, folderPath: '', mediaId: undefined }, 'push');
+        galleryNavigation.updateLocation({ view: mode, folderPath: '', mediaId: undefined, layout: resolveTargetLayout(mode) }, 'push');
     };
 
     const handleFolderClick = (path: string) => {
         cacheCurrentGallery();
         navigationRequestEpochRef.current += 1;
-        galleryNavigation.navigatePath(path);
+        galleryNavigation.updateLocation({
+            view: 'folders',
+            folderPath: path,
+            mediaId: undefined,
+            layout: resolveTargetLayout('folders'),
+        }, 'push');
     };
 
     const handleGoBackFolder = () => {
@@ -2319,7 +2351,13 @@ export default function App() {
                         if (typeof update.search === 'string') setActiveSearch(update.search);
                         if (update.layout) {
                             setLayoutMode(update.layout);
-                            setStorageItem(LAYOUT_MODE_KEY, update.layout, LEGACY_KEYS.layoutMode);
+                            if (currentUser) {
+                                writeGalleryLayoutPreference(localStorage, {
+                                    serverId: window.location.origin,
+                                    userId: currentUser.username,
+                                    view: galleryNavigation.location.view,
+                                }, update.layout);
+                            }
                         }
                         galleryNavigation.updateLocation(update, mode);
                     }}
