@@ -77,7 +77,7 @@ export const ViewerControls: React.FC<ViewerControlsProps> = ({
             onKeyDown={handleRenameKeyDown}
             onBlur={onRenameBlur}
             onClick={(e) => e.stopPropagation()}
-            className="bg-white/10 text-white border-b border-white outline-none p-1 rounded"
+            className="bg-accent-500/10 text-white border-b border-accent-500/40 outline-none p-1 rounded"
           />
         ) : (
           <span className="font-medium text-lg truncate flex items-center gap-2">
@@ -85,7 +85,7 @@ export const ViewerControls: React.FC<ViewerControlsProps> = ({
             {onStartRename && (
               <button
                 onClick={onStartRename}
-                className="p-1 hover:bg-white/20 rounded opacity-50 hover:opacity-100"
+                className="p-1 hover:bg-white/20 rounded opacity-50 hover:opacity-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-400/50"
               >
                 <Icons.Edit size={14} />
               </button>
@@ -101,7 +101,7 @@ export const ViewerControls: React.FC<ViewerControlsProps> = ({
         {onToggleFavorite && (
           <button
             onClick={(e) => { e.stopPropagation(); onToggleFavorite(); }}
-            className={`p-2 rounded-full transition-colors ${
+            className={`p-2 rounded-full transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-400/50 ${
               isFavorite ? 'text-red-500 hover:bg-white/10' : 'hover:bg-white/10 text-white/70'
             }`}
             title="Toggle Favorite"
@@ -113,7 +113,7 @@ export const ViewerControls: React.FC<ViewerControlsProps> = ({
         {/* 信息按钮 */}
         <button
           onClick={(e) => { e.stopPropagation(); onToggleInfo(); }}
-          className={`p-2 rounded-full transition-colors ${showInfo ? 'bg-white/20' : 'hover:bg-white/10'}`}
+          className={`p-2 rounded-full transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-400/50 ${showInfo ? 'bg-accent-500/15 text-accent-300 ring-1 ring-inset ring-accent-400/20' : 'hover:bg-white/10'}`}
           title="File Info"
         >
           <Icons.Info size={20} />
@@ -123,7 +123,7 @@ export const ViewerControls: React.FC<ViewerControlsProps> = ({
         {onJumpToFolder && (
           <button
             onClick={onJumpToFolder}
-            className="p-2 hover:bg-white/10 rounded-full transition-colors block"
+            className="p-2 hover:bg-white/10 rounded-full transition-colors block focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-400/50"
             title="Jump to Folder"
           >
             <Icons.Jump size={20} />
@@ -134,7 +134,7 @@ export const ViewerControls: React.FC<ViewerControlsProps> = ({
         {onDelete && (
           <button
             onClick={onDelete}
-            className="p-2 hover:bg-red-900/50 hover:text-red-400 rounded-full transition-colors mr-2"
+            className="p-2 hover:bg-red-900/50 hover:text-red-400 rounded-full transition-colors mr-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-400/50"
             title="Delete File"
           >
             <Icons.Trash size={20} />
@@ -145,7 +145,7 @@ export const ViewerControls: React.FC<ViewerControlsProps> = ({
         {onTogglePlay && item.mediaType === 'image' && (
           <button
             onClick={(e) => { e.stopPropagation(); onTogglePlay(); }}
-            className={`p-2 rounded-full transition-colors ${
+            className={`p-2 rounded-full transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-400/50 ${
               isPlaying ? 'bg-accent-500 text-white' : 'hover:bg-white/10'
             }`}
             title={isPlaying ? 'Pause Slideshow' : 'Play Slideshow'}
@@ -158,7 +158,7 @@ export const ViewerControls: React.FC<ViewerControlsProps> = ({
         {item.mediaType === 'image' && onToggleZoom && (
           <button
             onClick={(e) => { e.stopPropagation(); onToggleZoom(); }}
-            className="p-2 hover:bg-white/10 rounded-full transition-colors hidden md:block"
+            className="p-2 hover:bg-white/10 rounded-full transition-colors hidden md:block focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-400/50"
             title={transformScale > 1 ? 'Zoom Out' : 'Zoom In'}
           >
             {transformScale > 1 ? <Icons.ZoomOut size={24} /> : <Icons.ZoomIn size={24} />}
@@ -169,7 +169,7 @@ export const ViewerControls: React.FC<ViewerControlsProps> = ({
         {onToggleFullScreen && (
           <button
             onClick={(e) => { e.stopPropagation(); onToggleFullScreen(); }}
-            className="p-2 hover:bg-white/10 rounded-full transition-colors"
+            className="p-2 hover:bg-white/10 rounded-full transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-400/50"
             title={isFullScreen ? 'Exit Full Screen' : 'Full Screen'}
           >
             {isFullScreen ? <Icons.Minimize size={24} /> : <Icons.Maximize size={24} />}
@@ -179,7 +179,7 @@ export const ViewerControls: React.FC<ViewerControlsProps> = ({
         {/* 关闭按钮 */}
         <button
           onClick={(e) => { e.stopPropagation(); onClose(); }}
-          className="p-2 hover:bg-white/10 rounded-full transition-colors"
+          className="p-2 hover:bg-white/10 rounded-full transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-400/50"
         >
           <Icons.Close size={24} />
         </button>

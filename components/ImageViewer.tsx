@@ -392,7 +392,7 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({ item, onClose, onNext,
                                 onKeyDown={(e) => { if (e.key === 'Enter') submitRename(); if (e.key === 'Escape') setIsRenaming(false); }}
                                 onBlur={submitRename}
                                 onClick={(e) => e.stopPropagation()}
-                                className="bg-white/10 text-white border-b border-white outline-none p-1 rounded"
+                                className="bg-accent-500/10 text-white border-b border-accent-500/40 outline-none p-1 rounded"
                             />
                         ) : (
                             <span className="font-medium text-lg truncate flex items-center gap-2">

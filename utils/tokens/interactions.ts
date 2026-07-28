@@ -107,9 +107,9 @@ export const interactionClasses = {
   
   // 焦点效果
   focus: {
-    ring: 'focus:ring-2 focus:ring-accent-500/30 focus:ring-offset-2 focus:ring-offset-transparent',
-    glow: 'focus:shadow-[0_0_0_3px_rgba(var(--accent-rgb),0.15)]',
-    border: 'focus:border-accent-500/50',
+    ring: 'focus-visible:ring-2 focus-visible:ring-accent-500/30 focus-visible:ring-offset-2 focus-visible:ring-offset-transparent',
+    glow: 'focus-visible:shadow-[0_0_0_3px_rgba(var(--accent-rgb),0.15)]',
+    border: 'focus-visible:border-accent-500/50',
   },
   
   // 禁用效果
@@ -126,7 +126,7 @@ export const tailwindPresets = {
     bg-accent-500 text-white
     hover:bg-accent-600
     active:bg-accent-700
-    focus:ring-2 focus:ring-accent-500/50
+    focus-visible:ring-2 focus-visible:ring-accent-500/50
     disabled:bg-accent-500/50 disabled:text-white/50
     transition-all duration-200
   `,
@@ -136,7 +136,7 @@ export const tailwindPresets = {
     bg-white/5 text-text-primary
     hover:bg-white/10 hover:border-white/10
     active:bg-white/15
-    focus:ring-2 focus:ring-white/20
+    focus-visible:ring-2 focus-visible:ring-accent-500/30
     disabled:bg-white/5 disabled:text-text-muted
     border border-white/5
     transition-all duration-200
@@ -147,7 +147,7 @@ export const tailwindPresets = {
     bg-transparent text-text-secondary
     hover:bg-white/5 hover:text-text-primary
     active:bg-white/10
-    focus:ring-2 focus:ring-white/10
+    focus-visible:ring-2 focus-visible:ring-accent-500/30
     disabled:text-text-muted
     transition-all duration-200
   `,
@@ -181,7 +181,7 @@ export const tailwindPresets = {
     hover:bg-white/5
     hover:pl-5
     active:bg-white/10
-    focus:ring-2 focus:ring-inset focus:ring-accent-500/20
+    focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-500/20
     transition-all duration-200
   `,
 };

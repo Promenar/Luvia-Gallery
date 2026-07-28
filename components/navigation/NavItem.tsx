@@ -26,10 +26,10 @@ export const NavItem: React.FC<NavItemProps> = React.memo(({
   const baseClasses = `
     w-full flex items-center gap-3 py-3 rounded-xl 
     transition-all duration-300 ease-out
-    focus:outline-none focus:ring-2 focus:ring-accent-500/30
+    focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/30
     ${isExpanded ? 'px-4' : 'justify-center px-0'}
     ${active
-      ? 'glass-1 border border-accent-500/30 text-accent-500 shadow-glow bg-accent-500/10 font-semibold'
+      ? 'bg-accent-500/10 text-accent-500 ring-1 ring-inset ring-accent-500/20 font-semibold'
       : 'text-text-secondary hover:text-text-primary hover:bg-white/10 dark:hover:bg-white/5 border border-transparent'
     }
     ${className}
@@ -54,7 +54,7 @@ export const NavItem: React.FC<NavItemProps> = React.memo(({
             <span className={`
               ml-auto text-xs px-2 py-0.5 rounded-full border transition-colors
               ${active
-                ? 'bg-accent-500/15 text-text-primary border-border-glow'
+                ? 'bg-accent-500/10 text-accent-400 border-transparent ring-1 ring-inset ring-accent-500/20'
                 : 'bg-white/5 text-text-muted border-white/5'
               }
             `}>

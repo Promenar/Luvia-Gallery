@@ -793,80 +793,128 @@ app.post('/api/config', adminOnly, (req, res) => {
     res.json({ success: true });
 });
 
+function parseFolderSearchLimit(value) {
+    if (value === undefined || value === null || value === '') return 100;
+    const text = String(value);
+    if (!/^\d+$/.test(text)) return null;
+
+    const limit = Number(text);
+    return Number.isSafeInteger(limit) && limit >= 1 && limit <= 100 ? limit : null;
+}
+
+function getFolderCoverMedia(folderPath) {
+    const [found] = database.queryFiles({
+        folderPath,
+        recursive: true,
+        mediaType: ['image', 'video'],
+        limit: 1,
+        sortOption: 'dateDesc'
+    });
+    if (!found) return null;
+
+    let url = `/api/thumb/${encodeURIComponent(found.id)}`;
+    try {
+        const thumbFilename = crypto.createHash('md5').update(found.id).digest('hex') + '.webp';
+        const thumbPath = getCachedPath(thumbFilename);
+        if (fs.existsSync(thumbPath)) {
+            url += `?t=${fs.statSync(thumbPath).mtimeMs}`;
+        }
+    } catch (e) { }
+
+    return {
+        id: found.id,
+        url,
+        type: found.type,
+        path: found.path,
+        mediaType: found.mediaType,
+        name: found.name
+    };
+}
+
+function buildFolderResult(folderPath, isFavorite = false) {
+    let mediaCount = 0;
+    let lastModified = 0;
+
+    try {
+        const stats = fs.statSync(folderPath);
+        lastModified = Math.floor(stats.mtimeMs / 1000);
+        const items = fs.readdirSync(folderPath, { withFileTypes: true });
+        mediaCount = items.filter(item =>
+            item.isFile() && /\.(jpg|jpeg|png|gif|webp|mp4|mov|webm)$/i.test(item.name)
+        ).length;
+    } catch (e) { }
+
+    return {
+        name: path.basename(folderPath),
+        path: folderPath,
+        mediaCount,
+        coverMedia: getFolderCoverMedia(folderPath),
+        lastModified,
+        isFavorite
+    };
+}
+
 app.get('/api/library/folders', (req, res) => {
     const favoritesOnly = req.query.favorites === 'true';
     const userId = req.user.username;
     const isAdmin = req.user.role === 'admin';
+    const rawSearch = Array.isArray(req.query.search)
+        ? req.query.search[req.query.search.length - 1]
+        : req.query.search;
+    const search = rawSearch === undefined || rawSearch === null ? '' : String(rawSearch).trim();
 
     const userLibraryPaths = getUserLibraryPaths(req.user);
     if (userLibraryPaths.length === 0) return res.json([]);
 
-    // Check if the current requested path (if any) is allowed
-    // Note: LibraryFolders root request has no path, sub-folders are processed in frontend usually.
-    // However, if we filter here, we provide data isolation.
+    const isCurrentlyAllowed = folderPath => userLibraryPaths.some(
+        allowedPath => isPathWithin(path.resolve(folderPath), allowedPath)
+    );
+    const favoriteIds = database.getFavoriteIds(userId);
+    const favoriteFolders = new Set(
+        (favoriteIds.folders || []).filter(folderPath => isCurrentlyAllowed(folderPath))
+    );
 
-    if (favoritesOnly) {
-        // Return favorite folders
+    let parentPath = req.query.parentPath || req.query.parent;
+    const isRootRequest = !parentPath || parentPath === 'root' || parentPath === '/';
+    const resolvedParentPath = isRootRequest ? null : path.resolve(parentPath);
+
+    if (resolvedParentPath && !isAdmin && !isCurrentlyAllowed(resolvedParentPath)) {
+        console.log(`[Security] User ${userId} blocked from browsing: ${resolvedParentPath}`);
+        return res.status(403).json({ error: "Access denied to this folder" });
+    }
+
+    if (search) {
         if (!dbReady) {
             return res.status(503).json({ error: 'Database not ready' });
         }
 
-        const favoriteIds = database.getFavoriteIds(userId);
+        const limit = parseFolderSearchLimit(req.query.limit);
+        if (limit === null) {
+            return res.status(400).json({ error: 'limit must be an integer between 1 and 100' });
+        }
 
-        // Get folder details for each favorite folder path
-        const folders = favoriteIds.folders.map(folderPath => {
-            let coverMedia = null;
-            let mediaCount = 0;
+        let subs = database.queryFolderPaths({
+            parentPath: resolvedParentPath,
+            allowedPaths: userLibraryPaths,
+            search,
+            limit
+        }).filter(folderPath => isCurrentlyAllowed(folderPath));
+        if (favoritesOnly) {
+            subs = subs.filter(folderPath => favoriteFolders.has(folderPath));
+        }
 
-            try {
-                if (fs.existsSync(folderPath)) {
-                    // Count media files (non-recursive for now, or could use DB stats)
-                    const items = fs.readdirSync(folderPath, { withFileTypes: true });
-                    mediaCount = items.filter(i => i.isFile() && /\.(jpg|jpeg|png|webp|mp4|mov|webm)$/i.test(i.name)).length;
-
-                    // Find smart cover
-                    const found = findCoverMedia(folderPath);
-                    if (found) {
-                        const b64Id = Buffer.from(found.path).toString('base64');
-                        let url = `/api/thumb/${b64Id}`;
-                        try {
-                            const thumbFilename = crypto.createHash('md5').update(b64Id).digest('hex') + '.webp';
-                            const thumbPath = path.join(CACHE_DIR, thumbFilename);
-                            if (fs.existsSync(thumbPath)) {
-                                url += `?t=${fs.statSync(thumbPath).mtimeMs}`;
-                            }
-                        } catch (e) { }
-
-                        coverMedia = {
-                            url: url,
-                            mediaType: found.type,
-                            name: found.name
-                        };
-                    }
-                }
-            } catch (e) { }
-
-            let lastModified = 0;
-            try {
-                lastModified = Math.floor(fs.statSync(folderPath).mtimeMs / 1000);
-            } catch (e) { }
-
-            return {
-                name: path.basename(folderPath),
-                path: folderPath,
-                mediaCount: mediaCount,
-                coverMedia: coverMedia,
-                lastModified
-            };
-        });
-
+        const folders = subs.map(folderPath =>
+            buildFolderResult(folderPath, favoriteFolders.has(folderPath))
+        );
         return res.json({ folders });
     }
 
-    // Normal folder browsing (non-favorites)
-    // Decode if it came from encoded param
-    let parentPath = req.query.parentPath || req.query.parent;
-    const isRootRequest = !parentPath || parentPath === 'root' || parentPath === '/';
+    if (favoritesOnly) {
+        const folders = Array.from(favoriteFolders).map(folderPath =>
+            buildFolderResult(folderPath, true)
+        );
+        return res.json({ folders });
+    }
 
     // If client passes "root" or "/", treat as root request
     // If it's a root request, we need to decide what to show
@@ -889,18 +937,6 @@ app.get('/api/library/folders', (req, res) => {
         }
     } else {
         // Not root, just get subfolders of the requested parent
-        const resolvedPath = path.resolve(parentPath);
-
-        // Security Check: Is user allowed to browse this folder?
-        if (!isAdmin) {
-            const isAllowed = userLibraryPaths.some(lp => isPathWithin(resolvedPath, lp));
-
-            if (!isAllowed) {
-                console.log(`[Security] User ${userId} blocked from browsing: ${resolvedPath}`);
-                return res.status(403).json({ error: "Access denied to this folder" });
-            }
-        }
-
         console.log(`[DEBUG] /api/library/folders request. mappedPath: ${parentPath}`);
         let rawSubs = getSubfolders(parentPath);
 
@@ -925,52 +961,9 @@ app.get('/api/library/folders', (req, res) => {
         }
     }
 
-    const favoriteIds = database.getFavoriteIds(userId);
-    const favoriteFolders = new Set(favoriteIds.folders || []);
-
-    const folders = subs.map(sub => {
-        let coverMedia = null;
-        let mediaCount = 0;
-        let lastModified = 0;
-
-        try {
-            const stats = fs.statSync(sub);
-            lastModified = Math.floor(stats.mtimeMs / 1000);
-
-            // Count media files (non-recursive)
-            const items = fs.readdirSync(sub, { withFileTypes: true });
-            mediaCount = items.filter(i => i.isFile() && /(jpg|jpeg|png|webp|mp4|mov|webm)$/i.test(i.name)).length;
-
-            // Find cover media
-            const found = findCoverMedia(sub);
-            if (found) {
-                const b64Id = Buffer.from(found.path).toString('base64');
-                let url = `/api/thumb/${b64Id}`;
-                try {
-                    const thumbFilename = crypto.createHash('md5').update(b64Id).digest('hex') + '.webp';
-                    const thumbPath = getCachedPath(thumbFilename);
-                    if (fs.existsSync(thumbPath)) {
-                        url += `?t=${fs.statSync(thumbPath).mtimeMs}`;
-                    }
-                } catch (e) { }
-
-                coverMedia = {
-                    url: url,
-                    mediaType: found.type,
-                    name: found.name
-                };
-            }
-        } catch (e) { }
-
-        return {
-            name: path.basename(sub),
-            path: sub,
-            mediaCount,
-            coverMedia,
-            lastModified,
-            isFavorite: favoriteFolders.has(sub)
-        };
-    });
+    const folders = subs
+        .filter(folderPath => isCurrentlyAllowed(folderPath))
+        .map(folderPath => buildFolderResult(folderPath, favoriteFolders.has(folderPath)));
     res.json({ folders });
 });
 

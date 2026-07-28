@@ -1,5 +1,5 @@
 
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { FolderNode, MediaItem } from '../types';
 import { getAuthUrl } from '../utils/fileUtils';
@@ -31,6 +31,10 @@ export const FolderCard: React.FC<FolderCardProps> = React.memo(({ folder, onCli
     const [isRenaming, setIsRenaming] = useState(false);
     const [renameValue, setRenameValue] = useState('');
     const [imgError, setImgError] = useState(false);
+
+    useEffect(() => {
+        setImgError(false);
+    }, [folder.coverMedia?.url]);
 
     // Resolve thumbnail URL for cover
     const thumbUrl = useMemo(() => {
@@ -255,6 +259,9 @@ export const FolderCard: React.FC<FolderCardProps> = React.memo(({ folder, onCli
         prev.folder.mediaCount === next.folder.mediaCount &&
         prev.isFavorite === next.isFavorite &&
         prev.folder.coverMedia?.id === next.folder.coverMedia?.id &&
+        prev.folder.coverMedia?.url === next.folder.coverMedia?.url &&
+        prev.folder.coverMedia?.type === next.folder.coverMedia?.type &&
+        prev.folder.coverMedia?.mediaType === next.folder.coverMedia?.mediaType &&
         prev.layout === next.layout
     );
 });

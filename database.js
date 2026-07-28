@@ -508,6 +508,99 @@ function queryFiles(options = {}) {
 }
 
 /**
+ * 使用文件 FTS 索引查询目录路径，不依赖 folders 缓存表。
+ */
+function queryFolderPaths(options = {}) {
+    const {
+        parentPath = null,
+        allowedPaths = null,
+        search = null,
+        limit = 100
+    } = options;
+    const ftsQuery = buildFtsQuery(search);
+    if (!ftsQuery) return [];
+
+    const boundedLimit = Math.max(1, Math.min(100, Number.isInteger(limit) ? limit : 100));
+    if (allowedPaths !== null && allowedPaths.length === 0) return [];
+
+    const conditions = ['files_fts MATCH ?'];
+    const params = [`{folder_path} : (${ftsQuery})`];
+    const normalizedParent = parentPath === null ? null : path.resolve(parentPath);
+
+    if (normalizedParent !== null) {
+        conditions.push("(f.folder_path = ? OR f.folder_path LIKE ? ESCAPE '\\')");
+        params.push(normalizedParent, buildDescendantPattern(normalizedParent));
+    }
+
+    if (allowedPaths !== null) {
+        const clauses = allowedPaths.map(() => (
+            "(f.folder_path = ? OR f.folder_path LIKE ? ESCAPE '\\')"
+        )).join(' OR ');
+        conditions.push(`(${clauses})`);
+        allowedPaths.forEach(allowedPath => {
+            const normalizedAllowedPath = path.resolve(allowedPath);
+            params.push(normalizedAllowedPath, buildDescendantPattern(normalizedAllowedPath));
+        });
+    }
+
+    const rows = db.prepare(`
+        SELECT DISTINCT f.folder_path
+        FROM files f
+        JOIN files_fts ON f.rowid = files_fts.rowid
+        WHERE ${conditions.join(' AND ')}
+        ORDER BY f.folder_path COLLATE NOCASE ASC
+        LIMIT ?
+    `).all(...params, boundedLimit);
+
+    const queryTerms = String(search)
+        .trim()
+        .toLocaleLowerCase()
+        .split(/\s+/)
+        .filter(Boolean);
+    const isWithin = (candidate, root) => {
+        const relative = path.relative(path.resolve(root), path.resolve(candidate));
+        return relative === '' ||
+            (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+    };
+    const isInScope = candidate => {
+        if (normalizedParent !== null && (
+            path.resolve(candidate) === normalizedParent ||
+            !isWithin(candidate, normalizedParent)
+        )) {
+            return false;
+        }
+        return allowedPaths === null || allowedPaths.some(allowedPath => isWithin(candidate, allowedPath));
+    };
+
+    const matches = new Set();
+    for (const row of rows) {
+        let candidate = path.resolve(row.folder_path);
+        const root = path.parse(candidate).root;
+
+        while (candidate && candidate !== root) {
+            const folderName = path.basename(candidate).toLocaleLowerCase();
+            if (
+                queryTerms.every(term => folderName.includes(term.toLocaleLowerCase())) &&
+                isInScope(candidate)
+            ) {
+                matches.add(candidate);
+                if (matches.size >= boundedLimit) break;
+            }
+
+            const parent = path.dirname(candidate);
+            if (parent === candidate) break;
+            candidate = parent;
+        }
+
+        if (matches.size >= boundedLimit) break;
+    }
+
+    return Array.from(matches)
+        .sort((left, right) => left.localeCompare(right, undefined, { sensitivity: 'base' }))
+        .slice(0, boundedLimit);
+}
+
+/**
  * Count total files
  */
 function countFiles(options = {}) {
@@ -742,6 +835,7 @@ module.exports = {
     upsertFile,
     insertFilesBatch,
     queryFiles,
+    queryFolderPaths,
     countFiles,
     deleteFile,
     deleteFilesByFolder,
