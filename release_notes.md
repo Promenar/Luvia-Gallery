@@ -119,4 +119,6 @@
 
 ### 验证状态
 - Node 20 后端测试 31/31、前端测试 110/110 通过，Vite 生产构建成功。
-- 尚未提交、推送或部署至 FNOS 生产环境。
+- 已通过隔离候选容器冒烟并部署至 FNOS 生产；生产 revision 为 `26d4cce`，镜像为 `sha256:48fb1256c53cb3a773deb5b7f3615f669678a5eec571b5f64c7371b29f88454e`。
+- 生产首页、JS、CSS 与 manifest 均返回 HTTP 200；容器运行中、重启 0、OOM false，切换时内存约 86.9 MiB。
+- 原生产镜像保留为 `promenarleng/luvia-gallery:rollback-26d4cce-pre`。
