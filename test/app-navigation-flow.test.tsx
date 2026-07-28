@@ -4,7 +4,7 @@ import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import App, { activateGalleryLocation, getAdjacentMediaId, getGalleryCacheEvictionKeys, isActiveGalleryRequest, isGalleryRequestGuardActive, resolveGalleryRequestGuard, resolveScopedGalleryLayout, shouldRenderUnifiedGalleryToolbar, shouldSyncSearchDraft, shouldUpdateGalleryFetchingState, UnifiedGalleryToolbar } from '../App';
+import App, { activateGalleryLocation, appendGalleryScanScopeQuery, createTopLevelViewLocationUpdate, getAdjacentMediaId, getGalleryCacheEvictionKeys, isActiveGalleryRequest, isGalleryRequestGuardActive, resolveGalleryRequestGuard, resolveScopedGalleryLayout, resolveVisibleGalleryFolders, SearchEmptyState, shouldRenderUnifiedGalleryToolbar, shouldSyncSearchDraft, shouldUpdateGalleryFetchingState, UnifiedGalleryToolbar } from '../App';
 import { LanguageProvider } from '../contexts/LanguageContext';
 import { useGalleryNavigation, type GalleryNavigationApi } from '../hooks/useGalleryNavigation';
 import { GalleryNavigationController, type NavigationEnvironment } from '../navigation/navigation-controller';
@@ -319,6 +319,76 @@ describe('应用导航最小闭环', () => {
   it('搜索草稿只在位置键变化时同步，输入中的字符不会被同一位置覆盖', () => {
     expect(shouldSyncSearchDraft('folders:albums', 'folders:albums')).toBe(false);
     expect(shouldSyncSearchDraft('folders:albums', 'folders:albums?search=cat')).toBe(true);
+  });
+
+  it('切换顶级视图会清除 q 和 mediaId，同一文件夹视图内导航保留搜索', () => {
+    const fake = createEnvironment();
+    const controller = new GalleryNavigationController({ environment: fake.environment });
+    controller.initialize();
+    controller.updateLocation({ view: 'all', folderPath: '', search: '人物', mediaId: 'media-1' }, 'replace');
+    controller.updateLocation(createTopLevelViewLocationUpdate('all', 'favorites', 'grid'), 'push');
+
+    expect(controller.getLocation()).toMatchObject({
+      view: 'favorites',
+      search: '',
+    });
+    expect(controller.getLocation()).not.toHaveProperty('mediaId');
+    expect(fake.environment.location.hash).not.toContain('q=');
+
+    controller.updateLocation({ view: 'folders', folderPath: '相册', search: '人物' }, 'replace');
+    controller.navigatePath('相册/旅行');
+    expect(controller.getLocation()).toMatchObject({
+      view: 'folders',
+      folderPath: '相册/旅行',
+      search: '人物',
+    });
+  });
+
+  it('扫描请求仅为非空文件夹搜索启用递归，普通目录和收藏夹请求均不递归', () => {
+    const baseUrl = '/api/scan/results?offset=0&limit=500';
+    const folderSearch = new URLSearchParams(
+      appendGalleryScanScopeQuery(baseUrl, '相册/旅行', false, ' 人物 ').split('?')[1],
+    );
+    const plainFolder = new URLSearchParams(
+      appendGalleryScanScopeQuery(baseUrl, '相册/旅行', false, '   ').split('?')[1],
+    );
+    const favoritesSearch = new URLSearchParams(
+      appendGalleryScanScopeQuery(baseUrl, null, true, '人物').split('?')[1],
+    );
+
+    expect(folderSearch.get('folder')).toBe('相册/旅行');
+    expect(folderSearch.get('search')).toBe('人物');
+    expect(folderSearch.get('recursive')).toBe('true');
+    expect(plainFolder.get('recursive')).toBeNull();
+    expect(plainFolder.get('search')).toBeNull();
+    expect(favoritesSearch.get('favorites')).toBe('true');
+    expect(favoritesSearch.get('search')).toBe('人物');
+    expect(favoritesSearch.get('recursive')).toBeNull();
+  });
+
+  it('搜索无结果空态区分当前目录并通过现有位置更新链路清除搜索', () => {
+    const onLocationChange = vi.fn();
+    expect(resolveVisibleGalleryFolders(
+      'folders',
+      ' 人物 ',
+      true,
+      [{ path: '相册/未经过搜索筛选的目录' }],
+      [],
+    )).toEqual([]);
+
+    render(
+      <LanguageProvider>
+        <SearchEmptyState
+          view="folders"
+          folderPath="相册/旅行"
+          onLocationChange={onLocationChange}
+        />
+      </LanguageProvider>,
+    );
+
+    expect(screen.getByTestId('search-empty-state').textContent).toContain('旅行');
+    fireEvent.click(screen.getByRole('button', { name: /清除搜索|Clear search/ }));
+    expect(onLocationChange).toHaveBeenCalledWith({ search: '', mediaId: undefined }, 'push');
   });
 
   it('媒体条目回退后恢复无 mediaId 的目录位置', () => {

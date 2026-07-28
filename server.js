@@ -43,6 +43,38 @@ function smartNormalizePath(filePath) {
     return path.resolve(filePath);
 }
 
+function isPathWithin(candidate, root) {
+    if (typeof candidate !== 'string' || typeof root !== 'string' || !candidate || !root) {
+        return false;
+    }
+
+    const resolvedCandidate = path.resolve(candidate);
+    const resolvedRoot = path.resolve(root);
+    const relativePath = path.relative(resolvedRoot, resolvedCandidate);
+
+    return relativePath === '' ||
+        (relativePath !== '..' &&
+            !relativePath.startsWith(`..${path.sep}`) &&
+            !path.isAbsolute(relativePath));
+}
+
+function parseScanPagination(query) {
+    const parseValue = (value, defaultValue, min, max) => {
+        if (value === undefined) return defaultValue;
+        if (typeof value !== 'string' || !/^\d+$/.test(value)) return null;
+
+        const parsed = Number(value);
+        if (!Number.isSafeInteger(parsed) || parsed < min || parsed > max) return null;
+        return parsed;
+    };
+
+    const offset = parseValue(query.offset, 0, 0, Number.MAX_SAFE_INTEGER);
+    const limit = parseValue(query.limit, 100, 1, 500);
+
+    if (offset === null || limit === null) return null;
+    return { offset, limit };
+}
+
 // --- Constants ---
 const RAW_MEDIA_ROOT = process.env.MEDIA_ROOT || path.join(__dirname, 'media');
 // Support multiple roots via ';' delimiter (cross-platform friendly config)
@@ -410,11 +442,7 @@ function checkFileAccess(user, filePath) {
     const allowedPaths = getUserLibraryPaths(user);
     if (allowedPaths.length === 0) return false;
 
-    const normalizedFile = path.resolve(filePath).replace(/\\/g, '/').toLowerCase();
-    return allowedPaths.some(p => {
-        const normalizedAllowed = path.resolve(p).replace(/\\/g, '/').toLowerCase();
-        return normalizedFile.startsWith(normalizedAllowed);
-    });
+    return allowedPaths.some(allowedPath => isPathWithin(filePath, allowedPath));
 }
 
 // Helper to recursively count cached files
@@ -865,10 +893,7 @@ app.get('/api/library/folders', (req, res) => {
 
         // Security Check: Is user allowed to browse this folder?
         if (!isAdmin) {
-            const isAllowed = userLibraryPaths.some(lp => {
-                const lpResolved = path.resolve(lp);
-                return resolvedPath === lpResolved || resolvedPath.startsWith(lpResolved + path.sep) || resolvedPath.startsWith(lpResolved + '/');
-            });
+            const isAllowed = userLibraryPaths.some(lp => isPathWithin(resolvedPath, lp));
 
             if (!isAllowed) {
                 console.log(`[Security] User ${userId} blocked from browsing: ${resolvedPath}`);
@@ -884,11 +909,11 @@ app.get('/api/library/folders', (req, res) => {
             // Filter rawSubs
             subs = rawSubs.filter(subPath => {
                 // Check 1: Is subPath inside any libraryPath?
-                const isDescendant = userLibraryPaths.some(lp => subPath.startsWith(lp));
+                const isDescendant = userLibraryPaths.some(lp => isPathWithin(subPath, lp));
                 if (isDescendant) return true;
 
                 // Check 2: Is subPath on the way to any libraryPath?
-                const isAncestor = userLibraryPaths.some(lp => lp.startsWith(subPath));
+                const isAncestor = userLibraryPaths.some(lp => isPathWithin(lp, subPath));
                 if (isAncestor) return true;
 
                 return false;
@@ -1299,13 +1324,16 @@ app.post('/api/scan/control', adminOnly, (req, res) => {
 });
 
 app.get('/api/scan/results', (req, res) => {
+    const pagination = parseScanPagination(req.query);
+    if (!pagination) {
+        return res.status(400).json({ error: 'Invalid offset or limit' });
+    }
+
     if (!dbReady) {
         return res.status(503).json({ error: 'Database not ready' });
     }
 
-    // Determine offset/limit for pagination
-    const offset = parseInt(req.query.offset) || 0;
-    const limit = parseInt(req.query.limit) || 100;
+    const { offset, limit } = pagination;
     const favoritesOnly = req.query.favorites === 'true';
     const random = req.query.random === 'true';
     const recursive = req.query.recursive === 'true';
@@ -1322,180 +1350,36 @@ app.get('/api/scan/results', (req, res) => {
         }
     }
 
-    let files, total;
     const userId = req.user.username;
     const isAdmin = req.user.role === 'admin';
-
     const userLibraryPaths = getUserLibraryPaths(req.user);
+    const normalizedFolderPath = folderPath ? path.resolve(folderPath) : null;
+    const hasLibraryAccess = isAdmin || userLibraryPaths.length > 0;
+    const isFolderAllowed = !normalizedFolderPath ||
+        isAdmin ||
+        userLibraryPaths.some(allowedPath => isPathWithin(normalizedFolderPath, allowedPath));
 
-    const sortArray = (arr) => {
-        if (!Array.isArray(arr)) return arr;
-        switch (sortOption) {
-            case 'dateAsc':
-                return [...arr].sort((a, b) => (a.lastModified || 0) - (b.lastModified || 0));
-            case 'nameAsc':
-                return [...arr].sort((a, b) => (a.name || '').localeCompare(b.name || '', undefined, { sensitivity: 'base' }));
-            case 'nameDesc':
-                return [...arr].sort((a, b) => (b.name || '').localeCompare(a.name || '', undefined, { sensitivity: 'base' }));
-            case 'dateDesc':
-            default:
-                return [...arr].sort((a, b) => (b.lastModified || 0) - (a.lastModified || 0));
-        }
-    };
+    let files = [];
+    let total = 0;
 
-    if (favoritesOnly) {
-        // Query favorites from DB
-        if (recursive) {
-            // Recursive mode: Favorite files + All files in favorite folders
-            console.log('[Favorites Carousel] Recursive mode enabled');
+    if (hasLibraryAccess && isFolderAllowed) {
+        const filterOptions = {
+            favoritesOnly,
+            userId,
+            folderPath: normalizedFolderPath,
+            recursive,
+            allowedPaths: isAdmin ? null : userLibraryPaths,
+            search,
+            mediaType,
+            excludeMediaType,
+            sortOption,
+            random
+        };
 
-            // 1. Get directly favorited files
-            const favoriteFiles = database.queryFavoriteFiles(userId, { offset: 0, limit: 999999 });
-
-            // 2. Get all favorite folder paths
-            const favoriteIds = database.getFavoriteIds(userId);
-            const favoriteFolderPaths = favoriteIds.folders || [];
-
-            console.log(`[Favorites Carousel] Found ${favoriteFiles.length} favorite files and ${favoriteFolderPaths.length} favorite folders`);
-
-            // 3. Recursively get all files from favorite folders
-            let folderFiles = [];
-            for (const folderPath of favoriteFolderPaths) {
-                try {
-                    // Security check: ensure folder is within user's allowed paths
-                    let canAccess = isAdmin;
-                    if (!canAccess && userLibraryPaths.length > 0) {
-                        const resolvedPath = path.resolve(folderPath);
-                        canAccess = userLibraryPaths.some(lp => {
-                            const resolvedLp = path.resolve(lp);
-                            return resolvedPath === resolvedLp ||
-                                resolvedPath.startsWith(resolvedLp + path.sep) ||
-                                resolvedPath.startsWith(resolvedLp + '/');
-                        });
-                    }
-
-                    if (canAccess) {
-                        const files = database.queryFiles({
-                            folderPath: path.resolve(folderPath),
-                            offset: 0,
-                            limit: 999999,
-                            userId,
-                            recursive: true, // Enable recursive scanning
-                            allowedPaths: isAdmin ? null : userLibraryPaths
-                        });
-                        folderFiles = folderFiles.concat(files);
-                        console.log(`[Favorites Carousel] Folder ${folderPath}: ${files.length} files`);
-                    } else {
-                        console.log(`[Favorites Carousel] Skipping unauthorized folder: ${folderPath}`);
-                    }
-                } catch (e) {
-                    console.error(`[Favorites Carousel] Error querying folder ${folderPath}:`, e);
-                }
-            }
-
-            // 4. Merge and deduplicate (by id or path)
-            const allFiles = [...favoriteFiles, ...folderFiles];
-            const uniqueFilesMap = new Map();
-            allFiles.forEach(f => {
-                if (!uniqueFilesMap.has(f.id)) {
-                    uniqueFilesMap.set(f.id, f);
-                }
-            });
-
-            const uniqueFiles = Array.from(uniqueFilesMap.values());
-            console.log(`[Favorites Carousel] Total unique files after merge: ${uniqueFiles.length}`);
-
-            // 5. Apply filters (mediaType, excludeMediaType, random)
-            let filteredFiles = uniqueFiles;
-
-            if (mediaType) {
-                const types = Array.isArray(mediaType) ? mediaType : [mediaType];
-                filteredFiles = filteredFiles.filter(f => types.includes(f.mediaType));
-            }
-
-            if (excludeMediaType) {
-                const excludeTypes = Array.isArray(excludeMediaType) ? excludeMediaType : [excludeMediaType];
-                filteredFiles = filteredFiles.filter(f => !excludeTypes.includes(f.mediaType));
-            }
-
-            // Ensure favorites are marked for downstream filters/clients
-            filteredFiles = filteredFiles.map(f => ({ ...f, isFavorite: true }));
-
-            if (random) {
-                // Shuffle array using Fisher-Yates
-                for (let i = filteredFiles.length - 1; i > 0; i--) {
-                    const j = Math.floor(Math.random() * (i + 1));
-                    [filteredFiles[i], filteredFiles[j]] = [filteredFiles[j], filteredFiles[i]];
-                }
-            } else {
-                filteredFiles = sortArray(filteredFiles);
-            }
-
-            // 6. Apply pagination
-            total = filteredFiles.length;
-            files = filteredFiles.slice(offset, offset + limit);
-
-            console.log(`[Favorites Carousel] Returning ${files.length} files (total: ${total})`);
-        } else {
-            // Non-recursive mode: Only directly favorited files
-            files = database.queryFavoriteFiles(userId, { offset, limit });
-            total = database.countFavoriteFiles(userId);
-        }
-    } else {
-        const userLibraryPaths = getUserLibraryPaths(req.user);
-
-        // Security Guard: If non-admin has no allowed paths, they see nothing.
-        // This prevents "allow everything" behavior if logic below is flawed.
-        if (!isAdmin && userLibraryPaths.length === 0) {
-            files = [];
-            total = 0;
-        } else {
-            let isBasePathValid = true;
-
-            if (userLibraryPaths.length > 0 && folderPath) {
-                const resolvedPath = path.resolve(folderPath);
-                const isDescendantOrEqual = userLibraryPaths.some(lp => {
-                    const resolvedLp = path.resolve(lp);
-                    return resolvedPath === resolvedLp || resolvedPath.startsWith(resolvedLp + path.sep) || resolvedPath.startsWith(resolvedLp + '/');
-                });
-
-                if (!isDescendantOrEqual) {
-                    isBasePathValid = false;
-                    console.log(`[Security] Blocking file listing for unauthorized path: ${resolvedPath}`);
-                }
-            } else if (!isAdmin && !folderPath) {
-                // If requesting a global view (random, recent) and not admin, must constrain to user's paths
-                // queryFiles needs update to support multiple paths constraint or we just filter results?
-                // Better: constraint in DB.
-            }
-
-            if (!isBasePathValid) {
-                files = [];
-                total = 0;
-            } else {
-                // Query database normally
-                const queryOptions = { offset, limit, random, recursive, mediaType, excludeMediaType, userId, search };
-
-                if (folderPath) {
-                    // Try both original and normalized path for backward compatibility
-                    const normalizedFolderPath = path.resolve(folderPath);
-                    queryOptions.folderPath = normalizedFolderPath;
-                    queryOptions.alternativeFolderPath = folderPath;  // For fallback lookup
-                } else if (!isAdmin) {
-                    // If no specific folder and not admin, ALWAYS apply path constraints
-                    queryOptions.allowedPaths = userLibraryPaths;
-                }
-
-                files = database.queryFiles({ ...queryOptions, sortOption });
-                total = database.countFiles({
-                    folderPath: folderPath ? path.resolve(folderPath) : null,
-                    alternativeFolderPath: folderPath,  // For fallback lookup
-                    recursive,
-                    allowedPaths: (!folderPath && !isAdmin) ? userLibraryPaths : null,
-                    search
-                });
-            }
-        }
+        files = database.queryFiles({ ...filterOptions, offset, limit });
+        total = database.countFiles(filterOptions);
+    } else if (!isFolderAllowed) {
+        console.log(`[Security] Blocking file listing for unauthorized path: ${normalizedFolderPath}`);
     }
 
     // Transform to API format
@@ -1511,7 +1395,7 @@ app.get('/api/scan/results', (req, res) => {
         lastModified: f.lastModified,
         mediaType: f.mediaType,
         sourceId: f.sourceId,
-        isFavorite: f.isFavorite, // Pass through
+        isFavorite: favoritesOnly ? true : f.isFavorite,
         width: f.thumb_width,           // ✨ NEW
         height: f.thumb_height,         // ✨ NEW
         aspectRatio: f.thumb_aspect_ratio // ✨ NEW

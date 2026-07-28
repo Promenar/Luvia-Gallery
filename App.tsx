@@ -87,6 +87,48 @@ export const shouldSyncSearchDraft = (lastLocationKey: string | null, locationKe
 
 export const shouldRenderUnifiedGalleryToolbar = (viewMode: ViewMode) => viewMode !== 'home';
 
+export const createTopLevelViewLocationUpdate = (
+    currentView: ViewMode,
+    targetView: ViewMode,
+    layout: GridLayout,
+): Partial<Pick<GalleryLocation, 'view' | 'folderPath' | 'search' | 'layout' | 'mediaId'>> => ({
+    view: targetView,
+    folderPath: '',
+    layout,
+    mediaId: undefined,
+    ...(currentView !== targetView ? { search: '' } : {}),
+});
+
+export const appendGalleryScanScopeQuery = (
+    url: string,
+    folderFilter: string | null | undefined,
+    favoritesOnly: boolean,
+    searchQuery: string,
+) => {
+    const effectiveSearch = searchQuery.trim();
+    let scopedUrl = url;
+
+    if (favoritesOnly) {
+        scopedUrl += '&favorites=true';
+    } else if (folderFilter !== null && folderFilter !== undefined) {
+        scopedUrl += `&folder=${encodeURIComponent(folderFilter)}`;
+        if (effectiveSearch) scopedUrl += '&recursive=true';
+    }
+
+    if (effectiveSearch) scopedUrl += `&search=${encodeURIComponent(effectiveSearch)}`;
+    return scopedUrl;
+};
+
+export const resolveVisibleGalleryFolders = (
+    viewMode: ViewMode,
+    activeSearch: string,
+    isServerMode: boolean,
+    serverFolders: any[],
+    clientSubfolders: any[],
+) => viewMode === 'folders' && activeSearch.trim()
+    ? []
+    : (isServerMode ? serverFolders : clientSubfolders);
+
 export const resolveScopedGalleryLayout = (
     storage: LayoutPreferenceStorage | undefined,
     serverId: string,
@@ -145,6 +187,51 @@ export const UnifiedGalleryToolbar: React.FC<UnifiedGalleryToolbarProps> = ({
             <div className="hidden lg:block" data-testid="gallery-toolbar-desktop-slot">
                 <GalleryNavigationBar {...sharedProps} compact={false} />
             </div>
+        </div>
+    );
+};
+
+type SearchEmptyStateProps = {
+    view: GalleryLocation['view'];
+    folderPath: string;
+    onLocationChange: (update: UnifiedToolbarLocationUpdate, mode: 'push' | 'replace') => void;
+};
+
+export const SearchEmptyState: React.FC<SearchEmptyStateProps> = ({
+    view,
+    folderPath,
+    onLocationChange,
+}) => {
+    const { language } = useLanguage();
+    const isChinese = language === 'zh';
+    const folderName = folderPath.split('/').filter(Boolean).pop();
+    const title = view === 'favorites'
+        ? (isChinese ? '收藏夹中没有匹配的结果' : 'No matching results in Favorites')
+        : view === 'folders'
+            ? (isChinese
+                ? `当前目录“${folderName || '根目录'}”中没有匹配的结果`
+                : `No matching results in the current folder "${folderName || 'Root'}"`)
+            : (isChinese ? '媒体库中没有匹配的结果' : 'No matching results in the media library');
+
+    return (
+        <div
+            className="absolute inset-0 z-10 flex flex-col items-center justify-center px-6 text-center text-text-tertiary"
+            data-testid="search-empty-state"
+        >
+            <div className="w-24 h-24 bg-white/5 rounded-full flex items-center justify-center mb-4 border border-white/5">
+                <Icons.Image size={40} className="opacity-30" />
+            </div>
+            <h3 className="text-xl font-bold text-gray-600 dark:text-gray-300 mb-2">{title}</h3>
+            <p className="max-w-sm text-sm">
+                {isChinese ? '请尝试其他关键词，或清除当前搜索。' : 'Try another keyword or clear the current search.'}
+            </p>
+            <button
+                type="button"
+                className="mt-6 px-5 py-2 rounded-full bg-primary-600 hover:bg-primary-700 text-white font-medium transition-colors"
+                onClick={() => onLocationChange({ search: '', mediaId: undefined }, 'push')}
+            >
+                {isChinese ? '清除搜索' : 'Clear search'}
+            </button>
         </div>
     );
 };
@@ -908,17 +995,9 @@ export default function App() {
                 if (sortParam) url += `&sort=${sortParam}`;
             }
 
-            if (favoritesOnly) {
-                url += `&favorites=true`;
-                if (recursiveFavorites) url += `&recursive=true`;
-            } else if (folderFilter !== null && folderFilter !== undefined) {
-                url += `&folder=${encodeURIComponent(folderFilter)}`;
-            }
-
             const effectiveSearch = searchQuery || activeSearchRef.current;
-            if (effectiveSearch) {
-                url += `&search=${encodeURIComponent(effectiveSearch)}`;
-            }
+            url = appendGalleryScanScopeQuery(url, folderFilter, favoritesOnly, effectiveSearch);
+            void recursiveFavorites; // 兼容现有调用签名；收藏夹请求固定不递归。
 
             const res = await apiFetch(url, { signal: guard.signal });
             if (!res.ok) throw new Error(`API Error: ${res.status}`);
@@ -1493,11 +1572,34 @@ export default function App() {
         resolveScopedGalleryLayout(localStorage, window.location.origin, currentUser?.username, view),
     [currentUser?.username]);
 
+    const handleGalleryLocationChange = (update: UnifiedToolbarLocationUpdate, mode: 'push' | 'replace') => {
+        cacheCurrentGallery();
+        navigationRequestEpochRef.current += 1;
+        if (typeof update.search === 'string') setActiveSearch(update.search);
+        if (update.layout) {
+            setLayoutMode(update.layout);
+            if (currentUser) {
+                writeGalleryLayoutPreference(localStorage, {
+                    serverId: window.location.origin,
+                    userId: currentUser.username,
+                    view: galleryNavigation.location.view,
+                }, update.layout);
+            }
+        }
+        galleryNavigation.updateLocation(update, mode);
+    };
+
     const handleSetViewMode = async (mode: ViewMode) => {
         cacheCurrentGallery();
         navigationRequestEpochRef.current += 1;
         setStorageItem(VIEW_MODE_KEY, mode, LEGACY_KEYS.viewMode);
-        galleryNavigation.updateLocation({ view: mode, folderPath: '', mediaId: undefined, layout: resolveTargetLayout(mode) }, 'push');
+        const locationUpdate = createTopLevelViewLocationUpdate(
+            galleryNavigation.location.view,
+            mode,
+            resolveTargetLayout(mode),
+        );
+        if (locationUpdate.search === '') setActiveSearch('');
+        galleryNavigation.updateLocation(locationUpdate, 'push');
     };
 
     const handleFolderClick = (path: string) => {
@@ -2101,7 +2203,13 @@ export default function App() {
     }, [folderTree, currentPath, isServerMode]);
 
     // Combined folders for view
-    const visibleFolders = isServerMode ? serverFolders : clientSubfolders;
+    const visibleFolders = resolveVisibleGalleryFolders(
+        viewMode,
+        activeSearch,
+        isServerMode,
+        serverFolders,
+        clientSubfolders,
+    );
 
     const mixedItems = useMemo(() => {
         const folderItems: MediaItem[] = visibleFolders.map(f => ({
@@ -2124,6 +2232,14 @@ export default function App() {
 
         return sortCombinedItems([...folderItems, ...processedFiles]);
     }, [visibleFolders, processedFiles, isServerMode, serverFavoriteIds, allUserData, currentUser, sortCombinedItems]);
+
+    const hasVisibleSearchResults = viewMode === 'folders'
+        ? mixedItems.filter(Boolean).length > 0
+        : processedFiles.filter(Boolean).length > 0
+            || (viewMode === 'favorites' && serverFavoriteIds.folders.length > 0);
+    const shouldShowSearchEmptyState = activeSearch.trim().length > 0
+        && !isFetchingMore
+        && !hasVisibleSearchResults;
 
 
     // Auth/Setup Screens
@@ -2345,22 +2461,7 @@ export default function App() {
                     onNavigateView={(mode) => handleSetViewMode(mode as ViewMode)}
                     onOpenMenu={() => setIsSidebarOpen(true)}
                     onScrollToTop={handleScrollToTop}
-                    onLocationChange={(update, mode) => {
-                        cacheCurrentGallery();
-                        navigationRequestEpochRef.current += 1;
-                        if (typeof update.search === 'string') setActiveSearch(update.search);
-                        if (update.layout) {
-                            setLayoutMode(update.layout);
-                            if (currentUser) {
-                                writeGalleryLayoutPreference(localStorage, {
-                                    serverId: window.location.origin,
-                                    userId: currentUser.username,
-                                    view: galleryNavigation.location.view,
-                                }, update.layout);
-                            }
-                        }
-                        galleryNavigation.updateLocation(update, mode);
-                    }}
+                    onLocationChange={handleGalleryLocationChange}
                 />
 
                 {/* Content Area */}
@@ -2376,7 +2477,7 @@ export default function App() {
                 ) : (
                     <div className="flex-1 overflow-hidden relative">
                         {/* Empty State */}
-                        {!isServerMode && files.length === 0 && (
+                        {!activeSearch.trim() && !isServerMode && files.length === 0 && (
                             <div className="absolute inset-0 flex flex-col items-center justify-center text-text-tertiary">
                                 <div className="w-24 h-24 bg-white/5 rounded-full flex items-center justify-center mb-4 border border-white/5">
                                     <Icons.Image size={40} className="opacity-30" />
@@ -2385,7 +2486,7 @@ export default function App() {
                                 <p className="max-w-xs text-center text-sm">{t('import_local')}</p>
                             </div>
                         )}
-                        {isServerMode && libraryTotalCount === 0 && !isFetchingMore && viewMode === 'all' && (
+                        {!activeSearch.trim() && isServerMode && libraryTotalCount === 0 && !isFetchingMore && viewMode === 'all' && (
                             <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-400">
                                 <Icons.Server size={48} className="mb-4 text-primary-500" />
                                 <h3 className="text-xl font-bold text-gray-600 dark:text-gray-300 mb-2">{t('connected_to_nas')}</h3>
@@ -2398,7 +2499,13 @@ export default function App() {
 
                         {/* Views */}
                         {/* Views */}
-                        {viewMode === 'folders' ? (
+                        {shouldShowSearchEmptyState ? (
+                            <SearchEmptyState
+                                view={galleryNavigation.location.view}
+                                folderPath={currentPath}
+                                onLocationChange={handleGalleryLocationChange}
+                            />
+                        ) : viewMode === 'folders' ? (
                             /* Unified View (Folders + Files) */
                             (viewMode === 'folders' || currentPath) && (
                                 <div className="flex-1 w-full h-full p-4 md:p-8 flex flex-col min-h-0">
