@@ -5,6 +5,7 @@ const test = require('node:test');
 const BetterSqlite3 = require('better-sqlite3');
 
 const preparedSql = [];
+const preparedGetCalls = [];
 let inMemoryDatabase = null;
 
 function loadIsolatedDatabaseModule() {
@@ -20,7 +21,19 @@ function loadIsolatedDatabaseModule() {
                     const prepare = memoryDatabase.prepare.bind(memoryDatabase);
                     memoryDatabase.prepare = sql => {
                         preparedSql.push(sql);
-                        return prepare(sql);
+                        const statement = prepare(sql);
+                        return new Proxy(statement, {
+                            get(target, property) {
+                                const value = Reflect.get(target, property, target);
+                                if (property === 'get') {
+                                    return (...params) => {
+                                        preparedGetCalls.push({ sql, params });
+                                        return value.apply(target, params);
+                                    };
+                                }
+                                return typeof value === 'function' ? value.bind(target) : value;
+                            }
+                        });
                     };
                     inMemoryDatabase = memoryDatabase;
                     return memoryDatabase;
@@ -72,6 +85,7 @@ function addFile({
 test.beforeEach(() => {
     database.initDatabase();
     preparedSql.length = 0;
+    preparedGetCalls.length = 0;
 });
 
 test.afterEach(() => {
@@ -260,56 +274,71 @@ test('目录搜索同时限制 parent、allowedPaths、limit 和最多 100 条',
 });
 
 test('批量目录封面只匹配自身或真实后代，并为每个目录选择最新媒体', () => {
+    const fixtureRoot = path.join(path.parse(process.cwd()).root, 'album');
+    const albumA = path.join(fixtureRoot, 'a');
+    const albumB = path.join(fixtureRoot, 'b');
+    const albumAB = path.join(fixtureRoot, 'ab');
+    const albumAWithTrailingSeparator = `${albumA}${path.sep}`;
+
     addFile({
         id: 'a-direct',
-        path: '/album/a/direct.jpg',
+        path: path.join(albumA, 'direct.jpg'),
         name: 'direct.jpg',
-        folderPath: '/album/a',
+        folderPath: albumA,
         lastModified: 20
     });
     addFile({
         id: 'a-newest',
-        path: '/album/a/deep/newest.jpg',
+        path: path.join(albumA, 'deep', 'newest.jpg'),
         name: 'newest.jpg',
-        folderPath: '/album/a/deep',
+        folderPath: path.join(albumA, 'deep'),
         lastModified: 30
     });
     addFile({
         id: 'a-audio-newer',
-        path: '/album/a/deep/newest.mp3',
+        path: path.join(albumA, 'deep', 'newest.mp3'),
         name: 'newest.mp3',
-        folderPath: '/album/a/deep',
+        folderPath: path.join(albumA, 'deep'),
         mediaType: 'audio',
         lastModified: 40
     });
     addFile({
         id: 'prefix-sibling',
-        path: '/album/ab/newest.jpg',
+        path: path.join(albumAB, 'newest.jpg'),
         name: 'newest.jpg',
-        folderPath: '/album/ab',
+        folderPath: albumAB,
         lastModified: 50
     });
     addFile({
         id: 'b-stable-second',
-        path: '/album/b/second.jpg',
+        path: path.join(albumB, 'second.jpg'),
         name: 'second.jpg',
-        folderPath: '/album/b',
+        folderPath: albumB,
         lastModified: 60
     });
     addFile({
         id: 'b-stable-first',
-        path: '/album/b/first.jpg',
+        path: path.join(albumB, 'first.jpg'),
         name: 'first.jpg',
-        folderPath: '/album/b',
+        folderPath: albumB,
         lastModified: 60
     });
 
-    const covers = database.queryFolderCovers(['/album/a', '/album/b', '/album/a']);
+    const covers = database.queryFolderCovers([
+        albumA,
+        albumB,
+        albumAWithTrailingSeparator,
+        albumA
+    ]);
 
-    assert.equal(covers.get('/album/a').id, 'a-newest');
-    assert.equal(covers.get('/album/b').id, 'b-stable-first');
-    assert.equal(covers.has('/album/ab'), false);
-    assert.deepEqual(Array.from(covers.keys()), ['/album/a', '/album/b']);
+    assert.equal(covers.get(albumA).id, 'a-newest');
+    assert.equal(covers.get(albumB).id, 'b-stable-first');
+    assert.equal(covers.get(albumAWithTrailingSeparator).id, 'a-newest');
+    assert.equal(covers.has(albumAB), false);
+    assert.deepEqual(
+        new Set(covers.keys()),
+        new Set([albumA, albumB, albumAWithTrailingSeparator])
+    );
 
     const coverSql = preparedSql.find(sql =>
         sql.includes('INDEXED BY idx_folder_path') &&
@@ -317,10 +346,15 @@ test('批量目录封面只匹配自身或真实后代，并为每个目录选�
     );
     assert.ok(coverSql, '应记录目录封面查询使用的 prepared SQL');
 
-    const descendantStart = `/album/a${path.sep}`;
+    const coverQueryPaths = preparedGetCalls
+        .filter(call => call.sql.includes('INDEXED BY idx_folder_path'))
+        .map(call => call.params[0]);
+    assert.deepEqual(coverQueryPaths, [albumA, albumB]);
+
+    const descendantStart = albumAWithTrailingSeparator;
     const descendantEnd = `${descendantStart.slice(0, -1)}${String.fromCharCode(descendantStart.charCodeAt(descendantStart.length - 1) + 1)}`;
     const plan = inMemoryDatabase.prepare(`EXPLAIN QUERY PLAN ${coverSql}`).all(
-        '/album/a',
+        albumA,
         descendantStart,
         descendantEnd
     );

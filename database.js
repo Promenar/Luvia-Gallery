@@ -522,12 +522,17 @@ function queryFiles(options = {}) {
 function queryFolderCovers(folderPaths) {
     if (!Array.isArray(folderPaths) || folderPaths.length === 0) return new Map();
 
-    const uniqueFolderPaths = Array.from(new Set(
-        folderPaths
-            .filter(folderPath => typeof folderPath === 'string' && path.isAbsolute(folderPath))
-            .map(folderPath => path.resolve(folderPath))
-    ));
-    if (uniqueFolderPaths.length === 0) return new Map();
+    const originalKeysByNormalizedPath = new Map();
+    for (const folderPath of folderPaths) {
+        if (typeof folderPath !== 'string' || !path.isAbsolute(folderPath)) continue;
+
+        const normalizedFolderPath = path.resolve(folderPath);
+        if (!originalKeysByNormalizedPath.has(normalizedFolderPath)) {
+            originalKeysByNormalizedPath.set(normalizedFolderPath, new Set());
+        }
+        originalKeysByNormalizedPath.get(normalizedFolderPath).add(folderPath);
+    }
+    if (originalKeysByNormalizedPath.size === 0) return new Map();
 
     const statement = db.prepare(`
         SELECT f.*
@@ -542,16 +547,21 @@ function queryFolderCovers(folderPaths) {
     `);
     const covers = new Map();
 
-    for (const folderPath of uniqueFolderPaths) {
-        const descendantStart = folderPath.endsWith(path.sep)
-            ? folderPath
-            : `${folderPath}${path.sep}`;
+    for (const [normalizedFolderPath, originalKeys] of originalKeysByNormalizedPath) {
+        const descendantStart = normalizedFolderPath.endsWith(path.sep)
+            ? normalizedFolderPath
+            : `${normalizedFolderPath}${path.sep}`;
         const row = statement.get(
-            folderPath,
+            normalizedFolderPath,
             descendantStart,
             incrementLastCodeUnit(descendantStart)
         );
-        if (row) covers.set(folderPath, mapFileRow(row));
+        if (row) {
+            const cover = mapFileRow(row);
+            for (const originalKey of originalKeys) {
+                covers.set(originalKey, cover);
+            }
+        }
     }
 
     return covers;
