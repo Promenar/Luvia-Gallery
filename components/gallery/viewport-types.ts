@@ -21,6 +21,7 @@ export interface CommonViewportProps {
   isNextPageLoading: boolean;
   loadNextPage: (startIndex: number, stopIndex: number) => Promise<void> | void;
   itemCount: number;
+  mediaHoverZoomEnabled: boolean;
   // Folder Actions
   onToggleFavorite?: (path: string, type: 'file' | 'folder') => void;
   onRename?: (path: string, newName: string) => void;

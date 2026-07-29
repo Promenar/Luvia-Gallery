@@ -11,17 +11,43 @@ interface MediaCardProps {
   onClick: (item: MediaItem) => void;
   layout?: 'grid' | 'masonry';
   isVirtual?: boolean;
+  mediaHoverZoomEnabled?: boolean;
 }
 
 export const getMediaCardContainerClasses = (isGrid: boolean): string =>
   `relative group cursor-pointer overflow-hidden rounded-2xl glass-1 glass-hover ${isGrid ? 'w-full h-full aspect-square ring-1 ring-white/10 dark:ring-white/5' : 'w-full break-inside-avoid ring-1 ring-white/10 dark:ring-white/5'}`;
 
-export const MediaCard: React.FC<MediaCardProps> = React.memo(({ item, onClick, layout, isVirtual }) => {
+export const getMediaCardHoverAnimation = (
+  isVirtual: boolean,
+  mediaHoverZoomEnabled: boolean,
+): { scale?: number } => !isVirtual && mediaHoverZoomEnabled ? { scale: 1.02 } : {};
+
+export const getMediaThumbnailClasses = (
+  isGrid: boolean,
+  mediaHoverZoomEnabled: boolean,
+): string =>
+  `w-full h-full object-cover transition-transform duration-700 ${mediaHoverZoomEnabled ? 'group-hover:scale-105 ' : ''}${isGrid ? 'absolute inset-0' : 'block'}`;
+
+export const MediaCard: React.FC<MediaCardProps> = React.memo(({
+  item,
+  onClick,
+  layout,
+  isVirtual = false,
+  mediaHoverZoomEnabled = true,
+}) => {
   const { t } = useLanguage();
 
   // If it's an audio file, use AudioCard component
   if (item.mediaType === 'audio') {
-    return <AudioCard item={item} onClick={onClick} layout={layout || 'grid'} isVirtual={isVirtual} />;
+    return (
+      <AudioCard
+        item={item}
+        onClick={onClick}
+        layout={layout || 'grid'}
+        isVirtual={isVirtual}
+        mediaHoverZoomEnabled={mediaHoverZoomEnabled}
+      />
+    );
   }
 
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -141,7 +167,7 @@ export const MediaCard: React.FC<MediaCardProps> = React.memo(({ item, onClick, 
       layoutId={!isVirtual && layout !== 'masonry' ? `media-${item.id}` : undefined}
       initial={!isVirtual ? { opacity: 0, scale: 0.95 } : { opacity: 1 }}
       animate={{ opacity: 1, scale: 1 }}
-      whileHover={!isVirtual ? { scale: 1.02 } : {}}
+      whileHover={getMediaCardHoverAnimation(isVirtual, mediaHoverZoomEnabled)}
       transition={{ duration: 0.2 }}
       className={containerClasses}
       onClick={() => onClick(item)}
@@ -203,7 +229,7 @@ export const MediaCard: React.FC<MediaCardProps> = React.memo(({ item, onClick, 
             src={thumbnailSrc}
             alt={item.name}
             loading="lazy"
-            className={`w-full h-full object-cover transition-transform duration-700 group-hover:scale-105 ${isGrid ? 'absolute inset-0' : 'block'}`}
+            className={getMediaThumbnailClasses(isGrid, mediaHoverZoomEnabled)}
             onError={() => {
               // Smart Fallback Logic
               if (item.thumbnailUrl && thumbnailSrc === item.thumbnailUrl) {
@@ -225,7 +251,7 @@ export const MediaCard: React.FC<MediaCardProps> = React.memo(({ item, onClick, 
                 src={getAuthUrl(item.url)} // Use original URL
                 alt={item.name}
                 loading="lazy"
-                className={`w-full h-full object-cover transition-transform duration-700 group-hover:scale-105 ${isGrid ? 'absolute inset-0' : 'block'}`}
+                className={getMediaThumbnailClasses(isGrid, mediaHoverZoomEnabled)}
                 onError={() => setImgError(true)}
               />
               {/* Repair Button / Warning Indicator */}
@@ -271,5 +297,6 @@ export const MediaCard: React.FC<MediaCardProps> = React.memo(({ item, onClick, 
   return prev.item.id === next.item.id &&
     prev.item.isFavorite === next.item.isFavorite && // Re-render on favorite change
     prev.layout === next.layout &&
-    prev.isVirtual === next.isVirtual;
+    prev.isVirtual === next.isVirtual &&
+    prev.mediaHoverZoomEnabled === next.mediaHoverZoomEnabled;
 });

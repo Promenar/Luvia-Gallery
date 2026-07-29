@@ -7,9 +7,22 @@ interface AudioCardProps {
     onClick: (item: MediaItem) => void;
     layout: 'grid' | 'masonry';
     isVirtual?: boolean;
+    mediaHoverZoomEnabled?: boolean;
 }
 
-export const AudioCard: React.FC<AudioCardProps> = React.memo(({ item, onClick, layout, isVirtual = false }) => {
+export const getAudioCardClasses = (
+    layout: 'grid' | 'masonry',
+    mediaHoverZoomEnabled: boolean,
+): string =>
+    `group relative bg-gradient-to-br from-purple-500/10 to-blue-500/10 dark:from-purple-500/20 dark:to-blue-500/20 rounded-xl overflow-hidden cursor-pointer transition-all duration-200 ${mediaHoverZoomEnabled ? 'hover:scale-[1.02] ' : ''}hover:shadow-xl ${layout === 'grid' ? 'aspect-square' : 'aspect-[4/3]'} will-change-transform`;
+
+export const AudioCard: React.FC<AudioCardProps> = React.memo(({
+    item,
+    onClick,
+    layout,
+    isVirtual = false,
+    mediaHoverZoomEnabled = true,
+}) => {
     const formatFileSize = (bytes: number): string => {
         if (bytes < 1024) return bytes + ' B';
         if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
@@ -18,8 +31,7 @@ export const AudioCard: React.FC<AudioCardProps> = React.memo(({ item, onClick, 
 
     return (
         <div
-            className={`group relative bg-gradient-to-br from-purple-500/10 to-blue-500/10 dark:from-purple-500/20 dark:to-blue-500/20 rounded-xl overflow-hidden cursor-pointer transition-all duration-200 hover:scale-[1.02] hover:shadow-xl ${layout === 'grid' ? 'aspect-square' : 'aspect-[4/3]'
-                } will-change-transform`}
+            className={getAudioCardClasses(layout, mediaHoverZoomEnabled)}
             onClick={() => onClick(item)}
         >
             {/* Audio Icon Background */}
@@ -63,6 +75,7 @@ export const AudioCard: React.FC<AudioCardProps> = React.memo(({ item, onClick, 
     return (
         prev.item.id === next.item.id &&
         prev.item.isFavorite === next.item.isFavorite &&
-        prev.layout === next.layout
+        prev.layout === next.layout &&
+        prev.mediaHoverZoomEnabled === next.mediaHoverZoomEnabled
     );
 });

@@ -14,6 +14,7 @@ export interface VirtualGalleryProps {
     loadNextPage: (startIndex: number, stopIndex: number) => Promise<void> | void;
     itemCount: number; // Total count if known, or items.length
     layout: 'grid' | 'masonry' | 'timeline';
+    mediaHoverZoomEnabled: boolean;
     // Folder Actions
     onToggleFavorite?: (path: string, type: 'file' | 'folder') => void;
     onRename?: (path: string, newName: string) => void;

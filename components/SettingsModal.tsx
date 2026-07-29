@@ -53,6 +53,8 @@ interface SettingsModalProps {
     onTabChange?: (tab: SettingsTab) => void;
     theme?: string;
     onToggleTheme?: () => void;
+    mediaHoverZoomEnabled: boolean;
+    onMediaHoverZoomChange: (enabled: boolean) => void;
     onGenerateWallpaperToken?: (config?: any) => Promise<string>;
     onFetchWallpaperToken?: () => Promise<{ token: string, config: any }>;
     baseUrl?: string;
@@ -74,6 +76,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
         dirPickerContext,
         onShowDirPicker, onUpdateThreadCount, onPruneCache, onClearCache, onFetchSmartResults, smartScanResults, thumbStatus,
         activeTab: externalTab, onTabChange, theme, onToggleTheme,
+        mediaHoverZoomEnabled, onMediaHoverZoomChange,
         onGenerateWallpaperToken, onFetchWallpaperToken, baseUrl, onOpenScanReport
     } = props;
 
@@ -202,6 +205,38 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                         <option value="en">English</option>
                                         <option value="zh">中文 (Chinese)</option>
                                     </select>
+                                </div>
+                                <div className="flex items-center justify-between gap-4 rounded-xl glass-1 p-4">
+                                    <div>
+                                        <label
+                                            htmlFor="media-hover-zoom-toggle"
+                                            className="block text-sm font-medium text-text-primary"
+                                        >
+                                            {t('media_hover_zoom')}
+                                        </label>
+                                        <p id="media-hover-zoom-description" className="mt-1 text-xs text-text-tertiary">
+                                            {t('media_hover_zoom_desc')}
+                                        </p>
+                                    </div>
+                                    <button
+                                        id="media-hover-zoom-toggle"
+                                        type="button"
+                                        role="switch"
+                                        aria-checked={mediaHoverZoomEnabled}
+                                        aria-describedby="media-hover-zoom-description"
+                                        onClick={() => onMediaHoverZoomChange(!mediaHoverZoomEnabled)}
+                                        className={`relative h-7 w-12 shrink-0 rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2 focus-visible:ring-offset-surface-primary ${
+                                            mediaHoverZoomEnabled ? 'bg-accent-500' : 'bg-white/15'
+                                        }`}
+                                    >
+                                        <span
+                                            aria-hidden="true"
+                                            className={`absolute left-0 top-1 h-5 w-5 rounded-full bg-white shadow-sm transition-transform ${
+                                                mediaHoverZoomEnabled ? 'translate-x-6' : 'translate-x-1'
+                                            }`}
+                                        />
+                                        <span className="sr-only">{t('media_hover_zoom')}</span>
+                                    </button>
                                 </div>
                                 <div>
                                     <label className="block text-sm font-medium mb-2 text-text-secondary">{t('home_screen_conf')}</label>
