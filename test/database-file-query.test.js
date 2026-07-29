@@ -1,7 +1,11 @@
 const assert = require('node:assert/strict');
 const Module = require('node:module');
+const path = require('node:path');
 const test = require('node:test');
 const BetterSqlite3 = require('better-sqlite3');
+
+const preparedSql = [];
+let inMemoryDatabase = null;
 
 function loadIsolatedDatabaseModule() {
     const databasePath = require.resolve('../database');
@@ -12,7 +16,14 @@ function loadIsolatedDatabaseModule() {
         if (parent && parent.filename === databasePath) {
             if (request === 'better-sqlite3') {
                 return function MemoryDatabase() {
-                    return new BetterSqlite3(':memory:');
+                    const memoryDatabase = new BetterSqlite3(':memory:');
+                    const prepare = memoryDatabase.prepare.bind(memoryDatabase);
+                    memoryDatabase.prepare = sql => {
+                        preparedSql.push(sql);
+                        return prepare(sql);
+                    };
+                    inMemoryDatabase = memoryDatabase;
+                    return memoryDatabase;
                 };
             }
             if (request === 'fs') {
@@ -60,6 +71,7 @@ function addFile({
 
 test.beforeEach(() => {
     database.initDatabase();
+    preparedSql.length = 0;
 });
 
 test.afterEach(() => {
@@ -245,4 +257,74 @@ test('目录搜索同时限制 parent、allowedPaths、limit 和最多 100 条',
     assert.equal(capped.length, 100);
     assert.equal(capped.every(folder => folder.startsWith('/library/')), true);
     assert.equal(capped.some(folder => folder.startsWith('/private')), false);
+});
+
+test('批量目录封面只匹配自身或真实后代，并为每个目录选择最新媒体', () => {
+    addFile({
+        id: 'a-direct',
+        path: '/album/a/direct.jpg',
+        name: 'direct.jpg',
+        folderPath: '/album/a',
+        lastModified: 20
+    });
+    addFile({
+        id: 'a-newest',
+        path: '/album/a/deep/newest.jpg',
+        name: 'newest.jpg',
+        folderPath: '/album/a/deep',
+        lastModified: 30
+    });
+    addFile({
+        id: 'a-audio-newer',
+        path: '/album/a/deep/newest.mp3',
+        name: 'newest.mp3',
+        folderPath: '/album/a/deep',
+        mediaType: 'audio',
+        lastModified: 40
+    });
+    addFile({
+        id: 'prefix-sibling',
+        path: '/album/ab/newest.jpg',
+        name: 'newest.jpg',
+        folderPath: '/album/ab',
+        lastModified: 50
+    });
+    addFile({
+        id: 'b-stable-second',
+        path: '/album/b/second.jpg',
+        name: 'second.jpg',
+        folderPath: '/album/b',
+        lastModified: 60
+    });
+    addFile({
+        id: 'b-stable-first',
+        path: '/album/b/first.jpg',
+        name: 'first.jpg',
+        folderPath: '/album/b',
+        lastModified: 60
+    });
+
+    const covers = database.queryFolderCovers(['/album/a', '/album/b', '/album/a']);
+
+    assert.equal(covers.get('/album/a').id, 'a-newest');
+    assert.equal(covers.get('/album/b').id, 'b-stable-first');
+    assert.equal(covers.has('/album/ab'), false);
+    assert.deepEqual(Array.from(covers.keys()), ['/album/a', '/album/b']);
+
+    const coverSql = preparedSql.find(sql =>
+        sql.includes('INDEXED BY idx_folder_path') &&
+        sql.includes('ORDER BY f.last_modified DESC, f.id ASC')
+    );
+    assert.ok(coverSql, '应记录目录封面查询使用的 prepared SQL');
+
+    const descendantStart = `/album/a${path.sep}`;
+    const descendantEnd = `${descendantStart.slice(0, -1)}${String.fromCharCode(descendantStart.charCodeAt(descendantStart.length - 1) + 1)}`;
+    const plan = inMemoryDatabase.prepare(`EXPLAIN QUERY PLAN ${coverSql}`).all(
+        '/album/a',
+        descendantStart,
+        descendantEnd
+    );
+
+    assert.equal(plan.some(step => step.detail.includes('idx_folder_path')), true);
+    assert.equal(database.queryFolderCovers([]).size, 0);
 });
