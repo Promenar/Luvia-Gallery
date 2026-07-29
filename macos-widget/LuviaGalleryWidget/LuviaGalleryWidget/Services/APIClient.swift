@@ -82,7 +82,7 @@ actor APIClient {
             throw WidgetError.invalidURL
         }
         
-        print("[APIClient] Fetching: \(url.absoluteString.prefix(100))...")
+        print("[APIClient] 正在请求 /api/scan/results（模式=\(mode.rawValue)，上限=\(limit)）")
         
         // 发起请求
         let (data, response): (Data, URLResponse)
@@ -109,6 +109,36 @@ actor APIClient {
             return result.files
         } catch {
             print("[APIClient] Decoding error: \(error)")
+            throw WidgetError.decodingError(error)
+        }
+    }
+
+    /// 拉取当前用户授权范围内的一层目录；Token 仅通过 Authorization header 发送。
+    func fetchFolders(parentPath: String?) async throws -> [RemoteFolder] {
+        let request = try RemoteFolderRequest.make(
+            serverAddress: serverUrl,
+            token: token,
+            parentPath: parentPath
+        )
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await URLSession.shared.data(for: request)
+        } catch {
+            throw WidgetError.networkError(error)
+        }
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw WidgetError.invalidResponse
+        }
+        guard (200...299).contains(httpResponse.statusCode) else {
+            throw WidgetError.serverError(httpResponse.statusCode)
+        }
+
+        do {
+            return try RemoteFolderResponse.decode(data)
+        } catch {
             throw WidgetError.decodingError(error)
         }
     }

@@ -9,6 +9,7 @@
 
 import SwiftUI
 import AppKit
+import CoreGraphics
 
 @main
 struct LuviaGalleryWidgetApp: App {
@@ -57,10 +58,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         window.contentView = NSHostingView(rootView: ContentView())
         self.window = window
 
-        // 恢复窗口 frame：按当前所在屏的 displayID 查存档；
-        // 该屏无存档时迁移旧的单档 windowFrame（存到其所在屏 key 下），
-        // 再不行回退居中；始终保留 80×40 可见性校验
-        restoreWindowFrame(on: window)
+        // 启动总以系统主屏为目标；无位置档案时居中并建立初始 V2 存档。
+        restoreInitialWindowFrame(on: window)
 
         // 显示器插拔/切换时：按新所在屏的存档恢复（无存档则保持现状不乱跳）
         NotificationCenter.default.addObserver(
@@ -71,7 +70,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         )
 
         // 注册到窗口控制器，供 SwiftUI 侧操作（置顶/关闭/重开）
-        WindowController.shared.attach(window)
+        WindowController.shared.attach(window) { [weak self] window in
+            self?.prepareForWindowOrderOut(window)
+        }
 
         // 启动即按持久化的置顶设置校正窗口层级：
         // FloatingWindow 默认 .floating，此前仅靠 ContentView.onAppear 校正，
@@ -106,21 +107,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     /// 点击关闭按钮：隐藏窗口而不是退出 App
     func windowShouldClose(_ sender: NSWindow) -> Bool {
-        sender.orderOut(nil)
+        WindowController.shared.closeWindow()
         return false
     }
 
     // MARK: - 窗口 frame 记忆
 
-    /// 每屏存档字典 key：displayFrames: [displayID: NSStringFromRect]
-    /// displayID 取 NSScreen.deviceDescription["NSScreenNumber"]
-    /// （CGDirectDisplayID，跨重启稳定）
-    private static let displayFramesKey = "displayFrames"
-    /// 旧的单档 key（d3fbb63），启动时迁移后删除
-    private static let legacyWindowFrameKey = "windowFrame"
-
     /// 窗口弱引用（屏幕参数变化时恢复用）
     private weak var window: NSWindow?
+
+    /// V2 存档通过注入的 defaults 访问，测试可使用独立 suite 隔离每屏数据。
+    private let placementStore = DisplayPlacementStore(defaults: .standard)
+
+    /// 物理指纹冲突时生成仅进程内有效的 session 键。
+    private var placementKeyResolver = DisplayPlacementKeyResolver()
+
+    /// 上次已处理的系统主屏 Resolver 键；同 fingerprint 的不同 session 键也必须区分。
+    private var systemPrimaryDisplayState = SystemPrimaryDisplayState()
+
+    /// 最近一次已确认稳定的保存值及其屏幕快照，用于新主屏没有档案时投射恢复。
+    private struct StablePlacementSnapshot {
+        let placement: DisplayPlacement
+        let visibleFrame: NSRect
+    }
+    private var lastStableSnapshot: StablePlacementSnapshot?
+
+    /// 系统主屏恢复期间，窗口移动/缩放回调不得保存或触发网格吸附。
+    private var isRestoringDisplayPlacement = false
 
     /// 节流保存任务：拖动/缩放中频繁触发 delegate，frame 稳定 0.5s 后才落盘
     private var frameSaveWorkItem: DispatchWorkItem?
@@ -128,120 +141,221 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// 屏幕参数变化防抖任务（插拔瞬间系统可能连发多次通知）
     private var screenChangeWorkItem: DispatchWorkItem?
 
-    /// 屏幕的跨重启稳定 ID（CGDirectDisplayID 字符串化）
-    private static func displayID(for screen: NSScreen) -> String? {
-        (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.stringValue
+    /// 系统主屏按 AppKit 的屏幕数组首项定义；不能以窗口所在屏 API 替代。
+    private static func systemPrimaryScreen() -> NSScreen? {
+        NSScreen.screens.first
     }
 
-    /// 读取全部显示器存档
-    private static func savedFrames() -> [String: String] {
-        UserDefaults.standard.dictionary(forKey: Self.displayFramesKey) as? [String: String] ?? [:]
+    /// NSScreenNumber 只作为当前连接的会话标识；不参与持久化物理指纹。
+    private static func transientDisplayID(for screen: NSScreen) -> CGDirectDisplayID? {
+        guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else {
+            return nil
+        }
+        return CGDirectDisplayID(number.uint32Value)
     }
 
-    /// 节流保存窗口 frame 到"窗口当前所在屏"的 key 下
-    private func scheduleFrameSave(_ window: NSWindow) {
+    /// 从 CG 物理属性与 AppKit 名称构造稳定指纹，刻意不读取 CG UUID。
+    private static func physicalIdentity(for screen: NSScreen) -> (identity: DisplayPhysicalIdentity, connectionID: String)? {
+        guard let displayID = transientDisplayID(for: screen) else { return nil }
+        return (
+            DisplayPhysicalIdentity(
+                isBuiltIn: CGDisplayIsBuiltin(displayID) != 0,
+                vendorID: CGDisplayVendorNumber(displayID),
+                modelID: CGDisplayModelNumber(displayID),
+                serialNumber: CGDisplaySerialNumber(displayID),
+                localizedName: screen.localizedName,
+                physicalSizeMillimeters: CGDisplayScreenSize(displayID)
+            ),
+            String(displayID)
+        )
+    }
+
+    private func displayKey(for screen: NSScreen) -> DisplayPlacementKey? {
+        guard let candidate = Self.physicalIdentity(for: screen) else { return nil }
+        let connectedFingerprints = NSScreen.screens.compactMap { Self.physicalIdentity(for: $0)?.identity.fingerprint }
+        return placementKeyResolver.resolve(
+            identity: candidate.identity,
+            connectionID: candidate.connectionID,
+            connectedFingerprints: connectedFingerprints
+        )
+    }
+
+    private func cancelDeferredWindowWork() {
         frameSaveWorkItem?.cancel()
-        let item = DispatchWorkItem { [weak window] in
-            guard let window,
-                  let screen = window.screen ?? NSScreen.main,
-                  let id = Self.displayID(for: screen) else { return }
-            var frames = Self.savedFrames()
-            frames[id] = NSStringFromRect(window.frame)
-            UserDefaults.standard.set(frames, forKey: Self.displayFramesKey)
+        frameSaveWorkItem = nil
+        snapWorkItem?.cancel()
+        snapWorkItem = nil
+    }
+
+    private struct ScheduledPlacementSave {
+        let frame: NSRect
+        let visibleFrame: NSRect
+        let key: DisplayPlacementKey
+    }
+
+    private func capturePlacementSave(
+        _ window: NSWindow,
+        on screen: NSScreen? = nil,
+        allowPrimaryFallback: Bool = true
+    ) -> ScheduledPlacementSave? {
+        let fallbackScreen = allowPrimaryFallback ? Self.systemPrimaryScreen() : nil
+        guard let targetScreen = screen ?? window.screen ?? fallbackScreen,
+              DisplayPlacement.isValidVisibleFrame(targetScreen.visibleFrame),
+              let displayKey = displayKey(for: targetScreen)
+        else { return nil }
+        let frame = window.frame
+        return ScheduledPlacementSave(
+            frame: frame,
+            visibleFrame: targetScreen.visibleFrame,
+            key: displayKey
+        )
+    }
+
+    private func commitPlacementSave(_ snapshot: ScheduledPlacementSave) {
+        let placement = DisplayPlacement(globalFrame: snapshot.frame, visibleFrame: snapshot.visibleFrame)
+        placementStore.save(placement, for: snapshot.key)
+        lastStableSnapshot = StablePlacementSnapshot(placement: placement, visibleFrame: snapshot.visibleFrame)
+    }
+
+    private func saveFrame(_ window: NSWindow, on screen: NSScreen? = nil, allowPrimaryFallback: Bool = true) {
+        guard !isRestoringDisplayPlacement,
+              let snapshot = capturePlacementSave(window, on: screen, allowPrimaryFallback: allowPrimaryFallback)
+        else { return }
+        commitPlacementSave(snapshot)
+    }
+
+    /// 所有隐藏入口都在 orderOut 前经过这里：取消延迟任务后，仅在稳定状态保存当前屏快照。
+    private func prepareForWindowOrderOut(_ window: NSWindow) {
+        cancelDeferredWindowWork()
+        guard !isRestoringDisplayPlacement else { return }
+        saveFrame(window, allowPrimaryFallback: false)
+    }
+
+    /// 节流保存窗口 frame 到调度瞬间捕获的 V2 物理键或 session 键下。
+    private func scheduleFrameSave(_ window: NSWindow) {
+        guard !isRestoringDisplayPlacement,
+              let snapshot = capturePlacementSave(window)
+        else { return }
+        frameSaveWorkItem?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            guard let self, !self.isRestoringDisplayPlacement else { return }
+            self.commitPlacementSave(snapshot)
         }
         frameSaveWorkItem = item
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: item)
     }
 
-    /// 恢复窗口 frame（启动 / 屏幕参数变化共用）：
-    /// - 优先按窗口所在屏的 displayID 查存档；
-    /// - 该屏无存档且存在旧单档时迁移：旧档写到"其 frame 所在屏"的 key 下，
-    ///   若旧档就在当前屏则同时恢复；
-    /// - 屏幕参数变化场景下该屏无存档时保持现状（centerAtLaunch 为 false 不乱跳）；
-    /// - 启动场景下最后回退居中
-    private func restoreWindowFrame(on window: NSWindow, centerAtLaunch: Bool = true) {
-        guard let screen = window.screen ?? NSScreen.main,
-              let id = Self.displayID(for: screen) else {
-            if centerAtLaunch { window.center() }
+    private func centeredFrame(for window: NSWindow, in visibleFrame: NSRect) -> NSRect? {
+        guard DisplayPlacement.isValidVisibleFrame(visibleFrame) else { return nil }
+        let width = min(max(window.frame.width, 1), visibleFrame.width)
+        let height = min(max(window.frame.height, 1), visibleFrame.height)
+        return NSRect(
+            x: visibleFrame.midX - width / 2,
+            y: visibleFrame.midY - height / 2,
+            width: width,
+            height: height
+        )
+    }
+
+    /// 启动和主屏切换共用恢复入口。V1 数字键不可靠，完全 fail-closed，不参与迁移。
+    private func restoreWindowFrame(
+        on window: NSWindow,
+        targetScreen: NSScreen,
+        displayKey: DisplayPlacementKey,
+        centerIfMissing: Bool
+    ) {
+        guard DisplayPlacement.isValidVisibleFrame(targetScreen.visibleFrame) else {
+            isRestoringDisplayPlacement = false
             return
         }
+        isRestoringDisplayPlacement = true
 
-        let frames = Self.savedFrames()
-        if let saved = frames[id] {
-            let rect = NSRectFromString(saved)
-            if Self.isFrameVisible(rect) {
-                window.setFrame(rect, display: false)
+        let projectedStablePlacement = lastStableSnapshot.flatMap {
+            DisplayPlacement.isValidVisibleFrame($0.visibleFrame) ? $0.placement : nil
+        }
+        let placement = placementStore.placement(for: displayKey) ?? projectedStablePlacement
+
+        let restoredFrame: NSRect?
+        if let placement, let restored = placement.restoredFrame(in: targetScreen.visibleFrame) {
+            restoredFrame = restored
+        } else if centerIfMissing {
+            restoredFrame = centeredFrame(for: window, in: targetScreen.visibleFrame)
+        } else {
+            restoredFrame = nil
+        }
+
+        guard let restoredFrame else {
+            isRestoringDisplayPlacement = false
+            return
+        }
+        window.setFrame(restoredFrame, display: false)
+        let stablePlacement = DisplayPlacement(globalFrame: restoredFrame, visibleFrame: targetScreen.visibleFrame)
+        placementStore.save(stablePlacement, for: displayKey)
+        lastStableSnapshot = StablePlacementSnapshot(placement: stablePlacement, visibleFrame: targetScreen.visibleFrame)
+        isRestoringDisplayPlacement = false
+    }
+
+    private func restoreInitialWindowFrame(on window: NSWindow) {
+        guard let primaryScreen = Self.systemPrimaryScreen(),
+              let key = displayKey(for: primaryScreen)
+        else {
+            window.center()
+            return
+        }
+        _ = systemPrimaryDisplayState.shouldRestore(for: key)
+        restoreWindowFrame(
+            on: window,
+            targetScreen: primaryScreen,
+            displayKey: key,
+            centerIfMissing: true
+        )
+    }
+
+    /// 参数通知只有在系统主屏物理键改变时才恢复，避免副屏窗口被无关通知拉回主屏。
+    @objc private func screenParametersChanged() {
+        cancelDeferredWindowWork()
+        screenChangeWorkItem?.cancel()
+        isRestoringDisplayPlacement = true
+        let item = DispatchWorkItem { [weak self, weak window] in
+            guard let self else { return }
+            guard let window else {
+                self.isRestoringDisplayPlacement = false
                 return
             }
-        }
-
-        // 旧单档迁移（只执行一次：迁移后删除旧 key）
-        if let legacy = UserDefaults.standard.string(forKey: Self.legacyWindowFrameKey) {
-            let rect = NSRectFromString(legacy)
-            UserDefaults.standard.removeObject(forKey: Self.legacyWindowFrameKey)
-            if Self.isFrameVisible(rect) {
-                // 存到旧 frame 实际所在屏的 key 下
-                var frames = Self.savedFrames()
-                let legacyScreen = Self.screenContaining(rect) ?? screen
-                let legacyID = Self.displayID(for: legacyScreen)
-                if let legacyID {
-                    frames[legacyID] = legacy
-                    UserDefaults.standard.set(frames, forKey: Self.displayFramesKey)
-                }
-                if legacyID == id {
-                    window.setFrame(rect, display: false)
-                    return
-                }
+            guard let primaryScreen = Self.systemPrimaryScreen(),
+                  let key = self.displayKey(for: primaryScreen)
+            else {
+                self.isRestoringDisplayPlacement = false
+                return
             }
-        }
-
-        if centerAtLaunch {
-            window.center()
-        }
-    }
-
-    /// 与 rect 交集面积最大的屏幕（判断存档 frame 属于哪台显示器）
-    private static func screenContaining(_ rect: NSRect) -> NSScreen? {
-        var best: NSScreen?
-        var bestArea: CGFloat = 0
-        for screen in NSScreen.screens {
-            let intersection = rect.intersection(screen.visibleFrame)
-            let area = intersection.isNull ? 0 : intersection.width * intersection.height
-            if area > bestArea {
-                bestArea = area
-                best = screen
+            guard self.systemPrimaryDisplayState.shouldRestore(for: key) else {
+                self.isRestoringDisplayPlacement = false
+                return
             }
-        }
-        return best
-    }
-
-    /// 显示器插拔/切换：防抖后按新所在屏的存档恢复；无存档保持现状
-    @objc private func screenParametersChanged() {
-        screenChangeWorkItem?.cancel()
-        let item = DispatchWorkItem { [weak self, weak window] in
-            guard let self, let window else { return }
-            self.restoreWindowFrame(on: window, centerAtLaunch: false)
+            self.restoreWindowFrame(
+                on: window,
+                targetScreen: primaryScreen,
+                displayKey: key,
+                centerIfMissing: false
+            )
         }
         screenChangeWorkItem = item
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: item)
     }
 
-    /// 屏幕边界校验：窗口至少在某个屏幕的可见区域内有
-    /// 80x40 以上的可见部分才认为可恢复
-    private static func isFrameVisible(_ rect: NSRect) -> Bool {
-        guard rect.width > 0, rect.height > 0 else { return false }
-        for screen in NSScreen.screens {
-            let intersection = rect.intersection(screen.visibleFrame)
-            if !intersection.isNull, intersection.width >= 80, intersection.height >= 40 {
-                return true
-            }
-        }
-        return false
+    func windowDidResize(_ notification: Notification) {
+        guard !isRestoringDisplayPlacement,
+              let window = notification.object as? NSWindow
+        else { return }
+        scheduleFrameSave(window)
     }
 
-    func windowDidResize(_ notification: Notification) {
-        guard let window = notification.object as? NSWindow else { return }
-        scheduleFrameSave(window)
+    /// 用户手动跨屏时只保存窗口当前屏，不对系统主屏执行自动跳回。
+    func windowDidChangeScreen(_ notification: Notification) {
+        guard !isRestoringDisplayPlacement,
+              let window = notification.object as? NSWindow
+        else { return }
+        saveFrame(window)
     }
 
     // MARK: - 桌面网格吸附
@@ -250,7 +364,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var snapWorkItem: DispatchWorkItem?
 
     func windowDidMove(_ notification: Notification) {
-        guard let window = notification.object as? NSWindow else { return }
+        guard !isRestoringDisplayPlacement,
+              let window = notification.object as? NSWindow
+        else { return }
         // 记忆 frame（吸附动画结束后的最终位置也会再次触发本回调，最终落盘值正确）
         scheduleFrameSave(window)
         // 开关关闭时完全不吸附（@AppStorage("snapToGrid")，缺省视为开）
@@ -262,9 +378,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard !window.inLiveResize else { return }
 
         snapWorkItem?.cancel()
-        let item = DispatchWorkItem { [weak window] in
-            guard let window, !window.inLiveResize else { return }
-            guard let screen = window.screen ?? NSScreen.main,
+        let item = DispatchWorkItem { [weak self, weak window] in
+            guard let self, !self.isRestoringDisplayPlacement,
+                  let window, !window.inLiveResize else { return }
+            guard let screen = window.screen ?? Self.systemPrimaryScreen(),
                   let target = DesktopGrid.shared.snappedFrame(for: window.frame, in: screen)
             else { return }
             // 0.2s 动画滑到最近网格点
@@ -272,6 +389,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         snapWorkItem = item
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: item)
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        cancelDeferredWindowWork()
+        screenChangeWorkItem?.cancel()
+        screenChangeWorkItem = nil
+        if !isRestoringDisplayPlacement, let window {
+            saveFrame(window, allowPrimaryFallback: window.isVisible)
+        }
     }
 
     /// 点击 Dock 图标：重新显示悬浮窗

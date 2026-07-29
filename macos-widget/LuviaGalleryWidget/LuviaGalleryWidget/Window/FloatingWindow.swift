@@ -56,12 +56,15 @@ final class WindowController {
     private static let ctLogger = Logger(subsystem: "com.luvia.LuviaGalleryWidget", category: "WindowController")
 
     private weak var window: NSWindow?
+    /// 由 AppDelegate 注册，在任何隐藏入口执行 orderOut 前同步位置快照。
+    private var beforeOrderOut: ((NSWindow) -> Void)?
 
     private init() {}
 
     /// 绑定 AppDelegate 创建的悬浮窗
-    func attach(_ window: NSWindow) {
+    func attach(_ window: NSWindow, beforeOrderOut: @escaping (NSWindow) -> Void) {
         self.window = window
+        self.beforeOrderOut = beforeOrderOut
     }
 
     /// 根据开关应用窗口层级与集合行为
@@ -105,7 +108,9 @@ final class WindowController {
 
     /// 隐藏窗口（不退出 App）
     func closeWindow() {
-        window?.orderOut(nil)
+        guard let window else { return }
+        beforeOrderOut?(window)
+        window.orderOut(nil)
     }
 
     /// 重新显示窗口（Dock 图标点击时调用）

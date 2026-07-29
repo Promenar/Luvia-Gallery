@@ -12,6 +12,8 @@ import SwiftUI
 
 struct SettingsPanel: View {
 
+    @State private var isRemoteFolderBrowserPresented = false
+
     // 持久化字段（Binding 来自 ContentView 的 @AppStorage）
     @Binding var serverAddress: String
     @Binding var apiToken: String
@@ -86,8 +88,28 @@ struct SettingsPanel: View {
 
                 // 文件夹路径（仅 folder 模式显示）
                 if loadMode == "folder" {
-                    TextField("文件夹路径", text: $folderPath, prompt: Text("Photos/Vacation"))
-                        .textFieldStyle(.roundedBorder)
+                    HStack(spacing: 8) {
+                        Text(folderPath.isEmpty ? "未选择目录" : folderPath)
+                            .font(.caption)
+                            .foregroundStyle(folderPath.isEmpty ? .secondary : .primary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Button("浏览…") {
+                            isRemoteFolderBrowserPresented = true
+                        }
+                        .disabled(!RemoteFolderLoadPolicy.hasUsableOnlineCredentials(
+                            serverAddress: serverAddress,
+                            apiToken: apiToken
+                        ))
+                    }
+                    .sheet(isPresented: $isRemoteFolderBrowserPresented) {
+                        RemoteFolderBrowserSheet(
+                            serverAddress: serverAddress,
+                            token: apiToken,
+                            onSelect: { folderPath = $0 }
+                        )
+                    }
                 }
             }
 
@@ -225,10 +247,14 @@ struct SettingsPanel: View {
 
     /// 「立即加载」是否可用（按来源判断必填项）
     private var loadEnabled: Bool {
-        if sourceMode == "local" {
-            return !localFolderPath.isEmpty
-        }
-        return !serverAddress.isEmpty && !apiToken.isEmpty
+        RemoteFolderLoadPolicy.canLoad(
+            sourceMode: sourceMode,
+            loadMode: loadMode,
+            serverAddress: serverAddress,
+            apiToken: apiToken,
+            folderPath: folderPath,
+            localFolderPath: localFolderPath
+        )
     }
 
     /// 分组小标题
