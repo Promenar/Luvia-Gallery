@@ -802,19 +802,12 @@ function parseFolderSearchLimit(value) {
     return Number.isSafeInteger(limit) && limit >= 1 && limit <= 100 ? limit : null;
 }
 
-function getFolderCoverMedia(folderPath) {
-    const [found] = database.queryFiles({
-        folderPath,
-        recursive: true,
-        mediaType: ['image', 'video'],
-        limit: 1,
-        sortOption: 'dateDesc'
-    });
-    if (!found) return null;
+function formatFolderCoverMedia(coverMedia) {
+    if (!coverMedia) return null;
 
-    let url = `/api/thumb/${encodeURIComponent(found.id)}`;
+    let url = `/api/thumb/${encodeURIComponent(coverMedia.id)}`;
     try {
-        const thumbFilename = crypto.createHash('md5').update(found.id).digest('hex') + '.webp';
+        const thumbFilename = crypto.createHash('md5').update(coverMedia.id).digest('hex') + '.webp';
         const thumbPath = getCachedPath(thumbFilename);
         if (fs.existsSync(thumbPath)) {
             url += `?t=${fs.statSync(thumbPath).mtimeMs}`;
@@ -822,16 +815,16 @@ function getFolderCoverMedia(folderPath) {
     } catch (e) { }
 
     return {
-        id: found.id,
+        id: coverMedia.id,
         url,
-        type: found.type,
-        path: found.path,
-        mediaType: found.mediaType,
-        name: found.name
+        type: coverMedia.type,
+        path: coverMedia.path,
+        mediaType: coverMedia.mediaType,
+        name: coverMedia.name
     };
 }
 
-function buildFolderResult(folderPath, isFavorite = false) {
+function buildFolderResult(folderPath, coverMedia, isFavorite = false) {
     let mediaCount = 0;
     let lastModified = 0;
 
@@ -848,7 +841,7 @@ function buildFolderResult(folderPath, isFavorite = false) {
         name: path.basename(folderPath),
         path: folderPath,
         mediaCount,
-        coverMedia: getFolderCoverMedia(folderPath),
+        coverMedia: formatFolderCoverMedia(coverMedia),
         lastModified,
         isFavorite
     };
@@ -903,15 +896,22 @@ app.get('/api/library/folders', (req, res) => {
             subs = subs.filter(folderPath => favoriteFolders.has(folderPath));
         }
 
+        const coverByFolder = database.queryFolderCovers(subs);
         const folders = subs.map(folderPath =>
-            buildFolderResult(folderPath, favoriteFolders.has(folderPath))
+            buildFolderResult(
+                folderPath,
+                coverByFolder.get(folderPath) || null,
+                favoriteFolders.has(folderPath)
+            )
         );
         return res.json({ folders });
     }
 
     if (favoritesOnly) {
-        const folders = Array.from(favoriteFolders).map(folderPath =>
-            buildFolderResult(folderPath, true)
+        const subs = Array.from(favoriteFolders);
+        const coverByFolder = database.queryFolderCovers(subs);
+        const folders = subs.map(folderPath =>
+            buildFolderResult(folderPath, coverByFolder.get(folderPath) || null, true)
         );
         return res.json({ folders });
     }
@@ -961,9 +961,15 @@ app.get('/api/library/folders', (req, res) => {
         }
     }
 
-    const folders = subs
-        .filter(folderPath => isCurrentlyAllowed(folderPath))
-        .map(folderPath => buildFolderResult(folderPath, favoriteFolders.has(folderPath)));
+    subs = subs.filter(folderPath => isCurrentlyAllowed(folderPath));
+    const coverByFolder = database.queryFolderCovers(subs);
+    const folders = subs.map(folderPath =>
+        buildFolderResult(
+            folderPath,
+            coverByFolder.get(folderPath) || null,
+            favoriteFolders.has(folderPath)
+        )
+    );
     res.json({ folders });
 });
 

@@ -358,6 +358,29 @@ function buildDescendantPattern(value) {
     return withoutTrailingSlash ? `${withoutTrailingSlash}/%` : '/%';
 }
 
+function mapFileRow(row) {
+    return {
+        id: row.id,
+        path: row.path,
+        name: row.name,
+        folderPath: row.folder_path,
+        size: row.size,
+        type: row.type,
+        mediaType: row.media_type,
+        lastModified: row.last_modified,
+        sourceId: row.source_id,
+        isFavorite: !!row.is_fav,
+        thumb_width: row.thumb_width,
+        thumb_height: row.thumb_height,
+        thumb_aspect_ratio: row.thumb_aspect_ratio
+    };
+}
+
+function incrementLastCodeUnit(value) {
+    const lastIndex = value.length - 1;
+    return `${value.slice(0, lastIndex)}${String.fromCharCode(value.charCodeAt(lastIndex) + 1)}`;
+}
+
 function buildFileQueryParts(options = {}) {
     const {
         folderPath = null,
@@ -490,21 +513,48 @@ function queryFiles(options = {}) {
     const stmt = db.prepare(query);
     const results = stmt.all(...params);
 
-    return results.map(row => ({
-        id: row.id,
-        path: row.path,
-        name: row.name,
-        folderPath: row.folder_path,
-        size: row.size,
-        type: row.type,
-        mediaType: row.media_type,
-        lastModified: row.last_modified,
-        sourceId: row.source_id,
-        isFavorite: !!row.is_fav,
-        thumb_width: row.thumb_width,
-        thumb_height: row.thumb_height,
-        thumb_aspect_ratio: row.thumb_aspect_ratio
-    }));
+    return results.map(mapFileRow);
+}
+
+/**
+ * 为目录列表批量获取封面媒体，每个目录只执行一次索引范围查询。
+ */
+function queryFolderCovers(folderPaths) {
+    if (!Array.isArray(folderPaths) || folderPaths.length === 0) return new Map();
+
+    const uniqueFolderPaths = Array.from(new Set(
+        folderPaths
+            .filter(folderPath => typeof folderPath === 'string' && path.isAbsolute(folderPath))
+            .map(folderPath => path.resolve(folderPath))
+    ));
+    if (uniqueFolderPaths.length === 0) return new Map();
+
+    const statement = db.prepare(`
+        SELECT f.*
+        FROM files f INDEXED BY idx_folder_path
+        WHERE (
+            f.folder_path = ?
+            OR (f.folder_path >= ? AND f.folder_path < ?)
+        )
+        AND f.media_type IN ('image', 'video')
+        ORDER BY f.last_modified DESC, f.id ASC
+        LIMIT 1
+    `);
+    const covers = new Map();
+
+    for (const folderPath of uniqueFolderPaths) {
+        const descendantStart = folderPath.endsWith(path.sep)
+            ? folderPath
+            : `${folderPath}${path.sep}`;
+        const row = statement.get(
+            folderPath,
+            descendantStart,
+            incrementLastCodeUnit(descendantStart)
+        );
+        if (row) covers.set(folderPath, mapFileRow(row));
+    }
+
+    return covers;
 }
 
 /**
@@ -835,6 +885,7 @@ module.exports = {
     upsertFile,
     insertFilesBatch,
     queryFiles,
+    queryFolderCovers,
     queryFolderPaths,
     countFiles,
     deleteFile,

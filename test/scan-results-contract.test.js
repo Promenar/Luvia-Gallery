@@ -85,42 +85,16 @@ test('folder search limit only accepts integers from 1 through 100', () => {
     }
 });
 
-test('folder cover uses recursive database selection and URL-safe base64 id', () => {
-    const queryCalls = [];
-    const getFolderCoverMedia = loadHelper('getFolderCoverMedia', {
-        database: {
-            queryFiles(options) {
-                queryCalls.push(options);
-                return [{
-                    id: 'folder/+=',
-                    path: '/library/folder/photo.gif',
-                    name: 'photo.gif',
-                    type: 'image/gif',
-                    mediaType: 'image'
-                }];
-            }
-        },
-        crypto: require('node:crypto'),
-        encodeURIComponent,
-        fs: {
-            existsSync: () => true,
-            statSync: () => ({ mtimeMs: 123 })
-        },
-        getCachedPath: filename => `/cache/${filename}`
-    });
+test('folder route batches cover queries and buildFolderResult never queries the database', () => {
+    const route = getLibraryFoldersRoute();
+    const helper = serverSource.slice(
+        serverSource.indexOf('function buildFolderResult('),
+        serverSource.indexOf("app.get('/api/library/folders'")
+    );
 
-    const cover = getFolderCoverMedia('/library/folder');
-
-    assert.equal(queryCalls.length, 1);
-    assert.equal(queryCalls[0].folderPath, '/library/folder');
-    assert.equal(queryCalls[0].recursive, true);
-    assert.deepEqual(Array.from(queryCalls[0].mediaType), ['image', 'video']);
-    assert.equal(queryCalls[0].limit, 1);
-    assert.equal(queryCalls[0].sortOption, 'dateDesc');
-    assert.equal(cover.id, 'folder/+=');
-    assert.equal(cover.url, '/api/thumb/folder%2F%2B%3D?t=123');
-    assert.equal(cover.type, 'image/gif');
-    assert.equal(cover.path, '/library/folder/photo.gif');
+    assert.equal((route.match(/database\.queryFolderCovers\(subs\)/g) || []).length, 3);
+    assert.match(route, /buildFolderResult\(\s*folderPath,\s*coverByFolder\.get\(folderPath\) \|\| null,/);
+    assert.doesNotMatch(helper, /database\./);
 });
 
 test('folder route narrows searched and historical favorite paths to current permissions', () => {
@@ -134,14 +108,13 @@ test('folder route narrows searched and historical favorite paths to current per
 
 test('folder route cover selection never calls recursive filesystem cover discovery', () => {
     const route = getLibraryFoldersRoute();
-    const coverHelper = serverSource.slice(
-        serverSource.indexOf('function getFolderCoverMedia('),
-        serverSource.indexOf('function buildFolderResult(')
+    const folderHelper = serverSource.slice(
+        serverSource.indexOf('function buildFolderResult('),
+        serverSource.indexOf("app.get('/api/library/folders'")
     );
 
-    assert.match(coverHelper, /database\.queryFiles\(\{[\s\S]*?recursive: true,[\s\S]*?mediaType: \['image', 'video'\],[\s\S]*?limit: 1/);
     assert.doesNotMatch(route, /findCoverMedia/);
-    assert.doesNotMatch(coverHelper, /findCoverMedia|readdirSync/);
+    assert.doesNotMatch(folderHelper, /findCoverMedia/);
 });
 
 test('folder media count requires a dotted extension and includes GIF', () => {
