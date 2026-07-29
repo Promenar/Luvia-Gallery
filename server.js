@@ -20,6 +20,7 @@ const {
     tryStartScan,
     walkMediaFiles
 } = require('./lib/background-file-walker');
+const { createRequestTimingMiddleware } = require('./lib/request-timing');
 
 const app = express();
 const port = process.env.PORT || 3001;
@@ -282,6 +283,7 @@ app.use((req, res, next) => {
 });
 app.use(cors());
 app.use(express.json());
+app.use(createRequestTimingMiddleware());
 
 // (Static files middleware moved down after API routes)
 
