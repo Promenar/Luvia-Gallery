@@ -37,3 +37,6 @@ media_test/
 secure_env/
 # Xcode 用户态
 **/*.xcodeproj/**/xcuserdata/
+
+# macOS Widget SwiftPM 测试产物
+macos-widget/.build/

@@ -3,7 +3,7 @@ import Foundation
 // MARK: - MediaFile
 // 对标 /api/scan/results 返回的文件数据结构
 
-struct MediaFile: Decodable, Identifiable, Hashable, Sendable {
+nonisolated struct MediaFile: Decodable, Identifiable, Hashable, Sendable {
     let id: String
     let url: String
     let thumbnailUrl: String
@@ -38,13 +38,13 @@ struct MediaFile: Decodable, Identifiable, Hashable, Sendable {
 // MARK: - ScanResult
 // /api/scan/results 返回的完整响应结构
 
-struct ScanResult: Decodable, Sendable {
+nonisolated struct ScanResult: Decodable, Sendable {
     let files: [MediaFile]
     let total: Int
     let hasMore: Bool
     let sources: [SourceInfo]?
     
-    struct SourceInfo: Decodable, Sendable {
+    nonisolated struct SourceInfo: Decodable, Sendable {
         let id: String
         let name: String
         let count: Int
