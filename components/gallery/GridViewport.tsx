@@ -26,6 +26,7 @@ const GridViewportInner = React.forwardRef<ViewportCaptureHandle, InnerProps>(({
   onRename,
   onDelete,
   onRegenerate,
+  mediaHoverZoomEnabled,
   viewKey,
   restoreSnapshot,
   restoreCommand,
@@ -303,7 +304,13 @@ const GridViewportInner = React.forwardRef<ViewportCaptureHandle, InnerProps>(({
                 />
               </div>
             ) : (
-              <MediaCard item={item} onClick={onItemClick} layout="grid" isVirtual={true} />
+              <MediaCard
+                item={item}
+                onClick={onItemClick}
+                layout="grid"
+                isVirtual={true}
+                mediaHoverZoomEnabled={mediaHoverZoomEnabled}
+              />
             )}
           </div>
         );

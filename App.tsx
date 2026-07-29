@@ -21,6 +21,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useGalleryNavigation } from './hooks/useGalleryNavigation';
 import { createGalleryQueryKey } from './navigation/query-key';
 import { getLayoutPreferenceView, resolveGalleryLayoutPreference, type LayoutPreferenceStorage, writeGalleryLayoutPreference } from './navigation/layout-preference';
+import { readMediaHoverZoomPreference, writeMediaHoverZoomPreference } from './navigation/media-hover-zoom-preference';
 import { GalleryNavigationBar, type GalleryNavigationBarProps } from './components/navigation/GalleryNavigationBar';
 import type { GalleryLocation, ViewportSnapshot } from './navigation/types';
 
@@ -346,7 +347,6 @@ const CURRENT_PATH_KEY = STORAGE_KEYS.currentPath;
 const CACHE_HOME_KEY = STORAGE_KEYS.cacheHome;
 const TOKEN_STORAGE_KEY = STORAGE_KEYS.token;
 const IS_DESKTOP_SIDEBAR_OPEN_KEY = STORAGE_KEYS.isDesktopSidebarOpen;
-
 const getStorageItem = (key: string, legacyKey?: string) => {
     const value = localStorage.getItem(key);
     if (value !== null) return value;
@@ -549,6 +549,14 @@ export default function App() {
 
     // --- Theme State ---
     const [theme, setTheme] = useState<'light' | 'dark' | 'system'>('system');
+    const [mediaHoverZoomEnabled, setMediaHoverZoomEnabled] = useState(() =>
+        readMediaHoverZoomPreference(typeof window === 'undefined' ? undefined : window.localStorage)
+    );
+
+    const handleMediaHoverZoomChange = (enabled: boolean) => {
+        setMediaHoverZoomEnabled(enabled);
+        writeMediaHoverZoomPreference(typeof window === 'undefined' ? undefined : window.localStorage, enabled);
+    };
 
     // Refs to combat stale closures
     useEffect(() => {
@@ -2562,6 +2570,7 @@ export default function App() {
                                         restoreCommand={galleryNavigation.restoreCommand}
                                         onSnapshotChange={handleViewportSnapshot}
                                         onRestoreComplete={galleryNavigation.consumeRestoreSnapshot}
+                                        mediaHoverZoomEnabled={mediaHoverZoomEnabled}
                                         onToggleFavorite={handleToggleFavorite}
                                         onRename={handleFolderRename}
                                         onDelete={handleFolderDelete}
@@ -2636,6 +2645,7 @@ export default function App() {
                                             restoreCommand={galleryNavigation.restoreCommand}
                                             onSnapshotChange={handleViewportSnapshot}
                                             onRestoreComplete={galleryNavigation.consumeRestoreSnapshot}
+                                            mediaHoverZoomEnabled={mediaHoverZoomEnabled}
                                             onRegenerate={handleRegenerateFolder}
                                         />
                                     )}
@@ -2694,6 +2704,8 @@ export default function App() {
                 thumbStatus={thumbStatus}
                 theme={theme}
                 onToggleTheme={toggleTheme}
+                mediaHoverZoomEnabled={mediaHoverZoomEnabled}
+                onMediaHoverZoomChange={handleMediaHoverZoomChange}
                 onGenerateWallpaperToken={async (config) => {
                     if (!isServerMode) return '';
                     try {

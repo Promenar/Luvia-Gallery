@@ -14,6 +14,7 @@ export const MasonryViewport = React.forwardRef<ViewportCaptureHandle, CommonVie
   onRename,
   onDelete,
   onRegenerate,
+  mediaHoverZoomEnabled,
   viewKey,
   restoreSnapshot,
   restoreCommand,
@@ -367,6 +368,7 @@ export const MasonryViewport = React.forwardRef<ViewportCaptureHandle, CommonVie
                       onClick={onItemClick}
                       layout="masonry"
                       isVirtual={false}
+                      mediaHoverZoomEnabled={mediaHoverZoomEnabled}
                     />
                   )}
                 </div>
