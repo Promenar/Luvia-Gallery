@@ -26,3 +26,17 @@ android {
         compose = true
     }
 }
+
+dependencies {
+    implementation(project(":core:model"))
+    implementation(project(":core:network"))
+    implementation(libs.okhttp)
+    implementation(libs.androidx.lifecycle.viewmodel.ktx)
+    implementation(platform(libs.androidx.compose.bom))
+    implementation(libs.androidx.ui)
+    implementation(libs.androidx.material3)
+    implementation(libs.androidx.material.icons.extended)
+
+    testImplementation(libs.junit)
+    testImplementation(libs.kotlinx.coroutines.test)
+}

@@ -1,3 +1,6 @@
 <resources>
     <string name="app_name">Luvia Gallery</string>
+    <string name="native_rewrite_in_progress">原生重构进行中</string>
+    <string name="native_rewrite_in_progress_detail">登录链路已就绪，图库功能将在后续阶段逐步恢复。</string>
+    <string name="logout_action">退出登录</string>
 </resources>
