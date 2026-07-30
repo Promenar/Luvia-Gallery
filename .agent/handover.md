@@ -1533,3 +1533,34 @@ record-fingerprint: fedf6d3a71e273bd51b8612a2a8a3ea628d6d8a61f38112faef6bba1950b
 
 ### HLG
 本记录建立 mobile-native-rewrite 连续工作流，continuity 为 resume；后续阶段按同一 continuity-key 追加，不回写历史记录。
+
+## 2026-07-30T18:44:21+08:00 · 勘误：Android Compose Phase 1 会话与 Bearer 接线边界
+
+type: correction
+scope: ["mobile-native-rewrite", "native-ui"]
+status: in_progress
+tags: ["android", "authentication", "correction"]
+continuity: resume
+continuity-key: mobile-native-rewrite
+record-fingerprint: 891ddc9f44feb1a69440fea652c35aa9d376903dae6bbb28e743d1d7952dc8c0
+
+### Summary
+勘误 2026-07-30T18:38:44+08:00 的第一阶段记录：登录成功后并未保存 Session/token，仅在 LoginViewModel 内保留 isAuthenticated 布尔态。
+
+### Changed
+README、release_notes.md 与 docs/ARCHITECTURE.md 已改为精确描述；AuthHeaderInterceptor 已实现并测试，但尚未接入后续认证客户端。
+
+### Validation
+对照 LoginViewModel 成功分支与客户端构造代码复核；Task 4 独立审查准确指出原记录高估了会话与 Bearer 接线完成度。
+
+### Next
+下一阶段先保存 Session/token，并接入使用唯一 Bearer Header 的认证客户端；随后再实现 Android Keystore 支持的加密持久化与会话恢复。
+
+### Risks
+当前主壳的已认证状态只是进程内布尔值，不代表已具备可用于后续 API 请求或应用重启恢复的会话。
+
+### DIA
+已同步 README、release_notes.md 与 docs/ARCHITECTURE.md 的认证边界描述。
+
+### HLG
+本记录以同一 continuity-key 追加勘误，不回写或删除原交接记录。

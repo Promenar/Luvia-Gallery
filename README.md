@@ -81,8 +81,9 @@ services:
 ### Android 原生迁移状态（Phase 1）
 
 `native-ui/` 已建立可构建的 Kotlin / Jetpack Compose 五模块工程骨架，应用 ID 为
-`com.promenar.luvia`。本阶段只实现了受控服务器地址、Bearer 认证头、`suspend` 登录网络层、
-Material 3 登录页与“原生重构进行中”主壳；登录成功后不能进入图库。
+`com.promenar.luvia`。本阶段只实现了受控服务器地址、尚未接入后续客户端的 Bearer 认证头组件、
+`suspend` 登录网络层、Material 3 登录页与“原生重构进行中”主壳；登录成功后仅保留
+ViewModel 内存中的认证布尔态，`Session` / token 尚未保存，也不能进入图库。
 
 - 构建基线：AGP 9.0.1、Gradle 9.1.0、Kotlin 2.4.10、Compose BOM 2026.06.00。
 - Android SDK：`compileSdk` / `targetSdk` 为 36，`minSdk` 为 26。
