@@ -17,7 +17,7 @@ Luvia Gallery 专为"已有归档媒体"设计：它不搬动、不重命名、�
 - 🔌 **即插即用**: 通过 Docker 卷映射 `/media` 即可入库，无需复杂的迁移过程。
 - 🚀 **极速响应**: 异步流式扫描、有界文件 I/O 与虚拟滚动技术，避免超大媒体库后台扫描阻塞浏览请求。
 - 🧭 **统一可恢复导航**: WebUI 使用浏览器式单行工具栏整合地址、作用域搜索、排序和布局；媒体库、收藏夹与文件夹地址互不污染，进出目录、打开媒体或刷新后可恢复浏览位置。
-- 📱 **全端覆盖**: 统一的 Web (React) 与 移动端 (React Native) 体验。
+- 📱 **移动端基线**: 当前生产移动端仍为 React Native / Expo；Android 原生端正在分阶段迁移。
 - 🧭 **非同步工具**: 专注"浏览"而非"同步/备份"，不具备上传功能，确保文件系统纯净。
 - 🔐 **用户认证**: 多用户支持，JWT 安全认证，用户级别路径访问控制。
 - ⭐ **收藏功能**: 快速收藏文件和文件夹，支持收藏夹浏览。
@@ -78,6 +78,20 @@ services:
 - **前端**: React / Vite / Tailwind CSS
 - **移动**: React Native / Expo
 
+### Android 原生迁移状态（Phase 1）
+
+`native-ui/` 已建立可构建的 Kotlin / Jetpack Compose 五模块工程骨架，应用 ID 为
+`com.promenar.luvia`。本阶段只实现了受控服务器地址、Bearer 认证头、`suspend` 登录网络层、
+Material 3 登录页与“原生重构进行中”主壳；登录成功后不能进入图库。
+
+- 构建基线：AGP 9.0.1、Gradle 9.1.0、Kotlin 2.4.10、Compose BOM 2026.06.00。
+- Android SDK：`compileSdk` / `targetSdk` 为 36，`minSdk` 为 26。
+- 已验证：`cd native-ui && ./gradlew testDebugUnitTest lintDebug :app:assembleDebug --no-daemon`。
+- 限制：当前没有已连接 Android 设备或模拟器；Compose 仪器测试仅完成编译，尚未在真机或模拟器执行。
+
+生产移动端继续以 `mobile/` 中的 Expo / React Native 实现为准。图库、文件夹、收藏、媒体播放、
+设置、管理、加密持久会话与完整原生导航均不属于 Phase 1，尚未迁移完成。
+
 ## ⚠️ 使用须知
 
 - 本项目定位为"媒体浏览器"，**不具备上传功能**。
@@ -98,7 +112,7 @@ Luvia Gallery is a non-destructive media browser for pre-archived libraries. It 
 - 🔌 **Volume-First**: Map your library to `/media` and start browsing instantly.
 - 🚀 **Performance**: Streaming scans, bounded filesystem I/O, and virtualized grids keep browsing responsive on large libraries.
 - 🧭 **Unified Restorable Navigation**: A browser-style toolbar combines location, scoped search, sorting, and layout controls while keeping library, favorites, and folder locations isolated and restorable.
-- 📱 **Cross-Platform**: Seamless experience on both Web and Mobile.
+- 📱 **Mobile Baseline**: The production mobile app remains React Native / Expo; the native Android rewrite is phased and still in progress.
 - 🧭 **Library Focused**: Designed for browsing archives; no upload features to keep your filesystem clean.
 - 🔐 **Authentication**: Multi-user support with JWT security and path-based access control.
 - ⭐ **Favorites**: Quick bookmark for files and folders.
@@ -158,6 +172,14 @@ services:
 - **Processing**: FFmpeg
 - **Frontend**: React / Vite / Tailwind CSS
 - **Mobile**: React Native / Expo
+
+### Native Android migration status (Phase 1)
+
+`native-ui/` now contains a buildable Kotlin / Jetpack Compose five-module skeleton with application ID
+`com.promenar.luvia`. Phase 1 covers only controlled server URLs, Bearer authentication headers, a suspend
+login network layer, a Material 3 login screen, and a rewrite-in-progress shell. It is not a complete native
+client: gallery, folders, favorites, media, settings, administration, encrypted persistent sessions, and
+device UI validation remain outstanding. Production mobile behavior continues to come from `mobile/`.
 
 ---
 

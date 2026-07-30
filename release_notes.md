@@ -141,19 +141,25 @@
 - 为 Supervisor HTTP 服务设置明确的 keep-alive、headers timeout 与代理空闲超时，提升异常网络场景下的鲁棒性。
 - 为 Docker Compose 增加 `mem_limit`、`memswap_limit` 与 `NODE_OPTIONS=--max-old-space-size=2048`，防止容器无上限占用 FNOS 内存与 swap。
 
-# 🚀 Luvia Gallery v1.2.0 (Kotlin Native Refactor)
+# Android 原生重构 Phase 1（开发中，未发布）
 
-本次更新完成了移动端从 React Native 到 Android 原生 Kotlin (Jetpack Compose) 的全面重构。
+本阶段新增 `native-ui/` Kotlin / Jetpack Compose 工程，但不改变生产移动端事实：`mobile/` 中的
+Expo / React Native 仍是当前可用基线。原生端应用 ID 为 `com.promenar.luvia`，构建版本锁定为 AGP
+9.0.1、Gradle 9.1.0、Kotlin 2.4.10、Compose BOM 2026.06.00，SDK 约束为 compile/target 36、min 26。
 
-### 🆕 核心特性
-- **Jetpack Compose UI**：100% 原生声明式 UI，带来更丝滑的交互体验与更低的内存占用。
-- **类型安全导航**：全新的路由系统，彻底消除旧版中常见的导航状态异常。
-- **动态服务器接入**：登录界面支持输入自定义服务器地址，完美支持私有化部署。
-- **Stitch 设计系统**：完美复刻 Stitch 产出的高保真设计，提供极致的视觉质感。
+### 已完成的范围
 
-### 🛠️ 架构升级
-- **MVVM + Hilt**：标准化的原生开发模式，提升了代码的鲁棒性与可测试性。
-- **Coil 图片加载**：优化的位图缓存管理，图库滚动帧率稳定在 120fps (支持高刷设备)。
+- 五模块工程骨架：`:app`、`:core:model`、`:core:network`、`:core:designsystem`、`:feature:auth`。
+- 受控 HTTPS 服务器地址解析、唯一 Bearer 认证头与不泄露敏感值的结果映射。
+- 基于 Retrofit 协程的 `suspend` 登录网络层；取消会继续传播，不被转换为普通失败结果。
+- Material 3 登录页、登录状态流与安全区适配的“原生重构进行中”主壳；认证成功后可退出登录。
+
+### 验证与限制
+
+- 已通过：`cd native-ui && ./gradlew testDebugUnitTest lintDebug :app:assembleDebug --no-daemon`；网络模块
+  15 项单元测试、登录 ViewModel 6 项单元测试、Lint 与 Debug APK 构建均已验证。
+- AndroidTest 已可编译，但当前无连接设备或模拟器；`connectedDebugAndroidTest` 没有产生实际仪器测试结果。
+- 图库、文件夹、收藏、媒体、设置、管理、加密持久会话和完整原生导航尚未实现，不能据此宣称完成移动端迁移或性能指标。
 
 # 🚀 Luvia Gallery v1.1.0
 
