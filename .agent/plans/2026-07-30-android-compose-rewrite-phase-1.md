@@ -97,7 +97,7 @@ git commit -m "build(android): 重建 Compose 多模块工程"
 
 **Interfaces:**
 - Consumes: `Session(token: String, username: String, isAdmin: Boolean)`。
-- Produces: `ServerUrl.parse(raw: String): Result<HttpUrl>`；`AuthHeaderInterceptor`；`AuthRepository.login(serverUrl: HttpUrl, username: String, password: String): ApiResult<Session>`。
+- Produces: `ServerUrl.parse(raw: String): Result<HttpUrl>`；`AuthHeaderInterceptor`；`suspend AuthRepository.login(serverUrl: HttpUrl, username: String, password: String): ApiResult<Session>`。
 
 - [ ] **Step 1: 编写 ServerUrl 失败测试**
 
@@ -127,7 +127,7 @@ Token 通过构造参数 `tokenProvider: () -> String?` 获取，不记录请求
 
 - [ ] **Step 7: 实现 DTO、AuthApi、ApiResult 与 AuthRepository**
 
-`ApiResult` 使用 `Success<T>`、`Unauthorized`、`HttpError(code: Int)`、`NetworkError`、`InvalidResponse`；不得把响应体原文直接作为用户错误。
+`AuthApi.login` 与 `AuthRepository.login` 均使用 Retrofit 协程接口，禁止 `Call.execute()`；`ApiResult` 使用 `Success<T>`、`Unauthorized`、`HttpError(code: Int)`、`NetworkError`、`InvalidResponse`，不得把响应体原文直接作为用户错误。
 
 - [ ] **Step 8: 运行网络模块测试**
 
@@ -242,4 +242,3 @@ Expected: 无空白错误，只有预期文档变更。
 git add README.md release_notes.md docs/ARCHITECTURE.md .agent
 git commit -m "docs(android): 记录原生重构第一阶段"
 ```
-

@@ -150,7 +150,8 @@ Expo / React Native 仍是当前可用基线。原生端应用 ID 为 `com.prome
 ### 已完成的范围
 
 - 五模块工程骨架：`:app`、`:core:model`、`:core:network`、`:core:designsystem`、`:feature:auth`。
-- 受控 HTTPS 服务器地址解析、唯一 Bearer 认证头与不泄露敏感值的结果映射。
+- 受控 HTTP/HTTPS 服务器地址解析；发行构建不启用全局明文流量，实际接入应使用 HTTPS。
+- 唯一 Bearer 认证头与不泄露敏感值的结果映射。
 - 基于 Retrofit 协程的 `suspend` 登录网络层；取消会继续传播，不被转换为普通失败结果。
 - Material 3 登录页、登录状态流与安全区适配的“原生重构进行中”主壳；认证成功后可退出登录。
 

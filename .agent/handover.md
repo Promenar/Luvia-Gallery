@@ -1502,3 +1502,34 @@ Swift 核心测试 28/28 通过；Xcode Debug clean build 和 Release archive �
 
 ### HLG
 已通过标准 HLG append 流程追加本记录并重建派生索引；未发现需要另行沉淀至全局规则或 Skill 的候选长期规则。
+
+## 2026-07-30T18:38:44+08:00 · Android Compose 原生重构第一阶段
+
+type: implementation
+scope: ["mobile-native-rewrite", "native-ui"]
+status: in_progress
+tags: ["android", "kotlin", "compose", "material3", "migration"]
+continuity: resume
+continuity-key: mobile-native-rewrite
+record-fingerprint: fedf6d3a71e273bd51b8612a2a8a3ea628d6d8a61f38112faef6bba1950b202d
+
+### Summary
+已忽略旧 Android 骨架并从零完成 Phase 1：可构建的五模块 Kotlin/Compose 工程、安全登录网络层、Material 3 登录页和明确标注为迁移中的主壳。生产移动端仍以 mobile/ 的 Expo/React Native 实现为准，原生端尚不可替代发布。
+
+### Changed
+保持 applicationId com.promenar.luvia；锁定 AGP 9.0.1、Gradle 9.1.0、Kotlin 2.4.10、Compose BOM 2026.06.00、compile/target 36、min 26。新增 core:model、core:network、core:designsystem、feature:auth；认证使用 suspend Retrofit、唯一 Bearer Header、稳定 ApiResult 与不泄漏敏感值的地址/响应处理。新增动态色 MD3 主题、UDF LoginViewModel、edge-to-edge 登录页和安全区主壳。
+
+### Validation
+工程约束回归 7 项通过；core:network 单元测试 15 项通过；feature:auth 单元测试 6 项通过；AndroidTest Kotlin 编译、lintDebug、assembleDebug 通过。当前 adb 无连接设备，因此 Compose instrumentation 测试未实际运行，不能作为真机通过证据。
+
+### Next
+下一阶段先实现 Android Keystore 支持的会话持久化和恢复，再迁移首页、图库、文件夹、收藏与 Paging/Room 数据链路；启用删除、EXIF 和管理功能前，先加固后端路径权限和幂等收藏契约。
+
+### Risks
+登录成功后的 Session 当前只存在于进程内状态，尚未加密持久化；HTTP 地址可通过语法解析但发行 Manifest 不允许全局明文流量，应使用 HTTPS；尚无真机或模拟器 UI 运行证据；图库、媒体、设置和管理功能均未实现。
+
+### DIA
+已同步 README、release_notes.md、docs/ARCHITECTURE.md、.agent/registry.md 与第一阶段实施计划，纠正了历史上全面重构完成及无证据性能指标等失实描述。
+
+### HLG
+本记录建立 mobile-native-rewrite 连续工作流，continuity 为 resume；后续阶段按同一 continuity-key 追加，不回写历史记录。
