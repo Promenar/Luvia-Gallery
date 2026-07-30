@@ -2,6 +2,11 @@ package com.promenar.luvia.core.network.auth
 
 import com.promenar.luvia.core.model.Session
 import com.promenar.luvia.core.network.ApiResult
+import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -11,6 +16,8 @@ import okhttp3.mockwebserver.SocketPolicy
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import retrofit2.Retrofit
@@ -32,56 +39,101 @@ class AuthRepositoryTest {
 
     @Test
     fun `登录成功时发送 JSON 并映射 Session`() {
-        server.enqueue(jsonResponse(200, """{"token":"session-token","user":{"username":"alice","isAdmin":true}}"""))
+        runTest {
+            server.enqueue(jsonResponse(200, """{"token":"response-token","user":{"username":"alice","isAdmin":true}}"""))
 
-        val result = repository().login(server.url("/"), "alice", "correct-horse")
+            val result = repository().login(server.url("/"), "alice", "request-password")
 
-        assertEquals(ApiResult.Success(Session("session-token", "alice", true)), result)
-        val request = server.takeRequest()
-        assertEquals("POST", request.method)
-        assertEquals("/api/auth/login", request.path)
-        assertEquals("application/json; charset=utf-8", request.getHeader("Content-Type"))
-        assertEquals("{\"username\":\"alice\",\"password\":\"correct-horse\"}", request.body.readUtf8())
+            assertEquals(ApiResult.Success(Session("response-token", "alice", true)), result)
+            val request = server.takeRequest()
+            assertEquals("POST", request.method)
+            assertEquals("/api/auth/login", request.path)
+            assertEquals("application/json; charset=utf-8", request.getHeader("Content-Type"))
+            assertEquals("{\"username\":\"alice\",\"password\":\"request-password\"}", request.body.readUtf8())
+            assertFalse(request.requestUrl.toString().contains("request-password"))
+            assertFalse(request.headers.toString().contains("request-password"))
+            assertFalse(request.headers.toString().contains("response-token"))
+        }
     }
 
     @Test
     fun `401 映射为 Unauthorized`() {
-        server.enqueue(jsonResponse(401, """{"error":"invalid credentials"}"""))
+        runTest {
+            server.enqueue(jsonResponse(401, """{"error":"invalid credentials response-token"}"""))
 
-        val result = repository().login(server.url("/"), "alice", "not-to-leak")
+            val result = repository().login(server.url("/"), "alice", "request-password")
 
-        assertEquals(ApiResult.Unauthorized, result)
-        assertFalse(result.toString().contains("not-to-leak"))
+            assertEquals(ApiResult.Unauthorized, result)
+            assertNoSensitiveData(result)
+        }
     }
 
     @Test
     fun `服务端 5xx 映射为 HttpError 且不暴露响应体`() {
-        server.enqueue(jsonResponse(503, """{"error":"internal details: not-to-leak"}"""))
+        runTest {
+            server.enqueue(jsonResponse(503, """{"error":"internal details: response-token"}"""))
 
-        val result = repository().login(server.url("/"), "alice", "not-to-leak")
+            val result = repository().login(server.url("/"), "alice", "request-password")
 
-        assertEquals(ApiResult.HttpError(503), result)
-        assertFalse(result.toString().contains("not-to-leak"))
+            assertEquals(ApiResult.HttpError(503), result)
+            assertNoSensitiveData(result)
+        }
     }
 
     @Test
     fun `传输异常映射为 NetworkError 且不泄漏密码`() {
-        server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AT_START))
+        runTest {
+            server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AT_START))
 
-        val result = repository().login(server.url("/"), "alice", "not-to-leak")
+            val result = repository().login(server.url("/"), "alice", "request-password")
 
-        assertEquals(ApiResult.NetworkError, result)
-        assertFalse(result.toString().contains("not-to-leak"))
+            assertEquals(ApiResult.NetworkError, result)
+            assertNoSensitiveData(result)
+        }
     }
 
     @Test
     fun `缺少会话字段映射为 InvalidResponse 且不泄漏密码`() {
-        server.enqueue(jsonResponse(200, """{"token":"not-to-leak","user":{"username":"alice"}}"""))
+        runTest {
+            server.enqueue(jsonResponse(200, """{"token":"response-token","user":{"username":"alice"}}"""))
 
-        val result = repository().login(server.url("/"), "alice", "not-to-leak")
+            val result = repository().login(server.url("/"), "alice", "request-password")
 
-        assertEquals(ApiResult.InvalidResponse, result)
-        assertFalse(result.toString().contains("not-to-leak"))
+            assertEquals(ApiResult.InvalidResponse, result)
+            assertNoSensitiveData(result)
+        }
+    }
+
+    @Test
+    fun `格式错误 JSON 映射为 InvalidResponse 且异常不泄漏敏感值`() {
+        runTest {
+            server.enqueue(jsonResponse(200, """{"token":"response-token","user":malformed}"""))
+
+            val result = repository().login(server.url("/"), "alice", "request-password")
+
+            assertEquals(ApiResult.InvalidResponse, result)
+            assertNoSensitiveData(result)
+        }
+    }
+
+    @Test
+    fun `取消协程不会被转换为 ApiResult`() {
+        runTest {
+            server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE))
+            val job = async(start = CoroutineStart.UNDISPATCHED) {
+                repository().login(server.url("/"), "alice", "request-password")
+            }
+
+            assertNotNull(server.takeRequest(5, TimeUnit.SECONDS))
+            job.cancelAndJoin()
+
+            assertTrue(job.isCancelled)
+        }
+    }
+
+    private fun assertNoSensitiveData(result: ApiResult<*>) {
+        assertFalse(result.toString().contains("request-password"))
+        assertFalse(result.toString().contains("response-token"))
     }
 
     private fun repository(): AuthRepository = AuthRepository { baseUrl ->

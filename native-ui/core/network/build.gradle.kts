@@ -32,5 +32,6 @@ dependencies {
     implementation(libs.retrofit.kotlinx.serialization)
 
     testImplementation(libs.junit)
+    testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.okhttp.mockwebserver)
 }
