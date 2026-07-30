@@ -2,6 +2,7 @@ package com.promenar.luvia.feature.auth
 
 import com.promenar.luvia.core.model.Session
 import com.promenar.luvia.core.network.ApiResult
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -77,20 +78,29 @@ class LoginViewModelTest {
     }
 
     @Test
-    fun `提交时禁用重复提交并在成功后认证`() = runTest {
+    fun `重复提交只发起一次认证并在请求完成后认证`() = runTest {
+        val result = CompletableDeferred<ApiResult<Session>>()
+        var loginAttempts = 0
         val viewModel = LoginViewModel { _, _, _ ->
-            kotlinx.coroutines.awaitCancellation()
+            loginAttempts += 1
+            result.await()
         }
-        viewModel.onAction(LoginAction.ServerUrlChanged("https://gallery.example.com"))
-        viewModel.onAction(LoginAction.UsernameChanged("luvia"))
-        viewModel.onAction(LoginAction.PasswordChanged("secret"))
+        fillValidCredentials(viewModel)
 
         viewModel.onAction(LoginAction.Submit)
         dispatcher.scheduler.runCurrent()
         viewModel.onAction(LoginAction.Submit)
+        dispatcher.scheduler.runCurrent()
 
+        assertEquals(1, loginAttempts)
         assertTrue(viewModel.uiState.value.isSubmitting)
         assertFalse(viewModel.uiState.value.isLoginEnabled)
+
+        result.complete(ApiResult.Success(Session(token = "token", username = "luvia", isAdmin = true)))
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertFalse(viewModel.uiState.value.isSubmitting)
+        assertTrue(viewModel.uiState.value.isAuthenticated)
     }
 
     @Test

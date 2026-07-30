@@ -5,11 +5,13 @@ import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performClick
 import com.promenar.luvia.core.designsystem.theme.LuviaTheme
 import com.promenar.luvia.feature.auth.LoginScreen
 import com.promenar.luvia.feature.auth.LoginTestTags
 import com.promenar.luvia.feature.auth.LoginUiState
 import org.junit.Rule
+import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class LoginScreenTest {
@@ -39,5 +41,19 @@ class LoginScreenTest {
         }
 
         composeTestRule.onNodeWithContentDescription("显示密码").assertExists()
+    }
+
+    @Test
+    fun 重构主壳提供语义化退出操作() {
+        var logoutCount = 0
+        composeTestRule.setContent {
+            LuviaTheme {
+                RewriteInProgressShell(onLogout = { logoutCount += 1 })
+            }
+        }
+
+        composeTestRule.onNodeWithTag(RewriteShellTestTags.SHELL).assertExists()
+        composeTestRule.onNodeWithTag(RewriteShellTestTags.LOGOUT).performClick()
+        composeTestRule.runOnIdle { assertEquals(1, logoutCount) }
     }
 }

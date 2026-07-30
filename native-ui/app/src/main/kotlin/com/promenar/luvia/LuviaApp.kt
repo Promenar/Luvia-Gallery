@@ -2,18 +2,24 @@ package com.promenar.luvia
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -57,31 +63,47 @@ fun LuviaApp(authenticator: LoginAuthenticator) {
     }
 }
 
+object RewriteShellTestTags {
+    const val SHELL = "rewrite_in_progress_shell"
+    const val LOGOUT = "rewrite_in_progress_logout"
+}
+
 @Composable
-private fun RewriteInProgressShell(onLogout: () -> Unit) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(24.dp),
-        verticalArrangement = Arrangement.Center,
-    ) {
-        Text(
-            text = stringResource(R.string.native_rewrite_in_progress),
-            style = MaterialTheme.typography.headlineMedium,
-        )
-        Text(
-            text = stringResource(R.string.native_rewrite_in_progress_detail),
-            modifier = Modifier.padding(top = 12.dp),
-            style = MaterialTheme.typography.bodyLarge,
-        )
-        Button(
-            onClick = onLogout,
+fun RewriteInProgressShell(
+    onLogout: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Scaffold(
+        modifier = modifier.testTag(RewriteShellTestTags.SHELL),
+        contentWindowInsets = WindowInsets.safeDrawing,
+    ) { contentPadding ->
+        Column(
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = 24.dp)
-                .heightIn(min = 48.dp),
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(contentPadding)
+                .padding(horizontal = 24.dp, vertical = 24.dp),
+            verticalArrangement = Arrangement.Center,
         ) {
-            Text(stringResource(R.string.logout_action))
+            Text(
+                text = stringResource(R.string.native_rewrite_in_progress),
+                style = MaterialTheme.typography.headlineMedium,
+            )
+            Text(
+                text = stringResource(R.string.native_rewrite_in_progress_detail),
+                modifier = Modifier.padding(top = 12.dp),
+                style = MaterialTheme.typography.bodyLarge,
+            )
+            Button(
+                onClick = onLogout,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 24.dp)
+                    .heightIn(min = 48.dp)
+                    .testTag(RewriteShellTestTags.LOGOUT),
+            ) {
+                Text(stringResource(R.string.logout_action))
+            }
         }
     }
 }
