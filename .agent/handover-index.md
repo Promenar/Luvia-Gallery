@@ -1,6 +1,6 @@
 # Handover Index
 
-> generated_at: 2026-07-30T18:44:21+08:00
+> generated_at: 2026-07-30T18:46:08+08:00
 > generated: true; do not edit manually
 > recovery_window_days: 7
 
@@ -12,12 +12,13 @@
 | fnos-udp-qos | resume | 2026-07-23T21:12:00+08:00 | done | macos-widget/loading-network | 修正：UDP QoS 推论推翻 + 加载转圈/失败根因实为 App 实现 + 启动层级修复 | `.agent/handover.md` · `2026-07-23T21:12:00+08:00` · `fp:130fa8d362` |
 | macos-floating-widget | resume | 2026-07-25T13:18:00+08:00 | done | macos-widget/desktop-widget-mode | Dock 隐藏/菜单栏入口/分屏记忆/点击穿透/WidgetKit 清理 | `.agent/handover.md` · `2026-07-25T13:18:00+08:00` · `fp:3e60e6d4d0` |
 | macos-per-display-placement-v2 | waiting | 2026-07-30T01:18:25+08:00 | done | ["Luvia-Gallery", "macOS-widget", "local-install"] | macOS 每显示器位置 V2 已安装 | `.agent/handover.md` · `2026-07-30T01:18:25+08:00` · `fp:22f05e2741` |
-| mobile-native-rewrite | resume | 2026-07-30T18:44:21+08:00 | in_progress | ["mobile-native-rewrite", "native-ui"] | 勘误：Android Compose Phase 1 会话与 Bearer 接线边界 | `.agent/handover.md` · `2026-07-30T18:44:21+08:00` · `fp:891ddc9f44` |
+| mobile-native-rewrite | resume | 2026-07-30T18:46:08+08:00 | in_progress | ["mobile-native-rewrite", "native-ui"] | 勘误补充：Android Phase 1 英文 README 认证边界 | `.agent/handover.md` · `2026-07-30T18:46:08+08:00` · `fp:c7b4adfd72` |
 
 ## Recent 7-Day Catalog
 
 | date | format | status | continuity | scope | tags | title | source |
 | :---: | :---: | :---: | :---: | :--- | :--- | :--- | :--- |
+| 2026-07-30T18:46:08+08:00 | iso | in_progress | resume | ["mobile-native-rewrite", "native-ui"] | ["android", "authentication", "documentation", "correction"] | 勘误补充：Android Phase 1 英文 README 认证边界 | `.agent/handover.md` · `2026-07-30T18:46:08+08:00` · `fp:c7b4adfd72` |
 | 2026-07-30T18:44:21+08:00 | iso | in_progress | resume | ["mobile-native-rewrite", "native-ui"] | ["android", "authentication", "correction"] | 勘误：Android Compose Phase 1 会话与 Bearer 接线边界 | `.agent/handover.md` · `2026-07-30T18:44:21+08:00` · `fp:891ddc9f44` |
 | 2026-07-30T18:38:44+08:00 | iso | in_progress | resume | ["mobile-native-rewrite", "native-ui"] | ["android", "kotlin", "compose", "material3", "migration"] | Android Compose 原生重构第一阶段 | `.agent/handover.md` · `2026-07-30T18:38:44+08:00` · `fp:fedf6d3a71` |
 | 2026-07-30T01:50:08+08:00 | iso | done | none | ["macos-widget", "remote-folder-browser"] | ["macos", "folder-browser", "swiftui", "release"] | macOS 在线目录可视化选择器实施与安装 | `.agent/handover.md` · `2026-07-30T01:50:08+08:00` · `fp:63b2575e6d` |

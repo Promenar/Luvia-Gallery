@@ -177,10 +177,12 @@ services:
 ### Native Android migration status (Phase 1)
 
 `native-ui/` now contains a buildable Kotlin / Jetpack Compose five-module skeleton with application ID
-`com.promenar.luvia`. Phase 1 covers only controlled server URLs, Bearer authentication headers, a suspend
-login network layer, a Material 3 login screen, and a rewrite-in-progress shell. It is not a complete native
-client: gallery, folders, favorites, media, settings, administration, encrypted persistent sessions, and
-device UI validation remain outstanding. Production mobile behavior continues to come from `mobile/`.
+`com.promenar.luvia`. Phase 1 covers only controlled server URLs, an as-yet unwired and tested Bearer header
+component, a suspend login network layer, a Material 3 login screen, and a rewrite-in-progress shell. A
+successful login retains only an authentication Boolean in ViewModel memory; the returned `Session` / token
+is not stored. It is not a complete native client: gallery, folders, favorites, media, settings,
+administration, session persistence, and device UI validation remain outstanding. Production mobile behavior
+continues to come from `mobile/`.
 
 ---
 

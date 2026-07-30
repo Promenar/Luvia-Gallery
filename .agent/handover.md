@@ -1564,3 +1564,34 @@ README、release_notes.md 与 docs/ARCHITECTURE.md 已改为精确描述；AuthH
 
 ### HLG
 本记录以同一 continuity-key 追加勘误，不回写或删除原交接记录。
+
+## 2026-07-30T18:46:08+08:00 · 勘误补充：Android Phase 1 英文 README 认证边界
+
+type: correction
+scope: ["mobile-native-rewrite", "native-ui"]
+status: in_progress
+tags: ["android", "authentication", "documentation", "correction"]
+continuity: resume
+continuity-key: mobile-native-rewrite
+record-fingerprint: c7b4adfd7270e64a988754dd6b84867d1bff46217b25aff535a7742b6a1ad25d
+
+### Summary
+补充 2026-07-30T18:44:21+08:00 勘误：当时仅同步了 README 中文段落，英文 Native Android migration status 段落仍保留易误解表述。
+
+### Changed
+README 英文段落现已明确：Bearer Header 组件尚未接线，登录成功后仅保留认证布尔态，返回的 Session/token 未保存。
+
+### Validation
+Task 4 第二次限定复审发现英文段落遗漏；已逐句对照中文说明与 LoginViewModel 实现修正。
+
+### Next
+后续认证实现应同时更新中英文项目说明，并以实际 Session/token 接线测试作为完成证据。
+
+### Risks
+当前仍不具备可用于后续认证 API 或重启恢复的会话。
+
+### DIA
+已同步 README 英文 Android Phase 1 状态段落。
+
+### HLG
+以同一 continuity-key 追加补充勘误，不回写前两条记录。
