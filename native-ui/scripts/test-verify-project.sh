@@ -1,14 +1,37 @@
 #!/usr/bin/env bash
 
-set -u
+set -euo pipefail
 
 script_dir="$(cd "$(dirname "$0")" && pwd)"
 project_root="$(cd "$script_dir/.." && pwd)"
 verifier="$script_dir/verify-project.sh"
 temporary_root="$(mktemp -d)"
 
+if [ -z "$temporary_root" ] || [ ! -d "$temporary_root" ] || [ "$temporary_root" = "/" ]; then
+    printf '无法创建安全临时目录。\n' >&2
+    exit 1
+fi
+
+case "$temporary_root" in
+    /*) ;;
+    *)
+        printf '临时目录必须是绝对路径。\n' >&2
+        exit 1
+        ;;
+esac
+
 cleanup() {
-    rm -rf "$temporary_root"
+    if [ -z "${temporary_root:-}" ] \
+        || [ "$temporary_root" = "/" ] \
+        || [ ! -d "$temporary_root" ]; then
+        printf '拒绝清理不安全的临时目录。\n' >&2
+        return
+    fi
+
+    case "$temporary_root" in
+        /*) rm -rf -- "$temporary_root" ;;
+        *) printf '拒绝清理非绝对路径的临时目录。\n' >&2 ;;
+    esac
 }
 trap cleanup EXIT HUP INT TERM
 
@@ -18,15 +41,22 @@ create_fixture() {
     local fixture_name="$1"
     local fixture_root="$temporary_root/$fixture_name"
 
-    mkdir -p "$fixture_root/app/src/main" "$fixture_root/core" "$fixture_root/feature"
+    mkdir -p \
+        "$fixture_root/app/src/main" \
+        "$fixture_root/core/model" \
+        "$fixture_root/core/network" \
+        "$fixture_root/core/designsystem" \
+        "$fixture_root/feature/auth" \
+        "$fixture_root/gradle/wrapper"
     cp "$project_root/settings.gradle.kts" "$fixture_root/settings.gradle.kts"
-    cp -R "$project_root/gradle" "$fixture_root/gradle"
+    cp "$project_root/gradle/libs.versions.toml" "$fixture_root/gradle/libs.versions.toml"
+    cp "$project_root/gradle/wrapper/gradle-wrapper.properties" "$fixture_root/gradle/wrapper/gradle-wrapper.properties"
     cp "$project_root/app/build.gradle.kts" "$fixture_root/app/build.gradle.kts"
     cp "$project_root/app/src/main/AndroidManifest.xml" "$fixture_root/app/src/main/AndroidManifest.xml"
-    cp -R "$project_root/core/model" "$fixture_root/core/model"
-    cp -R "$project_root/core/network" "$fixture_root/core/network"
-    cp -R "$project_root/core/designsystem" "$fixture_root/core/designsystem"
-    cp -R "$project_root/feature/auth" "$fixture_root/feature/auth"
+    cp "$project_root/core/model/build.gradle.kts" "$fixture_root/core/model/build.gradle.kts"
+    cp "$project_root/core/network/build.gradle.kts" "$fixture_root/core/network/build.gradle.kts"
+    cp "$project_root/core/designsystem/build.gradle.kts" "$fixture_root/core/designsystem/build.gradle.kts"
+    cp "$project_root/feature/auth/build.gradle.kts" "$fixture_root/feature/auth/build.gradle.kts"
     printf '%s\n' "$fixture_root"
 }
 
@@ -72,6 +102,21 @@ replace_once "$fixture_root/gradle/libs.versions.toml" \
     'agp = "9.0.1"' \
     $'/*\nagp = "9.0.1"\n*/\nagp = "9.0.0"'
 expect_result "块注释中的伪装版本必须失败" 1 "$fixture_root"
+
+fixture_root="$(create_fixture nested-kotlin-comment)"
+replace_once "$fixture_root/app/build.gradle.kts" \
+    $'    compileSdk = 36\n\n    defaultConfig {\n        applicationId = "com.promenar.luvia"\n        minSdk = 26\n        targetSdk = 36' \
+    $'    /* outer\n        /* inner */\n        applicationId = "com.promenar.luvia"\n        compileSdk = 36\n        targetSdk = 36\n    */\n    compileSdk = 35\n\n    defaultConfig {\n        applicationId = "com.example.invalid"\n        minSdk = 26\n        targetSdk = 35'
+expect_result "嵌套 Kotlin 注释中的伪装配置必须失败" 1 "$fixture_root"
+
+fixture_root="$(create_fixture kotlin-triple-quoted-string)"
+replace_once "$fixture_root/app/build.gradle.kts" \
+    'android {' \
+    $'val decoy = """\napplicationId = "com.promenar.luvia"\ncompileSdk = 36\ntargetSdk = 36\n"""\n\nandroid {'
+replace_once "$fixture_root/app/build.gradle.kts" \
+    $'    compileSdk = 36\n\n    defaultConfig {\n        applicationId = "com.promenar.luvia"\n        minSdk = 26\n        targetSdk = 36' \
+    $'    compileSdk = 35\n\n    defaultConfig {\n        applicationId = "com.example.invalid"\n        minSdk = 26\n        targetSdk = 35'
+expect_result "三引号字符串中的伪装配置必须失败" 1 "$fixture_root"
 
 fixture_root="$(create_fixture same-line-permissions)"
 replace_once "$fixture_root/app/src/main/AndroidManifest.xml" \

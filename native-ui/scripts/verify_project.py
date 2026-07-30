@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import re
 import sys
+import tomllib
 from pathlib import Path
 from xml.etree import ElementTree
 
@@ -17,8 +18,8 @@ EXPECTED_PERMISSIONS = {
 }
 
 
-def strip_comments(source: str) -> str:
-    """剥离代码注释，同时保留字符串和换行的位置。"""
+def strip_kotlin_comments_and_raw_strings(source: str) -> str:
+    """剥离 Kotlin 注释及三引号字符串，保留普通字符串和换行。"""
 
     output: list[str] = []
     index = 0
@@ -27,7 +28,6 @@ def strip_comments(source: str) -> str:
 
     while index < len(source):
         character = source[index]
-        following = source[index + 1] if index + 1 < len(source) else ""
 
         if state == "string":
             output.append(character)
@@ -41,33 +41,43 @@ def strip_comments(source: str) -> str:
             index += 1
             continue
 
+        if source.startswith("/*", index):
+            depth = 1
+            index += 2
+            while index < len(source) and depth > 0:
+                if source.startswith("/*", index):
+                    depth += 1
+                    index += 2
+                elif source.startswith("*/", index):
+                    depth -= 1
+                    index += 2
+                else:
+                    if source[index] == "\n":
+                        output.append("\n")
+                    index += 1
+            continue
+
+        if source.startswith("//", index):
+            index += 2
+            while index < len(source) and source[index] != "\n":
+                index += 1
+            continue
+
+        if source.startswith('"""', index):
+            index += 3
+            while index < len(source) and not source.startswith('"""', index):
+                if source[index] == "\n":
+                    output.append("\n")
+                index += 1
+            if index < len(source):
+                index += 3
+            continue
+
         if character in {"'", '"'}:
             output.append(character)
             state = "string"
             quote = character
             index += 1
-            continue
-
-        if character == "/" and following == "*":
-            index += 2
-            while index < len(source):
-                if source[index] == "*" and index + 1 < len(source) and source[index + 1] == "/":
-                    index += 2
-                    break
-                if source[index] == "\n":
-                    output.append("\n")
-                index += 1
-            continue
-
-        if character == "/" and following == "/" and (index == 0 or source[index - 1] != ":"):
-            index += 2
-            while index < len(source) and source[index] != "\n":
-                index += 1
-            continue
-
-        if character == "#":
-            while index < len(source) and source[index] != "\n":
-                index += 1
             continue
 
         output.append(character)
@@ -76,67 +86,116 @@ def strip_comments(source: str) -> str:
     return "".join(output)
 
 
+def parse_properties(source: str) -> dict[str, str]:
+    """按 Gradle Properties 的 key/value 规则读取本任务所需条目。"""
+
+    properties: dict[str, str] = {}
+    for raw_line in source.splitlines():
+        line = raw_line.lstrip()
+        if not line or line.startswith(("#", "!")):
+            continue
+        separator_positions = [position for position in (line.find("="), line.find(":")) if position >= 0]
+        if not separator_positions:
+            continue
+        separator = min(separator_positions)
+        key = line[:separator].rstrip()
+        value = line[separator + 1 :].lstrip()
+        properties[key] = value
+    return properties
+
+
 class Verifier:
     def __init__(self, root: Path) -> None:
         self.root = root
         self.failures: list[str] = []
 
-    def read_source(self, relative_path: str) -> str:
+    def read_source(self, relative_path: str) -> str | None:
         path = self.root / relative_path
         try:
             return path.read_text(encoding="utf-8")
         except FileNotFoundError:
             self.failures.append(f"缺少文件：{relative_path}")
-            return ""
+            return None
 
-    def require_pattern(self, relative_path: str, pattern: str, description: str) -> None:
-        source = strip_comments(self.read_source(relative_path))
-        if not re.search(pattern, source, flags=re.MULTILINE):
+    def require_kotlin_pattern(self, relative_path: str, pattern: str, description: str) -> None:
+        source = self.read_source(relative_path)
+        if source is None:
+            return
+        sanitized_source = strip_kotlin_comments_and_raw_strings(source)
+        if not re.search(pattern, sanitized_source, flags=re.MULTILINE):
+            self.failures.append(f"缺少或不匹配 {description}")
+
+    def read_toml(self, relative_path: str) -> dict[str, object] | None:
+        source = self.read_source(relative_path)
+        if source is None:
+            return None
+        try:
+            return tomllib.loads(source)
+        except tomllib.TOMLDecodeError as error:
+            self.failures.append(f"TOML 无法解析：{relative_path}：{error}")
+            return None
+
+    def read_properties(self, relative_path: str) -> dict[str, str] | None:
+        source = self.read_source(relative_path)
+        return parse_properties(source) if source is not None else None
+
+    def require_toml_value(
+        self,
+        document: dict[str, object] | None,
+        section: str,
+        key: str,
+        expected_value: str,
+        description: str,
+    ) -> None:
+        if document is None:
+            return
+        actual_section = document.get(section)
+        actual_value = actual_section.get(key) if isinstance(actual_section, dict) else None
+        if actual_value != expected_value:
+            self.failures.append(f"缺少或不匹配 {description}")
+
+    def require_property(self, properties: dict[str, str] | None, key: str, expected_value: str, description: str) -> None:
+        if properties is None:
+            return
+        if properties.get(key) != expected_value:
             self.failures.append(f"缺少或不匹配 {description}")
 
     def verify_static_constraints(self) -> None:
-        self.require_pattern(
-            "gradle/libs.versions.toml",
-            r'^\s*agp\s*=\s*"9\.0\.1"\s*$',
-            "AGP 9.0.1",
-        )
-        self.require_pattern(
-            "gradle/libs.versions.toml",
-            r'^\s*kotlin\s*=\s*"2\.4\.10"\s*$',
-            "Kotlin 2.4.10",
-        )
-        self.require_pattern(
-            "gradle/libs.versions.toml",
-            r'^\s*composeBom\s*=\s*"2026\.06\.00"\s*$',
-            "Compose BOM 2026.06.00",
-        )
-        self.require_pattern(
-            "gradle/wrapper/gradle-wrapper.properties",
-            r"^distributionUrl=.*gradle-9\.1\.0-bin\.zip$",
+        versions = self.read_toml("gradle/libs.versions.toml")
+        self.require_toml_value(versions, "versions", "agp", "9.0.1", "AGP 9.0.1")
+        self.require_toml_value(versions, "versions", "kotlin", "2.4.10", "Kotlin 2.4.10")
+        self.require_toml_value(versions, "versions", "composeBom", "2026.06.00", "Compose BOM 2026.06.00")
+
+        wrapper = self.read_properties("gradle/wrapper/gradle-wrapper.properties")
+        self.require_property(
+            wrapper,
+            "distributionUrl",
+            "https\\://services.gradle.org/distributions/gradle-9.1.0-bin.zip",
             "Gradle 9.1.0 Wrapper",
         )
-        self.require_pattern(
-            "gradle/wrapper/gradle-wrapper.properties",
-            r"^distributionSha256Sum=a17ddd85a26b6a7f5ddb71ff8b05fc5104c0202c6e64782429790c933686c806$",
+        self.require_property(
+            wrapper,
+            "distributionSha256Sum",
+            "a17ddd85a26b6a7f5ddb71ff8b05fc5104c0202c6e64782429790c933686c806",
             "Gradle Wrapper 校验和",
         )
 
-        self.require_pattern(
+        self.require_kotlin_pattern(
             "app/build.gradle.kts",
             r'^\s*applicationId\s*=\s*"com\.promenar\.luvia"\s*$',
             "应用 ID",
         )
         for module in (":app", ":core:model", ":core:network", ":core:designsystem", ":feature:auth"):
             escaped_module = re.escape(module)
-            self.require_pattern(
+            self.require_kotlin_pattern(
                 "settings.gradle.kts",
                 rf'^\s*include\("{escaped_module}"\)\s*$',
                 f"{module.removeprefix(':')} 模块",
             )
 
-        self.require_pattern("app/build.gradle.kts", r"^\s*compileSdk\s*=\s*36\s*$", "编译 SDK 36")
-        self.require_pattern("app/build.gradle.kts", r"^\s*targetSdk\s*=\s*36\s*$", "目标 SDK 36")
-        self.require_pattern("app/build.gradle.kts", r"^\s*minSdk\s*=\s*26\s*$", "最低 SDK 26")
+        self.require_kotlin_pattern("app/build.gradle.kts", r"^\s*compileSdk\s*=\s*36\s*$", "编译 SDK 36")
+        self.require_kotlin_pattern("app/build.gradle.kts", r"^\s*targetSdk\s*=\s*36\s*$", "目标 SDK 36")
+        self.require_kotlin_pattern("app/build.gradle.kts", r"^\s*minSdk\s*=\s*26\s*$", "最低 SDK 26")
 
         namespaces = {
             "core/model/build.gradle.kts": "com.promenar.luvia.core.model",
@@ -145,7 +204,7 @@ class Verifier:
             "feature/auth/build.gradle.kts": "com.promenar.luvia.feature.auth",
         }
         for relative_path, namespace in namespaces.items():
-            self.require_pattern(
+            self.require_kotlin_pattern(
                 relative_path,
                 rf'^\s*namespace\s*=\s*"{re.escape(namespace)}"\s*$',
                 f"{namespace} namespace",
