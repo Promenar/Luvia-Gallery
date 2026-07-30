@@ -1,8 +1,8 @@
 [versions]
-agp = "9.0.0"
-kotlin = "2.2.0"
+agp = "9.0.1"
+kotlin = "2.4.10"
 activityCompose = "1.12.0"
-composeBom = "2025.12.01"
+composeBom = "2026.06.00"
 
 [libraries]
 androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
