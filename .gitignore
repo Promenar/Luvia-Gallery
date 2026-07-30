@@ -43,3 +43,8 @@ macos-widget/.build/
 
 # Codex 隔离工作树
 .worktrees/
+
+# Android/Gradle 本机产物
+native-ui/.gradle/
+native-ui/**/build/
+native-ui/local.properties
