@@ -40,3 +40,6 @@ secure_env/
 
 # macOS Widget SwiftPM 测试产物
 macos-widget/.build/
+
+# Codex 隔离工作树
+.worktrees/
