@@ -83,7 +83,7 @@ services:
 `native-ui/` 已建立可构建的 Kotlin / Jetpack Compose 五模块工程骨架，应用 ID 为
 `com.promenar.luvia`。本阶段只实现了受控服务器地址、尚未接入后续客户端的 Bearer 认证头组件、
 `suspend` 登录网络层、Material 3 登录页与“原生重构进行中”主壳；登录成功后仅保留
-ViewModel 内存中的认证布尔态，`Session` / token 尚未保存，也不能进入图库。
+ViewModel 内存中的认证布尔态并立即清除密码，`Session` / token 尚未保存，也不能进入图库。
 
 - 构建基线：AGP 9.0.1、Gradle 9.1.0、Kotlin 2.4.10、Compose BOM 2026.06.00。
 - Android SDK：`compileSdk` / `targetSdk` 为 36，`minSdk` 为 26。
@@ -180,7 +180,7 @@ services:
 `com.promenar.luvia`. Phase 1 covers only controlled server URLs, an as-yet unwired and tested Bearer header
 component, a suspend login network layer, a Material 3 login screen, and a rewrite-in-progress shell. A
 successful login retains only an authentication Boolean in ViewModel memory; the returned `Session` / token
-is not stored. It is not a complete native client: gallery, folders, favorites, media, settings,
+is not stored, and the password is cleared immediately. It is not a complete native client: gallery, folders, favorites, media, settings,
 administration, session persistence, and device UI validation remain outstanding. Production mobile behavior
 continues to come from `mobile/`.
 

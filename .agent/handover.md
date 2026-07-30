@@ -1595,3 +1595,34 @@ Task 4 第二次限定复审发现英文段落遗漏；已逐句对照中文说�
 
 ### HLG
 以同一 continuity-key 追加补充勘误，不回写前两条记录。
+
+## 2026-07-30T18:58:17+08:00 · Android Compose Phase 1 最终审查修复与 DIA 收口
+
+type: implementation
+scope: ["mobile-native-rewrite", "native-ui"]
+status: done
+tags: ["android", "authentication", "testing", "dia", "correction"]
+continuity: resume
+continuity-key: mobile-native-rewrite
+record-fingerprint: 67c14906600876d989b1885b5e1cc48747f44468957f40f5f49cd7c6c0025494
+
+### Summary
+关闭 Phase 1 整分支审查的三个 Important 问题：成功登录后清除密码、补齐空 token 边界测试、同步不可跳过的 project_memory。
+
+### Changed
+LoginViewModel 在成功状态的同一次更新中清空 password 并关闭密码可见性；AuthHeaderInterceptor 测试分别覆盖 null、空字符串与纯空白 token；README、release_notes.md、docs/ARCHITECTURE.md 和 .agent/project_memory.md 已同步真实边界。
+
+### Validation
+TDD 红灯确认旧实现会保留密码；修复后网络模块 17 项与登录 ViewModel 6 项单元测试通过。最终 clean 构建覆盖 AndroidTest Kotlin 编译、lintDebug 与 assembleDebug，219 项 Gradle 任务成功；当前仍无设备运行证据。
+
+### Next
+Phase 2 保存 Session/token、接入 Bearer 客户端并使用 Android Keystore 加密持久化，然后迁移图库与文件夹数据链路。
+
+### Risks
+Session/token 仍未保存，Bearer Header 组件仍未接入后续客户端；AndroidTest 尚未在真机或模拟器运行。
+
+### DIA
+已同步 registry 注册的 README、release_notes.md、project_memory.md、handover/index，并更新 ARCHITECTURE 与计划事实边界。
+
+### HLG
+本记录追加关闭先前失实边界与 DIA 缺口；沿用 mobile-native-rewrite continuity-key，Phase 2 继续追加记录。

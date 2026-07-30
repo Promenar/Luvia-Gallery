@@ -154,12 +154,12 @@ Expo / React Native 仍是当前可用基线。原生端应用 ID 为 `com.prome
 - 唯一 Bearer 认证头组件与不泄露敏感值的结果映射；该组件已测试，但尚未接入后续认证客户端。
 - 基于 Retrofit 协程的 `suspend` 登录网络层；取消会继续传播，不被转换为普通失败结果。
 - Material 3 登录页、登录状态流与安全区适配的“原生重构进行中”主壳；认证成功后仅保留 ViewModel
-  内存中的认证布尔态，`Session` / token 尚未保存。
+  内存中的认证布尔态并立即清除密码，`Session` / token 尚未保存。
 
 ### 验证与限制
 
 - 已通过：`cd native-ui && ./gradlew testDebugUnitTest lintDebug :app:assembleDebug --no-daemon`；网络模块
-  15 项单元测试、登录 ViewModel 6 项单元测试、Lint 与 Debug APK 构建均已验证。
+  17 项单元测试、登录 ViewModel 6 项单元测试、Lint 与 Debug APK 构建均已验证。
 - AndroidTest 已可编译，但当前无连接设备或模拟器；`connectedDebugAndroidTest` 没有产生实际仪器测试结果。
 - 图库、文件夹、收藏、媒体、设置、管理、Session/token 保存、加密持久会话和完整原生导航尚未实现，
   不能据此宣称完成移动端迁移或性能指标。
