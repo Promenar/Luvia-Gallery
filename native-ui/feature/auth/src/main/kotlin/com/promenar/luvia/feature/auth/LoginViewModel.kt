@@ -64,6 +64,8 @@ class LoginViewModel(
                 it.copy(
                     isSubmitting = false,
                     isAuthenticated = message == null,
+                    password = if (message == null) "" else it.password,
+                    isPasswordVisible = if (message == null) false else it.isPasswordVisible,
                     message = message,
                 )
             }

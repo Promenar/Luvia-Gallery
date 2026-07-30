@@ -5,7 +5,6 @@ import okhttp3.Request
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNull
 import org.junit.Test
 
 class AuthHeaderInterceptorTest {
@@ -37,23 +36,41 @@ class AuthHeaderInterceptorTest {
     }
 
     @Test
-    fun `空或缺失 token 时移除所有旧认证头`() {
+    fun `null token 会移除旧认证头且保持 URL`() {
+        assertMissingTokenRemovesAuthorization(null)
+    }
+
+    @Test
+    fun `空字符串 token 会移除旧认证头且保持 URL`() {
+        assertMissingTokenRemovesAuthorization("")
+    }
+
+    @Test
+    fun `纯空白 token 会移除旧认证头且保持 URL`() {
+        assertMissingTokenRemovesAuthorization(" \t\n ")
+    }
+
+    private fun assertMissingTokenRemovesAuthorization(token: String?) {
         val server = MockWebServer()
         server.start()
         try {
             server.enqueue(MockResponse().setResponseCode(204))
             val client = OkHttpClient.Builder()
-                .addInterceptor(AuthHeaderInterceptor { null })
+                .addInterceptor(AuthHeaderInterceptor { token })
                 .build()
             val request = Request.Builder()
-                .url(server.url("/library"))
+                .url(server.url("/library?view=grid"))
                 .addHeader("Authorization", "Legacy one")
                 .addHeader("Authorization", "Legacy two")
                 .build()
+            val originalUrl = request.url.toString()
 
             client.newCall(request).execute().use { }
 
-            assertNull(server.takeRequest().getHeader("Authorization"))
+            val received = server.takeRequest()
+            assertEquals(emptyList<String>(), received.headers.values("Authorization"))
+            assertEquals(originalUrl, received.requestUrl.toString())
+            assertEquals(originalUrl, request.url.toString())
         } finally {
             server.close()
         }

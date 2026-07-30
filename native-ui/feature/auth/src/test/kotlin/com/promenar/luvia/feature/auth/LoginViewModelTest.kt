@@ -108,12 +108,15 @@ class LoginViewModelTest {
         val session = Session(token = "token", username = "luvia", isAdmin = true)
         val viewModel = LoginViewModel { _, _, _ -> ApiResult.Success(session) }
         fillValidCredentials(viewModel)
+        viewModel.onAction(LoginAction.TogglePasswordVisibility)
 
         viewModel.onAction(LoginAction.Submit)
         dispatcher.scheduler.advanceUntilIdle()
 
         assertTrue(viewModel.uiState.value.isAuthenticated)
         assertFalse(viewModel.uiState.value.isSubmitting)
+        assertEquals("", viewModel.uiState.value.password)
+        assertFalse(viewModel.uiState.value.isPasswordVisible)
         assertEquals(null, viewModel.uiState.value.message)
     }
 
