@@ -1,6 +1,6 @@
 plugins {
     alias(libs.plugins.android.library)
-    alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.kotlin.serialization)
 }
 
 android {
@@ -22,7 +22,15 @@ android {
         }
     }
 
-    buildFeatures {
-        compose = true
-    }
+}
+
+dependencies {
+    implementation(project(":core:model"))
+    implementation(libs.kotlinx.serialization.json)
+    implementation(libs.okhttp)
+    implementation(libs.retrofit)
+    implementation(libs.retrofit.kotlinx.serialization)
+
+    testImplementation(libs.junit)
+    testImplementation(libs.okhttp.mockwebserver)
 }
