@@ -233,7 +233,7 @@ async function backfillFolderCoverCache() {
     let afterRowid = Number.parseInt(state || '0', 10) || 0;
     let restored = 0;
     while (true) {
-        const batch = database.getFolderCoverBackfillBatch(afterRowid, 256);
+        const batch = database.getFolderCoverBackfillBatch(afterRowid, 32);
         if (batch.length === 0) break;
 
         const candidates = await Promise.all(batch.map(async file => {
@@ -254,7 +254,7 @@ async function backfillFolderCoverCache() {
         }
         afterRowid = batch[batch.length - 1].rowid;
         database.setFolderCoverBackfillState(String(afterRowid));
-        await new Promise(resolve => setImmediate(resolve));
+        await new Promise(resolve => setTimeout(resolve, 10));
     }
 
     database.setFolderCoverBackfillState('complete');
