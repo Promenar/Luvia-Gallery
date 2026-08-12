@@ -447,11 +447,11 @@ export const UnifiedGalleryToolbar: React.FC<UnifiedGalleryToolbarProps> = ({
     };
 
     return (
-        <div className="px-3 pb-3 md:px-8 md:pt-4 md:pb-4 shrink-0 relative z-[35]" data-testid="unified-gallery-toolbar">
-            <div className="lg:hidden" data-testid="gallery-toolbar-compact-slot">
+        <div className="px-3 pb-3 md:absolute md:inset-x-0 md:top-0 md:px-8 md:pt-4 md:pb-0 md:pointer-events-none z-[35]" data-testid="unified-gallery-toolbar">
+            <div className="lg:hidden md:pointer-events-auto" data-testid="gallery-toolbar-compact-slot">
                 <GalleryNavigationBar {...sharedProps} compact />
             </div>
-            <div className="hidden lg:block" data-testid="gallery-toolbar-desktop-slot">
+            <div className="hidden lg:block md:pointer-events-auto" data-testid="gallery-toolbar-desktop-slot">
                 <GalleryNavigationBar {...sharedProps} compact={false} />
             </div>
         </div>

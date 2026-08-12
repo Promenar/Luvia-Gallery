@@ -742,6 +742,7 @@ describe('GalleryNavigationBar 组件测试 (Unified Toolbar Phase 2)', () => {
     expect(breadcrumbs.className).toContain('flex-nowrap');
     const toolbar = screen.getByTestId('gallery-nav-bar-desktop');
     expect(toolbar.className).toContain('flex-nowrap');
+    expect(toolbar.className).toContain('gallery-toolbar-glass');
     const omnibox = screen.getByTestId('gallery-omnibox');
     expect(omnibox.className).toContain('min-w-[12rem]');
     expect(screen.getByText('…')).toBeDefined();

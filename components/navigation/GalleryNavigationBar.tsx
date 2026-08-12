@@ -350,7 +350,7 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
     return (
     <div
       ref={navRootRef}
-      className={`flex items-center justify-between gap-2 p-2 rounded-2xl glass-1 border border-white/5 shadow-lg transition-all duration-300 relative isolate ${className}`}
+      className={`flex items-center justify-between gap-2 p-2 rounded-2xl glass-1 gallery-toolbar-glass border border-white/5 shadow-lg transition-all duration-300 relative isolate ${className}`}
       data-testid="gallery-nav-bar-compact"
     >
         {isSearchMode ? (
@@ -580,7 +580,7 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
   return (
     <div
       ref={navRootRef}
-      className={`flex flex-nowrap items-center gap-2 xl:gap-4 w-full min-w-0 p-3 rounded-2xl glass-1 border border-white/5 shadow-md transition-all duration-300 relative isolate ${className}`}
+      className={`flex flex-nowrap items-center gap-2 xl:gap-4 w-full min-w-0 p-3 rounded-2xl glass-1 gallery-toolbar-glass border border-white/5 shadow-md transition-all duration-300 relative isolate ${className}`}
       data-testid="gallery-nav-bar-desktop"
     >
       {/* 1. Left Nav buttons: back, forward, go-up */}
