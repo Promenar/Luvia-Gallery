@@ -1,4 +1,4 @@
-import React, { useRef, useState, useMemo, useEffect } from 'react';
+import React, { useRef, useState, useMemo, useEffect, useCallback } from 'react';
 import { motion } from 'framer-motion';
 import { MediaItem } from '../types';
 import { getAuthUrl } from '../utils/fileUtils';
@@ -6,16 +6,73 @@ import { Icons } from './ui/Icon';
 import { useLanguage } from '../contexts/LanguageContext';
 import { AudioCard } from './AudioCard';
 
-interface MediaCardProps {
+export interface MediaCardProps {
   item: MediaItem;
   onClick: (item: MediaItem) => void;
   layout?: 'grid' | 'masonry';
   isVirtual?: boolean;
   mediaHoverZoomEnabled?: boolean;
+  imagePriority?: boolean;
 }
 
-export const getMediaCardContainerClasses = (isGrid: boolean): string =>
-  `relative group cursor-pointer overflow-hidden rounded-2xl glass-1 glass-hover ${isGrid ? 'w-full h-full aspect-square ring-1 ring-white/10 dark:ring-white/5' : 'w-full break-inside-avoid ring-1 ring-white/10 dark:ring-white/5'}`;
+const areCardMediaItemsEqual = (prev: MediaItem, next: MediaItem): boolean =>
+  prev.id === next.id
+  && prev.file === next.file
+  && prev.url === next.url
+  && prev.thumbnailUrl === next.thumbnailUrl
+  && prev.name === next.name
+  && prev.path === next.path
+  && prev.folderPath === next.folderPath
+  && prev.size === next.size
+  && prev.type === next.type
+  && prev.lastModified === next.lastModified
+  && prev.mediaType === next.mediaType
+  && prev.sourceId === next.sourceId
+  && prev.isFavorite === next.isFavorite
+  && prev.width === next.width
+  && prev.height === next.height
+  && prev.aspectRatio === next.aspectRatio
+  && prev.mediaCount === next.mediaCount
+  && prev.coverMedia === next.coverMedia
+  && prev.children === next.children;
+
+const MIN_MEDIA_ASPECT_RATIO = 0.5;
+const MAX_MEDIA_ASPECT_RATIO = 2.4;
+const FALLBACK_MEDIA_ASPECT_RATIOS = [0.625, 0.75, 1, 1.25, 1.5, 16 / 9] as const;
+
+const clampMediaAspectRatio = (ratio: number): number =>
+  Math.min(MAX_MEDIA_ASPECT_RATIO, Math.max(MIN_MEDIA_ASPECT_RATIO, ratio));
+
+/** 在缩略图尺寸缺失时，使用媒体 ID 生成跨渲染稳定的几何比例。 */
+export const resolveMediaAspectRatio = (item: MediaItem): number => {
+  if (Number.isFinite(item.aspectRatio) && Number(item.aspectRatio) > 0) {
+    return clampMediaAspectRatio(Number(item.aspectRatio));
+  }
+  if (
+    Number.isFinite(item.width)
+    && Number.isFinite(item.height)
+    && Number(item.width) > 0
+    && Number(item.height) > 0
+  ) {
+    return clampMediaAspectRatio(Number(item.width) / Number(item.height));
+  }
+
+  let hash = 0;
+  const identity = item.id || item.path || item.name;
+  for (let index = 0; index < identity.length; index += 1) {
+    hash = ((hash * 31) + identity.charCodeAt(index)) >>> 0;
+  }
+  return FALLBACK_MEDIA_ASPECT_RATIOS[hash % FALLBACK_MEDIA_ASPECT_RATIOS.length];
+};
+
+export const getMediaImageLoadingProps = (imagePriority: boolean) => ({
+  loading: imagePriority ? 'eager' as const : 'lazy' as const,
+  fetchPriority: imagePriority ? 'high' as const : 'auto' as const,
+  decoding: 'async' as const,
+});
+
+export const getMediaCardContainerClasses = (isGrid: boolean, isLoaded: boolean = true): string =>
+  `relative group cursor-pointer overflow-hidden rounded-2xl ${isLoaded ? 'glass-1 glass-hover ring-1 ring-white/10 dark:ring-white/5' : 'bg-white/[0.045] dark:bg-white/[0.035]'} ${isGrid ? 'w-full h-full aspect-square' : 'w-full break-inside-avoid'}`;
 
 export const getMediaCardHoverAnimation = (
   isVirtual: boolean,
@@ -25,30 +82,36 @@ export const getMediaCardHoverAnimation = (
 export const getMediaThumbnailClasses = (
   isGrid: boolean,
   mediaHoverZoomEnabled: boolean,
+  isLoaded: boolean = true,
 ): string =>
-  `w-full h-full object-cover transition-transform duration-700 ${mediaHoverZoomEnabled ? 'group-hover:scale-105 ' : ''}${isGrid ? 'absolute inset-0' : 'block'}`;
+  `absolute inset-0 w-full h-full object-cover transition-[opacity,transform] duration-500 ${isLoaded ? 'opacity-100' : 'opacity-0'} ${mediaHoverZoomEnabled ? 'group-hover:scale-105 ' : ''}${isGrid ? '' : 'block'}`;
 
-export const MediaCard: React.FC<MediaCardProps> = React.memo(({
+export const areMediaCardPropsEqual = (prev: MediaCardProps, next: MediaCardProps): boolean =>
+  areCardMediaItemsEqual(prev.item, next.item)
+  && prev.onClick === next.onClick
+  && prev.layout === next.layout
+  && prev.isVirtual === next.isVirtual
+  && prev.imagePriority === next.imagePriority
+  && prev.mediaHoverZoomEnabled === next.mediaHoverZoomEnabled;
+
+/** 保持传给大量媒体卡片的点击函数稳定，同时始终执行调用方最新的点击语义。 */
+export const useStableMediaItemClick = (
+  onClick: (item: MediaItem) => void,
+): ((item: MediaItem) => void) => {
+  const onClickRef = useRef(onClick);
+  onClickRef.current = onClick;
+  return useCallback((item: MediaItem) => onClickRef.current(item), []);
+};
+
+const VisualMediaCard: React.FC<MediaCardProps> = ({
   item,
   onClick,
   layout,
   isVirtual = false,
   mediaHoverZoomEnabled = true,
+  imagePriority = false,
 }) => {
   const { t } = useLanguage();
-
-  // If it's an audio file, use AudioCard component
-  if (item.mediaType === 'audio') {
-    return (
-      <AudioCard
-        item={item}
-        onClick={onClick}
-        layout={layout || 'grid'}
-        isVirtual={isVirtual}
-        mediaHoverZoomEnabled={mediaHoverZoomEnabled}
-      />
-    );
-  }
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const hoverTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -58,14 +121,16 @@ export const MediaCard: React.FC<MediaCardProps> = React.memo(({
   const [imgError, setImgError] = useState(false);
   const [hasError, setHasError] = useState(false);
   const [isRepairing, setIsRepairing] = useState(false);
+  const [isThumbnailLoaded, setIsThumbnailLoaded] = useState(false);
   const [retryQuery, setRetryQuery] = useState(''); // Cache busting
 
   // Reset error when item changes
   useEffect(() => {
     setImgError(false);
     setHasError(false);
+    setIsThumbnailLoaded(false);
     setRetryQuery(''); // Reset retry query on item change
-  }, [item.id, item.url]);
+  }, [item.id, item.url, item.thumbnailUrl]);
 
   const handleRepair = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -159,23 +224,28 @@ export const MediaCard: React.FC<MediaCardProps> = React.memo(({
   }, []);
 
   const isGrid = layout === 'grid' || isVirtual;
+  const aspectRatio = resolveMediaAspectRatio(item);
+  const imageLoadingProps = getMediaImageLoadingProps(imagePriority);
 
-  const containerClasses = getMediaCardContainerClasses(isGrid);
+  const containerClasses = getMediaCardContainerClasses(isGrid, isThumbnailLoaded);
 
   return (
     <motion.div
       layoutId={!isVirtual && layout !== 'masonry' ? `media-${item.id}` : undefined}
-      initial={!isVirtual ? { opacity: 0, scale: 0.95 } : { opacity: 1 }}
+      initial={!isVirtual && layout !== 'masonry' ? { opacity: 0, scale: 0.95 } : { opacity: 1, scale: 1 }}
       animate={{ opacity: 1, scale: 1 }}
       whileHover={getMediaCardHoverAnimation(isVirtual, mediaHoverZoomEnabled)}
       transition={{ duration: 0.2 }}
       className={containerClasses}
+      style={isGrid ? undefined : { aspectRatio }}
+      data-media-aspect-ratio={aspectRatio}
+      data-thumbnail-state={isThumbnailLoaded ? 'loaded' : 'loading'}
       onClick={() => onClick(item)}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
     >
       {item.mediaType === 'video' ? (
-        <div className={`relative w-full ${isGrid ? 'h-full absolute inset-0' : 'aspect-video'} flex items-center justify-center bg-surface-deep`}>
+        <div className="absolute inset-0 flex items-center justify-center bg-surface-deep">
           {isHovered && !imgError && (
             <video
               ref={videoRef}
@@ -192,13 +262,19 @@ export const MediaCard: React.FC<MediaCardProps> = React.memo(({
           )}
 
           {!imgError && thumbnailSrc ? (
-            <img
+            <>
+              {!isThumbnailLoaded && (
+                <div className="absolute inset-0 bg-white/[0.045] dark:bg-white/[0.035] animate-pulse" aria-hidden="true" />
+              )}
+              <img
               src={thumbnailSrc}
               alt={item.name}
-              loading="lazy"
-              className="w-full h-full object-cover block"
+              {...imageLoadingProps}
+              className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-500 ${isThumbnailLoaded ? 'opacity-100' : 'opacity-0'}`}
+              onLoad={() => setIsThumbnailLoaded(true)}
               onError={() => setImgError(true)}
-            />
+              />
+            </>
           ) : (
             <div className="w-full h-full bg-surface-tertiary relative overflow-hidden flex flex-col items-center justify-center text-text-tertiary">
               {imgError ? (
@@ -225,24 +301,31 @@ export const MediaCard: React.FC<MediaCardProps> = React.memo(({
         </div>
       ) : (
         !imgError && !hasError ? (
-          <img
-            src={thumbnailSrc}
-            alt={item.name}
-            loading="lazy"
-            className={getMediaThumbnailClasses(isGrid, mediaHoverZoomEnabled)}
-            onError={() => {
-              // Smart Fallback Logic
-              if (item.thumbnailUrl && thumbnailSrc === item.thumbnailUrl) {
-                // Start of fallback sequence: Switch to original URL via state
-                setHasError(true);
-              } else if (thumbnailSrc.startsWith('/api/thumbnail')) { // Corrected from /api/thumb/
-                setHasError(true);
-              } else {
-                // Only error out completely if we were already using the original URL
-                setImgError(true);
-              }
-            }}
-          />
+          <>
+            {!isThumbnailLoaded && (
+              <div className="absolute inset-0 bg-white/[0.045] dark:bg-white/[0.035] animate-pulse" aria-hidden="true" />
+            )}
+            <img
+              src={thumbnailSrc}
+              alt={item.name}
+              {...imageLoadingProps}
+              className={getMediaThumbnailClasses(isGrid, mediaHoverZoomEnabled, isThumbnailLoaded)}
+              onLoad={() => setIsThumbnailLoaded(true)}
+              onError={() => {
+                setIsThumbnailLoaded(false);
+                // Smart Fallback Logic
+                if (item.thumbnailUrl && thumbnailSrc === item.thumbnailUrl) {
+                  // Start of fallback sequence: Switch to original URL via state
+                  setHasError(true);
+                } else if (thumbnailSrc.startsWith('/api/thumbnail')) { // Corrected from /api/thumb/
+                  setHasError(true);
+                } else {
+                  // Only error out completely if we were already using the original URL
+                  setImgError(true);
+                }
+              }}
+            />
+          </>
         ) : (
           // Fallback Rendering
           !imgError ? (
@@ -250,8 +333,9 @@ export const MediaCard: React.FC<MediaCardProps> = React.memo(({
               <img
                 src={getAuthUrl(item.url)} // Use original URL
                 alt={item.name}
-                loading="lazy"
-                className={getMediaThumbnailClasses(isGrid, mediaHoverZoomEnabled)}
+                {...imageLoadingProps}
+                className={getMediaThumbnailClasses(isGrid, mediaHoverZoomEnabled, isThumbnailLoaded)}
+                onLoad={() => setIsThumbnailLoaded(true)}
                 onError={() => setImgError(true)}
               />
               {/* Repair Button / Warning Indicator */}
@@ -293,10 +377,21 @@ export const MediaCard: React.FC<MediaCardProps> = React.memo(({
       </div>
     </motion.div>
   );
-}, (prev, next) => {
-  return prev.item.id === next.item.id &&
-    prev.item.isFavorite === next.item.isFavorite && // Re-render on favorite change
-    prev.layout === next.layout &&
-    prev.isVirtual === next.isVirtual &&
-    prev.mediaHoverZoomEnabled === next.mediaHoverZoomEnabled;
-});
+};
+
+const MediaCardByType: React.FC<MediaCardProps> = (props) => {
+  if (props.item.mediaType === 'audio') {
+    return (
+      <AudioCard
+        item={props.item}
+        onClick={props.onClick}
+        layout={props.layout || 'grid'}
+        isVirtual={props.isVirtual}
+        mediaHoverZoomEnabled={props.mediaHoverZoomEnabled}
+      />
+    );
+  }
+  return <VisualMediaCard {...props} />;
+};
+
+export const MediaCard: React.FC<MediaCardProps> = React.memo(MediaCardByType, areMediaCardPropsEqual);

@@ -67,14 +67,15 @@ function addFile({
     folderPath,
     mediaType = 'image',
     sourceId = 'source-a',
-    lastModified = 1
+    lastModified = 1,
+    size = 1
 }) {
     database.upsertFile({
         id,
         path,
         name,
         folderPath,
-        size: 1,
+        size,
         type: 'file',
         mediaType,
         lastModified,
@@ -129,11 +130,127 @@ test('queryFiles 与 countFiles 复用全部过滤条件，直接收藏可与搜
         userId: 'user-a',
         sourceId: 'source-a'
     };
+    preparedSql.length = 0;
     const files = database.queryFiles(options);
 
     assert.deepEqual(files.map(file => file.id), ['direct-favorite']);
     assert.equal(files[0].isFavorite, true);
     assert.equal(database.countFiles(options), files.length);
+
+    const favoriteSql = preparedSql.find(sql => sql.includes('ORDER BY f.last_modified DESC'));
+    assert.ok(favoriteSql, '应记录收藏列表 SQL');
+    assert.match(favoriteSql, /INNER JOIN favorites favorite_filter/);
+    assert.match(favoriteSql, /favorite_filter\.item_id = f\.id/);
+    assert.doesNotMatch(favoriteSql, /favorite_filter\.item_id = f\.path|SELECT DISTINCT|WHERE EXISTS/);
+});
+
+test('媒体分页只对最终页计算收藏标记，并用多取一条判断续页', () => {
+    addFile({ id: 'page-1', path: '/library/1.jpg', name: '1.jpg', folderPath: '/library', lastModified: 30 });
+    addFile({ id: 'page-2', path: '/library/2.jpg', name: '2.jpg', folderPath: '/library', lastModified: 20 });
+    addFile({ id: 'page-3', path: '/library/3.jpg', name: '3.jpg', folderPath: '/library', lastModified: 10 });
+    database.toggleFavorite('user-a', 'page-2', 'file');
+
+    preparedSql.length = 0;
+    const firstPage = database.queryFilesPage({ userId: 'user-a', limit: 2, offset: 0 });
+    assert.deepEqual(firstPage.files.map(file => [file.id, file.isFavorite]), [
+        ['page-1', false],
+        ['page-2', true]
+    ]);
+    assert.equal(firstPage.hasMore, true);
+
+    const listSql = preparedSql.find(sql => sql.includes('ORDER BY f.last_modified DESC'));
+    assert.ok(listSql, '应记录媒体分页 SQL');
+    assert.match(listSql, /CASE WHEN EXISTS/);
+    assert.doesNotMatch(listSql, /LEFT JOIN favorites|SELECT DISTINCT/);
+
+    const finalPage = database.queryFilesPage({ userId: 'user-a', limit: 2, offset: 2 });
+    assert.deepEqual(finalPage.files.map(file => file.id), ['page-3']);
+    assert.equal(finalPage.hasMore, false);
+});
+
+test('旧 path 收藏迁移遇到已存在的 ID 收藏时仍能完成其余迁移', () => {
+    addFile({
+        id: 'canonical-a',
+        path: '/library/a.jpg',
+        name: 'a.jpg',
+        folderPath: '/library'
+    });
+    addFile({
+        id: 'canonical-b',
+        path: '/library/b.jpg',
+        name: 'b.jpg',
+        folderPath: '/library'
+    });
+    database.toggleFavorite('user-a', 'canonical-a', 'file');
+    database.toggleFavorite('user-a', '/library/a.jpg', 'file');
+    database.toggleFavorite('user-a', '/library/b.jpg', 'file');
+    database.toggleFavorite('user-a', '/library/missing.jpg', 'file');
+
+    database.migrateFavorites();
+    database.migrateFavorites();
+
+    const favoriteIds = database.getFavoriteIds('user-a').files.sort();
+    assert.deepEqual(favoriteIds, [
+        '/library/missing.jpg',
+        'canonical-a',
+        'canonical-b'
+    ]);
+    const files = database.queryFiles({ favoritesOnly: true, userId: 'user-a' });
+    assert.deepEqual(files.map(file => file.id).sort(), ['canonical-a', 'canonical-b']);
+});
+
+test('sizeDesc 按文件大小全局降序并用 ID 稳定排序', () => {
+    addFile({ id: 'size-b', path: '/library/b.jpg', name: 'b.jpg', folderPath: '/library', size: 20 });
+    addFile({ id: 'size-a', path: '/library/a.jpg', name: 'a.jpg', folderPath: '/library', size: 20 });
+    addFile({ id: 'size-c', path: '/library/c.jpg', name: 'c.jpg', folderPath: '/library', size: 10 });
+
+    preparedSql.length = 0;
+    const files = database.queryFiles({ sortOption: 'sizeDesc' });
+
+    assert.deepEqual(files.map(file => file.id), ['size-a', 'size-b', 'size-c']);
+    const listSql = preparedSql.find(sql => sql.includes('ORDER BY f.size DESC'));
+    assert.ok(listSql, '应记录大小降序列表 SQL');
+    assert.match(listSql, /ORDER BY f\.size DESC, f\.id ASC/);
+});
+
+test('默认日期、大小、媒体类型和文件夹分页索引在旧库初始化时均存在', () => {
+    const indexNames = new Set(inMemoryDatabase.prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'index'"
+    ).all().map(row => row.name));
+
+    assert.equal(indexNames.has('idx_files_date_desc_id'), true);
+    assert.equal(indexNames.has('idx_files_size_desc_id'), true);
+    assert.equal(indexNames.has('idx_files_media_date_desc_id'), true);
+    assert.equal(indexNames.has('idx_files_folder_date_desc_id'), true);
+    assert.equal(indexNames.has('idx_files_media_size_desc_id'), true);
+    assert.equal(indexNames.has('idx_files_folder_size_desc_id'), true);
+    assert.equal(indexNames.has('idx_favorites_user_type_item'), true);
+});
+
+test('媒体类型和文件夹的 sizeDesc 首包使用组合索引且不创建临时排序', () => {
+    const mediaPlan = inMemoryDatabase.prepare(`
+        EXPLAIN QUERY PLAN
+        SELECT f.id
+        FROM files f
+        WHERE f.media_type = ?
+        ORDER BY f.size DESC, f.id ASC
+        LIMIT ? OFFSET ?
+    `).all('image', 121, 0);
+    const folderPlan = inMemoryDatabase.prepare(`
+        EXPLAIN QUERY PLAN
+        SELECT f.id
+        FROM files f
+        WHERE f.folder_path = ?
+        ORDER BY f.size DESC, f.id ASC
+        LIMIT ? OFFSET ?
+    `).all('/library', 121, 0);
+
+    const mediaDetails = mediaPlan.map(row => row.detail).join('\n');
+    const folderDetails = folderPlan.map(row => row.detail).join('\n');
+    assert.match(mediaDetails, /idx_files_media_size_desc_id/);
+    assert.doesNotMatch(mediaDetails, /USE TEMP B-TREE/);
+    assert.match(folderDetails, /idx_files_folder_size_desc_id/);
+    assert.doesNotMatch(folderDetails, /USE TEMP B-TREE/);
 });
 
 test('递归目录仅包含自身与后代，不包含同前缀兄弟，根目录可覆盖绝对路径', () => {
@@ -404,6 +521,37 @@ test('全局媒体统计由写入触发器维护，状态读取不再执行四�
         database.getCachedStats(),
         { totalFiles: 1, totalImages: 1, totalVideos: 0, totalAudio: 0 }
     );
+});
+
+test('受限账号状态统计不扫描媒体表且不泄露全库总数', () => {
+    addFile({
+        id: 'restricted-image',
+        path: '/library/private.jpg',
+        name: 'private.jpg',
+        folderPath: '/library',
+        mediaType: 'image'
+    });
+
+    preparedSql.length = 0;
+    const stats = database.getStats({ allowedPaths: ['/library'] });
+
+    assert.deepEqual(stats, {
+        totalFiles: 0,
+        totalImages: 0,
+        totalVideos: 0,
+        totalAudio: 0,
+        dbSize: 0,
+        statsExact: false
+    });
+    assert.deepEqual(database.getStats(), {
+        totalFiles: 1,
+        totalImages: 1,
+        totalVideos: 0,
+        totalAudio: 0,
+        dbSize: 0,
+        statsExact: true
+    });
+    assert.equal(preparedSql.some(sql => /COUNT\s*\(|FROM\s+files\b/i.test(sql)), false);
 });
 
 test('历史封面恢复游标覆盖没有尺寸元数据的图片和视频', () => {

@@ -20,6 +20,7 @@ describe('createGalleryQueryKey', () => {
     const folderPathChanged = createGalleryQueryKey(createInput({ folderPath: 'album/work' }));
     const searchChanged = createGalleryQueryKey(createInput({ search: 'city' }));
     const sortChanged = createGalleryQueryKey(createInput({ sort: 'nameAsc' }));
+    const filterChanged = createGalleryQueryKey(createInput({ filter: 'video' }));
     const seedChanged = createGalleryQueryKey(createInput({ randomSeed: 2 }));
 
     const keys = [
@@ -29,21 +30,33 @@ describe('createGalleryQueryKey', () => {
       folderPathChanged,
       searchChanged,
       sortChanged,
+      filterChanged,
       seedChanged,
     ].map((item) => JSON.stringify(item));
 
     expect(new Set(keys).size).toBe(keys.length);
   });
 
-  it('filter 与 layout 变化不应影响服务端查询键', () => {
+  it('filter 变化必须隔离服务端数据缓存，layout 变化继续复用同一查询键', () => {
     const withFilter = createGalleryQueryKey(createInput({ filter: 'video' }));
-    const withDifferentFilter = createGalleryQueryKey(createInput({ filter: 'favored' }));
-    const withLayoutGrid = createGalleryQueryKey(createInput({ layout: 'grid' }));
-    const withLayoutTimeline = createGalleryQueryKey(createInput({ layout: 'timeline' }));
+    const withDifferentFilter = createGalleryQueryKey(createInput({ filter: 'image' }));
+    const withLayoutGrid = createGalleryQueryKey(createInput({ filter: 'video', layout: 'grid' }));
+    const withLayoutTimeline = createGalleryQueryKey(createInput({ filter: 'video', layout: 'timeline' }));
 
-    expect(withFilter).toEqual(withDifferentFilter);
+    expect(withFilter).not.toEqual(withDifferentFilter);
     expect(withFilter).toEqual(withLayoutGrid);
     expect(withFilter).toEqual(withLayoutTimeline);
+  });
+
+  it('打开媒体和切换布局不会改变数据集身份', () => {
+    const base = createGalleryQueryKey(createInput({ layout: 'grid' }));
+    const mediaOpened = createGalleryQueryKey(createInput({ layout: 'grid', mediaId: 'media-1' }));
+    const mediaSwitched = createGalleryQueryKey(createInput({ layout: 'grid', mediaId: 'media-2' }));
+    const layoutChanged = createGalleryQueryKey(createInput({ layout: 'masonry', mediaId: 'media-2' }));
+
+    expect(mediaOpened).toEqual(base);
+    expect(mediaSwitched).toEqual(base);
+    expect(layoutChanged).toEqual(base);
   });
 
   it('应输出路径规范化后的稳定键', () => {

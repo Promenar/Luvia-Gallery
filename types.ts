@@ -8,6 +8,9 @@ export interface MediaItem {
   file?: File;      // Optional because it might be missing after config load
   url: string;      // Blob URL (session only) or empty
   thumbnailUrl?: string; // New: Thumbnail URL
+  width?: number;
+  height?: number;
+  aspectRatio?: number;
   name: string;
   path: string;       // Full relative path: "Vacation/2023/beach.jpg"
   folderPath: string; // Directory path: "Vacation/2023"
@@ -97,6 +100,7 @@ export interface ExtendedSystemStatus extends SystemStatus {
   scanInterval?: number;
   dbStatus?: string;
   mediaStats?: {
+    exact?: boolean;
     totalFiles: number;
     images: number;
     videos: number;

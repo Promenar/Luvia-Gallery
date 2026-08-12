@@ -1,13 +1,48 @@
-import React, { useMemo, useRef, useEffect, useState } from 'react';
+import React, { useMemo, useRef, useEffect, useState, useCallback } from 'react';
 import { CommonViewportProps, ViewportCaptureHandle, resolveAnchorIndex, createViewportSnapshot } from './viewport-types';
 import { MediaCard } from '../PhotoCard';
 import { FolderCard } from '../FolderCard';
-import { Button } from '../ui/Button';
+
+const SKELETON_ASPECT_RATIOS = [0.72, 1, 1.28, 0.8, 1.5, 0.92] as const;
+const LOAD_MORE_SKELETONS_PER_COLUMN = 3;
+
+export const getMasonryInitialSkeletonCount = (
+  columnCount: number,
+  viewportHeight: number,
+  viewportWidth: number,
+): number => {
+  const safeColumns = Math.max(1, columnCount);
+  const columnWidth = Math.max(120, (viewportWidth - ((safeColumns - 1) * 16)) / safeColumns);
+  const averageCardHeight = columnWidth / 1.02 + 16;
+  const rowsForTwoViewports = Math.ceil((Math.max(480, viewportHeight) * 2) / averageCardHeight);
+  return safeColumns * Math.max(4, rowsForTwoViewports);
+};
+
+export const isWithinMasonryPrefetchRange = (
+  scrollHeight: number,
+  scrollTop: number,
+  clientHeight: number,
+): boolean => scrollHeight - scrollTop - clientHeight <= clientHeight * 1.5;
+
+export const getMasonryPrefetchRootMargin = (viewportHeight: number): string =>
+  `0px 0px ${Math.round(Math.max(1, viewportHeight) * 1.5)}px 0px`;
+
+const MasonrySkeleton = ({ index, phase }: { index: number; phase: 'initial' | 'next' }) => (
+  <div
+    data-testid={`masonry-${phase}-skeleton`}
+    className="relative w-full overflow-hidden rounded-2xl bg-white/[0.045] dark:bg-white/[0.035] animate-pulse"
+    style={{ aspectRatio: SKELETON_ASPECT_RATIOS[index % SKELETON_ASPECT_RATIOS.length] }}
+    aria-hidden="true"
+  >
+    <div className="absolute inset-0 bg-gradient-to-br from-white/[0.035] via-transparent to-black/[0.025]" />
+  </div>
+);
 
 export const MasonryViewport = React.forwardRef<ViewportCaptureHandle, CommonViewportProps>(({
   items,
   onItemClick,
   hasNextPage,
+  isInitialLoading,
   isNextPageLoading,
   loadNextPage,
   onToggleFavorite,
@@ -23,6 +58,10 @@ export const MasonryViewport = React.forwardRef<ViewportCaptureHandle, CommonVie
 }, ref) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const loadLockRef = useRef(false);
+  const loadStateRef = useRef({ hasNextPage, isInitialLoading, isNextPageLoading, itemsLength: items.length, loadNextPage });
+  const scrollFrameRef = useRef<number | null>(null);
+  const loadMoreSentinelRef = useRef<HTMLDivElement>(null);
+  loadStateRef.current = { hasNextPage, isInitialLoading, isNextPageLoading, itemsLength: items.length, loadNextPage };
 
   // 滚动位置捕获与恢复锁
   const isRestoredRef = useRef(false);
@@ -85,6 +124,7 @@ export const MasonryViewport = React.forwardRef<ViewportCaptureHandle, CommonVie
 
   // 动态分栏列数计算
   const [columnCount, setColumnCount] = useState(3);
+  const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 });
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -99,9 +139,22 @@ export const MasonryViewport = React.forwardRef<ViewportCaptureHandle, CommonVie
     };
 
     updateColumns();
-    window.addEventListener('resize', updateColumns);
+    window.addEventListener('resize', updateColumns, { passive: true });
     return () => window.removeEventListener('resize', updateColumns);
   }, []);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const updateViewportSize = () => {
+      setViewportSize({ width: container.clientWidth, height: container.clientHeight });
+    };
+    updateViewportSize();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(updateViewportSize);
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, [viewKey]);
 
   // 建立每一项 item 的索引和列分块
   const { columns, itemIndices } = useMemo(() => {
@@ -186,6 +239,7 @@ export const MasonryViewport = React.forwardRef<ViewportCaptureHandle, CommonVie
 
   useEffect(() => {
     if (positionIdentityViewKeyRef.current !== viewKey) {
+      loadLockRef.current = false;
       cancelPendingSnapshot();
       currentScrollTopRef.current = 0;
       isRestoringRef.current = false;
@@ -282,57 +336,97 @@ export const MasonryViewport = React.forwardRef<ViewportCaptureHandle, CommonVie
   // 组件卸载时清理定时器
   useEffect(() => {
     return () => {
+      if (scrollFrameRef.current !== null) cancelAnimationFrame(scrollFrameRef.current);
       cancelPendingSnapshot();
       cancelRestoreTransaction();
     };
   }, []);
 
-  const onScroll = () => {
+  const requestNextPage = useCallback(() => {
+    const loadState = loadStateRef.current;
+    if (!loadState.hasNextPage || loadState.isInitialLoading || loadState.isNextPageLoading || loadLockRef.current) return;
+    loadLockRef.current = true;
+    const loadPromise = loadState.loadNextPage(loadState.itemsLength, loadState.itemsLength + 120);
+    if (loadPromise && typeof loadPromise.then === 'function') {
+      loadPromise.then(
+        () => { loadLockRef.current = false; },
+        () => { loadLockRef.current = false; },
+      );
+    } else {
+      setTimeout(() => {
+        loadLockRef.current = false;
+      }, 1000);
+    }
+  }, []);
+
+  useEffect(() => {
+    const root = containerRef.current;
+    const sentinel = loadMoreSentinelRef.current;
+    if (!root || !sentinel || typeof IntersectionObserver === 'undefined') return;
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some(entry => entry.isIntersecting)) requestNextPage();
+    }, {
+      root,
+      rootMargin: getMasonryPrefetchRootMargin(viewportSize.height || root.clientHeight),
+      threshold: 0,
+    });
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [isInitialLoading, requestNextPage, viewKey, viewportSize.height]);
+
+  const processScrollFrame = () => {
+    scrollFrameRef.current = null;
     const container = containerRef.current;
     if (!container) return;
 
     const scrollTop = container.scrollTop;
     currentScrollTopRef.current = scrollTop;
 
-    // 1. 无尽加载检测
-    const scrollHeight = container.scrollHeight;
-    const clientHeight = container.clientHeight;
-    const nearBottom = scrollHeight - scrollTop - clientHeight < 200;
-
-    if (nearBottom && hasNextPage && !isNextPageLoading && !loadLockRef.current) {
-      loadLockRef.current = true;
-      const loadPromise = loadNextPage(items.length, items.length + 50);
-      if (loadPromise && typeof loadPromise.then === 'function') {
-        loadPromise.then(() => {
-          loadLockRef.current = false;
-        }).catch(() => {
-          loadLockRef.current = false;
-        });
-      } else {
-        setTimeout(() => {
-          loadLockRef.current = false;
-        }, 1000);
-      }
+    // 每次滚动都保留阈值预取；IO 请求失败后哨兵可能不会再次回调，滚动可触发重试。
+    if (isWithinMasonryPrefetchRange(container.scrollHeight, scrollTop, container.clientHeight)) {
+      requestNextPage();
     }
 
-    if (!nearBottom) {
-      loadLockRef.current = false;
-    }
-
-    // 2. 采样失败时只上报当前 scrollTop 兜底，绝不复用旧锚点或旧偏移。
+    // 采样失败时只上报当前 scrollTop 兜底，绝不复用旧锚点或旧偏移。
     triggerSnapshotUpdate(createCurrentSnapshot(readLiveAnchor()));
   };
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const onScroll = () => {
+      currentScrollTopRef.current = container.scrollTop;
+      if (scrollFrameRef.current !== null) return;
+      scrollFrameRef.current = requestAnimationFrame(processScrollFrame);
+    };
+    container.addEventListener('scroll', onScroll, { passive: true });
+    return () => container.removeEventListener('scroll', onScroll);
+  }, [hasNextPage, isNextPageLoading, items.length, requestNextPage, viewKey, itemIndices]);
+
+  const initialSkeletonCount = getMasonryInitialSkeletonCount(
+    columnCount,
+    viewportSize.height || (typeof window === 'undefined' ? 800 : window.innerHeight),
+    viewportSize.width || (typeof window === 'undefined' ? 1000 : window.innerWidth),
+  );
+  const initialSkeletonColumns = useMemo(() => {
+    const result = Array.from({ length: columnCount }, () => [] as number[]);
+    for (let index = 0; index < initialSkeletonCount; index += 1) {
+      result[index % columnCount].push(index);
+    }
+    return result;
+  }, [columnCount, initialSkeletonCount]);
 
   return (
     <div
       ref={containerRef}
-      onScroll={onScroll}
       className="w-full h-full overflow-y-auto pb-20 no-scrollbar"
     >
       <div className="flex gap-4 p-1 items-start">
-        {columns.map((colItems, colIndex) => (
+        {(isInitialLoading && items.length === 0 ? initialSkeletonColumns : columns).map((colItems, colIndex) => (
           <div key={colIndex} className="flex-1 flex flex-col gap-4">
-            {colItems.filter(item => item && item.id).map((item) => {
+            {isInitialLoading && items.length === 0 ? (
+              (colItems as number[]).map(index => <MasonrySkeleton key={`initial-${index}`} index={index} phase="initial" />)
+            ) : (colItems as typeof items).filter(item => item && item.id).map((item) => {
               const actualIndex = itemIndices[item.id];
               return (
                 <div
@@ -368,27 +462,20 @@ export const MasonryViewport = React.forwardRef<ViewportCaptureHandle, CommonVie
                       onClick={onItemClick}
                       layout="masonry"
                       isVirtual={false}
+                      imagePriority={actualIndex < columnCount * 2}
                       mediaHoverZoomEnabled={mediaHoverZoomEnabled}
                     />
                   )}
                 </div>
               );
             })}
+            {!isInitialLoading && isNextPageLoading && Array.from({ length: LOAD_MORE_SKELETONS_PER_COLUMN }, (_, index) => (
+              <MasonrySkeleton key={`next-${colIndex}-${index}`} index={(colIndex * LOAD_MORE_SKELETONS_PER_COLUMN) + index} phase="next" />
+            ))}
           </div>
         ))}
       </div>
-      {hasNextPage && (
-        <div className="w-full py-8 flex justify-center items-center">
-          <Button
-            variant="secondary"
-            onClick={() => loadNextPage(items.length, items.length + 50)}
-            loading={isNextPageLoading}
-            disabled={isNextPageLoading}
-          >
-            {isNextPageLoading ? 'Loading more...' : 'Load More'}
-          </Button>
-        </div>
-      )}
+      <div ref={loadMoreSentinelRef} data-testid="masonry-load-more-sentinel" className="h-px w-full" aria-hidden="true" />
     </div>
   );
 });

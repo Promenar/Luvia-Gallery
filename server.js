@@ -76,6 +76,29 @@ function parseScanPagination(query) {
     return { offset, limit };
 }
 
+function shouldUseCachedLibraryTotal({ isAdmin, favoritesOnly, folderPath, search, mediaType, excludeMediaType }) {
+    return Boolean(isAdmin) &&
+        !favoritesOnly &&
+        folderPath === null &&
+        !search &&
+        !mediaType &&
+        !excludeMediaType;
+}
+
+/**
+ * 非精确 total 是已返回范围的已知下界；有续页时多保留一个虚拟列表哨兵。
+ */
+function resolveScanResultsPageMetadata({ offset, returnedCount, hasMore, exactTotal }) {
+    const hasExactTotal = Number.isSafeInteger(exactTotal) && exactTotal >= 0;
+    return {
+        total: hasExactTotal
+            ? exactTotal
+            : offset + returnedCount + (hasMore ? 1 : 0),
+        totalExact: hasExactTotal || !hasMore,
+        hasMore: Boolean(hasMore)
+    };
+}
+
 // --- Constants ---
 const RAW_MEDIA_ROOT = process.env.MEDIA_ROOT || path.join(__dirname, 'media');
 // Support multiple roots via ';' delimiter (cross-platform friendly config)
@@ -768,6 +791,7 @@ app.get('/api/config', (req, res) => {
             return res.json({
                 configured: true,
                 libraryPaths: safeUser.libraryPaths || [],
+                allowedPaths: safeUser.allowedPaths || [],
                 homeSettings: safeUser.homeSettings || {},
                 role: 'user',
                 username: safeUser.username,
@@ -1415,6 +1439,8 @@ app.get('/api/scan/results', (req, res) => {
 
     let files = [];
     let total = 0;
+    let totalExact = true;
+    let hasMore = false;
 
     if (hasLibraryAccess && isFolderAllowed) {
         const filterOptions = {
@@ -1430,8 +1456,27 @@ app.get('/api/scan/results', (req, res) => {
             random
         };
 
-        files = database.queryFiles({ ...filterOptions, offset, limit });
-        total = database.countFiles(filterOptions);
+        const page = database.queryFilesPage({ ...filterOptions, offset, limit });
+        const exactTotal = shouldUseCachedLibraryTotal({
+            isAdmin,
+            favoritesOnly,
+            folderPath: normalizedFolderPath,
+            search,
+            mediaType,
+            excludeMediaType
+        })
+            ? database.getCachedStats().totalFiles
+            : undefined;
+        const pageMetadata = resolveScanResultsPageMetadata({
+            offset,
+            returnedCount: page.files.length,
+            hasMore: page.hasMore,
+            exactTotal
+        });
+        files = page.files;
+        total = pageMetadata.total;
+        totalExact = pageMetadata.totalExact;
+        hasMore = pageMetadata.hasMore;
     } else if (!isFolderAllowed) {
         console.log(`[Security] Blocking file listing for unauthorized path: ${normalizedFolderPath}`);
     }
@@ -1457,9 +1502,10 @@ app.get('/api/scan/results', (req, res) => {
 
     res.json({
         files: transformedFiles,
-        total: total,
-        hasMore: offset + limit < total,
-        sources: [{ id: 'local', name: 'Local Storage', count: total }]
+        total,
+        totalExact,
+        hasMore,
+        sources: [{ id: 'local', name: 'Local Storage', count: total, countExact: totalExact }]
     });
 });
 
@@ -2536,7 +2582,9 @@ app.get('/api/system/status', (req, res) => {
     const isAdmin = req.user.role === 'admin';
 
     const userLibraryPaths = getUserLibraryPaths(req.user);
-    const dbStats = dbReady ? database.getStats({ allowedPaths: isAdmin ? null : userLibraryPaths }) : { totalFiles: 0, totalImages: 0, totalVideos: 0, totalAudio: 0 };
+    const dbStats = dbReady
+        ? database.getStats({ allowedPaths: isAdmin ? null : userLibraryPaths })
+        : { totalFiles: 0, totalImages: 0, totalVideos: 0, totalAudio: 0, statsExact: false };
 
     // Use pre-calculated values to avoid blocking the event loop
     const cacheSize = globalCacheSize;
@@ -2547,7 +2595,8 @@ app.get('/api/system/status', (req, res) => {
             totalFiles: dbStats.totalFiles || 0,
             images: dbStats.totalImages || 0,
             videos: dbStats.totalVideos || 0,
-            audio: dbStats.totalAudio || 0
+            audio: dbStats.totalAudio || 0,
+            exact: dbStats.statsExact === true
         }
     };
 

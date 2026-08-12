@@ -4,7 +4,7 @@ import { MediaItem, ViewMode, GridLayout, User, UserData, SortOption, FilterOpti
 import { buildFolderTree, generateId, isVideo, isAudio, sortMedia, getImmediateSubfolders } from './utils/fileUtils';
 import { Icons } from './components/ui/Icon';
 import { Navigation } from './components/Navigation';
-import { MediaCard } from './components/PhotoCard';
+import { MediaCard, useStableMediaItemClick } from './components/PhotoCard';
 import { FolderCard } from './components/FolderCard';
 import { ImageViewer } from './components/ImageViewer';
 import { UnifiedProgressModal } from './components/UnifiedProgressModal';
@@ -20,6 +20,7 @@ import { ScanReportModal } from './components/ScanReportModal';
 import { useQueryClient } from '@tanstack/react-query';
 import { useGalleryNavigation } from './hooks/useGalleryNavigation';
 import { createGalleryQueryKey } from './navigation/query-key';
+import { getParentFolderPath } from './navigation/location';
 import { getLayoutPreferenceView, resolveGalleryLayoutPreference, type LayoutPreferenceStorage, writeGalleryLayoutPreference } from './navigation/layout-preference';
 import { readMediaHoverZoomPreference, writeMediaHoverZoomPreference } from './navigation/media-hover-zoom-preference';
 import { GalleryNavigationBar, type GalleryNavigationBarProps } from './components/navigation/GalleryNavigationBar';
@@ -34,6 +35,241 @@ type GalleryPageCache = {
     serverTotal: number;
     hasMoreServer: boolean;
 };
+
+export const GALLERY_PAGE_SIZE = 120;
+
+export const appendGalleryMediaTypeQuery = (url: string, filter: FilterOption): string => {
+    if (filter !== 'image' && filter !== 'video' && filter !== 'audio') return url;
+    return `${url}&mediaType=${encodeURIComponent(filter)}`;
+};
+
+export const isDefaultGalleryCacheScope = (
+    view: ViewMode,
+    folderPath: string,
+    search: string,
+    sort: SortOption,
+    filter: FilterOption,
+) => view === 'all'
+    && folderPath === ''
+    && search.trim() === ''
+    && sort === 'dateDesc'
+    && filter === 'all';
+
+type GalleryHomeCachePayload = {
+    version: 2;
+    userScope: string;
+    files: MediaItem[];
+    total: number;
+    timestamp: number;
+};
+
+export const getGalleryUserScopeFingerprint = (
+    user: Pick<User, 'username' | 'isAdmin' | 'allowedPaths'>,
+): string => {
+    const canonical = JSON.stringify({
+        username: user.username,
+        role: user.isAdmin ? 'admin' : 'user',
+        allowedPaths: [...(user.allowedPaths || [])].map(path => path.trim()).filter(Boolean).sort(),
+    });
+    let hash = 2166136261;
+    for (let index = 0; index < canonical.length; index += 1) {
+        hash ^= canonical.charCodeAt(index);
+        hash = Math.imul(hash, 16777619);
+    }
+    return `v2-${(hash >>> 0).toString(16).padStart(8, '0')}`;
+};
+
+export const resolveLibraryTotalCountForScope = (
+    previousScope: string,
+    nextScope: string,
+    currentTotal: number,
+): number => previousScope === nextScope ? currentTotal : 0;
+
+export const createGalleryHomeCachePayload = (
+    user: Pick<User, 'username' | 'isAdmin' | 'allowedPaths'>,
+    files: MediaItem[],
+    total: number,
+    timestamp = Date.now(),
+): GalleryHomeCachePayload => ({
+    version: 2,
+    userScope: getGalleryUserScopeFingerprint(user),
+    files,
+    total,
+    timestamp,
+});
+
+export const readGalleryHomeCache = (
+    raw: string | null,
+    user: Pick<User, 'username' | 'isAdmin' | 'allowedPaths'>,
+): GalleryHomeCachePayload | null => {
+    if (!raw) return null;
+    try {
+        const parsed = JSON.parse(raw) as Partial<GalleryHomeCachePayload>;
+        if (
+            parsed.version !== 2
+            || parsed.userScope !== getGalleryUserScopeFingerprint(user)
+            || !Array.isArray(parsed.files)
+            || !Number.isFinite(parsed.total)
+        ) return null;
+        return parsed as GalleryHomeCachePayload;
+    } catch {
+        return null;
+    }
+};
+
+export const shouldShowServerEmptyLibrary = ({
+    isServerMode,
+    location,
+    fileCount,
+    libraryTotalCount,
+    isLoading,
+}: {
+    isServerMode: boolean;
+    location: Pick<GalleryLocation, 'view' | 'folderPath' | 'search' | 'sort' | 'filter'>;
+    fileCount: number;
+    libraryTotalCount: number;
+    isLoading: boolean;
+}): boolean => isServerMode
+    && fileCount === 0
+    && libraryTotalCount === 0
+    && !isLoading
+    && isDefaultGalleryCacheScope(location.view, location.folderPath, location.search, location.sort, location.filter);
+
+const stableMediaIdentity = (item: MediaItem): string => item.id || item.path || item.name || '';
+
+export const sortGalleryCombinedItems = (items: MediaItem[], sort: SortOption): MediaItem[] => {
+    if (sort === 'random') {
+        const shuffled = [...items];
+        for (let index = shuffled.length - 1; index > 0; index -= 1) {
+            const target = Math.floor(Math.random() * (index + 1));
+            [shuffled[index], shuffled[target]] = [shuffled[target], shuffled[index]];
+        }
+        return shuffled;
+    }
+
+    return [...items].sort((left, right) => {
+        let order = 0;
+        if (sort === 'nameAsc') order = (left.name || '').localeCompare(right.name || '');
+        else if (sort === 'nameDesc') order = (right.name || '').localeCompare(left.name || '');
+        else if (sort === 'sizeDesc') order = (right.size || 0) - (left.size || 0);
+        else if (sort === 'dateAsc') order = (left.lastModified || 0) - (right.lastModified || 0);
+        else order = (right.lastModified || 0) - (left.lastModified || 0);
+        return order || stableMediaIdentity(left).localeCompare(stableMediaIdentity(right));
+    });
+};
+
+export const runWithGalleryPaginationLock = async (
+    lockRef: { current: boolean },
+    task: () => Promise<void>,
+): Promise<boolean> => {
+    if (lockRef.current) return false;
+    lockRef.current = true;
+    try {
+        await task();
+        return true;
+    } finally {
+        lockRef.current = false;
+    }
+};
+
+export const waitForGalleryLocationResults = <FileResult, FolderResult>(
+    fileRequest: Promise<FileResult>,
+    folderRequest: Promise<FolderResult>,
+): Promise<[FileResult, FolderResult]> => Promise.all([fileRequest, folderRequest]);
+
+export const shouldShowGallerySearchEmptyState = (
+    search: string,
+    hasVisibleResults: boolean,
+    isFetchingMore: boolean,
+    isInitialLoading: boolean,
+): boolean => search.trim().length > 0
+    && !isFetchingMore
+    && !isInitialLoading
+    && !hasVisibleResults;
+
+export const shouldShowFavoritesEmptyState = (
+    view: ViewMode,
+    fileCount: number,
+    favoriteFolderCount: number,
+    isInitialLoading: boolean,
+): boolean => view === 'favorites'
+    && fileCount === 0
+    && favoriteFolderCount === 0
+    && !isInitialLoading;
+
+export const shouldCoverGalleryWithInitialSkeleton = (
+    hasMatchingCache: boolean,
+    shouldPreserveHydratedFiles: boolean,
+): boolean => !hasMatchingCache && !shouldPreserveHydratedFiles;
+
+export const shouldPreserveGalleryHydratedFiles = (
+    isDefaultScope: boolean,
+    contentScopeIdentity: string,
+    currentScopeIdentity: string,
+    serverOffset: number,
+    fileCount: number,
+): boolean => isDefaultScope
+    && contentScopeIdentity === currentScopeIdentity
+    && serverOffset === 0
+    && fileCount > 0;
+
+export const resolveGalleryRenderItems = <Item,>(items: Item[], shouldCover: boolean): Item[] =>
+    shouldCover ? [] : items;
+
+export const shouldCacheCurrentGallery = (
+    isInitialLoading: boolean,
+    isInitialSkeletonCovering: boolean,
+    hasLoadError: boolean,
+): boolean => !isInitialLoading && !isInitialSkeletonCovering && !hasLoadError;
+
+export const canLoadNextGalleryPage = ({
+    isServerMode,
+    hasCurrentUser,
+    hasMore,
+    isFetching,
+    isInitialLoading,
+    isInitialSkeletonCovering,
+    serverOffset,
+    readyDatasetIdentity,
+    currentDatasetIdentity,
+}: {
+    isServerMode: boolean;
+    hasCurrentUser: boolean;
+    hasMore: boolean;
+    isFetching: boolean;
+    isInitialLoading: boolean;
+    isInitialSkeletonCovering: boolean;
+    serverOffset: number;
+    readyDatasetIdentity: string;
+    currentDatasetIdentity: string;
+}): boolean => isServerMode
+    && hasCurrentUser
+    && hasMore
+    && !isFetching
+    && !isInitialLoading
+    && !isInitialSkeletonCovering
+    && serverOffset > 0
+    && readyDatasetIdentity === currentDatasetIdentity;
+
+export const resolveReadyGalleryDatasetIdentity = (
+    results: readonly boolean[],
+    currentDatasetIdentity: string,
+): string => results.length > 0 && results.every(result => result === true)
+    ? currentDatasetIdentity
+    : '';
+
+type GalleryDatasetLocation = Pick<GalleryLocation, 'view' | 'folderPath' | 'search' | 'sort' | 'filter' | 'randomSeed'>;
+
+export const getGalleryDatasetIdentity = (
+    scopeIdentity: string,
+    location: GalleryDatasetLocation,
+): string => JSON.stringify(createGalleryQueryKey({ username: scopeIdentity, ...location, randomSeed: Number(location.randomSeed) || 0 }));
+
+export const shouldAdvanceGalleryNavigationEpoch = (
+    scopeIdentity: string,
+    current: GalleryDatasetLocation,
+    next: GalleryDatasetLocation,
+): boolean => getGalleryDatasetIdentity(scopeIdentity, current) !== getGalleryDatasetIdentity(scopeIdentity, next);
 
 export const isNavigationRequestCurrent = (activeEpoch: number, requestEpoch: number) => activeEpoch === requestEpoch;
 
@@ -429,7 +665,10 @@ export default function App() {
     const [serverTotal, setServerTotal] = useState(0); // Count for CURRENT view (folder or all)
     const [libraryTotalCount, setLibraryTotalCount] = useState(0); // Count for "All Photos" in sidebar
     const [serverOffset, setServerOffset] = useState(0);
+    const [isInitialGalleryLoading, setIsInitialGalleryLoading] = useState(false);
+    const [isInitialGallerySkeletonCovering, setIsInitialGallerySkeletonCovering] = useState(false);
     const [isFetchingMore, setIsFetchingMore] = useState(false);
+    const [galleryReadyDatasetIdentity, setGalleryReadyDatasetIdentity] = useState('');
     const [hasMoreServer, setHasMoreServer] = useState(true);
     const [serverFolders, setServerFolders] = useState<any[]>([]); // Full list of folders from server
     const [serverFavoriteIds, setServerFavoriteIds] = useState<{ files: string[], folders: string[] }>({ files: [], folders: [] });
@@ -463,7 +702,10 @@ export default function App() {
     const activeLocationKeyRef = useRef(galleryNavigation.location.key);
     const galleryAbortControllerRef = useRef<AbortController | null>(null);
     const activeGalleryFetchRequestIdRef = useRef(0);
+    const endReachedLockRef = useRef(false);
     const resolvedLayoutPreferenceScopeRef = useRef<string | null>(null);
+    const libraryTotalScopeRef = useRef('');
+    const galleryContentScopeRef = useRef('');
 
 
 
@@ -486,6 +728,16 @@ export default function App() {
         [currentUser, allUserData]
     );
 
+    const currentGalleryUserScope = currentUser ? getGalleryUserScopeFingerprint(currentUser) : '';
+    useEffect(() => {
+        setLibraryTotalCount((currentTotal) => resolveLibraryTotalCountForScope(
+            libraryTotalScopeRef.current,
+            currentGalleryUserScope,
+            currentTotal,
+        ));
+        libraryTotalScopeRef.current = currentGalleryUserScope;
+    }, [currentGalleryUserScope]);
+
     // --- View State ---
     const [viewMode, setViewMode] = useState<ViewMode>(() => galleryNavigation.location.view);
     const [layoutMode, setLayoutMode] = useState<GridLayout>(() => galleryNavigation.location.layout);
@@ -496,7 +748,6 @@ export default function App() {
     const [activeSearch, setActiveSearch] = useState(() => galleryNavigation.location.search);
     const [galleryLoadError, setGalleryLoadError] = useState(false);
     const [galleryReloadNonce, setGalleryReloadNonce] = useState(0);
-    const activeSearchRef = useRef(activeSearch);
     const lastSearchLocationKeyRef = useRef<string | null>(null);
     const [isSidebarOpen, setIsSidebarOpen] = useState(false);
     const [isDesktopSidebarOpen, setIsDesktopSidebarOpen] = useState(() => {
@@ -582,10 +833,6 @@ export default function App() {
         writeMediaHoverZoomPreference(typeof window === 'undefined' ? undefined : window.localStorage, enabled);
     };
 
-    // Refs to combat stale closures
-    useEffect(() => {
-        activeSearchRef.current = activeSearch;
-    }, [activeSearch]);
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
     const [settingsTab, setSettingsTab] = useState<SettingsTab>('general');
 
@@ -672,6 +919,8 @@ export default function App() {
         queryClient.removeQueries({ queryKey: ['galleryFiles'] });
         removeStorageItem(TOKEN_STORAGE_KEY, LEGACY_KEYS.token);
         removeStorageItem(AUTH_USER_KEY, LEGACY_KEYS.authUser);
+        removeStorageItem(CACHE_HOME_KEY, LEGACY_KEYS.cacheHome);
+        setLibraryTotalCount(0);
         setCurrentUser(null);
         setAuthStep('login');
         // Optionally clear other user-specific state
@@ -822,7 +1071,11 @@ export default function App() {
                         });
                     } else if (config.username) {
                         // Scenario 2: Regular user login (sanitized info)
-                        loadedUsers = [{ username: config.username, isAdmin: config.role === 'admin' } as User];
+                        loadedUsers = [{
+                            username: config.username,
+                            isAdmin: config.role === 'admin',
+                            allowedPaths: Array.isArray(config.allowedPaths) ? config.allowedPaths : [],
+                        } as User];
                         loadedData[config.username] = { sources: [], files: [], favoriteFolderPaths: [] };
                     }
                     if (config.title) loadedTitle = config.title;
@@ -882,15 +1135,26 @@ export default function App() {
         const savedUser = getStorageItem(AUTH_USER_KEY, LEGACY_KEYS.authUser);
         const savedViewMode = getStorageItem(VIEW_MODE_KEY, LEGACY_KEYS.viewMode) as ViewMode;
 
-        if (savedUser && (!savedViewMode || savedViewMode === 'home' || savedViewMode === 'all')) {
+        if (
+            savedUser
+            && (!savedViewMode || savedViewMode === 'all')
+            && isDefaultGalleryCacheScope(
+                galleryNavigation.location.view,
+                galleryNavigation.location.folderPath,
+                galleryNavigation.location.search,
+                galleryNavigation.location.sort,
+                galleryNavigation.location.filter,
+            )
+        ) {
             try {
-                const cached = getStorageItem(CACHE_HOME_KEY, LEGACY_KEYS.cacheHome);
-                if (cached && loadedData[savedUser]) {
-                    const cData = JSON.parse(cached);
-                    if (cData && Array.isArray(cData.files)) {
-                        loadedData[savedUser].files = cData.files;
-                        console.log('Processed Initial Cache:', cData.files.length);
-                    }
+                const cachedUser = loadedUsers.find(user => user.username === savedUser);
+                const cData = cachedUser
+                    ? readGalleryHomeCache(getStorageItem(CACHE_HOME_KEY, LEGACY_KEYS.cacheHome), cachedUser)
+                    : null;
+                if (cData && loadedData[savedUser]) {
+                    loadedData[savedUser].files = cData.files;
+                    galleryContentScopeRef.current = cData.userScope;
+                    console.log('Processed Initial Cache:', cData.files.length);
                 }
             } catch (e) { }
         }
@@ -1017,6 +1281,9 @@ export default function App() {
         navigationEpoch?: number,
         locationKey?: string,
         signal?: AbortSignal,
+        mediaFilterOverride?: FilterOption,
+        sortOverride?: SortOption,
+        manageInitialLoading = false,
     ) => {
         const guard = resolveGalleryRequestGuard(
             navigationEpoch,
@@ -1029,30 +1296,35 @@ export default function App() {
         if (!isGalleryRequestGuardActive(guard, navigationRequestEpochRef.current, activeLocationKeyRef.current)) return true;
         const requestId = ++activeGalleryFetchRequestIdRef.current;
         try {
+            if (reset && manageInitialLoading) setIsInitialGalleryLoading(true);
             setIsFetchingMore(true);
-            const limit = 500;
+            const limit = GALLERY_PAGE_SIZE;
             let url = `/api/scan/results?offset=${offset}&limit=${limit}`;
+            const effectiveFilter = mediaFilterOverride ?? galleryNavigation.location.filter;
+            const effectiveSort = sortOverride ?? galleryNavigation.location.sort;
 
             const mapSort = (opt: SortOption) => {
                 switch (opt) {
                     case 'dateAsc': return 'dateAsc';
                     case 'nameAsc': return 'nameAsc';
                     case 'nameDesc': return 'nameDesc';
+                    case 'sizeDesc': return 'sizeDesc';
                     case 'random': return null; // handled separately
                     case 'dateDesc':
                     default: return 'dateDesc';
                 }
             };
 
-            if (sortOption === 'random') {
+            if (effectiveSort === 'random') {
                 url += `&random=true`;
             } else {
-                const sortParam = mapSort(sortOption);
+                const sortParam = mapSort(effectiveSort);
                 if (sortParam) url += `&sort=${sortParam}`;
             }
 
-            const effectiveSearch = searchQuery || activeSearchRef.current;
+            const effectiveSearch = searchQuery !== undefined ? searchQuery : galleryNavigation.location.search;
             url = appendGalleryScanScopeQuery(url, folderFilter, favoritesOnly, effectiveSearch);
+            url = appendGalleryMediaTypeQuery(url, effectiveFilter);
             void recursiveFavorites; // 兼容现有调用签名；收藏夹请求固定不递归。
 
             const res = await apiFetch(url, { signal: guard.signal });
@@ -1087,11 +1359,9 @@ export default function App() {
             const newFiles = reset ? filesWithFavorites : [...prevFiles, ...uniqueNew];
             console.log('[DEBUG] Total files to set:', newFiles.length);
 
-            // Unlock load-more once user scrolls away from end
-            if (sortOption === 'random' && !reset && uniqueNew.length === 0) {
+            // 随机分页没有新增项时，显式结束后续加载。
+            if (effectiveSort === 'random' && !reset && uniqueNew.length === 0) {
                 setHasMoreServer(false);
-            } else {
-                endReachedLockRef.current = false;
             }
 
             setAllUserData({
@@ -1102,22 +1372,29 @@ export default function App() {
                     sources: data.sources
                 }
             });
+            galleryContentScopeRef.current = currentGalleryUserScope;
 
             setServerTotal(data.total);
-            if (folderFilter === null && !favoritesOnly) {
+            const isDefaultFullLibraryRequest = isDefaultGalleryCacheScope(
+                galleryNavigation.location.view,
+                galleryNavigation.location.folderPath,
+                effectiveSearch,
+                effectiveSort,
+                effectiveFilter,
+            ) && folderFilter === null && !favoritesOnly;
+            if (isDefaultFullLibraryRequest && data.totalExact === true) {
                 setLibraryTotalCount(data.total);
+            }
 
-                // Cache First Page (Performance Optimization)
-                if (offset === 0) {
-                    try {
-                        const cacheData = {
-                            files: filesWithFavorites.slice(0, 200), // Cache first 200 items
-                            total: data.total,
-                            timestamp: Date.now()
-                        };
-                        setStorageItem(CACHE_HOME_KEY, JSON.stringify(cacheData), LEGACY_KEYS.cacheHome);
-                    } catch (e) { console.error('Cache save failed', e); }
-                }
+            if (isDefaultFullLibraryRequest && offset === 0 && currentUser) {
+                try {
+                    const cacheData = createGalleryHomeCachePayload(
+                        currentUser,
+                        filesWithFavorites.slice(0, GALLERY_PAGE_SIZE),
+                        data.total,
+                    );
+                    setStorageItem(CACHE_HOME_KEY, JSON.stringify(cacheData), LEGACY_KEYS.cacheHome);
+                } catch (e) { console.error('Cache save failed', e); }
             }
 
 
@@ -1136,12 +1413,13 @@ export default function App() {
                 isGalleryRequestGuardActive(guard, navigationRequestEpochRef.current, activeLocationKeyRef.current),
             )) {
                 setIsFetchingMore(false);
+                if (reset && manageInitialLoading) setIsInitialGalleryLoading(false);
             }
         }
     };
 
     const getGalleryQueryKey = useCallback((location: GalleryLocation) => createGalleryQueryKey({
-        username: currentUser?.username || '',
+        username: currentGalleryUserScope,
         view: location.view,
         folderPath: location.folderPath,
         search: location.search,
@@ -1149,7 +1427,9 @@ export default function App() {
         filter: location.filter,
         randomSeed: Number(location.randomSeed) || 0,
         layout: location.layout,
-    }), [currentUser?.username]);
+    }), [currentGalleryUserScope]);
+
+    const galleryDatasetIdentity = getGalleryDatasetIdentity(currentGalleryUserScope, galleryNavigation.location);
 
     const pruneGalleryCache = useCallback((protectedQueryKey?: readonly unknown[]) => {
         const entries = queryClient.getQueryCache().findAll({ queryKey: ['galleryFiles'] }).map((query) => {
@@ -1166,7 +1446,7 @@ export default function App() {
     }, [queryClient]);
 
     const cacheCurrentGallery = useCallback(() => {
-        if (!currentUser) return;
+        if (!currentUser || !shouldCacheCurrentGallery(isInitialGalleryLoading, isInitialGallerySkeletonCovering, galleryLoadError)) return;
         const queryKey = getGalleryQueryKey(galleryNavigation.location);
         const cached: GalleryPageCache = {
             files: allUserData[currentUser.username]?.files || [],
@@ -1177,11 +1457,11 @@ export default function App() {
         };
         queryClient.setQueryData(queryKey, cached);
         pruneGalleryCache(queryKey);
-    }, [allUserData, currentUser, galleryNavigation.location, getGalleryQueryKey, hasMoreServer, pruneGalleryCache, queryClient, serverFolders, serverOffset, serverTotal]);
+    }, [allUserData, currentUser, galleryLoadError, galleryNavigation.location, getGalleryQueryKey, hasMoreServer, isInitialGalleryLoading, isInitialGallerySkeletonCovering, pruneGalleryCache, queryClient, serverFolders, serverOffset, serverTotal]);
 
     useEffect(() => {
         queryClient.removeQueries({ queryKey: ['galleryFiles'] });
-    }, [currentUser?.username, currentUser?.allowedPaths?.join('\n'), queryClient]);
+    }, [currentGalleryUserScope, queryClient]);
 
     useEffect(() => {
         if (authStep !== 'app' || !currentUser || !isServerMode) return;
@@ -1190,11 +1470,16 @@ export default function App() {
         const abortController = new AbortController();
         galleryAbortControllerRef.current = abortController;
         const epoch = activateGalleryLocation(navigationRequestEpochRef, activeLocationKeyRef, location.key);
+        endReachedLockRef.current = false;
         activeGalleryFetchRequestIdRef.current += 1;
         setIsFetchingMore(false);
+        setIsInitialGalleryLoading(false);
+        setIsInitialGallerySkeletonCovering(false);
+        setGalleryReadyDatasetIdentity('');
         const cached = queryClient.getQueryData<GalleryPageCache>(getGalleryQueryKey(location));
         if (cached) {
             setGalleryLoadError(false);
+            galleryContentScopeRef.current = currentGalleryUserScope;
             setAllUserData((data) => ({
                 ...data,
                 [currentUser.username]: { ...data[currentUser.username], files: cached.files },
@@ -1203,43 +1488,90 @@ export default function App() {
             setServerOffset(cached.serverOffset);
             setServerTotal(cached.serverTotal);
             setHasMoreServer(cached.hasMoreServer);
+            setGalleryReadyDatasetIdentity(galleryDatasetIdentity);
             return;
         }
+
+        const shouldPreserveHydratedFiles = shouldPreserveGalleryHydratedFiles(
+            isDefaultGalleryCacheScope(
+                location.view,
+                location.folderPath,
+                location.search,
+                location.sort,
+                location.filter,
+            ),
+            galleryContentScopeRef.current,
+            currentGalleryUserScope,
+            serverOffset,
+            allUserData[currentUser.username]?.files.length || 0,
+        );
+        const shouldCoverWithSkeleton = shouldCoverGalleryWithInitialSkeleton(false, shouldPreserveHydratedFiles);
+        if (!shouldPreserveHydratedFiles) {
+            setAllUserData((data) => ({
+                ...data,
+                [currentUser.username]: { ...data[currentUser.username], files: [] },
+            }));
+        }
+        setServerOffset(0);
+        setServerTotal(0);
+        setServerFolders([]);
+        setHasMoreServer(true);
+        setIsInitialGalleryLoading(true);
+        setIsInitialGallerySkeletonCovering(shouldCoverWithSkeleton);
 
         const folderFilter = location.view === 'folders' ? location.folderPath : null;
         const favoritesOnly = location.view === 'favorites';
         const load = async () => {
             setGalleryLoadError(false);
-            const favoriteIds = favoritesOnly ? await fetchServerFavorites() : undefined;
-            if (!isActiveGalleryRequest(navigationRequestEpochRef.current, epoch, activeLocationKeyRef.current, location.key)) return;
-            const results = await Promise.all([
-                fetchServerFiles(currentUser.username, allUserData, 0, true, folderFilter, favoritesOnly, favoriteIds, false, location.search, epoch, location.key, abortController.signal),
-                fetchServerFolders(folderFilter, favoritesOnly, epoch, location.key, abortController.signal, location.search),
-            ]);
-            if (
-                results.some(result => result === false)
-                && isActiveGalleryRequest(navigationRequestEpochRef.current, epoch, activeLocationKeyRef.current, location.key)
-            ) {
-                setGalleryLoadError(true);
+            try {
+                const favoriteIds = favoritesOnly ? await fetchServerFavorites() : undefined;
+                if (!isActiveGalleryRequest(navigationRequestEpochRef.current, epoch, activeLocationKeyRef.current, location.key)) return;
+                const results = await waitForGalleryLocationResults(
+                    fetchServerFiles(currentUser.username, allUserData, 0, true, folderFilter, favoritesOnly, favoriteIds, false, location.search, epoch, location.key, abortController.signal, location.filter, location.sort, false),
+                    fetchServerFolders(folderFilter, favoritesOnly, epoch, location.key, abortController.signal, location.search),
+                );
+                if (
+                    results.some(result => result === false)
+                    && isActiveGalleryRequest(navigationRequestEpochRef.current, epoch, activeLocationKeyRef.current, location.key)
+                ) {
+                    setGalleryLoadError(true);
+                } else if (isActiveGalleryRequest(navigationRequestEpochRef.current, epoch, activeLocationKeyRef.current, location.key)) {
+                    setGalleryReadyDatasetIdentity(resolveReadyGalleryDatasetIdentity(results, galleryDatasetIdentity));
+                }
+            } finally {
+                if (
+                    !abortController.signal.aborted
+                    && isActiveGalleryRequest(navigationRequestEpochRef.current, epoch, activeLocationKeyRef.current, location.key)
+                ) {
+                    setIsInitialGalleryLoading(false);
+                    setIsInitialGallerySkeletonCovering(false);
+                }
             }
         };
         void load();
         return () => abortController.abort();
-    }, [authStep, currentUser?.username, galleryNavigation.location.key, galleryReloadNonce, getGalleryQueryKey, isServerMode, queryClient]);
-
-    const endReachedLockRef = useRef(false);
+    }, [authStep, currentGalleryUserScope, galleryDatasetIdentity, galleryReloadNonce, getGalleryQueryKey, isServerMode, queryClient]);
 
     const loadMoreServerFiles = async () => {
-        if (!isServerMode || !currentUser || !hasMoreServer || isFetchingMore) return;
+        if (!canLoadNextGalleryPage({
+            isServerMode,
+            hasCurrentUser: Boolean(currentUser),
+            hasMore: hasMoreServer,
+            isFetching: isFetchingMore,
+            isInitialLoading: isInitialGalleryLoading,
+            isInitialSkeletonCovering: isInitialGallerySkeletonCovering,
+            serverOffset,
+            readyDatasetIdentity: galleryReadyDatasetIdentity,
+            currentDatasetIdentity: galleryDatasetIdentity,
+        }) || !currentUser) return;
         const filter = viewMode === 'folders' ? currentPath : null;
         const favs = viewMode === 'favorites';
 
-        if (endReachedLockRef.current) return;
-        endReachedLockRef.current = true;
-
         const requestEpoch = navigationRequestEpochRef.current;
         const requestLocationKey = activeLocationKeyRef.current;
-        await fetchServerFiles(currentUser.username, allUserData, serverOffset, false, filter, favs, undefined, false, galleryNavigation.location.search, requestEpoch, requestLocationKey, galleryAbortControllerRef.current?.signal);
+        await runWithGalleryPaginationLock(endReachedLockRef, async () => {
+            await fetchServerFiles(currentUser.username, allUserData, serverOffset, false, filter, favs, undefined, false, galleryNavigation.location.search, requestEpoch, requestLocationKey, galleryAbortControllerRef.current?.signal, galleryNavigation.location.filter, galleryNavigation.location.sort);
+        });
     };
 
     // Home favorites mode: fetch recursive favorites (parity with mobile carousel)
@@ -1636,9 +1968,21 @@ export default function App() {
         resolveScopedGalleryLayout(localStorage, window.location.origin, currentUser?.username, view),
     [currentUser?.username]);
 
-    const handleGalleryLocationChange = (update: UnifiedToolbarLocationUpdate, mode: 'push' | 'replace') => {
+    const advanceGalleryDatasetNavigation = (nextLocation: GalleryLocation): boolean => {
+        if (!shouldAdvanceGalleryNavigationEpoch(currentGalleryUserScope, galleryNavigation.location, nextLocation)) return false;
         cacheCurrentGallery();
         navigationRequestEpochRef.current += 1;
+        return true;
+    };
+
+    const resolveNextGalleryLocation = (update: Partial<Omit<GalleryLocation, 'key'>>): GalleryLocation => ({
+        ...galleryNavigation.location,
+        ...update,
+        key: galleryNavigation.location.key,
+    });
+
+    const handleGalleryLocationChange = (update: UnifiedToolbarLocationUpdate, mode: 'push' | 'replace') => {
+        advanceGalleryDatasetNavigation(resolveNextGalleryLocation(update));
         if (typeof update.search === 'string') setActiveSearch(update.search);
         if (update.layout) {
             setLayoutMode(update.layout);
@@ -1654,32 +1998,34 @@ export default function App() {
     };
 
     const handleSetViewMode = async (mode: ViewMode) => {
-        cacheCurrentGallery();
-        navigationRequestEpochRef.current += 1;
-        setStorageItem(VIEW_MODE_KEY, mode, LEGACY_KEYS.viewMode);
         const locationUpdate = createTopLevelViewLocationUpdate(
             galleryNavigation.location.view,
             mode,
             resolveTargetLayout(mode),
         );
+        advanceGalleryDatasetNavigation(resolveNextGalleryLocation(locationUpdate));
+        setStorageItem(VIEW_MODE_KEY, mode, LEGACY_KEYS.viewMode);
         if (locationUpdate.search === '') setActiveSearch('');
         galleryNavigation.updateLocation(locationUpdate, 'push');
     };
 
     const handleFolderClick = (path: string) => {
-        cacheCurrentGallery();
-        navigationRequestEpochRef.current += 1;
-        galleryNavigation.updateLocation({
+        const update = {
             view: 'folders',
             folderPath: path,
             mediaId: undefined,
             layout: resolveTargetLayout('folders'),
-        }, 'push');
+        } as const;
+        advanceGalleryDatasetNavigation(resolveNextGalleryLocation(update));
+        galleryNavigation.updateLocation(update, 'push');
     };
 
     const handleGoBackFolder = () => {
-        cacheCurrentGallery();
-        navigationRequestEpochRef.current += 1;
+        advanceGalleryDatasetNavigation(resolveNextGalleryLocation({
+            view: 'folders',
+            folderPath: getParentFolderPath(galleryNavigation.location.folderPath),
+            mediaId: undefined,
+        }));
         galleryNavigation.up();
     };
 
@@ -2041,6 +2387,34 @@ export default function App() {
         galleryNavigation.updateLocation({ mediaId: item.id }, 'push');
     };
 
+    const handleFolderGalleryItemClick = useStableMediaItemClick((item) => {
+        if (item.mediaType === 'folder') {
+            handleFolderClick(item.path);
+        } else if (item.mediaType === 'audio') {
+            const audioFiles = mixedItems.filter(media => media && media.mediaType === 'audio');
+            const clickedIndex = audioFiles.findIndex(media => media.id === item.id);
+            setAudioPlaylist(audioFiles);
+            setCurrentAudioIndex(clickedIndex >= 0 ? clickedIndex : 0);
+            setCurrentAudio(item);
+            setIsPlayerMinimized(false);
+        } else {
+            handleOpenMedia(item);
+        }
+    });
+
+    const handleMediaGalleryItemClick = useStableMediaItemClick((item) => {
+        if (item.mediaType === 'audio') {
+            const audioFiles = processedFiles.filter(media => media && media.mediaType === 'audio');
+            const clickedIndex = audioFiles.findIndex(media => media.id === item.id);
+            setAudioPlaylist(audioFiles);
+            setCurrentAudioIndex(clickedIndex >= 0 ? clickedIndex : 0);
+            setCurrentAudio(item);
+            setIsPlayerMinimized(false);
+        } else {
+            handleOpenMedia(item);
+        }
+    });
+
     const handleCloseMedia = () => {
         setSelectedItem(null);
         if (!galleryNavigation.location.mediaId || !galleryNavigation.back()) {
@@ -2226,23 +2600,7 @@ export default function App() {
     }, [files, viewMode, currentPath, filterOption, sortOption, isServerMode, serverFavoriteIds]);
 
     const sortCombinedItems = useCallback((items: MediaItem[]) => {
-        if (sortOption === 'random') {
-            const shuffled = [...items];
-            for (let i = shuffled.length - 1; i > 0; i--) {
-                const j = Math.floor(Math.random() * (i + 1));
-                [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-            }
-            return shuffled;
-        }
-
-        return [...items].sort((a, b) => {
-            if (sortOption === 'nameAsc') return (a.name || '').localeCompare(b.name || '');
-            if (sortOption === 'nameDesc') return (b.name || '').localeCompare(a.name || '');
-            const aTime = a.lastModified || 0;
-            const bTime = b.lastModified || 0;
-            if (sortOption === 'dateAsc') return aTime - bTime;
-            return bTime - aTime; // default dateDesc
-        });
+        return sortGalleryCombinedItems(items, sortOption);
     }, [sortOption]);
 
     const nameAscLabel = useMemo(() => {
@@ -2303,9 +2661,12 @@ export default function App() {
         processedFiles.filter(Boolean).length,
         serverFavoriteIds.folders.length,
     );
-    const shouldShowSearchEmptyState = activeSearch.trim().length > 0
-        && !isFetchingMore
-        && !hasVisibleSearchResults;
+    const shouldShowSearchEmptyState = shouldShowGallerySearchEmptyState(
+        activeSearch,
+        hasVisibleSearchResults,
+        isFetchingMore,
+        isInitialGalleryLoading,
+    );
 
 
     // Auth/Setup Screens
@@ -2422,12 +2783,7 @@ export default function App() {
                                                 setAuthStep('app');
                                                 setStorageItem(AUTH_USER_KEY, data.user.username, LEGACY_KEYS.authUser);
 
-                                                // Trigger init fetch if server mode
-                                                setTimeout(() => {
-                                                    // Make sure fetchServerFiles uses the token now (will be updated in next step)
-                                                    fetchServerFiles(data.user.username, allUserData, 0, true, null);
-                                                    fetchServerFolders('', false);
-                                                }, 100);
+                                                // 登录后的首载统一由数据集 effect 聚合媒体与目录请求。
                                             }
                                         } else {
                                             setAuthError(t('invalid_credentials'));
@@ -2520,8 +2876,8 @@ export default function App() {
                     location={galleryNavigation.location}
                     canGoBack={galleryNavigation.canGoBack}
                     canGoForward={galleryNavigation.canGoForward}
-                    onBack={() => { cacheCurrentGallery(); navigationRequestEpochRef.current += 1; galleryNavigation.back(); }}
-                    onForward={() => { cacheCurrentGallery(); navigationRequestEpochRef.current += 1; galleryNavigation.forward(); }}
+                    onBack={() => { cacheCurrentGallery(); galleryNavigation.back(); }}
+                    onForward={() => { cacheCurrentGallery(); galleryNavigation.forward(); }}
                     onUp={handleGoBackFolder}
                     onNavigatePath={handleFolderClick}
                     onNavigateView={(mode) => handleSetViewMode(mode as ViewMode)}
@@ -2555,7 +2911,13 @@ export default function App() {
                                 <p className="max-w-xs text-center text-sm">{t('import_local')}</p>
                             </div>
                         )}
-                        {!activeSearch.trim() && isServerMode && libraryTotalCount === 0 && !isFetchingMore && viewMode === 'all' && (
+                        {shouldShowServerEmptyLibrary({
+                            isServerMode,
+                            location: galleryNavigation.location,
+                            fileCount: files.length,
+                            libraryTotalCount,
+                            isLoading: isFetchingMore || isInitialGalleryLoading,
+                        }) && (
                             <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-400">
                                 <Icons.Server size={48} className="mb-4 text-primary-500" />
                                 <h3 className="text-xl font-bold text-gray-600 dark:text-gray-300 mb-2">{t('connected_to_nas')}</h3>
@@ -2580,27 +2942,13 @@ export default function App() {
                                 <div className="flex-1 w-full h-full p-4 md:p-8 flex flex-col min-h-0">
                                     <VirtualGallery
                                         ref={galleryViewportRef}
-                                        items={mixedItems.filter(Boolean)}
-                                        onItemClick={(item) => {
-                                            if (item.mediaType === 'folder') {
-                                                handleFolderClick(item.path);
-                                            } else if (item.mediaType === 'audio') {
-                                                // Create playlist from all audio files in effective list
-                                                // Filter mixedItems to just audio for the playlist
-                                                const audioFiles = mixedItems.filter(f => f && f.mediaType === 'audio');
-                                                const clickedIndex = audioFiles.findIndex(f => f.id === item.id);
-                                                setAudioPlaylist(audioFiles);
-                                                setCurrentAudioIndex(clickedIndex >= 0 ? clickedIndex : 0);
-                                                setCurrentAudio(item);
-                                                setIsPlayerMinimized(false);
-                                            } else {
-                                                handleOpenMedia(item);
-                                            }
-                                        }}
+                                        items={resolveGalleryRenderItems(mixedItems.filter(Boolean), isInitialGallerySkeletonCovering)}
+                                        onItemClick={handleFolderGalleryItemClick}
                                         hasNextPage={isServerMode && hasMoreServer}
+                                        isInitialLoading={isInitialGalleryLoading}
                                         isNextPageLoading={isFetchingMore}
                                         loadNextPage={() => loadMoreServerFiles()}
-                                        itemCount={isServerMode ? serverTotal + visibleFolders.length : mixedItems.length}
+                                        itemCount={isInitialGallerySkeletonCovering ? 0 : (isServerMode ? serverTotal + visibleFolders.length : mixedItems.length)}
                                         layout={viewMode === 'folders' && layoutMode === 'timeline' ? 'masonry' : layoutMode}
                                         viewKey={galleryNavigation.location.key}
                                         restoreSnapshot={galleryNavigation.restoreSnapshot}
@@ -2618,7 +2966,7 @@ export default function App() {
                         ) : (
                             <div className="w-full h-full flex flex-col">
                                 {/* Favorite Folders Section (only in favorites view) */}
-                                {viewMode === 'favorites' && isServerMode && serverFavoriteIds.folders.length > 0 && (
+                                {viewMode === 'favorites' && isServerMode && !isInitialGallerySkeletonCovering && serverFavoriteIds.folders.length > 0 && (
                                     <div className="p-4 md:p-8 pb-0">
                                         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 md:gap-6 mb-6">
                                             {serverFolders
@@ -2649,7 +2997,12 @@ export default function App() {
 
                                 {/* Files Section */}
                                 <div className="flex-1 min-h-0 p-4 md:p-8">
-                                    {viewMode === 'favorites' && processedFiles.length === 0 && serverFavoriteIds.folders.length === 0 ? (
+                                    {shouldShowFavoritesEmptyState(
+                                        viewMode,
+                                        processedFiles.length,
+                                        serverFavoriteIds.folders.length,
+                                        isInitialGalleryLoading,
+                                    ) ? (
                                         <div className="h-full flex flex-col items-center justify-center text-gray-400 dark:text-gray-500">
                                             <Icons.Heart size={64} className="mb-4 opacity-20" />
                                             <p className="text-lg font-medium">{t('no_favorites')}</p>
@@ -2658,24 +3011,13 @@ export default function App() {
                                     ) : (
                                         <VirtualGallery
                                             ref={galleryViewportRef}
-                                            items={processedFiles.filter(Boolean)}
-                                            onItemClick={(item) => {
-                                                if (item.mediaType === 'audio') {
-                                                    // Create playlist from all audio files in current view
-                                                    const audioFiles = processedFiles.filter(f => f && f.mediaType === 'audio');
-                                                    const clickedIndex = audioFiles.findIndex(f => f.id === item.id);
-                                                    setAudioPlaylist(audioFiles);
-                                                    setCurrentAudioIndex(clickedIndex >= 0 ? clickedIndex : 0);
-                                                    setCurrentAudio(item);
-                                                    setIsPlayerMinimized(false); // Show full player initially
-                                            } else {
-                                                    handleOpenMedia(item);
-                                                }
-                                            }}
+                                            items={resolveGalleryRenderItems(processedFiles.filter(Boolean), isInitialGallerySkeletonCovering)}
+                                            onItemClick={handleMediaGalleryItemClick}
                                             hasNextPage={isServerMode && hasMoreServer}
+                                            isInitialLoading={isInitialGalleryLoading}
                                             isNextPageLoading={isFetchingMore}
                                             loadNextPage={loadMoreServerFiles}
-                                            itemCount={isServerMode ? serverTotal : processedFiles.filter(Boolean).length}
+                                            itemCount={isInitialGallerySkeletonCovering ? 0 : (isServerMode ? serverTotal : processedFiles.filter(Boolean).length)}
                                             layout={layoutMode}
                                             viewKey={galleryNavigation.location.key}
                                             restoreSnapshot={galleryNavigation.restoreSnapshot}

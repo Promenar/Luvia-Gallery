@@ -76,6 +76,12 @@ function createSchema() {
         CREATE INDEX IF NOT EXISTS idx_source_id ON files(source_id);
         CREATE INDEX IF NOT EXISTS idx_last_modified ON files(last_modified DESC);
         CREATE INDEX IF NOT EXISTS idx_name ON files(name COLLATE NOCASE);
+        CREATE INDEX IF NOT EXISTS idx_files_date_desc_id ON files(last_modified DESC, id ASC);
+        CREATE INDEX IF NOT EXISTS idx_files_size_desc_id ON files(size DESC, id ASC);
+        CREATE INDEX IF NOT EXISTS idx_files_media_date_desc_id ON files(media_type, last_modified DESC, id ASC);
+        CREATE INDEX IF NOT EXISTS idx_files_folder_date_desc_id ON files(folder_path, last_modified DESC, id ASC);
+        CREATE INDEX IF NOT EXISTS idx_files_media_size_desc_id ON files(media_type, size DESC, id ASC);
+        CREATE INDEX IF NOT EXISTS idx_files_folder_size_desc_id ON files(folder_path, size DESC, id ASC);
     `);
 
     // FTS5 Virtual Table for Search
@@ -120,6 +126,10 @@ function createSchema() {
             created_at INTEGER DEFAULT (strftime('%s', 'now')),
             UNIQUE(user_id, item_id, item_type)
         )
+    `);
+    db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_favorites_user_type_item
+        ON favorites(user_id, item_type, item_id)
     `);
 
     // Folders cache table
@@ -199,6 +209,13 @@ function ensurePerformanceCaches() {
             value TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_folders_cover_file_id ON folders(cover_file_id);
+        CREATE INDEX IF NOT EXISTS idx_files_date_desc_id ON files(last_modified DESC, id ASC);
+        CREATE INDEX IF NOT EXISTS idx_files_size_desc_id ON files(size DESC, id ASC);
+        CREATE INDEX IF NOT EXISTS idx_files_media_date_desc_id ON files(media_type, last_modified DESC, id ASC);
+        CREATE INDEX IF NOT EXISTS idx_files_folder_date_desc_id ON files(folder_path, last_modified DESC, id ASC);
+        CREATE INDEX IF NOT EXISTS idx_files_media_size_desc_id ON files(media_type, size DESC, id ASC);
+        CREATE INDEX IF NOT EXISTS idx_files_folder_size_desc_id ON files(folder_path, size DESC, id ASC);
+        CREATE INDEX IF NOT EXISTS idx_favorites_user_type_item ON favorites(user_id, item_type, item_id);
     `);
 
     const existing = db.prepare('SELECT id FROM library_stats WHERE id = 1').get();
@@ -502,13 +519,11 @@ function buildFileQueryParts(options = {}) {
     }
 
     if (favoritesOnly) {
-        joins.push("INNER JOIN favorites fav ON (fav.item_id = f.id OR fav.item_id = f.path) AND fav.user_id = ? AND fav.item_type = 'file'");
+        joins.push(`INNER JOIN favorites favorite_filter
+            ON favorite_filter.item_id = f.id
+           AND favorite_filter.user_id = ?
+           AND favorite_filter.item_type = 'file'`);
         params.push(userId);
-    } else if (userId !== null && userId !== undefined) {
-        joins.push("LEFT JOIN favorites fav ON (fav.item_id = f.id OR fav.item_id = f.path) AND fav.user_id = ? AND fav.item_type = 'file'");
-        params.push(userId);
-    } else {
-        joins.push('LEFT JOIN favorites fav ON 1=0');
     }
 
     if (ftsQuery) {
@@ -590,7 +605,21 @@ function queryFiles(options = {}) {
         sortOption = 'dateDesc'
     } = options;
     const queryParts = buildFileQueryParts(options);
-    let query = `SELECT DISTINCT f.*, CASE WHEN fav.id IS NULL THEN 0 ELSE 1 END AS is_fav
+    const favoriteProjection = options.favoritesOnly
+        ? '1 AS is_fav'
+        : options.userId !== null && options.userId !== undefined
+            ? `CASE WHEN EXISTS (
+                SELECT 1
+                FROM favorites favorite_page
+                WHERE favorite_page.user_id = ?
+                  AND favorite_page.item_type = 'file'
+                  AND favorite_page.item_id = f.id
+            ) THEN 1 ELSE 0 END AS is_fav`
+            : '0 AS is_fav';
+    const projectionParams = options.favoritesOnly || options.userId === null || options.userId === undefined
+        ? []
+        : [options.userId];
+    let query = `SELECT f.*, ${favoriteProjection}
         FROM files f ${queryParts.joins} ${queryParts.where}`;
 
     if (random) {
@@ -600,17 +629,32 @@ function queryFiles(options = {}) {
             case 'dateAsc': query += ' ORDER BY f.last_modified ASC, f.id ASC LIMIT ? OFFSET ?'; break;
             case 'nameAsc': query += ' ORDER BY f.name COLLATE NOCASE ASC, f.id ASC LIMIT ? OFFSET ?'; break;
             case 'nameDesc': query += ' ORDER BY f.name COLLATE NOCASE DESC, f.id ASC LIMIT ? OFFSET ?'; break;
+            case 'sizeDesc': query += ' ORDER BY f.size DESC, f.id ASC LIMIT ? OFFSET ?'; break;
             case 'dateDesc':
             default: query += ' ORDER BY f.last_modified DESC, f.id ASC LIMIT ? OFFSET ?';
         }
     }
 
-    const params = [...queryParts.params, limit, offset];
+    const params = [...projectionParams, ...queryParts.params, limit, offset];
 
     const stmt = db.prepare(query);
     const results = stmt.all(...params);
 
     return results.map(mapFileRow);
+}
+
+/**
+ * 多取一条媒体记录来判断是否存在续页，避免分页请求依赖全量精确计数。
+ */
+function queryFilesPage(options = {}) {
+    const requestedLimit = Number.isSafeInteger(options.limit) && options.limit > 0
+        ? options.limit
+        : 500;
+    const rows = queryFiles({ ...options, limit: requestedLimit + 1 });
+    return {
+        files: rows.slice(0, requestedLimit),
+        hasMore: rows.length > requestedLimit
+    };
 }
 
 function refreshFolderCoversForPaths(folderPaths) {
@@ -899,7 +943,7 @@ function queryFolderPaths(options = {}) {
  */
 function countFiles(options = {}) {
     const queryParts = buildFileQueryParts(options);
-    const query = `SELECT COUNT(DISTINCT f.id) as count
+    const query = `SELECT COUNT(*) as count
         FROM files f ${queryParts.joins} ${queryParts.where}`;
     const stmt = db.prepare(query);
     const result = stmt.get(...queryParts.params);
@@ -1050,23 +1094,21 @@ function clearAllFiles() {
 
 function getStats(options = {}) {
     const { allowedPaths = null } = options;
-    if (allowedPaths === null) {
+    if (allowedPaths !== null) {
         return {
-            ...getCachedStats(),
-            dbSize: fs.existsSync(DB_FILE) ? fs.statSync(DB_FILE).size : 0
+            totalFiles: 0,
+            totalImages: 0,
+            totalVideos: 0,
+            totalAudio: 0,
+            dbSize: 0,
+            statsExact: false
         };
     }
-    const totalFiles = countFiles({ allowedPaths });
-    const totalImages = countFiles({ mediaType: 'image', allowedPaths });
-    const totalVideos = countFiles({ mediaType: 'video', allowedPaths });
-    const totalAudio = countFiles({ mediaType: 'audio', allowedPaths });
 
     return {
-        totalFiles,
-        totalImages,
-        totalVideos,
-        totalAudio,
-        dbSize: fs.existsSync(DB_FILE) ? fs.statSync(DB_FILE).size : 0
+        ...getCachedStats(),
+        dbSize: fs.existsSync(DB_FILE) ? fs.statSync(DB_FILE).size : 0,
+        statsExact: true
     };
 }
 
@@ -1080,13 +1122,32 @@ function closeDatabase() {
 function migrateFavorites() {
     try {
         console.log('[Migration] Checking for legacy path-based favorites...');
-        db.exec(`
-            UPDATE favorites 
-            SET item_id = (SELECT id FROM files WHERE path = favorites.item_id) 
-            WHERE item_type = 'file' 
-            AND item_id NOT IN(SELECT id FROM files) 
-            AND item_id IN(SELECT path FROM files);
-            `);
+        const migrate = db.transaction(() => {
+            // 同一媒体同时存在 ID 与历史 path 收藏时，先删除重复 path 行，
+            // 避免后续 UPDATE 因唯一键冲突而让整批迁移回滚。
+            db.prepare(`
+                DELETE FROM favorites
+                WHERE id IN (
+                    SELECT legacy.id
+                    FROM favorites legacy
+                    JOIN files target ON target.path = legacy.item_id
+                    JOIN favorites canonical
+                      ON canonical.user_id = legacy.user_id
+                     AND canonical.item_type = legacy.item_type
+                     AND canonical.item_id = target.id
+                    WHERE legacy.item_type = 'file'
+                      AND legacy.item_id NOT IN (SELECT id FROM files)
+                )
+            `).run();
+            db.prepare(`
+                UPDATE favorites
+                SET item_id = (SELECT id FROM files WHERE path = favorites.item_id)
+                WHERE item_type = 'file'
+                  AND item_id NOT IN (SELECT id FROM files)
+                  AND item_id IN (SELECT path FROM files)
+            `).run();
+        });
+        migrate();
     } catch (e) {
         console.error('[Migration] Error migrating favorites:', e);
     }
@@ -1206,6 +1267,7 @@ module.exports = {
     upsertFile,
     insertFilesBatch,
     queryFiles,
+    queryFilesPage,
     queryFolderCovers,
     queryFolderMetadata,
     recordThumbnailReady,

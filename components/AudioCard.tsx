@@ -2,13 +2,38 @@ import React from 'react';
 import { MediaItem } from '../types';
 import { Icons } from './ui/Icon';
 
-interface AudioCardProps {
+export interface AudioCardProps {
     item: MediaItem;
     onClick: (item: MediaItem) => void;
     layout: 'grid' | 'masonry';
     isVirtual?: boolean;
     mediaHoverZoomEnabled?: boolean;
 }
+
+export const areAudioCardPropsEqual = (prev: AudioCardProps, next: AudioCardProps): boolean =>
+    prev.item.id === next.item.id
+    && prev.item.file === next.item.file
+    && prev.item.url === next.item.url
+    && prev.item.thumbnailUrl === next.item.thumbnailUrl
+    && prev.item.name === next.item.name
+    && prev.item.path === next.item.path
+    && prev.item.folderPath === next.item.folderPath
+    && prev.item.size === next.item.size
+    && prev.item.type === next.item.type
+    && prev.item.lastModified === next.item.lastModified
+    && prev.item.mediaType === next.item.mediaType
+    && prev.item.sourceId === next.item.sourceId
+    && prev.item.isFavorite === next.item.isFavorite
+    && prev.item.width === next.item.width
+    && prev.item.height === next.item.height
+    && prev.item.aspectRatio === next.item.aspectRatio
+    && prev.item.mediaCount === next.item.mediaCount
+    && prev.item.coverMedia === next.item.coverMedia
+    && prev.item.children === next.item.children
+    && prev.onClick === next.onClick
+    && prev.layout === next.layout
+    && prev.isVirtual === next.isVirtual
+    && prev.mediaHoverZoomEnabled === next.mediaHoverZoomEnabled;
 
 export const getAudioCardClasses = (
     layout: 'grid' | 'masonry',
@@ -71,11 +96,4 @@ export const AudioCard: React.FC<AudioCardProps> = React.memo(({
             )}
         </div>
     );
-}, (prev, next) => {
-    return (
-        prev.item.id === next.item.id &&
-        prev.item.isFavorite === next.item.isFavorite &&
-        prev.layout === next.layout &&
-        prev.mediaHoverZoomEnabled === next.mediaHoverZoomEnabled
-    );
-});
+}, areAudioCardPropsEqual);

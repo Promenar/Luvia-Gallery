@@ -18,6 +18,7 @@ export interface CommonViewportProps {
   onItemClick: (item: MediaItem) => void;
   // Infinite scroll props
   hasNextPage: boolean;
+  isInitialLoading: boolean;
   isNextPageLoading: boolean;
   loadNextPage: (startIndex: number, stopIndex: number) => Promise<void> | void;
   itemCount: number;

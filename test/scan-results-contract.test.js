@@ -31,6 +31,22 @@ function getScanStatusRoute() {
     return serverSource.slice(start, end);
 }
 
+function getSystemStatusRoute() {
+    const start = serverSource.indexOf("app.get('/api/system/status'");
+    const end = serverSource.indexOf('\napp.', start + 1);
+    assert.notEqual(start, -1, 'Missing /api/system/status route');
+    assert.notEqual(end, -1, 'Unable to isolate /api/system/status route');
+    return serverSource.slice(start, end);
+}
+
+function getConfigRoute() {
+    const start = serverSource.indexOf("app.get('/api/config'");
+    const end = serverSource.indexOf('\napp.', start + 1);
+    assert.notEqual(start, -1, 'Missing /api/config route');
+    assert.notEqual(end, -1, 'Unable to isolate /api/config route');
+    return serverSource.slice(start, end);
+}
+
 function getLibraryFoldersRoute() {
     const start = serverSource.indexOf("app.get('/api/library/folders'");
     const end = serverSource.indexOf('\n});', start) + 4;
@@ -58,6 +74,7 @@ test('scan results rejects invalid decimal pagination with HTTP 400', () => {
     const defaults = parseScanPagination({});
     assert.equal(defaults.offset, 0);
     assert.equal(defaults.limit, 100);
+    assert.equal(parseScanPagination({ limit: '120' }).limit, 120);
 
     const route = getScanResultsRoute();
     assert.match(route, /if \(!pagination\)[\s\S]*?res\.status\(400\)/);
@@ -68,6 +85,22 @@ test('scan status only reads constant-time cached statistics', () => {
 
     assert.match(route, /database\.getCachedStats\(\)/);
     assert.doesNotMatch(route, /database\.getStats\(\)/);
+});
+
+test('system status 显式标记媒体统计是否精确', () => {
+    const route = getSystemStatusRoute();
+
+    assert.match(route, /mediaStats:\s*\{[\s\S]*?exact:\s*dbStats\.statsExact === true/);
+    assert.match(route, /statsExact:\s*false/);
+});
+
+test('普通用户配置响应返回本人权限路径且排除密码', () => {
+    const route = getConfigRoute();
+
+    assert.match(route, /find\(u => u\.username === req\.user\.username\)/);
+    assert.match(route, /const \{ password, \.\.\.safeUser \} = currentUser/);
+    assert.match(route, /allowedPaths:\s*safeUser\.allowedPaths \|\| \[\]/);
+    assert.doesNotMatch(route, /password:\s*safeUser\.password/);
 });
 
 test('folder cover formatting refuses a missing cached thumbnail', () => {
@@ -87,13 +120,55 @@ test('folder cover formatting refuses a missing cached thumbnail', () => {
     }), null);
 });
 
-test('favorites uses the unified database filters and pagination', () => {
+test('scan results uses limit-plus-one pagination and never blocks the response on an exact filtered count', () => {
     const route = getScanResultsRoute();
 
     assert.match(route, /const filterOptions = \{[\s\S]*?favoritesOnly,[\s\S]*?sortOption,[\s\S]*?random/);
-    assert.match(route, /database\.queryFiles\(\{ \.\.\.filterOptions, offset, limit \}\)/);
-    assert.match(route, /database\.countFiles\(filterOptions\)/);
+    assert.match(route, /database\.queryFilesPage\(\{ \.\.\.filterOptions, offset, limit \}\)/);
+    assert.doesNotMatch(route, /database\.countFiles\(filterOptions\)/);
     assert.doesNotMatch(route, /queryFavoriteFiles|countFavoriteFiles|999999|filteredFiles\.slice/);
+});
+
+test('扫描结果元数据对全库使用精确缓存，对过滤分页保留旧 total 续页语义', () => {
+    const resolveScanResultsPageMetadata = loadHelper('resolveScanResultsPageMetadata');
+
+    assert.deepEqual(
+        { ...resolveScanResultsPageMetadata({ offset: 0, returnedCount: 120, hasMore: true, exactTotal: 900000 }) },
+        { total: 900000, totalExact: true, hasMore: true }
+    );
+    assert.deepEqual(
+        { ...resolveScanResultsPageMetadata({ offset: 0, returnedCount: 120, hasMore: true }) },
+        { total: 121, totalExact: false, hasMore: true }
+    );
+    assert.deepEqual(
+        { ...resolveScanResultsPageMetadata({ offset: 120, returnedCount: 35, hasMore: false }) },
+        { total: 155, totalExact: true, hasMore: false }
+    );
+});
+
+test('数据源计数与分页 total 共享精确性标记', () => {
+    const route = getScanResultsRoute();
+
+    assert.match(route, /sources:\s*\[\{[\s\S]*?count: total,[\s\S]*?countExact: totalExact[\s\S]*?\}\]/);
+});
+
+test('只有管理员无筛选全库列表可以使用精确缓存总数', () => {
+    const shouldUseCachedLibraryTotal = loadHelper('shouldUseCachedLibraryTotal');
+    const unfiltered = {
+        isAdmin: true,
+        favoritesOnly: false,
+        folderPath: null,
+        search: undefined,
+        mediaType: undefined,
+        excludeMediaType: undefined
+    };
+
+    assert.equal(shouldUseCachedLibraryTotal(unfiltered), true);
+    assert.equal(shouldUseCachedLibraryTotal({ ...unfiltered, isAdmin: false }), false);
+    assert.equal(shouldUseCachedLibraryTotal({ ...unfiltered, favoritesOnly: true }), false);
+    assert.equal(shouldUseCachedLibraryTotal({ ...unfiltered, folderPath: '/library' }), false);
+    assert.equal(shouldUseCachedLibraryTotal({ ...unfiltered, search: 'cat' }), false);
+    assert.equal(shouldUseCachedLibraryTotal({ ...unfiltered, mediaType: 'image' }), false);
 });
 
 test('path containment rejects a sibling that only shares the root prefix', () => {

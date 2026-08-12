@@ -1,10 +1,12 @@
 import React from 'react';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import App, { activateGalleryLocation, appendGalleryFolderQuery, appendGalleryScanScopeQuery, createTopLevelViewLocationUpdate, GalleryLoadErrorBanner, getAdjacentMediaId, getGalleryCacheEvictionKeys, hasVisibleGallerySearchResults, isActiveGalleryRequest, isGalleryRequestGuardActive, resolveGalleryRequestGuard, resolveScopedGalleryLayout, resolveVisibleGalleryFolders, SearchEmptyState, shouldRenderUnifiedGalleryToolbar, shouldSyncSearchDraft, shouldUpdateGalleryFetchingState, UnifiedGalleryToolbar } from '../App';
+import App, { activateGalleryLocation, appendGalleryFolderQuery, appendGalleryMediaTypeQuery, appendGalleryScanScopeQuery, canLoadNextGalleryPage, createGalleryHomeCachePayload, createTopLevelViewLocationUpdate, GalleryLoadErrorBanner, GALLERY_PAGE_SIZE, getAdjacentMediaId, getGalleryCacheEvictionKeys, getGalleryDatasetIdentity, getGalleryUserScopeFingerprint, hasVisibleGallerySearchResults, isActiveGalleryRequest, isDefaultGalleryCacheScope, isGalleryRequestGuardActive, readGalleryHomeCache, resolveGalleryRenderItems, resolveGalleryRequestGuard, resolveLibraryTotalCountForScope, resolveReadyGalleryDatasetIdentity, resolveScopedGalleryLayout, resolveVisibleGalleryFolders, runWithGalleryPaginationLock, SearchEmptyState, shouldAdvanceGalleryNavigationEpoch, shouldCacheCurrentGallery, shouldCoverGalleryWithInitialSkeleton, shouldPreserveGalleryHydratedFiles, shouldRenderUnifiedGalleryToolbar, shouldShowFavoritesEmptyState, shouldShowGallerySearchEmptyState, shouldShowServerEmptyLibrary, shouldSyncSearchDraft, shouldUpdateGalleryFetchingState, sortGalleryCombinedItems, UnifiedGalleryToolbar, waitForGalleryLocationResults } from '../App';
 import { FolderCard } from '../components/FolderCard';
 import { LanguageProvider } from '../contexts/LanguageContext';
 import { useGalleryNavigation, type GalleryNavigationApi } from '../hooks/useGalleryNavigation';
@@ -355,7 +357,8 @@ describe('应用导航最小闭环', () => {
   });
 
   it('扫描请求仅为非空文件夹搜索启用递归，普通目录和收藏夹请求均不递归', () => {
-    const baseUrl = '/api/scan/results?offset=0&limit=500';
+    expect(GALLERY_PAGE_SIZE).toBe(120);
+    const baseUrl = `/api/scan/results?offset=0&limit=${GALLERY_PAGE_SIZE}`;
     const folderSearch = new URLSearchParams(
       appendGalleryScanScopeQuery(baseUrl, '相册/旅行', false, ' 人物 ').split('?')[1],
     );
@@ -374,6 +377,314 @@ describe('应用导航最小闭环', () => {
     expect(favoritesSearch.get('favorites')).toBe('true');
     expect(favoritesSearch.get('search')).toBe('人物');
     expect(favoritesSearch.get('recursive')).toBeNull();
+  });
+
+  it('服务端媒体筛选仅下发受支持的 image、video 和 audio 枚举', () => {
+    const baseUrl = `/api/scan/results?offset=0&limit=${GALLERY_PAGE_SIZE}`;
+    expect(new URLSearchParams(appendGalleryMediaTypeQuery(baseUrl, 'image').split('?')[1]).get('mediaType')).toBe('image');
+    expect(new URLSearchParams(appendGalleryMediaTypeQuery(baseUrl, 'video').split('?')[1]).get('mediaType')).toBe('video');
+    expect(new URLSearchParams(appendGalleryMediaTypeQuery(baseUrl, 'audio').split('?')[1]).get('mediaType')).toBe('audio');
+    expect(new URLSearchParams(appendGalleryMediaTypeQuery(baseUrl, 'all').split('?')[1]).get('mediaType')).toBeNull();
+  });
+
+  it('大文件优先排序通过服务端分页契约传递 sizeDesc', () => {
+    const source = readFileSync(path.join(process.cwd(), 'App.tsx'), 'utf8');
+    const mapSortBlock = source.match(/const mapSort = \(opt: SortOption\) => \{([\s\S]*?)\n\s*\};/)?.[1] || '';
+    expect(mapSortBlock).toContain("case 'sizeDesc': return 'sizeDesc'");
+  });
+
+  it('图库数据加载依赖数据集身份，不受媒体查看器或布局位置键变化影响', () => {
+    const source = readFileSync(path.join(process.cwd(), 'App.tsx'), 'utf8');
+    expect(source).toContain('const galleryDatasetIdentity = getGalleryDatasetIdentity(currentGalleryUserScope, galleryNavigation.location);');
+    expect(source).toContain('[authStep, currentGalleryUserScope, galleryDatasetIdentity, galleryReloadNonce');
+    expect(source).not.toContain('[authStep, currentUser?.username, galleryNavigation.location.key, galleryReloadNonce');
+  });
+
+  it('持久化首包缓存只服务默认全库视图', () => {
+    expect(isDefaultGalleryCacheScope('all', '', '', 'dateDesc', 'all')).toBe(true);
+    expect(isDefaultGalleryCacheScope('all', '', '人物', 'dateDesc', 'all')).toBe(false);
+    expect(isDefaultGalleryCacheScope('all', '', '', 'dateAsc', 'all')).toBe(false);
+    expect(isDefaultGalleryCacheScope('all', '', '', 'dateDesc', 'video')).toBe(false);
+    expect(isDefaultGalleryCacheScope('folders', '', '', 'dateDesc', 'all')).toBe(false);
+  });
+
+  it('服务端空库遮罩只在默认全库且当前文件确实为空时出现', () => {
+    const location = {
+      view: 'all' as const,
+      folderPath: '',
+      search: '',
+      sort: 'dateDesc' as const,
+      filter: 'all' as const,
+    };
+    expect(shouldShowServerEmptyLibrary({ isServerMode: true, location, fileCount: 0, libraryTotalCount: 0, isLoading: false })).toBe(true);
+    expect(shouldShowServerEmptyLibrary({ isServerMode: true, location, fileCount: 120, libraryTotalCount: 0, isLoading: false })).toBe(false);
+    expect(shouldShowServerEmptyLibrary({ isServerMode: true, location: { ...location, filter: 'video' }, fileCount: 0, libraryTotalCount: 0, isLoading: false })).toBe(false);
+    expect(shouldShowServerEmptyLibrary({ isServerMode: true, location, fileCount: 0, libraryTotalCount: 0, isLoading: true })).toBe(false);
+  });
+
+  it('首页缓存严格匹配用户名、角色和允许路径，旧无作用域缓存视为 miss', () => {
+    const baseUser = { username: 'alice', isAdmin: false, allowedPaths: ['/media/a', '/media/b'] };
+    const files = [{ id: 'media-1', path: '/media/a/image.jpg' }] as any;
+    const payload = createGalleryHomeCachePayload(baseUser, files, 900_000, 123);
+    const raw = JSON.stringify(payload);
+    expect(readGalleryHomeCache(raw, { ...baseUser, allowedPaths: ['/media/b', '/media/a'] })).toMatchObject({ files, total: 900_000 });
+    expect(readGalleryHomeCache(raw, { ...baseUser, username: 'bob' })).toBeNull();
+    expect(readGalleryHomeCache(raw, { ...baseUser, allowedPaths: ['/media/a'] })).toBeNull();
+    expect(readGalleryHomeCache(raw, { ...baseUser, isAdmin: true })).toBeNull();
+    expect(readGalleryHomeCache(JSON.stringify({ files, total: 900_000 }), baseUser)).toBeNull();
+    expect(getGalleryUserScopeFingerprint(baseUser)).not.toContain('/media/a');
+  });
+
+  it('管理员精确总数在登出或切换受限权限作用域后立即清零', () => {
+    const adminScope = getGalleryUserScopeFingerprint({ username: 'admin', isAdmin: true, allowedPaths: [] });
+    const restrictedScope = getGalleryUserScopeFingerprint({ username: 'viewer', isAdmin: false, allowedPaths: ['/media/public'] });
+    const sameRestrictedScope = getGalleryUserScopeFingerprint({ username: 'viewer', isAdmin: false, allowedPaths: ['/media/public'] });
+
+    expect(resolveLibraryTotalCountForScope(adminScope, adminScope, 900_000)).toBe(900_000);
+    expect(resolveLibraryTotalCountForScope(adminScope, '', 900_000)).toBe(0);
+    expect(resolveLibraryTotalCountForScope(adminScope, restrictedScope, 900_000)).toBe(0);
+    expect(resolveLibraryTotalCountForScope(restrictedScope, sameRestrictedScope, 120)).toBe(120);
+
+    const source = readFileSync(path.join(process.cwd(), 'App.tsx'), 'utf8');
+    expect(source).toContain('const currentGalleryUserScope = currentUser ? getGalleryUserScopeFingerprint(currentUser) :');
+    expect(source).toContain('setLibraryTotalCount(0);\n        setCurrentUser(null);');
+  });
+
+  it('同用户名角色或允许路径变化会隔离内存查询键且不暴露路径明文', () => {
+    const location = {
+      view: 'all' as const,
+      folderPath: '',
+      search: '',
+      sort: 'dateDesc' as const,
+      filter: 'all' as const,
+      randomSeed: '0',
+    };
+    const adminScope = getGalleryUserScopeFingerprint({ username: 'alice', isAdmin: true, allowedPaths: ['/private/admin'] });
+    const regularScope = getGalleryUserScopeFingerprint({ username: 'alice', isAdmin: false, allowedPaths: ['/media/public'] });
+    const narrowedScope = getGalleryUserScopeFingerprint({ username: 'alice', isAdmin: false, allowedPaths: ['/media/public/photos'] });
+    const adminIdentity = getGalleryDatasetIdentity(adminScope, location);
+    const regularIdentity = getGalleryDatasetIdentity(regularScope, location);
+    const narrowedIdentity = getGalleryDatasetIdentity(narrowedScope, location);
+
+    expect(new Set([adminIdentity, regularIdentity, narrowedIdentity]).size).toBe(3);
+    expect(adminIdentity).not.toContain('/private/admin');
+    expect(regularIdentity).not.toContain('/media/public');
+    expect(narrowedIdentity).not.toContain('/media/public/photos');
+
+    const client = new QueryClient();
+    const adminKey = JSON.parse(adminIdentity);
+    const narrowedKey = JSON.parse(narrowedIdentity);
+    client.setQueryData(adminKey, { files: [{ id: 'admin-only' }] });
+    expect(client.getQueryData(narrowedKey)).toBeUndefined();
+    expect(shouldPreserveGalleryHydratedFiles(true, adminScope, narrowedScope, 0, 120)).toBe(false);
+    expect(shouldPreserveGalleryHydratedFiles(true, narrowedScope, narrowedScope, 0, 120)).toBe(true);
+  });
+
+  it('图库数据 effect 与 query cache 清理均依赖权限指纹', () => {
+    const source = readFileSync(path.join(process.cwd(), 'App.tsx'), 'utf8');
+    expect(source).toContain('username: currentGalleryUserScope');
+    expect(source).toContain('}, [currentGalleryUserScope]);');
+    expect(source).toContain('}, [currentGalleryUserScope, queryClient]);');
+    expect(source).toContain('[authStep, currentGalleryUserScope, galleryDatasetIdentity');
+    expect(source).toContain('contentScopeIdentity === currentScopeIdentity');
+    expect(source).toContain('galleryContentScopeRef.current,\n            currentGalleryUserScope');
+  });
+
+  it('文件夹混排 sizeDesc 按大小降序并以媒体身份稳定打破并列', () => {
+    const createItem = (id: string, size: number) => ({
+      id,
+      name: `${id}.jpg`,
+      path: `${id}.jpg`,
+      folderPath: '',
+      size,
+      type: 'image/jpeg',
+      lastModified: 1,
+      mediaType: 'image' as const,
+      sourceId: 'local',
+      url: '',
+    });
+    const items = [createItem('z', 10), createItem('b', 50), createItem('a', 50)];
+    expect(sortGalleryCombinedItems(items, 'sizeDesc').map(item => item.id)).toEqual(['a', 'b', 'z']);
+    expect(sortGalleryCombinedItems([...items].reverse(), 'sizeDesc').map(item => item.id)).toEqual(['a', 'b', 'z']);
+  });
+
+  it('续页失败后释放互斥锁并允许立即重试', async () => {
+    const lockRef = { current: false };
+    const firstTask = vi.fn(async () => { throw new Error('network failed'); });
+    await expect(runWithGalleryPaginationLock(lockRef, firstTask)).rejects.toThrow('network failed');
+    expect(lockRef.current).toBe(false);
+
+    const retryTask = vi.fn(async () => undefined);
+    await expect(runWithGalleryPaginationLock(lockRef, retryTask)).resolves.toBe(true);
+    expect(retryTask).toHaveBeenCalledTimes(1);
+    expect(lockRef.current).toBe(false);
+  });
+
+  it('首次位置加载等待媒体和目录共同完成，目录较慢时不提前撤骨架', async () => {
+    let resolveFolders: ((value: boolean) => void) | undefined;
+    const fileRequest = Promise.resolve(true);
+    const folderRequest = new Promise<boolean>((resolve) => { resolveFolders = resolve; });
+    let settled = false;
+    let shouldCover = shouldCoverGalleryWithInitialSkeleton(false, false);
+    let loadedItems: Array<{ id: string }> = [];
+    const combined = waitForGalleryLocationResults(fileRequest, folderRequest).then((results) => {
+      settled = true;
+      shouldCover = false;
+      return results;
+    });
+
+    await fileRequest;
+    loadedItems = [{ id: 'file-arrived-first' }];
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(resolveGalleryRenderItems(loadedItems, shouldCover)).toEqual([]);
+    resolveFolders?.(true);
+    await expect(combined).resolves.toEqual([true, true]);
+    expect(settled).toBe(true);
+    expect(resolveGalleryRenderItems(loadedItems, shouldCover)).toEqual(loadedItems);
+    expect(shouldCoverGalleryWithInitialSkeleton(false, true)).toBe(false);
+    expect(shouldCoverGalleryWithInitialSkeleton(true, false)).toBe(false);
+  });
+
+  it('cache miss 首载未完成时禁止写入半成品查询缓存，完整首包和续页阶段允许缓存', () => {
+    expect(shouldCacheCurrentGallery(true, true, false)).toBe(false);
+    expect(shouldCacheCurrentGallery(true, false, false)).toBe(false);
+    expect(shouldCacheCurrentGallery(false, true, false)).toBe(false);
+    expect(shouldCacheCurrentGallery(false, false, true)).toBe(false);
+    expect(shouldCacheCurrentGallery(false, false, false)).toBe(true);
+
+    const client = new QueryClient();
+    const queryKey = createGalleryQueryKey({ username: 'alice', view: 'folders', folderPath: 'A', search: '', sort: 'dateDesc', filter: 'all', randomSeed: 0 });
+    if (shouldCacheCurrentGallery(true, true, false)) client.setQueryData(queryKey, { files: [{ id: 'partial' }] });
+    expect(client.getQueryData(queryKey)).toBeUndefined();
+    if (shouldCacheCurrentGallery(false, false, true)) client.setQueryData(queryKey, { files: [{ id: 'failed-partial' }] });
+    expect(client.getQueryData(queryKey)).toBeUndefined();
+    if (shouldCacheCurrentGallery(false, false, false)) client.setQueryData(queryKey, { files: [{ id: 'complete' }], serverFolders: [] });
+    expect(client.getQueryData(queryKey)).toMatchObject({ files: [{ id: 'complete' }] });
+  });
+
+  it('只有当前数据集完整首包就绪后才能请求续页', () => {
+    const base = {
+      isServerMode: true,
+      hasCurrentUser: true,
+      hasMore: true,
+      isFetching: false,
+      isInitialLoading: false,
+      isInitialSkeletonCovering: false,
+      serverOffset: 120,
+      readyDatasetIdentity: 'dataset-a',
+      currentDatasetIdentity: 'dataset-a',
+    };
+    expect(canLoadNextGalleryPage(base)).toBe(true);
+    expect(canLoadNextGalleryPage({ ...base, isInitialLoading: true })).toBe(false);
+    expect(canLoadNextGalleryPage({ ...base, isInitialSkeletonCovering: true })).toBe(false);
+    expect(canLoadNextGalleryPage({ ...base, isFetching: true })).toBe(false);
+    expect(canLoadNextGalleryPage({ ...base, serverOffset: 0 })).toBe(false);
+    expect(canLoadNextGalleryPage({ ...base, readyDatasetIdentity: '' })).toBe(false);
+    expect(canLoadNextGalleryPage({ ...base, currentDatasetIdentity: 'dataset-b' })).toBe(false);
+    expect(resolveReadyGalleryDatasetIdentity([true, true], 'dataset-a')).toBe('dataset-a');
+    expect(resolveReadyGalleryDatasetIdentity([true, false], 'dataset-a')).toBe('');
+    expect(resolveReadyGalleryDatasetIdentity([], 'dataset-a')).toBe('');
+  });
+
+  it('收藏夹首载等待 favorites 期间保持 initial 门禁，不会发第二条 offset=0', () => {
+    expect(canLoadNextGalleryPage({
+      isServerMode: true,
+      hasCurrentUser: true,
+      hasMore: true,
+      isFetching: false,
+      isInitialLoading: true,
+      isInitialSkeletonCovering: true,
+      serverOffset: 0,
+      readyDatasetIdentity: '',
+      currentDatasetIdentity: 'favorites-dataset',
+    })).toBe(false);
+  });
+
+  it('数据集切换 effect 前即使保留旧 offset 也不能沿用旧 ready 身份分页', () => {
+    expect(canLoadNextGalleryPage({
+      isServerMode: true,
+      hasCurrentUser: true,
+      hasMore: true,
+      isFetching: false,
+      isInitialLoading: false,
+      isInitialSkeletonCovering: false,
+      serverOffset: 360,
+      readyDatasetIdentity: 'dataset-a',
+      currentDatasetIdentity: 'dataset-b',
+    })).toBe(false);
+  });
+
+  it('布局和媒体导航不推进数据请求纪元，数据集更新仍使旧请求失效', () => {
+    const current = {
+      view: 'all' as const,
+      folderPath: '',
+      search: '',
+      sort: 'dateDesc' as const,
+      filter: 'all' as const,
+      randomSeed: '1',
+      layout: 'grid' as const,
+      mediaId: undefined,
+    };
+    expect(shouldAdvanceGalleryNavigationEpoch('alice', current, { ...current, layout: 'masonry' })).toBe(false);
+    expect(shouldAdvanceGalleryNavigationEpoch('alice', current, { ...current, mediaId: 'media-1' })).toBe(false);
+    expect(shouldAdvanceGalleryNavigationEpoch('alice', current, { ...current })).toBe(false);
+    expect(shouldAdvanceGalleryNavigationEpoch('alice', current, { ...current, search: '人物' })).toBe(true);
+    expect(shouldAdvanceGalleryNavigationEpoch('alice', current, { ...current, sort: 'sizeDesc' })).toBe(true);
+    expect(shouldAdvanceGalleryNavigationEpoch('alice', current, { ...current, filter: 'video' })).toBe(true);
+    expect(shouldAdvanceGalleryNavigationEpoch('alice', current, { ...current, randomSeed: '2' })).toBe(true);
+
+    const epochRef = { current: 8 };
+    const locationKeyRef = { current: 'all:grid' };
+    const requestGuard = resolveGalleryRequestGuard(undefined, undefined, undefined, epochRef.current, locationKeyRef.current);
+    if (shouldAdvanceGalleryNavigationEpoch('alice', current, { ...current, layout: 'masonry' })) epochRef.current += 1;
+    const remainsActiveAfterLayout = isGalleryRequestGuardActive(requestGuard, epochRef.current, locationKeyRef.current);
+    expect(remainsActiveAfterLayout).toBe(true);
+    let isFetchingMore = true;
+    if (shouldUpdateGalleryFetchingState(1, 1, remainsActiveAfterLayout)) isFetchingMore = false;
+    expect(isFetchingMore).toBe(false);
+    if (shouldAdvanceGalleryNavigationEpoch('alice', current, { ...current, filter: 'video' })) epochRef.current += 1;
+    expect(isGalleryRequestGuardActive(requestGuard, epochRef.current, locationKeyRef.current)).toBe(false);
+  });
+
+  it('首载中重复点击当前侧栏不推进纪元，旧请求仍能清理 loading', () => {
+    const current = {
+      view: 'all' as const,
+      folderPath: '',
+      search: '',
+      sort: 'dateDesc' as const,
+      filter: 'all' as const,
+      randomSeed: '0',
+    };
+    const epochRef = { current: 3 };
+    const locationKeyRef = { current: 'view=all' };
+    const guard = resolveGalleryRequestGuard(undefined, undefined, undefined, epochRef.current, locationKeyRef.current);
+    if (shouldAdvanceGalleryNavigationEpoch('alice', current, { ...current })) epochRef.current += 1;
+    expect(epochRef.current).toBe(3);
+    expect(isGalleryRequestGuardActive(guard, epochRef.current, locationKeyRef.current)).toBe(true);
+    let isInitialLoading = true;
+    if (shouldUpdateGalleryFetchingState(1, 1, true)) isInitialLoading = false;
+    expect(isInitialLoading).toBe(false);
+  });
+
+  it('所有显式 Gallery 导航入口统一通过数据集身份推进纪元，登录无旁路首载', () => {
+    const source = readFileSync(path.join(process.cwd(), 'App.tsx'), 'utf8');
+    expect(source.match(/navigationRequestEpochRef\.current \+= 1/g)).toHaveLength(1);
+    expect(source).toContain('advanceGalleryDatasetNavigation(resolveNextGalleryLocation(locationUpdate));');
+    expect(source).toContain('advanceGalleryDatasetNavigation(resolveNextGalleryLocation(update));');
+    expect(source).toContain('onBack={() => { cacheCurrentGallery(); galleryNavigation.back(); }}');
+    expect(source).toContain('onForward={() => { cacheCurrentGallery(); galleryNavigation.forward(); }}');
+    expect(source).not.toContain('setTimeout(() => {\n                                                    // Make sure fetchServerFiles uses the token now');
+    expect(source).toContain('manageInitialLoading = false');
+  });
+
+  it('搜索和收藏空态必须等待整体首次加载完成', () => {
+    expect(shouldShowGallerySearchEmptyState('人物', false, false, true)).toBe(false);
+    expect(shouldShowGallerySearchEmptyState('人物', false, false, false)).toBe(true);
+    expect(shouldShowGallerySearchEmptyState('人物', true, false, false)).toBe(false);
+    expect(shouldShowFavoritesEmptyState('favorites', 0, 0, true)).toBe(false);
+    expect(shouldShowFavoritesEmptyState('favorites', 0, 0, false)).toBe(true);
+    expect(shouldShowFavoritesEmptyState('favorites', 1, 0, false)).toBe(false);
   });
 
   it('目录搜索请求同时发送裁剪后的搜索词和固定上限', () => {

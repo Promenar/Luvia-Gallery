@@ -12,6 +12,9 @@ interface SystemTabProps {
   onExportConfig: () => void;
 }
 
+export const formatMediaStatValue = (value: number | undefined, exact: boolean | undefined): string =>
+  exact === false ? '—' : (value || 0).toLocaleString();
+
 export const SystemTab: React.FC<SystemTabProps> = ({
   isServerMode,
   systemStatus,
@@ -135,7 +138,7 @@ export const SystemTab: React.FC<SystemTabProps> = ({
                         <span className="text-sm font-bold text-text-secondary">{stat.label}</span>
                       </div>
                       <span className="text-xl font-black font-mono text-text-primary">
-                        {stat.value.toLocaleString()}
+                        {formatMediaStatValue(stat.value, systemStatus.mediaStats?.exact)}
                       </span>
                     </div>
                   ))}
