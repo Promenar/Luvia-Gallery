@@ -23,6 +23,14 @@ function getScanResultsRoute() {
     return serverSource.slice(start, end);
 }
 
+function getScanStatusRoute() {
+    const start = serverSource.indexOf("app.get('/api/scan/status'");
+    const end = serverSource.indexOf('\napp.', start + 1);
+    assert.notEqual(start, -1, 'Missing /api/scan/status route');
+    assert.notEqual(end, -1, 'Unable to isolate /api/scan/status route');
+    return serverSource.slice(start, end);
+}
+
 function getLibraryFoldersRoute() {
     const start = serverSource.indexOf("app.get('/api/library/folders'");
     const end = serverSource.indexOf('\n});', start) + 4;
@@ -53,6 +61,30 @@ test('scan results rejects invalid decimal pagination with HTTP 400', () => {
 
     const route = getScanResultsRoute();
     assert.match(route, /if \(!pagination\)[\s\S]*?res\.status\(400\)/);
+});
+
+test('scan status only reads constant-time cached statistics', () => {
+    const route = getScanStatusRoute();
+
+    assert.match(route, /database\.getCachedStats\(\)/);
+    assert.doesNotMatch(route, /database\.getStats\(\)/);
+});
+
+test('folder cover formatting refuses a missing cached thumbnail', () => {
+    const formatFolderCoverMedia = loadHelper('formatFolderCoverMedia', {
+        crypto: { createHash: () => ({ update: () => ({ digest: () => 'cover' }) }) },
+        getCachedPath: () => '/cache/missing.webp',
+        fs: { existsSync: () => false }
+    });
+
+    assert.equal(formatFolderCoverMedia({
+        id: 'cover-id',
+        path: '/library/cover.jpg',
+        type: 'image/jpeg',
+        mediaType: 'image',
+        name: 'cover.jpg',
+        thumbnailPath: '/cache/missing.webp'
+    }), null);
 });
 
 test('favorites uses the unified database filters and pagination', () => {
@@ -93,6 +125,7 @@ test('folder route batches cover queries and buildFolderResult never queries the
     );
 
     assert.equal((route.match(/database\.queryFolderCovers\(subs\)/g) || []).length, 3);
+    assert.equal((route.match(/database\.queryFolderMetadata\(subs\)/g) || []).length, 3);
     assert.match(route, /buildFolderResult\(\s*folderPath,\s*coverByFolder\.get\(folderPath\) \|\| null,/);
     assert.doesNotMatch(helper, /database\./);
 });
@@ -117,11 +150,20 @@ test('folder route cover selection never calls recursive filesystem cover discov
     assert.doesNotMatch(folderHelper, /findCoverMedia/);
 });
 
-test('folder media count requires a dotted extension and includes GIF', () => {
+test('folder metadata never performs per-folder synchronous filesystem reads', () => {
     const helper = serverSource.slice(
         serverSource.indexOf('function buildFolderResult('),
         serverSource.indexOf("app.get('/api/library/folders'")
     );
 
-    assert.match(helper, /\\\.\(jpg\|jpeg\|png\|gif\|webp\|mp4\|mov\|webm\)\$/);
+    assert.doesNotMatch(helper, /readdirSync|statSync/);
+    assert.match(helper, /metadata\?\.mediaCount/);
+});
+
+test('batch delete passes both decoded path and media id to the database', () => {
+    const start = serverSource.indexOf("app.post('/api/file/batch-delete'");
+    const end = serverSource.indexOf('\n});', start) + 4;
+    const route = serverSource.slice(start, end);
+
+    assert.equal((route.match(/database\.deleteFile\(filePath, id\)/g) || []).length, 2);
 });

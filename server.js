@@ -226,6 +226,56 @@ function getCachedPath(filename, ensureDir = false) {
     return path.join(dir, filename);
 }
 
+async function backfillFolderCoverCache() {
+    const state = database.getFolderCoverBackfillState();
+    if (state === 'complete') return;
+
+    let afterRowid = Number.parseInt(state || '0', 10) || 0;
+    let restored = 0;
+    while (true) {
+        const batch = database.getFolderCoverBackfillBatch(afterRowid, 256);
+        if (batch.length === 0) break;
+
+        const candidates = await Promise.all(batch.map(async file => {
+            const thumbFilename = crypto.createHash('md5').update(file.id).digest('hex') + '.webp';
+            const thumbnailPath = getCachedPath(thumbFilename);
+            try {
+                const stats = await fs.promises.stat(thumbnailPath);
+                if (!stats.isFile() || stats.size <= 0) return null;
+                return { fileId: file.id, thumbnailPath, generatedAt: stats.mtimeMs };
+            } catch (error) {
+                if (error.code === 'ENOENT') return null;
+                throw new Error(`无法检查历史缩略图 ${thumbnailPath}: ${error.message}`);
+            }
+        }));
+
+        for (const candidate of candidates) {
+            if (candidate && database.recordThumbnailReady(candidate)) restored += 1;
+        }
+        afterRowid = batch[batch.length - 1].rowid;
+        database.setFolderCoverBackfillState(String(afterRowid));
+        await new Promise(resolve => setImmediate(resolve));
+    }
+
+    database.setFolderCoverBackfillState('complete');
+    console.log(`[FolderCover] 历史封面缓存恢复完成，共登记 ${restored} 个有效缩略图。`);
+}
+
+function scheduleFolderCoverBackfill(delayMs = 5000) {
+    const timer = setTimeout(() => {
+        const task = backgroundTaskCoordinator.run('folder-cover-backfill', backfillFolderCoverCache);
+        if (task === false) {
+            scheduleFolderCoverBackfill(30_000);
+            return;
+        }
+        task.catch(error => {
+            console.error('[FolderCover] 历史封面缓存恢复失败:', error);
+            scheduleFolderCoverBackfill(30_000);
+        });
+    }, delayMs);
+    timer.unref();
+}
+
 // --- Migration Logic ---
 function migrateCacheStructure() {
     console.log('[Cache] Checking for legacy flat cache structure...');
@@ -271,6 +321,7 @@ try {
     console.error('Database initialization failed:', err);
     process.exit(1);
 }
+scheduleFolderCoverBackfill();
 // db.pragma('journal_mode = WAL');
 // db.prepare(`...`).run();
 
@@ -805,16 +856,17 @@ function parseFolderSearchLimit(value) {
 }
 
 function formatFolderCoverMedia(coverMedia) {
-    if (!coverMedia) return null;
+    if (!coverMedia || !coverMedia.thumbnailPath) return null;
 
     let url = `/api/thumb/${encodeURIComponent(coverMedia.id)}`;
     try {
-        const thumbFilename = crypto.createHash('md5').update(coverMedia.id).digest('hex') + '.webp';
-        const thumbPath = getCachedPath(thumbFilename);
-        if (fs.existsSync(thumbPath)) {
-            url += `?t=${fs.statSync(thumbPath).mtimeMs}`;
-        }
-    } catch (e) { }
+        if (!fs.existsSync(coverMedia.thumbnailPath)) return null;
+        const stats = fs.statSync(coverMedia.thumbnailPath);
+        if (!stats.isFile() || stats.size <= 0) return null;
+        url += `?t=${stats.mtimeMs}`;
+    } catch (e) {
+        return null;
+    }
 
     return {
         id: coverMedia.id,
@@ -826,25 +878,13 @@ function formatFolderCoverMedia(coverMedia) {
     };
 }
 
-function buildFolderResult(folderPath, coverMedia, isFavorite = false) {
-    let mediaCount = 0;
-    let lastModified = 0;
-
-    try {
-        const stats = fs.statSync(folderPath);
-        lastModified = Math.floor(stats.mtimeMs / 1000);
-        const items = fs.readdirSync(folderPath, { withFileTypes: true });
-        mediaCount = items.filter(item =>
-            item.isFile() && /\.(jpg|jpeg|png|gif|webp|mp4|mov|webm)$/i.test(item.name)
-        ).length;
-    } catch (e) { }
-
+function buildFolderResult(folderPath, coverMedia, isFavorite = false, metadata = null) {
     return {
         name: path.basename(folderPath),
         path: folderPath,
-        mediaCount,
+        mediaCount: metadata?.mediaCount || 0,
         coverMedia: formatFolderCoverMedia(coverMedia),
-        lastModified,
+        lastModified: metadata?.lastModified || 0,
         isFavorite
     };
 }
@@ -899,11 +939,13 @@ app.get('/api/library/folders', (req, res) => {
         }
 
         const coverByFolder = database.queryFolderCovers(subs);
+        const metadataByFolder = database.queryFolderMetadata(subs);
         const folders = subs.map(folderPath =>
             buildFolderResult(
                 folderPath,
                 coverByFolder.get(folderPath) || null,
-                favoriteFolders.has(folderPath)
+                favoriteFolders.has(folderPath),
+                metadataByFolder.get(folderPath) || null
             )
         );
         return res.json({ folders });
@@ -912,8 +954,14 @@ app.get('/api/library/folders', (req, res) => {
     if (favoritesOnly) {
         const subs = Array.from(favoriteFolders);
         const coverByFolder = database.queryFolderCovers(subs);
+        const metadataByFolder = database.queryFolderMetadata(subs);
         const folders = subs.map(folderPath =>
-            buildFolderResult(folderPath, coverByFolder.get(folderPath) || null, true)
+            buildFolderResult(
+                folderPath,
+                coverByFolder.get(folderPath) || null,
+                true,
+                metadataByFolder.get(folderPath) || null
+            )
         );
         return res.json({ folders });
     }
@@ -965,11 +1013,13 @@ app.get('/api/library/folders', (req, res) => {
 
     subs = subs.filter(folderPath => isCurrentlyAllowed(folderPath));
     const coverByFolder = database.queryFolderCovers(subs);
+    const metadataByFolder = database.queryFolderMetadata(subs);
     const folders = subs.map(folderPath =>
         buildFolderResult(
             folderPath,
             coverByFolder.get(folderPath) || null,
-            favoriteFolders.has(folderPath)
+            favoriteFolders.has(folderPath),
+            metadataByFolder.get(folderPath) || null
         )
     );
     res.json({ folders });
@@ -1014,7 +1064,10 @@ app.post('/api/file/rename', (req, res) => {
         if (fs.existsSync(newPath)) return res.status(400).json({ error: 'File already exists' });
 
         fs.renameSync(oldPath, newPath);
-        database.renameFile(oldPath, newPath, newName);
+        if (!database.renameFile(oldPath, newPath, newName)) {
+            fs.renameSync(newPath, oldPath);
+            throw new Error('数据库更新失败，文件改名已回滚');
+        }
         res.json({ success: true });
     } catch (e) {
         console.error("Rename error:", e);
@@ -1283,7 +1336,7 @@ app.get('/api/scan/status', (req, res) => {
             });
         }
 
-        const stats = database.getStats();
+        const stats = database.getCachedStats();
         res.json({
             status: scanState.status,
             count: scanState.count,
@@ -1580,7 +1633,17 @@ async function generateThumbnail(file, force = false) {
     const thumbFilename = crypto.createHash('md5').update(fileId).digest('hex') + '.webp';
     const thumbPath = getCachedPath(thumbFilename, true);
 
-    if (!force && fs.existsSync(thumbPath)) return true;
+    if (!force && fs.existsSync(thumbPath)) {
+        const stats = fs.statSync(thumbPath);
+        if (stats.isFile() && stats.size > 0) {
+            database.recordThumbnailReady({
+                fileId: file.id || fileId,
+                thumbnailPath: thumbPath,
+                generatedAt: stats.mtimeMs
+            });
+            return true;
+        }
+    }
 
 
     return new Promise(async (resolve) => {
@@ -1681,6 +1744,11 @@ async function generateThumbnail(file, force = false) {
         // Check final result
         if (!result.err && fs.existsSync(thumbPath) && fs.statSync(thumbPath).size > 0) {
             const dims = updateDbWithDimensions(thumbPath, file);
+            database.recordThumbnailReady({
+                fileId: file.id || fileId,
+                thumbnailPath: thumbPath,
+                generatedAt: fs.statSync(thumbPath).mtimeMs
+            });
             if (dims) {
                 console.log(`[Thumb] Success: ${file.name} (${dims.width}x${dims.height})`);
             }
@@ -2207,7 +2275,7 @@ app.post('/api/file/batch-delete', authenticateToken, adminOnly, (req, res) => {
             // but for deletion we must be extra careful. Here we rely on adminOnly and DB validation)
             if (!fs.existsSync(filePath)) {
                 // Already gone? Remove from DB anyway
-                database.deleteFile(id);
+                database.deleteFile(filePath, id);
                 deletedCount++;
                 return;
             }
@@ -2216,7 +2284,7 @@ app.post('/api/file/batch-delete', authenticateToken, adminOnly, (req, res) => {
             fs.unlinkSync(filePath);
 
             // 3. DB Delete
-            database.deleteFile(id);
+            database.deleteFile(filePath, id);
 
             // 4. Remove from Results lists
             smartScanResults.missing = smartScanResults.missing.filter(f => f.id !== id);

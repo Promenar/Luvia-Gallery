@@ -30,6 +30,7 @@ function initDatabase() {
 
     // Create/Verify schema exists (for upgrades)
     ensureSchema();
+    ensurePerformanceCaches();
 
     // Migration
     migrateFavorites();
@@ -165,6 +166,87 @@ function ensureSchema() {
     } catch (error) {
         console.error('[Migration] Failed to add thumbnail dimension columns:', error);
     }
+}
+
+/**
+ * 初始化常数时间媒体统计与文件夹封面缓存所需的派生结构。
+ * 旧数据库只在启动、尚未对外服务时执行一次聚合回填；后续由触发器增量维护。
+ */
+function ensurePerformanceCaches() {
+    db.exec(`
+        CREATE TABLE IF NOT EXISTS folders (
+            path TEXT PRIMARY KEY,
+            media_count INTEGER DEFAULT 0,
+            cover_file_id TEXT,
+            last_updated INTEGER NOT NULL
+        );
+    `);
+    const folderColumns = db.pragma('table_info(folders)').map(row => row.name);
+    if (!folderColumns.includes('cover_last_modified')) {
+        db.prepare('ALTER TABLE folders ADD COLUMN cover_last_modified INTEGER').run();
+    }
+
+    db.exec(`
+        CREATE TABLE IF NOT EXISTS library_stats (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            total_files INTEGER NOT NULL DEFAULT 0,
+            total_images INTEGER NOT NULL DEFAULT 0,
+            total_videos INTEGER NOT NULL DEFAULT 0,
+            total_audio INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS app_meta (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_folders_cover_file_id ON folders(cover_file_id);
+    `);
+
+    const existing = db.prepare('SELECT id FROM library_stats WHERE id = 1').get();
+    if (!existing) {
+        const totals = db.prepare(`
+            SELECT
+                COUNT(*) AS total_files,
+                COALESCE(SUM(media_type = 'image'), 0) AS total_images,
+                COALESCE(SUM(media_type = 'video'), 0) AS total_videos,
+                COALESCE(SUM(media_type = 'audio'), 0) AS total_audio
+            FROM files
+        `).get();
+        db.prepare(`
+            INSERT INTO library_stats(id, total_files, total_images, total_videos, total_audio)
+            VALUES (1, ?, ?, ?, ?)
+        `).run(
+            totals.total_files,
+            totals.total_images,
+            totals.total_videos,
+            totals.total_audio
+        );
+    }
+
+    db.exec(`
+        CREATE TRIGGER IF NOT EXISTS files_stats_ai AFTER INSERT ON files BEGIN
+            UPDATE library_stats SET
+                total_files = total_files + 1,
+                total_images = total_images + (new.media_type = 'image'),
+                total_videos = total_videos + (new.media_type = 'video'),
+                total_audio = total_audio + (new.media_type = 'audio')
+            WHERE id = 1;
+        END;
+        CREATE TRIGGER IF NOT EXISTS files_stats_ad AFTER DELETE ON files BEGIN
+            UPDATE library_stats SET
+                total_files = MAX(0, total_files - 1),
+                total_images = MAX(0, total_images - (old.media_type = 'image')),
+                total_videos = MAX(0, total_videos - (old.media_type = 'video')),
+                total_audio = MAX(0, total_audio - (old.media_type = 'audio'))
+            WHERE id = 1;
+        END;
+        CREATE TRIGGER IF NOT EXISTS files_stats_au AFTER UPDATE OF media_type ON files BEGIN
+            UPDATE library_stats SET
+                total_images = MAX(0, total_images - (old.media_type = 'image') + (new.media_type = 'image')),
+                total_videos = MAX(0, total_videos - (old.media_type = 'video') + (new.media_type = 'video')),
+                total_audio = MAX(0, total_audio - (old.media_type = 'audio') + (new.media_type = 'audio'))
+            WHERE id = 1;
+        END;
+    `);
 }
 
 async function migrateToFTS5() {
@@ -381,6 +463,21 @@ function incrementLastCodeUnit(value) {
     return `${value.slice(0, lastIndex)}${String.fromCharCode(value.charCodeAt(lastIndex) + 1)}`;
 }
 
+function getAncestorFolders(folderPath) {
+    if (typeof folderPath !== 'string' || !path.isAbsolute(folderPath)) return [];
+    const ancestors = [];
+    let current = path.resolve(folderPath);
+    const root = path.parse(current).root;
+    while (current) {
+        ancestors.push(current);
+        if (current === root) break;
+        const parent = path.dirname(current);
+        if (parent === current) break;
+        current = parent;
+    }
+    return ancestors;
+}
+
 function buildFileQueryParts(options = {}) {
     const {
         folderPath = null,
@@ -516,8 +613,125 @@ function queryFiles(options = {}) {
     return results.map(mapFileRow);
 }
 
+function refreshFolderCoversForPaths(folderPaths) {
+    const normalizedPaths = [...new Set(
+        folderPaths
+            .filter(folderPath => typeof folderPath === 'string' && path.isAbsolute(folderPath))
+            .map(folderPath => path.resolve(folderPath))
+    )];
+    if (normalizedPaths.length === 0) return;
+
+    const candidateStatement = db.prepare(`
+        SELECT f.*
+        FROM files f INDEXED BY idx_folder_path
+        INNER JOIN thumbnails thumbnail_cache ON thumbnail_cache.file_id = f.id
+        WHERE (
+            f.folder_path = ?
+            OR (f.folder_path >= ? AND f.folder_path < ?)
+        )
+        AND f.media_type IN ('image', 'video')
+        ORDER BY f.last_modified DESC, f.id ASC
+        LIMIT 1
+    `);
+    const updateStatement = db.prepare(`
+        INSERT INTO folders(path, media_count, cover_file_id, cover_last_modified, last_updated)
+        VALUES (?, 0, ?, ?, ?)
+        ON CONFLICT(path) DO UPDATE SET
+            cover_file_id = excluded.cover_file_id,
+            cover_last_modified = excluded.cover_last_modified,
+            last_updated = excluded.last_updated
+    `);
+    const now = Math.floor(Date.now() / 1000);
+    const transaction = db.transaction(paths => {
+        for (const folderPath of paths) {
+            const descendantStart = folderPath.endsWith(path.sep)
+                ? folderPath
+                : `${folderPath}${path.sep}`;
+            const candidate = candidateStatement.get(
+                folderPath,
+                descendantStart,
+                incrementLastCodeUnit(descendantStart)
+            );
+            updateStatement.run(
+                folderPath,
+                candidate?.id || null,
+                candidate?.last_modified || null,
+                now
+            );
+        }
+    });
+    transaction(normalizedPaths);
+}
+
+function recordThumbnailReady({ fileId, thumbnailPath, generatedAt = Date.now() }) {
+    if (!fileId || !thumbnailPath) return false;
+    const file = db.prepare(`
+        SELECT id, folder_path, media_type, last_modified
+        FROM files
+        WHERE id = ?
+    `).get(fileId);
+    if (!file || !['image', 'video'].includes(file.media_type)) return false;
+
+    const thumbnailStatement = db.prepare(`
+        INSERT INTO thumbnails(file_id, thumbnail_path, generated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(file_id) DO UPDATE SET
+            thumbnail_path = excluded.thumbnail_path,
+            generated_at = excluded.generated_at
+    `);
+    const coverStatement = db.prepare(`
+        INSERT INTO folders(path, media_count, cover_file_id, cover_last_modified, last_updated)
+        VALUES (?, 0, ?, ?, ?)
+        ON CONFLICT(path) DO UPDATE SET
+            cover_file_id = excluded.cover_file_id,
+            cover_last_modified = excluded.cover_last_modified,
+            last_updated = excluded.last_updated
+        WHERE folders.cover_file_id IS NULL
+           OR excluded.cover_last_modified > folders.cover_last_modified
+           OR (
+                excluded.cover_last_modified = folders.cover_last_modified
+                AND excluded.cover_file_id < folders.cover_file_id
+           )
+    `);
+    const transaction = db.transaction(() => {
+        thumbnailStatement.run(
+            file.id,
+            thumbnailPath,
+            Math.floor(Number(generatedAt) || Date.now())
+        );
+        const now = Math.floor(Date.now() / 1000);
+        for (const folderPath of getAncestorFolders(file.folder_path)) {
+            coverStatement.run(folderPath, file.id, file.last_modified, now);
+        }
+    });
+    transaction();
+    return true;
+}
+
+function getFolderCoverBackfillBatch(afterRowid = 0, limit = 256) {
+    return db.prepare(`
+        SELECT rowid, id
+        FROM files
+        WHERE rowid > ?
+          AND media_type IN ('image', 'video')
+        ORDER BY rowid ASC
+        LIMIT ?
+    `).all(afterRowid, limit);
+}
+
+function getFolderCoverBackfillState() {
+    return db.prepare("SELECT value FROM app_meta WHERE key = 'folder_cover_backfill_v1'").get()?.value || null;
+}
+
+function setFolderCoverBackfillState(value) {
+    db.prepare(`
+        INSERT INTO app_meta(key, value) VALUES ('folder_cover_backfill_v1', ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+    `).run(String(value));
+}
+
 /**
- * 为目录列表批量获取封面媒体，每个目录只执行一次索引范围查询。
+ * 目录读取只查询写时维护的封面缓存，不再扫描或排序后代媒体。
  */
 function queryFolderCovers(folderPaths) {
     if (!Array.isArray(folderPaths) || folderPaths.length === 0) return new Map();
@@ -534,37 +748,57 @@ function queryFolderCovers(folderPaths) {
     }
     if (originalKeysByNormalizedPath.size === 0) return new Map();
 
-    const statement = db.prepare(`
-        SELECT f.*
-        FROM files f INDEXED BY idx_folder_path
-        WHERE (
-            f.folder_path = ?
-            OR (f.folder_path >= ? AND f.folder_path < ?)
-        )
-        AND f.media_type IN ('image', 'video')
-        ORDER BY f.last_modified DESC, f.id ASC
-        LIMIT 1
-    `);
     const covers = new Map();
 
-    for (const [normalizedFolderPath, originalKeys] of originalKeysByNormalizedPath) {
-        const descendantStart = normalizedFolderPath.endsWith(path.sep)
-            ? normalizedFolderPath
-            : `${normalizedFolderPath}${path.sep}`;
-        const row = statement.get(
-            normalizedFolderPath,
-            descendantStart,
-            incrementLastCodeUnit(descendantStart)
-        );
-        if (row) {
-            const cover = mapFileRow(row);
-            for (const originalKey of originalKeys) {
+    const normalizedPaths = [...originalKeysByNormalizedPath.keys()];
+    for (let offset = 0; offset < normalizedPaths.length; offset += 500) {
+        const batch = normalizedPaths.slice(offset, offset + 500);
+        const placeholders = batch.map(() => '?').join(', ');
+        const rows = db.prepare(`
+            SELECT folder_cache.path AS cache_path, f.*, thumbnail_cache.thumbnail_path
+            FROM folders folder_cache
+            INNER JOIN files f ON f.id = folder_cache.cover_file_id
+            INNER JOIN thumbnails thumbnail_cache ON thumbnail_cache.file_id = f.id
+            WHERE folder_cache.path IN (${placeholders})
+        `).all(...batch);
+        for (const row of rows) {
+            const cover = { ...mapFileRow(row), thumbnailPath: row.thumbnail_path };
+            for (const originalKey of originalKeysByNormalizedPath.get(row.cache_path) || []) {
                 covers.set(originalKey, cover);
             }
         }
     }
 
     return covers;
+}
+
+function queryFolderMetadata(folderPaths) {
+    if (!Array.isArray(folderPaths) || folderPaths.length === 0) return new Map();
+    const normalizedPaths = [...new Set(folderPaths
+        .filter(folderPath => typeof folderPath === 'string' && path.isAbsolute(folderPath))
+        .map(folderPath => path.resolve(folderPath)))];
+    const metadata = new Map();
+    for (let offset = 0; offset < normalizedPaths.length; offset += 500) {
+        const batch = normalizedPaths.slice(offset, offset + 500);
+        const placeholders = batch.map(() => '?').join(', ');
+        const rows = db.prepare(`
+            SELECT
+                folder_path,
+                COUNT(*) AS media_count,
+                MAX(last_modified) AS last_modified
+            FROM files INDEXED BY idx_folder_path
+            WHERE folder_path IN (${placeholders})
+              AND media_type IN ('image', 'video')
+            GROUP BY folder_path
+        `).all(...batch);
+        for (const row of rows) {
+            metadata.set(row.folder_path, {
+                mediaCount: row.media_count || 0,
+                lastModified: row.last_modified || 0
+            });
+        }
+    }
+    return metadata;
 }
 
 /**
@@ -672,10 +906,27 @@ function countFiles(options = {}) {
     return result.count || 0;
 }
 
+function getCachedStats() {
+    const row = db.prepare(`
+        SELECT total_files, total_images, total_videos, total_audio
+        FROM library_stats
+        WHERE id = 1
+    `).get() || {};
+    return {
+        totalFiles: row.total_files || 0,
+        totalImages: row.total_images || 0,
+        totalVideos: row.total_videos || 0,
+        totalAudio: row.total_audio || 0
+    };
+}
+
 /**
  * Delete file by path or ID
  */
 function deleteFile(filePath, id = null) {
+    const existing = id
+        ? db.prepare('SELECT id, folder_path FROM files WHERE id = ? OR path = ? LIMIT 1').get(id, filePath)
+        : db.prepare('SELECT id, folder_path FROM files WHERE path = ?').get(filePath);
     // Sync FTS
     try {
         if (id) {
@@ -695,7 +946,16 @@ function deleteFile(filePath, id = null) {
         params.push(id);
     }
 
+    const affectedCoverPaths = existing
+        ? db.prepare('SELECT path FROM folders WHERE cover_file_id = ?').all(existing.id).map(row => row.path)
+        : [];
+
+    if (existing) db.prepare('DELETE FROM thumbnails WHERE file_id = ?').run(existing.id);
     db.prepare(query).run(...params);
+
+    if (existing) {
+        refreshFolderCoversForPaths(affectedCoverPaths);
+    }
 
     if (id) {
         db.prepare('DELETE FROM favorites WHERE item_id = ?').run(id);
@@ -706,7 +966,16 @@ function deleteFile(filePath, id = null) {
  * Batch delete files
  */
 function deleteFilesBatch(files) {
-    return createDatabaseBatchOperations(db).deleteFilesBatch(files);
+    const ids = files.map(file => file.id).filter(Boolean);
+    const placeholders = ids.map(() => '?').join(', ');
+    const affectedCoverPaths = ids.length > 0
+        ? db.prepare(`SELECT path FROM folders WHERE cover_file_id IN (${placeholders})`).all(...ids).map(row => row.path)
+        : [];
+    const deleted = createDatabaseBatchOperations(db).deleteFilesBatch(files);
+    if (deleted) {
+        refreshFolderCoversForPaths(affectedCoverPaths);
+    }
+    return deleted;
 }
 
 function getFilesMtimeByPaths(paths) {
@@ -718,17 +987,31 @@ function getFilesAfterRowid(afterRowid = 0, limit = 256) {
 }
 
 function deleteFilesByFolder(folderPath) {
+    const affectedCoverPaths = db.prepare(`
+        SELECT path FROM folders
+        WHERE cover_file_id IN (
+            SELECT id FROM files WHERE folder_path = ? OR folder_path LIKE ?
+        )
+    `).all(folderPath, folderPath + '/%').map(row => row.path);
+    db.prepare('DELETE FROM thumbnails WHERE file_id IN (SELECT id FROM files WHERE folder_path = ? OR folder_path LIKE ?)').run(folderPath, folderPath + '/%');
     try {
         db.prepare('DELETE FROM files_fts WHERE rowid IN (SELECT rowid FROM files WHERE folder_path = ? OR folder_path LIKE ?)').run(folderPath, folderPath + '/%');
     } catch (e) { }
     db.prepare('DELETE FROM files WHERE folder_path = ? OR folder_path LIKE ?').run(folderPath, folderPath + '/%');
+    refreshFolderCoversForPaths(affectedCoverPaths);
 }
 
 function deleteFilesBySourceId(sourceId) {
+    const affectedCoverPaths = db.prepare(`
+        SELECT path FROM folders
+        WHERE cover_file_id IN (SELECT id FROM files WHERE source_id = ?)
+    `).all(sourceId).map(row => row.path);
+    db.prepare('DELETE FROM thumbnails WHERE file_id IN (SELECT id FROM files WHERE source_id = ?)').run(sourceId);
     try {
         db.prepare('DELETE FROM files_fts WHERE rowid IN (SELECT rowid FROM files WHERE source_id = ?)').run(sourceId);
     } catch (e) { }
     db.prepare('DELETE FROM files WHERE source_id = ?').run(sourceId);
+    refreshFolderCoversForPaths(affectedCoverPaths);
 }
 
 function getFileByPath(filePath) {
@@ -755,10 +1038,24 @@ function clearAllFiles() {
         db.prepare('DELETE FROM files_fts').run();
     } catch (e) { }
     db.prepare('DELETE FROM files').run();
+    db.prepare('DELETE FROM thumbnails').run();
+    db.prepare(`
+        UPDATE folders
+        SET cover_file_id = NULL,
+            cover_last_modified = NULL,
+            last_updated = ?
+    `).run(Math.floor(Date.now() / 1000));
+    db.prepare("DELETE FROM app_meta WHERE key = 'folder_cover_backfill_v1'").run();
 }
 
 function getStats(options = {}) {
     const { allowedPaths = null } = options;
+    if (allowedPaths === null) {
+        return {
+            ...getCachedStats(),
+            dbSize: fs.existsSync(DB_FILE) ? fs.statSync(DB_FILE).size : 0
+        };
+    }
     const totalFiles = countFiles({ allowedPaths });
     const totalImages = countFiles({ mediaType: 'image', allowedPaths });
     const totalVideos = countFiles({ mediaType: 'video', allowedPaths });
@@ -861,6 +1158,10 @@ function renameFile(oldPath, newPath, newName) {
         const tx = db.transaction(() => {
             const row = db.prepare('SELECT * FROM files WHERE path = ?').get(oldPath);
             if (row) {
+                const affectedFolders = db.prepare('SELECT path FROM folders WHERE cover_file_id = ?')
+                    .all(oldId)
+                    .map(folder => folder.path);
+                db.prepare('DELETE FROM thumbnails WHERE file_id = ?').run(oldId);
                 db.prepare('DELETE FROM files WHERE id = ?').run(oldId);
                 const stmt = db.prepare(`
                     INSERT INTO files(id, path, name, folder_path, size, type, media_type, last_modified, source_id)
@@ -869,7 +1170,7 @@ function renameFile(oldPath, newPath, newName) {
                 stmt.run(newId, newPath, newName, folderPath, row.size, row.type, row.media_type, Date.now(), row.source_id);
 
                 db.prepare('UPDATE favorites SET item_id = ? WHERE item_id = ?').run(newId, oldId);
-                db.prepare('UPDATE thumbnails SET file_id = ? WHERE file_id = ?').run(newId, oldId);
+                refreshFolderCoversForPaths(affectedFolders);
             }
         });
         tx();
@@ -881,7 +1182,17 @@ function renameFile(oldPath, newPath, newName) {
 }
 
 function clearThumbnails() {
-    db.prepare('DELETE FROM thumbnails').run();
+    const transaction = db.transaction(() => {
+        db.prepare('DELETE FROM thumbnails').run();
+        db.prepare(`
+            UPDATE folders
+            SET cover_file_id = NULL,
+                cover_last_modified = NULL,
+                last_updated = ?
+        `).run(Math.floor(Date.now() / 1000));
+        db.prepare("DELETE FROM app_meta WHERE key = 'folder_cover_backfill_v1'").run();
+    });
+    transaction();
 }
 
 function getAllFilePaths() {
@@ -896,6 +1207,11 @@ module.exports = {
     insertFilesBatch,
     queryFiles,
     queryFolderCovers,
+    queryFolderMetadata,
+    recordThumbnailReady,
+    getFolderCoverBackfillBatch,
+    getFolderCoverBackfillState,
+    setFolderCoverBackfillState,
     queryFolderPaths,
     countFiles,
     deleteFile,
@@ -904,6 +1220,7 @@ module.exports = {
     getFileByPath,
     clearAllFiles,
     getStats,
+    getCachedStats,
     closeDatabase,
     toggleFavorite,
     getFavoriteIds,

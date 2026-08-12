@@ -24,6 +24,8 @@ import { getLayoutPreferenceView, resolveGalleryLayoutPreference, type LayoutPre
 import { readMediaHoverZoomPreference, writeMediaHoverZoomPreference } from './navigation/media-hover-zoom-preference';
 import { GalleryNavigationBar, type GalleryNavigationBarProps } from './components/navigation/GalleryNavigationBar';
 import type { GalleryLocation, ViewportSnapshot } from './navigation/types';
+import { SingleFlightPoller } from './utils/singleFlightPolling';
+import { fetchWithTimeout } from './utils/fetchWithTimeout';
 
 type GalleryPageCache = {
     files: MediaItem[];
@@ -265,6 +267,22 @@ export const SearchEmptyState: React.FC<SearchEmptyStateProps> = ({
     );
 };
 
+export const GalleryLoadErrorBanner: React.FC<{ onRetry: () => void }> = ({ onRetry }) => (
+    <div
+        role="alert"
+        className="absolute left-1/2 top-4 z-40 flex -translate-x-1/2 items-center gap-3 rounded-xl border border-red-400/30 bg-red-950/90 px-4 py-3 text-sm text-red-100 shadow-xl backdrop-blur"
+    >
+        <span>当前目录加载失败，已保留上一次内容。</span>
+        <button
+            type="button"
+            onClick={onRetry}
+            className="rounded-lg bg-red-400/15 px-3 py-1.5 font-medium text-red-50 hover:bg-red-400/25"
+        >
+            重试
+        </button>
+    </div>
+);
+
 type GalleryCacheBudgetEntry = {
     queryKey: readonly unknown[];
     itemCount: number;
@@ -436,7 +454,11 @@ export default function App() {
     const scanProgressRef = useRef({ count: 0 });
     const scanStatusRef = useRef<ScanStatus>('idle');
     const thumbStatusRef = useRef<'idle' | 'scanning' | 'paused' | 'error'>('idle');
-    const scanTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const unifiedPollerRef = useRef<SingleFlightPoller | null>(null);
+    if (unifiedPollerRef.current === null) {
+        unifiedPollerRef.current = new SingleFlightPoller({ delayMs: 1000 });
+    }
+    useEffect(() => () => unifiedPollerRef.current?.stop(), []);
     const navigationRequestEpochRef = useRef(0);
     const activeLocationKeyRef = useRef(galleryNavigation.location.key);
     const galleryAbortControllerRef = useRef<AbortController | null>(null);
@@ -472,6 +494,8 @@ export default function App() {
     const [sortOption, setSortOption] = useState<SortOption>(() => galleryNavigation.location.sort);
     const [filterOption, setFilterOption] = useState<FilterOption>(() => galleryNavigation.location.filter);
     const [activeSearch, setActiveSearch] = useState(() => galleryNavigation.location.search);
+    const [galleryLoadError, setGalleryLoadError] = useState(false);
+    const [galleryReloadNonce, setGalleryReloadNonce] = useState(0);
     const activeSearchRef = useRef(activeSearch);
     const lastSearchLocationKeyRef = useRef<string | null>(null);
     const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -661,7 +685,7 @@ export default function App() {
         const headers: any = { ...options.headers };
         if (token) headers['Authorization'] = `Bearer ${token}`;
 
-        const res = await fetch(url, { ...options, headers });
+        const res = await fetchWithTimeout(url, { ...options, headers }, 15_000);
 
         if (res.status === 401) {
             removeStorageItem(TOKEN_STORAGE_KEY, LEGACY_KEYS.token);
@@ -937,21 +961,23 @@ export default function App() {
             activeLocationKeyRef.current,
             galleryAbortControllerRef.current?.signal,
         );
-        if (!isGalleryRequestGuardActive(guard, navigationRequestEpochRef.current, activeLocationKeyRef.current)) return;
+        if (!isGalleryRequestGuardActive(guard, navigationRequestEpochRef.current, activeLocationKeyRef.current)) return true;
         try {
             const url = appendGalleryFolderQuery('/api/library/folders', parentPath, favoritesOnly, searchQuery);
 
             const res = await apiFetch(url, { signal: guard.signal });
-            if (res.ok) {
-                const text = await res.text();
-                try {
-                    const data = JSON.parse(text);
-                    if (data && data.folders && isGalleryRequestGuardActive(guard, navigationRequestEpochRef.current, activeLocationKeyRef.current)) {
-                        setServerFolders(data.folders);
-                    }
-                } catch (e) { }
+            if (!res.ok) return false;
+            const data = JSON.parse(await res.text());
+            if (!data || !Array.isArray(data.folders)) return false;
+            if (isGalleryRequestGuardActive(guard, navigationRequestEpochRef.current, activeLocationKeyRef.current)) {
+                setServerFolders(data.folders);
             }
-        } catch (e) { }
+            return true;
+        } catch (e) {
+            if (guard.signal?.aborted) return true;
+            console.error('Fetch folders failed', e);
+            return false;
+        }
     };
 
     const favFetchRef = useRef<Promise<any> | null>(null);
@@ -1000,7 +1026,7 @@ export default function App() {
             activeLocationKeyRef.current,
             galleryAbortControllerRef.current?.signal,
         );
-        if (!isGalleryRequestGuardActive(guard, navigationRequestEpochRef.current, activeLocationKeyRef.current)) return;
+        if (!isGalleryRequestGuardActive(guard, navigationRequestEpochRef.current, activeLocationKeyRef.current)) return true;
         const requestId = ++activeGalleryFetchRequestIdRef.current;
         try {
             setIsFetchingMore(true);
@@ -1041,7 +1067,7 @@ export default function App() {
             }
 
             if (!data) throw new Error("Empty response data");
-            if (!isGalleryRequestGuardActive(guard, navigationRequestEpochRef.current, activeLocationKeyRef.current)) return;
+            if (!isGalleryRequestGuardActive(guard, navigationRequestEpochRef.current, activeLocationKeyRef.current)) return true;
 
             // Map isFavorite property - Trust server provided isFavorite
             // But if we have an explicit override (optimistic UI), we could check it. 
@@ -1098,8 +1124,11 @@ export default function App() {
             setServerOffset(offset + limit);
             setHasMoreServer(data.hasMore);
 
+            return true;
+
         } catch (e) {
             console.error("Fetch files failed", e);
+            return Boolean(guard.signal?.aborted);
         } finally {
             if (shouldUpdateGalleryFetchingState(
                 activeGalleryFetchRequestIdRef.current,
@@ -1165,6 +1194,7 @@ export default function App() {
         setIsFetchingMore(false);
         const cached = queryClient.getQueryData<GalleryPageCache>(getGalleryQueryKey(location));
         if (cached) {
+            setGalleryLoadError(false);
             setAllUserData((data) => ({
                 ...data,
                 [currentUser.username]: { ...data[currentUser.username], files: cached.files },
@@ -1179,16 +1209,23 @@ export default function App() {
         const folderFilter = location.view === 'folders' ? location.folderPath : null;
         const favoritesOnly = location.view === 'favorites';
         const load = async () => {
+            setGalleryLoadError(false);
             const favoriteIds = favoritesOnly ? await fetchServerFavorites() : undefined;
             if (!isActiveGalleryRequest(navigationRequestEpochRef.current, epoch, activeLocationKeyRef.current, location.key)) return;
-            await Promise.all([
+            const results = await Promise.all([
                 fetchServerFiles(currentUser.username, allUserData, 0, true, folderFilter, favoritesOnly, favoriteIds, false, location.search, epoch, location.key, abortController.signal),
                 fetchServerFolders(folderFilter, favoritesOnly, epoch, location.key, abortController.signal, location.search),
             ]);
+            if (
+                results.some(result => result === false)
+                && isActiveGalleryRequest(navigationRequestEpochRef.current, epoch, activeLocationKeyRef.current, location.key)
+            ) {
+                setGalleryLoadError(true);
+            }
         };
         void load();
         return () => abortController.abort();
-    }, [authStep, currentUser?.username, galleryNavigation.location.key, getGalleryQueryKey, isServerMode, queryClient]);
+    }, [authStep, currentUser?.username, galleryNavigation.location.key, galleryReloadNonce, getGalleryQueryKey, isServerMode, queryClient]);
 
     const endReachedLockRef = useRef(false);
 
@@ -1217,10 +1254,7 @@ export default function App() {
     // 排序、筛选和搜索均由 GalleryLocation 变更触发加载，避免与 History 形成第二入口。
 
     const stopPolling = () => {
-        if (scanTimeoutRef.current) {
-            clearTimeout(scanTimeoutRef.current);
-            scanTimeoutRef.current = null;
-        }
+        unifiedPollerRef.current?.stop();
     };
 
     const fetchSystemStatus = async (forceCheck = false) => {
@@ -1280,13 +1314,11 @@ export default function App() {
     };
 
     const startUnifiedPolling = () => {
-        const poll = async () => {
-            if (!scanStatusRef.current && !thumbStatusRef.current) return;
-
+        unifiedPollerRef.current?.start(async (signal) => {
             try {
                 const [scanRes, thumbRes] = await Promise.all([
-                    apiFetch('/api/scan/status'),
-                    apiFetch('/api/thumb-gen/status')
+                    apiFetch('/api/scan/status', { signal }),
+                    apiFetch('/api/thumb-gen/status', { signal })
                 ]);
 
                 if (scanRes.ok) {
@@ -1299,8 +1331,8 @@ export default function App() {
                 if (thumbRes.ok) {
                     const thumbData = await thumbRes.json();
                     setThumbStatus(thumbData.status);
+                    thumbStatusRef.current = thumbData.status;
                     if (thumbData.status === 'scanning' || thumbData.status === 'paused') {
-                        thumbStatusRef.current = thumbData.status;
                         setThumbProgress({
                             count: thumbData.count || 0,
                             total: thumbData.total || 0,
@@ -1308,13 +1340,15 @@ export default function App() {
                         });
                     }
                 }
-            } catch (e) { }
+            } catch (e) {
+                if (!signal.aborted) console.error('[Polling] Failed to refresh background task state', e);
+            }
 
             const isScanActive = scanStatusRef.current === 'scanning' || scanStatusRef.current === 'paused';
             const isThumbActive = thumbStatusRef.current === 'scanning' || thumbStatusRef.current === 'paused';
 
             if (isScanActive || isThumbActive) {
-                scanTimeoutRef.current = setTimeout(poll, 1000);
+                return true;
             } else {
                 fetchSystemStatus();
                 if (settingsTab === 'system') {
@@ -1329,9 +1363,9 @@ export default function App() {
                         fetchServerFolders(path, mode === 'favorites');
                     }
                 }
+                return false;
             }
-        };
-        poll();
+        });
     };
 
     const handleSmartScan = async () => {
@@ -2508,6 +2542,9 @@ export default function App() {
                     />
                 ) : (
                     <div className="flex-1 overflow-hidden relative">
+                        {galleryLoadError && (
+                            <GalleryLoadErrorBanner onRetry={() => setGalleryReloadNonce(value => value + 1)} />
+                        )}
                         {/* Empty State */}
                         {!activeSearch.trim() && !isServerMode && files.length === 0 && (
                             <div className="absolute inset-0 flex flex-col items-center justify-center text-text-tertiary">
