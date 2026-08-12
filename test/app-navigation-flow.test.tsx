@@ -4,7 +4,7 @@ import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import App, { activateGalleryLocation, appendGalleryFolderQuery, appendGalleryScanScopeQuery, createTopLevelViewLocationUpdate, getAdjacentMediaId, getGalleryCacheEvictionKeys, hasVisibleGallerySearchResults, isActiveGalleryRequest, isGalleryRequestGuardActive, resolveGalleryRequestGuard, resolveScopedGalleryLayout, resolveVisibleGalleryFolders, SearchEmptyState, shouldRenderUnifiedGalleryToolbar, shouldSyncSearchDraft, shouldUpdateGalleryFetchingState, UnifiedGalleryToolbar } from '../App';
+import App, { activateGalleryLocation, appendGalleryFolderQuery, appendGalleryScanScopeQuery, createTopLevelViewLocationUpdate, GalleryLoadErrorBanner, getAdjacentMediaId, getGalleryCacheEvictionKeys, hasVisibleGallerySearchResults, isActiveGalleryRequest, isGalleryRequestGuardActive, resolveGalleryRequestGuard, resolveScopedGalleryLayout, resolveVisibleGalleryFolders, SearchEmptyState, shouldRenderUnifiedGalleryToolbar, shouldSyncSearchDraft, shouldUpdateGalleryFetchingState, UnifiedGalleryToolbar } from '../App';
 import { FolderCard } from '../components/FolderCard';
 import { LanguageProvider } from '../contexts/LanguageContext';
 import { useGalleryNavigation, type GalleryNavigationApi } from '../hooks/useGalleryNavigation';
@@ -42,6 +42,15 @@ describe('应用导航最小闭环', () => {
   afterEach(() => {
     cleanup();
     vi.unstubAllGlobals();
+  });
+
+  it('目录加载失败时保留内容并提供明确重试入口', () => {
+    const onRetry = vi.fn();
+    render(<GalleryLoadErrorBanner onRetry={onRetry} />);
+
+    expect(screen.getByRole('alert').textContent).toContain('已保留上一次内容');
+    fireEvent.click(screen.getByRole('button', { name: '重试' }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
   });
 
   it('统一工具栏仅在媒体库、收藏夹和文件夹内容视图显示', () => {

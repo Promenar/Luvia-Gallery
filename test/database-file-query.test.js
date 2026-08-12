@@ -273,7 +273,7 @@ test('目录搜索同时限制 parent、allowedPaths、limit 和最多 100 条',
     assert.equal(capped.some(folder => folder.startsWith('/private')), false);
 });
 
-test('批量目录封面只匹配自身或真实后代，并为每个目录选择最新媒体', () => {
+test('目录封面只读取已生成缩略图的写时缓存，并在删除当前封面后回退', () => {
     const fixtureRoot = path.join(path.parse(process.cwd()).root, 'album');
     const albumA = path.join(fixtureRoot, 'a');
     const albumB = path.join(fixtureRoot, 'b');
@@ -324,7 +324,30 @@ test('批量目录封面只匹配自身或真实后代，并为每个目录选�
         lastModified: 60
     });
 
-    const covers = database.queryFolderCovers([
+    database.recordThumbnailReady({
+        fileId: 'a-direct',
+        thumbnailPath: '/cache/a-direct.webp',
+        generatedAt: 100
+    });
+    database.recordThumbnailReady({
+        fileId: 'a-newest',
+        thumbnailPath: '/cache/a-newest.webp',
+        generatedAt: 101
+    });
+    database.recordThumbnailReady({
+        fileId: 'b-stable-second',
+        thumbnailPath: '/cache/b-second.webp',
+        generatedAt: 102
+    });
+    database.recordThumbnailReady({
+        fileId: 'b-stable-first',
+        thumbnailPath: '/cache/b-first.webp',
+        generatedAt: 103
+    });
+
+    preparedSql.length = 0;
+    preparedGetCalls.length = 0;
+    let covers = database.queryFolderCovers([
         albumA,
         albumB,
         albumAWithTrailingSeparator,
@@ -332,6 +355,7 @@ test('批量目录封面只匹配自身或真实后代，并为每个目录选�
     ]);
 
     assert.equal(covers.get(albumA).id, 'a-newest');
+    assert.equal(covers.get(albumA).thumbnailPath, '/cache/a-newest.webp');
     assert.equal(covers.get(albumB).id, 'b-stable-first');
     assert.equal(covers.get(albumAWithTrailingSeparator).id, 'a-newest');
     assert.equal(covers.has(albumAB), false);
@@ -340,25 +364,69 @@ test('批量目录封面只匹配自身或真实后代，并为每个目录选�
         new Set([albumA, albumB, albumAWithTrailingSeparator])
     );
 
-    const coverSql = preparedSql.find(sql =>
-        sql.includes('INDEXED BY idx_folder_path') &&
-        sql.includes('ORDER BY f.last_modified DESC, f.id ASC')
-    );
-    assert.ok(coverSql, '应记录目录封面查询使用的 prepared SQL');
+    const readSql = preparedSql.find(sql => sql.includes('FROM folders folder_cache'));
+    assert.ok(readSql, '目录读取应直接查询文件夹封面缓存');
+    assert.equal(readSql.includes('ORDER BY f.last_modified'), false);
+    assert.equal(preparedGetCalls.some(call => call.sql.includes('INDEXED BY idx_folder_path')), false);
 
-    const coverQueryPaths = preparedGetCalls
-        .filter(call => call.sql.includes('INDEXED BY idx_folder_path'))
-        .map(call => call.params[0]);
-    assert.deepEqual(coverQueryPaths, [albumA, albumB]);
-
-    const descendantStart = albumAWithTrailingSeparator;
-    const descendantEnd = `${descendantStart.slice(0, -1)}${String.fromCharCode(descendantStart.charCodeAt(descendantStart.length - 1) + 1)}`;
-    const plan = inMemoryDatabase.prepare(`EXPLAIN QUERY PLAN ${coverSql}`).all(
-        albumA,
-        descendantStart,
-        descendantEnd
-    );
-
-    assert.equal(plan.some(step => step.detail.includes('idx_folder_path')), true);
+    database.deleteFile(path.join(albumA, 'deep', 'newest.jpg'), 'a-newest');
+    covers = database.queryFolderCovers([albumA]);
+    assert.equal(covers.get(albumA).id, 'a-direct');
+    assert.equal(covers.get(albumA).thumbnailPath, '/cache/a-direct.webp');
     assert.equal(database.queryFolderCovers([]).size, 0);
+});
+
+test('全局媒体统计由写入触发器维护，状态读取不再执行四次全库计数', () => {
+    addFile({
+        id: 'stats-image',
+        path: '/library/image.jpg',
+        name: 'image.jpg',
+        folderPath: '/library',
+        mediaType: 'image'
+    });
+    addFile({
+        id: 'stats-video',
+        path: '/library/video.mp4',
+        name: 'video.mp4',
+        folderPath: '/library',
+        mediaType: 'video'
+    });
+
+    preparedSql.length = 0;
+    assert.deepEqual(
+        database.getCachedStats(),
+        { totalFiles: 2, totalImages: 1, totalVideos: 1, totalAudio: 0 }
+    );
+    assert.equal(preparedSql.some(sql => /COUNT\s*\(/i.test(sql)), false);
+
+    database.deleteFile('/library/video.mp4', 'stats-video');
+    assert.deepEqual(
+        database.getCachedStats(),
+        { totalFiles: 1, totalImages: 1, totalVideos: 0, totalAudio: 0 }
+    );
+});
+
+test('历史封面恢复游标覆盖没有尺寸元数据的图片和视频', () => {
+    addFile({
+        id: 'legacy-no-dimensions',
+        path: '/legacy/photo.jpg',
+        name: 'photo.jpg',
+        folderPath: '/legacy',
+        mediaType: 'image'
+    });
+
+    assert.deepEqual(
+        database.getFolderCoverBackfillBatch(0, 256).map(row => row.id),
+        ['legacy-no-dimensions']
+    );
+});
+
+test('目录元数据只聚合直属图片和视频，不扫描后代或音频', () => {
+    addFile({ id: 'direct-image', path: '/album/image.jpg', name: 'image.jpg', folderPath: '/album', mediaType: 'image', lastModified: 20 });
+    addFile({ id: 'direct-audio', path: '/album/song.mp3', name: 'song.mp3', folderPath: '/album', mediaType: 'audio', lastModified: 30 });
+    addFile({ id: 'nested-video', path: '/album/nested/video.mp4', name: 'video.mp4', folderPath: '/album/nested', mediaType: 'video', lastModified: 40 });
+
+    const metadata = database.queryFolderMetadata(['/album', '/album/nested']);
+    assert.deepEqual(metadata.get('/album'), { mediaCount: 1, lastModified: 20 });
+    assert.deepEqual(metadata.get('/album/nested'), { mediaCount: 1, lastModified: 40 });
 });

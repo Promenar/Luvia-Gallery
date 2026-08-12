@@ -17,15 +17,21 @@ function createTestDatabase() {
         CREATE TABLE favorites (
             item_id TEXT NOT NULL
         );
+        CREATE TABLE thumbnails (
+            file_id TEXT PRIMARY KEY,
+            thumbnail_path TEXT NOT NULL
+        );
     `);
     const insertFile = db.prepare('INSERT INTO files(id, path, last_modified) VALUES (?, ?, ?)');
     const insertFts = db.prepare('INSERT INTO files_fts(rowid, name) VALUES ((SELECT rowid FROM files WHERE id = ?), ?)');
     const insertFavorite = db.prepare('INSERT INTO favorites(item_id) VALUES (?)');
+    const insertThumbnail = db.prepare('INSERT INTO thumbnails(file_id, thumbnail_path) VALUES (?, ?)');
     for (let index = 1; index <= 5; index++) {
         const id = `id-${index}`;
         insertFile.run(id, `/media/${index}.jpg`, index);
         insertFts.run(id, `${index}.jpg`);
         insertFavorite.run(id);
+        insertThumbnail.run(id, `/cache/${index}.webp`);
     }
     return db;
 }
@@ -64,6 +70,10 @@ test('真实清理流程只删除未扫描记录及其收藏', async () => {
         );
         assert.deepEqual(
             db.prepare('SELECT item_id FROM favorites ORDER BY item_id').all().map(row => row.item_id),
+            ['id-1', 'id-3', 'id-5']
+        );
+        assert.deepEqual(
+            db.prepare('SELECT file_id FROM thumbnails ORDER BY file_id').all().map(row => row.file_id),
             ['id-1', 'id-3', 'id-5']
         );
     } finally {
