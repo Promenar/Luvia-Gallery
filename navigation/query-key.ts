@@ -9,6 +9,7 @@ export type GalleryQueryKeyInput = {
   filter?: FilterOption;
   randomSeed: number;
   layout?: GridLayout;
+  mediaId?: string;
 };
 
 export type GalleryQueryKey = readonly [
@@ -18,6 +19,7 @@ export type GalleryQueryKey = readonly [
   string,
   string,
   SortOption,
+  FilterOption,
   number
 ];
 
@@ -43,6 +45,7 @@ export const createGalleryQueryKey = (input: GalleryQueryKeyInput): GalleryQuery
     normalizeFolderPath(input.folderPath),
     normalizeSearch(input.search),
     input.sort,
+    input.filter ?? 'all',
     input.randomSeed,
   ] as const;
 };

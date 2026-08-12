@@ -4,6 +4,8 @@ import { describe, expect, it, vi, afterEach, beforeEach } from 'vitest';
 import { render, fireEvent, cleanup, act } from '@testing-library/react';
 import { resolveAnchorIndex, createViewportSnapshot, ViewportCaptureHandle, ViewportSnapshot } from '../components/gallery/viewport-types';
 import { VirtualGallery } from '../components/VirtualGallery';
+import { getMasonryInitialSkeletonCount, getMasonryPrefetchRootMargin, isWithinMasonryPrefetchRange } from '../components/gallery/MasonryViewport';
+import { getGridEffectiveItemCount, getGridInitialSkeletonItemCount, GRID_SKELETON_CLASSES } from '../components/gallery/GridViewport';
 import { MediaItem } from '../types';
 
 // Mock AutoSizer to provide fixed dimensions in JSDOM
@@ -128,6 +130,7 @@ describe('VirtualGallery 视口与协议流转测试', () => {
   afterEach(() => {
     cleanup();
     vi.useRealTimers();
+    vi.unstubAllGlobals();
     Element.prototype.getBoundingClientRect = originalGetBoundingClientRect;
     if (originalScrollTopDescriptor) {
       Object.defineProperty(HTMLElement.prototype, 'scrollTop', originalScrollTopDescriptor);
@@ -153,6 +156,7 @@ describe('VirtualGallery 视口与协议流转测试', () => {
     items: mockItems,
     onItemClick: vi.fn(),
     hasNextPage: false,
+    isInitialLoading: false,
     isNextPageLoading: false,
     loadNextPage: vi.fn(),
     itemCount: mockItems.length,
@@ -541,5 +545,175 @@ describe('VirtualGallery 视口与协议流转测试', () => {
 
     expect(onRestoreComplete).toHaveBeenCalled();
     expect(setScrollTopVal).toBe(235);
+  });
+
+  it('Masonry 初始加载使用覆盖约两个视口的几何骨架，续页按列保留占位', () => {
+    const initial = render(React.createElement(VirtualGallery, {
+      ...defaultProps,
+      items: [],
+      itemCount: 0,
+      isInitialLoading: true,
+      isNextPageLoading: true,
+      layout: 'masonry',
+      viewKey: 'all:masonry:initial',
+    }));
+    expect(initial.queryAllByTestId('masonry-initial-skeleton').length).toBeGreaterThanOrEqual(16);
+    expect(initial.queryAllByTestId('masonry-next-skeleton')).toHaveLength(0);
+    initial.unmount();
+
+    const continuation = render(React.createElement(VirtualGallery, {
+      ...defaultProps,
+      isInitialLoading: false,
+      isNextPageLoading: true,
+      layout: 'masonry',
+      viewKey: 'all:masonry:next',
+    }));
+    expect(continuation.queryAllByTestId('masonry-next-skeleton')).toHaveLength(12);
+  });
+
+  it('Masonry 骨架数量随视口和列数计算，并在距离底部 1.5 个视口时预取', () => {
+    const count = getMasonryInitialSkeletonCount(5, 900, 1200);
+    expect(count % 5).toBe(0);
+    expect(count).toBeGreaterThanOrEqual(40);
+    expect(isWithinMasonryPrefetchRange(5000, 2400, 1000)).toBe(false);
+    expect(isWithinMasonryPrefetchRange(5000, 2500, 1000)).toBe(true);
+    expect(getMasonryPrefetchRootMargin(800)).toBe('0px 0px 1200px 0px');
+  });
+
+  it('Grid 在总数尚未返回时仍生成至少一个可见视口的骨架行', () => {
+    const skeletonCount = getGridInitialSkeletonItemCount(4, 800, 216);
+    expect(skeletonCount).toBe(20);
+
+    render(React.createElement(VirtualGallery, {
+      ...defaultProps,
+      items: [],
+      itemCount: 0,
+      isInitialLoading: true,
+      layout: 'grid',
+      viewKey: 'all:grid:initial',
+    }));
+    expect((globalThis as any).lastGridProps.rowCount).toBeGreaterThan(0);
+  });
+
+  it('Grid 首载骨架阶段不触发续页，完整首包出现后才允许近底预取', async () => {
+    const loadNextPage = vi.fn().mockResolvedValue(undefined);
+    const view = render(React.createElement(VirtualGallery, {
+      ...defaultProps,
+      items: [],
+      itemCount: 0,
+      hasNextPage: true,
+      isInitialLoading: true,
+      loadNextPage,
+      layout: 'grid',
+      viewKey: 'all:grid:initial-prefetch',
+    }));
+    await act(async () => Promise.resolve());
+    expect(loadNextPage).not.toHaveBeenCalled();
+
+    view.rerender(React.createElement(VirtualGallery, {
+      ...defaultProps,
+      hasNextPage: true,
+      isInitialLoading: false,
+      loadNextPage,
+      layout: 'grid',
+      viewKey: 'all:grid:initial-prefetch',
+    }));
+    act(() => (globalThis as any).lastGridProps.onItemsRendered({
+      visibleRowStartIndex: 0,
+      visibleRowStopIndex: 5,
+    }));
+    await act(async () => Promise.resolve());
+    expect(loadNextPage).toHaveBeenCalledTimes(1);
+  });
+
+  it('Grid 续页加载时至少在已加载数据后预留两整行骨架', () => {
+    expect(getGridEffectiveItemCount(121, 120, 4, true)).toBe(128);
+    expect(getGridEffectiveItemCount(900_000, 120, 4, true)).toBe(900_000);
+    expect(getGridEffectiveItemCount(121, 120, 4, false)).toBe(121);
+    expect(GRID_SKELETON_CLASSES).toContain('bg-white/[0.045]');
+    expect(GRID_SKELETON_CLASSES).not.toContain('border');
+    expect(GRID_SKELETON_CLASSES).not.toContain('bg-white/3');
+  });
+
+  it('Masonry IO 预取失败后，下一次近底滚动可以重新请求', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) =>
+      setTimeout(() => callback(performance.now()), 16) as unknown as number);
+    vi.stubGlobal('cancelAnimationFrame', (frameId: number) => clearTimeout(frameId));
+    const loadNextPage = vi.fn()
+      .mockRejectedValueOnce(new Error('network failed'))
+      .mockResolvedValueOnce(undefined);
+    render(React.createElement(VirtualGallery, {
+      ...defaultProps,
+      hasNextPage: true,
+      loadNextPage,
+      layout: 'masonry',
+      viewKey: 'all:masonry:retry',
+    }));
+    const container = document.querySelector('.overflow-y-auto') as HTMLDivElement;
+    Object.defineProperties(container, {
+      scrollHeight: { configurable: true, value: 2000 },
+      clientHeight: { configurable: true, value: 800 },
+      scrollTop: { configurable: true, writable: true, value: 100 },
+    });
+
+    fireEvent.scroll(container);
+    await act(async () => {
+      vi.advanceTimersByTime(20);
+      await Promise.resolve();
+    });
+    expect(loadNextPage).toHaveBeenCalledTimes(1);
+
+    container.scrollTop = 200;
+    fireEvent.scroll(container);
+    await act(async () => {
+      vi.advanceTimersByTime(20);
+      await Promise.resolve();
+    });
+    expect(loadNextPage).toHaveBeenCalledTimes(2);
+  });
+
+  it('Masonry 首载阶段忽略 IO，首载结束后重建观察器并恢复预取', async () => {
+    const observerCallbacks: IntersectionObserverCallback[] = [];
+    class FakeIntersectionObserver {
+      constructor(callback: IntersectionObserverCallback) {
+        observerCallbacks.push(callback);
+      }
+      observe() {}
+      disconnect() {}
+      unobserve() {}
+      takeRecords() { return []; }
+      readonly root = null;
+      readonly rootMargin = '';
+      readonly thresholds = [0];
+    }
+    vi.stubGlobal('IntersectionObserver', FakeIntersectionObserver);
+    const loadNextPage = vi.fn().mockResolvedValue(undefined);
+    const view = render(React.createElement(VirtualGallery, {
+      ...defaultProps,
+      items: [],
+      itemCount: 0,
+      hasNextPage: true,
+      isInitialLoading: true,
+      loadNextPage,
+      layout: 'masonry',
+      viewKey: 'all:masonry:initial-prefetch',
+    }));
+    expect(observerCallbacks.length).toBeGreaterThan(0);
+    act(() => observerCallbacks.at(-1)?.([{ isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver));
+    expect(loadNextPage).not.toHaveBeenCalled();
+
+    view.rerender(React.createElement(VirtualGallery, {
+      ...defaultProps,
+      hasNextPage: true,
+      isInitialLoading: false,
+      loadNextPage,
+      layout: 'masonry',
+      viewKey: 'all:masonry:initial-prefetch',
+    }));
+    await act(async () => Promise.resolve());
+    expect(observerCallbacks.length).toBeGreaterThan(1);
+    act(() => observerCallbacks.at(-1)?.([{ isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver));
+    expect(loadNextPage).toHaveBeenCalledTimes(1);
   });
 });

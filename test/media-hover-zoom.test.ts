@@ -7,7 +7,22 @@ import {
   getMediaCardHoverAnimation,
   getMediaThumbnailClasses,
 } from '../components/PhotoCard';
-import { getAudioCardClasses } from '../components/AudioCard';
+import { areAudioCardPropsEqual, getAudioCardClasses } from '../components/AudioCard';
+import { MediaItem } from '../types';
+
+const createAudioItem = (patch: Partial<MediaItem> = {}): MediaItem => ({
+  id: 'audio-1',
+  url: '/api/file/audio-1',
+  name: 'track.mp3',
+  path: 'track.mp3',
+  folderPath: '',
+  size: 1024,
+  type: 'audio/mpeg',
+  lastModified: 1,
+  mediaType: 'audio',
+  sourceId: 'local',
+  ...patch,
+});
 
 describe('媒体缩略图悬浮缩放偏好', () => {
   it('没有持久化值时默认启用', () => {
@@ -68,5 +83,16 @@ describe('媒体卡片悬浮缩放配置', () => {
     expect(getAudioCardClasses('grid', true)).toContain('hover:scale-[1.02]');
     expect(getAudioCardClasses('grid', false)).not.toContain('hover:scale-[1.02]');
     expect(getAudioCardClasses('grid', false)).toContain('hover:shadow-xl');
+  });
+
+  it('AudioCard memo 覆盖展示字段、点击回调与虚拟化语义', () => {
+    const onClick = () => undefined;
+    const base = { item: createAudioItem(), onClick, layout: 'grid' as const, isVirtual: false };
+    expect(areAudioCardPropsEqual(base, { ...base, item: { ...base.item } })).toBe(true);
+    expect(areAudioCardPropsEqual(base, { ...base, item: { ...base.item, name: 'renamed.mp3' } })).toBe(false);
+    expect(areAudioCardPropsEqual(base, { ...base, item: { ...base.item, size: 2048 } })).toBe(false);
+    expect(areAudioCardPropsEqual(base, { ...base, item: { ...base.item, type: 'audio/flac' } })).toBe(false);
+    expect(areAudioCardPropsEqual(base, { ...base, onClick: () => undefined })).toBe(false);
+    expect(areAudioCardPropsEqual(base, { ...base, isVirtual: true })).toBe(false);
   });
 });

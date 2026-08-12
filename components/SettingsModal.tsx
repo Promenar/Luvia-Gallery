@@ -4,6 +4,7 @@ import { Icons } from './ui/Icon';
 import { User, ExtendedSystemStatus, HomeScreenConfig } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
 import SystemUpdater from './SystemUpdater';
+import { formatMediaStatValue } from './settings/SystemTab';
 
 export type SettingsTab = 'general' | 'library' | 'system' | 'account';
 
@@ -575,7 +576,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                                         </div>
                                                         <span className="text-sm font-bold text-text-secondary">{stat.label}</span>
                                                     </div>
-                                                    <span className="text-xl font-black font-mono tracking-tight text-text-primary">{stat.value.toLocaleString()}</span>
+                                                    <span className="text-xl font-black font-mono tracking-tight text-text-primary">{formatMediaStatValue(stat.value, systemStatus.mediaStats?.exact)}</span>
                                                 </div>
                                             ))}
                                         </div>

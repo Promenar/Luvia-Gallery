@@ -8,6 +8,23 @@ import { Icons } from '../ui/Icon';
 
 const FixedSizeGrid = (ReactWindow as any).FixedSizeGrid;
 
+export const getGridInitialSkeletonItemCount = (
+  columnCount: number,
+  viewportHeight: number,
+  rowHeight: number,
+): number => Math.max(1, columnCount) * Math.max(2, Math.ceil(viewportHeight / Math.max(1, rowHeight)) + 1);
+
+export const getGridEffectiveItemCount = (
+  itemCount: number,
+  loadedItemCount: number,
+  columnCount: number,
+  isNextPageLoading: boolean,
+): number => isNextPageLoading
+  ? Math.max(itemCount, loadedItemCount + (Math.max(1, columnCount) * 2))
+  : itemCount;
+
+export const GRID_SKELETON_CLASSES = 'bg-white/[0.045] dark:bg-white/[0.035] rounded-2xl animate-pulse flex items-center justify-center';
+
 interface InnerProps extends CommonViewportProps {
   width: number;
   height: number;
@@ -19,6 +36,7 @@ const GridViewportInner = React.forwardRef<ViewportCaptureHandle, InnerProps>(({
   items,
   onItemClick,
   hasNextPage,
+  isInitialLoading,
   isNextPageLoading,
   loadNextPage,
   itemCount,
@@ -103,9 +121,12 @@ const GridViewportInner = React.forwardRef<ViewportCaptureHandle, InnerProps>(({
 
   const columnCount = Math.floor((width + GUTTER_SIZE) / (COLUMN_WIDTH + GUTTER_SIZE));
   const safeColumnCount = Math.max(1, columnCount);
-  const rowCount = Math.ceil(itemCount / safeColumnCount);
   const cellWidth = (width - (safeColumnCount - 1) * GUTTER_SIZE) / safeColumnCount;
   const cellHeight = cellWidth;
+  const effectiveItemCount = isInitialLoading && items.length === 0
+    ? getGridInitialSkeletonItemCount(safeColumnCount, height, cellHeight + GUTTER_SIZE)
+    : getGridEffectiveItemCount(itemCount, items.length, safeColumnCount, isNextPageLoading);
+  const rowCount = Math.ceil(effectiveItemCount / safeColumnCount);
 
   const isItemLoaded = (index: number) => !hasNextPage || index < items.length;
 
@@ -131,6 +152,7 @@ const GridViewportInner = React.forwardRef<ViewportCaptureHandle, InnerProps>(({
 
   useEffect(() => {
     if (positionIdentityViewKeyRef.current !== viewKey) {
+      loadLockRef.current = false;
       cancelPendingSnapshot();
       currentScrollTopRef.current = 0;
       lastAnchorItemRef.current = null;
@@ -224,7 +246,7 @@ const GridViewportInner = React.forwardRef<ViewportCaptureHandle, InnerProps>(({
         const visibleEndIndex = (visibleRowStopIndex + 1) * safeColumnCount;
         const nearEnd = visibleEndIndex >= items.length - safeColumnCount;
 
-        if (nearEnd && hasNextPage && !isNextPageLoading && !loadLockRef.current) {
+        if (nearEnd && hasNextPage && !isInitialLoading && !isNextPageLoading && !loadLockRef.current) {
           loadLockRef.current = true;
           const loadPromise = loadNextPage(items.length, items.length + 50);
           if (loadPromise && typeof loadPromise.then === 'function') {
@@ -272,10 +294,10 @@ const GridViewportInner = React.forwardRef<ViewportCaptureHandle, InnerProps>(({
         const index = rowIndex * safeColumnCount + columnIndex;
         const itemStyle = { ...style, width: cellWidth, height: cellHeight, left: Number(style.left), top: Number(style.top) };
 
-        if (index >= itemCount) return null;
-        if (!isItemLoaded(index)) {
+        if (index >= effectiveItemCount) return null;
+        if ((!items.length && isInitialLoading) || !isItemLoaded(index)) {
           return (
-            <div style={itemStyle} className="bg-white/3 rounded-xl animate-pulse flex items-center justify-center border border-white/5">
+            <div style={itemStyle} className={GRID_SKELETON_CLASSES}>
               <Icons.Image className="text-white/10" />
             </div>
           );
@@ -309,6 +331,7 @@ const GridViewportInner = React.forwardRef<ViewportCaptureHandle, InnerProps>(({
                 onClick={onItemClick}
                 layout="grid"
                 isVirtual={true}
+                imagePriority={index < safeColumnCount * 2}
                 mediaHoverZoomEnabled={mediaHoverZoomEnabled}
               />
             )}

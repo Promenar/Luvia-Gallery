@@ -10,6 +10,7 @@ export interface VirtualGalleryProps {
     onItemClick: (item: MediaItem) => void;
     // Infinite scroll props
     hasNextPage: boolean;
+    isInitialLoading: boolean;
     isNextPageLoading: boolean;
     loadNextPage: (startIndex: number, stopIndex: number) => Promise<void> | void;
     itemCount: number; // Total count if known, or items.length
