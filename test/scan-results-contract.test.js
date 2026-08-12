@@ -167,3 +167,12 @@ test('batch delete passes both decoded path and media id to the database', () =>
 
     assert.equal((route.match(/database\.deleteFile\(filePath, id\)/g) || []).length, 2);
 });
+
+test('historical folder cover backfill uses paced small batches', () => {
+    const start = serverSource.indexOf('async function backfillFolderCoverCache()');
+    const end = serverSource.indexOf('\nfunction scheduleFolderCoverBackfill', start);
+    const helper = serverSource.slice(start, end);
+
+    assert.match(helper, /getFolderCoverBackfillBatch\(afterRowid, 32\)/);
+    assert.match(helper, /setTimeout\(resolve, 10\)/);
+});
