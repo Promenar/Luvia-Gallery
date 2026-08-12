@@ -4,7 +4,7 @@ import { describe, expect, it, vi, afterEach, beforeEach } from 'vitest';
 import { render, fireEvent, cleanup, act } from '@testing-library/react';
 import { resolveAnchorIndex, createViewportSnapshot, ViewportCaptureHandle, ViewportSnapshot } from '../components/gallery/viewport-types';
 import { VirtualGallery } from '../components/VirtualGallery';
-import { getMasonryInitialSkeletonCount, getMasonryPrefetchRootMargin, isWithinMasonryPrefetchRange } from '../components/gallery/MasonryViewport';
+import { getMasonryInitialSkeletonCount, getMasonryPrefetchRootMargin, isWithinMasonryPrefetchRange, MASONRY_TOP_SAFE_AREA_CLASSES } from '../components/gallery/MasonryViewport';
 import { getGridEffectiveItemCount, getGridInitialSkeletonItemCount, GRID_SKELETON_CLASSES } from '../components/gallery/GridViewport';
 import { MediaItem } from '../types';
 
@@ -569,6 +569,18 @@ describe('VirtualGallery 视口与协议流转测试', () => {
       viewKey: 'all:masonry:next',
     }));
     expect(continuation.queryAllByTestId('masonry-next-skeleton')).toHaveLength(12);
+  });
+
+  it('Masonry 在桌面首屏保留透明顶部安全区，滚动内容仍可经过浮岛背后', () => {
+    const view = render(React.createElement(VirtualGallery, {
+      ...defaultProps,
+      layout: 'masonry',
+      viewKey: 'all:masonry:safe-area',
+    }));
+    const content = view.getByTestId('masonry-scroll-content');
+    expect(content.className).toContain('pt-1');
+    expect(content.className).toContain('md:pt-16');
+    expect(MASONRY_TOP_SAFE_AREA_CLASSES).not.toContain('bg-');
   });
 
   it('Masonry 骨架数量随视口和列数计算，并在距离底部 1.5 个视口时预取', () => {

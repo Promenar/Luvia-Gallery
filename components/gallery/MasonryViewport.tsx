@@ -5,6 +5,7 @@ import { FolderCard } from '../FolderCard';
 
 const SKELETON_ASPECT_RATIOS = [0.72, 1, 1.28, 0.8, 1.5, 0.92] as const;
 const LOAD_MORE_SKELETONS_PER_COLUMN = 3;
+export const MASONRY_TOP_SAFE_AREA_CLASSES = 'px-1 pb-1 pt-1 md:pt-16';
 
 export const getMasonryInitialSkeletonCount = (
   columnCount: number,
@@ -421,7 +422,10 @@ export const MasonryViewport = React.forwardRef<ViewportCaptureHandle, CommonVie
       ref={containerRef}
       className="w-full h-full overflow-y-auto pb-20 no-scrollbar"
     >
-      <div className="flex gap-4 p-1 items-start">
+      <div
+        className={`flex gap-4 items-start ${MASONRY_TOP_SAFE_AREA_CLASSES}`}
+        data-testid="masonry-scroll-content"
+      >
         {(isInitialLoading && items.length === 0 ? initialSkeletonColumns : columns).map((colItems, colIndex) => (
           <div key={colIndex} className="flex-1 flex flex-col gap-4">
             {isInitialLoading && items.length === 0 ? (
