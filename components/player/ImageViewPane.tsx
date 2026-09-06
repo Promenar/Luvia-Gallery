@@ -17,6 +17,8 @@ interface ImageViewPaneProps {
     item: MediaItem;
     /** 幻灯片推进回调（MediaPlayer 传入队列 next） */
     onSlideNext: () => void;
+    /** hotfix-5：图片解码完成后的真实比例上报（naturalWidth/naturalHeight），供浮窗形状自适应 */
+    onMediaRatio?: (ratio: number) => void;
 }
 
 interface TransformState {
@@ -36,7 +38,7 @@ export const usePaneLanguage = (): { t: (key: string) => string; language: 'en' 
     }
 };
 
-export const ImageViewPane: React.FC<ImageViewPaneProps> = ({ item, onSlideNext }) => {
+export const ImageViewPane: React.FC<ImageViewPaneProps> = ({ item, onSlideNext, onMediaRatio }) => {
     const [transform, setTransform] = useState<TransformState>({ scale: 1, x: 0, y: 0 });
     const containerRef = useRef<HTMLDivElement>(null);
     const [dragConstraints, setDragConstraints] = useState<{ left: number, right: number, top: number, bottom: number } | null>(null);
@@ -244,6 +246,14 @@ export const ImageViewPane: React.FC<ImageViewPaneProps> = ({ item, onSlideNext 
                     style={{ cursor: transform.scale > 1 ? 'grab' : 'zoom-in' }}
                     onClick={(e) => e.stopPropagation()}
                     onDoubleClick={toggleZoom}
+                    onLoad={(e) => {
+                        // hotfix-5：浏览器解码后上报真实宽高比（任一边为 0 时无效，不上报），
+                        // 库内尺寸元数据缺失时浮窗据此把 16:9 兜底形状校正为真实比例
+                        const img = e.currentTarget;
+                        if (onMediaRatio && img.naturalWidth > 0 && img.naturalHeight > 0) {
+                            onMediaRatio(img.naturalWidth / img.naturalHeight);
+                        }
+                    }}
 
                     animate={{
                         scale: transform.scale,
