@@ -215,6 +215,20 @@ export const shouldPreserveGalleryHydratedFiles = (
     && serverOffset === 0
     && fileCount > 0;
 
+/**
+ * 返回引用恒定的回调壳：内部用 ref 持有每一帧提交后的最新闭包，调用时始终转发到最新实现。
+ * 仅消除 props 的 identity 抖动（让 VirtualGallery 的 memo 生效），调用语义与逐帧传递最新闭包完全一致。
+ */
+function useStableEventHandler<Args extends unknown[], Return>(
+    handler: (...args: Args) => Return,
+): (...args: Args) => Return {
+    const handlerRef = useRef(handler);
+    useLayoutEffect(() => {
+        handlerRef.current = handler;
+    });
+    return useCallback((...args: Args) => handlerRef.current(...args), []);
+}
+
 export const resolveGalleryRenderItems = <Item,>(items: Item[], shouldCover: boolean): Item[] =>
     shouldCover ? [] : items;
 
@@ -2362,6 +2376,15 @@ function GalleryApp() {
         galleryNavigation.captureSnapshot({ ...snapshot, loadedOffset: serverOffset });
     };
 
+    // 视口 props 引用稳定化：以下回调每次渲染都会重建引用，会持续击穿 VirtualGallery 的 memo，
+    // 导致播放器 item 切换等无关更新引发背后网格全量重渲染。稳定壳调用时仍执行最新闭包，行为不变。
+    const stableLoadNextPage = useStableEventHandler(loadMoreServerFiles);
+    const stableOnViewportSnapshot = useStableEventHandler(handleViewportSnapshot);
+    const stableToggleFavorite = useStableEventHandler(handleToggleFavorite);
+    const stableFolderRename = useStableEventHandler(handleFolderRename);
+    const stableFolderDelete = useStableEventHandler(handleFolderDelete);
+    const stableRegenerateFolder = useStableEventHandler(handleRegenerateFolder);
+
     const handleUpdateTitle = (newTitle: string) => {
         persistData(undefined, newTitle, undefined, undefined, undefined, undefined, undefined, true);
     };
@@ -2580,6 +2603,17 @@ function GalleryApp() {
 
         return sortCombinedItems([...folderItems, ...processedFiles]);
     }, [visibleFolders, processedFiles, isServerMode, serverFavoriteIds, allUserData, currentUser, sortCombinedItems]);
+
+    // 视口 items 引用稳定化：filter(Boolean) 会在每次渲染生成新数组并击穿 memo，
+    // 这里收敛为仅在数据源或骨架覆盖态变化时重建引用，内容语义与原内联表达式一致。
+    const folderGalleryItems = useMemo(
+        () => resolveGalleryRenderItems(mixedItems.filter(Boolean), isInitialGallerySkeletonCovering),
+        [mixedItems, isInitialGallerySkeletonCovering],
+    );
+    const filesGalleryItems = useMemo(
+        () => resolveGalleryRenderItems(processedFiles.filter(Boolean), isInitialGallerySkeletonCovering),
+        [processedFiles, isInitialGallerySkeletonCovering],
+    );
 
     const hasVisibleSearchResults = hasVisibleGallerySearchResults(
         viewMode,
@@ -2868,24 +2902,24 @@ function GalleryApp() {
                                 <div className="flex-1 w-full h-full p-4 md:p-8 flex flex-col min-h-0">
                                     <VirtualGallery
                                         ref={galleryViewportRef}
-                                        items={resolveGalleryRenderItems(mixedItems.filter(Boolean), isInitialGallerySkeletonCovering)}
+                                        items={folderGalleryItems}
                                         onItemClick={handleFolderGalleryItemClick}
                                         hasNextPage={isServerMode && hasMoreServer}
                                         isInitialLoading={isInitialGalleryLoading}
                                         isNextPageLoading={isFetchingMore}
-                                        loadNextPage={() => loadMoreServerFiles()}
+                                        loadNextPage={stableLoadNextPage}
                                         itemCount={isInitialGallerySkeletonCovering ? 0 : (isServerMode ? serverTotal + visibleFolders.length : mixedItems.length)}
                                         layout={viewMode === 'folders' && layoutMode === 'timeline' ? 'masonry' : layoutMode}
                                         viewKey={galleryNavigation.location.key}
                                         restoreSnapshot={galleryNavigation.restoreSnapshot}
                                         restoreCommand={galleryNavigation.restoreCommand}
-                                        onSnapshotChange={handleViewportSnapshot}
+                                        onSnapshotChange={stableOnViewportSnapshot}
                                         onRestoreComplete={galleryNavigation.consumeRestoreSnapshot}
                                         mediaHoverZoomEnabled={mediaHoverZoomEnabled}
-                                        onToggleFavorite={handleToggleFavorite}
-                                        onRename={handleFolderRename}
-                                        onDelete={handleFolderDelete}
-                                        onRegenerate={handleRegenerateFolder}
+                                        onToggleFavorite={stableToggleFavorite}
+                                        onRename={stableFolderRename}
+                                        onDelete={stableFolderDelete}
+                                        onRegenerate={stableRegenerateFolder}
                                     />
                                 </div>
                             )
@@ -2937,21 +2971,21 @@ function GalleryApp() {
                                     ) : (
                                         <VirtualGallery
                                             ref={galleryViewportRef}
-                                            items={resolveGalleryRenderItems(processedFiles.filter(Boolean), isInitialGallerySkeletonCovering)}
+                                            items={filesGalleryItems}
                                             onItemClick={handleMediaGalleryItemClick}
                                             hasNextPage={isServerMode && hasMoreServer}
                                             isInitialLoading={isInitialGalleryLoading}
                                             isNextPageLoading={isFetchingMore}
-                                            loadNextPage={loadMoreServerFiles}
+                                            loadNextPage={stableLoadNextPage}
                                             itemCount={isInitialGallerySkeletonCovering ? 0 : (isServerMode ? serverTotal : processedFiles.filter(Boolean).length)}
                                             layout={layoutMode}
                                             viewKey={galleryNavigation.location.key}
                                             restoreSnapshot={galleryNavigation.restoreSnapshot}
                                             restoreCommand={galleryNavigation.restoreCommand}
-                                            onSnapshotChange={handleViewportSnapshot}
+                                            onSnapshotChange={stableOnViewportSnapshot}
                                             onRestoreComplete={galleryNavigation.consumeRestoreSnapshot}
                                             mediaHoverZoomEnabled={mediaHoverZoomEnabled}
-                                            onRegenerate={handleRegenerateFolder}
+                                            onRegenerate={stableRegenerateFolder}
                                         />
                                     )}
                                 </div>

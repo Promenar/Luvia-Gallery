@@ -388,7 +388,8 @@ const TimelineViewportInner = React.forwardRef<ViewportCaptureHandle, InnerProps
   );
 });
 
-export const TimelineViewport = React.forwardRef<ViewportCaptureHandle, CommonViewportProps>((props, ref) => {
+// 先定义 forwardRef 内核，再包 memo：与 Grid/Masonry 视口保持一致的无关重渲染隔离；ref 透传不受影响。
+const TimelineViewportImpl = React.forwardRef<ViewportCaptureHandle, CommonViewportProps>((props, ref) => {
   return (
     <div className="w-full h-full relative">
       <AutoSizer>
@@ -402,3 +403,5 @@ export const TimelineViewport = React.forwardRef<ViewportCaptureHandle, CommonVi
     </div>
   );
 });
+
+export const TimelineViewport = React.memo(TimelineViewportImpl);
