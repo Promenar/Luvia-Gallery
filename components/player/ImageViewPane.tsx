@@ -20,7 +20,6 @@ interface ImageViewPaneProps {
     /** hotfix-5：图片解码完成后的真实比例上报（naturalWidth/naturalHeight），供浮窗形状自适应 */
     onMediaRatio?: (ratio: number) => void;
 }
-
 interface TransformState {
     scale: number;
     x: number;
@@ -53,6 +52,19 @@ export const ImageViewPane: React.FC<ImageViewPaneProps> = ({ item, onSlideNext,
     useEffect(() => {
         onSlideNextRef.current = onSlideNext;
     }, [onSlideNext]);
+
+    // hotfix-6：缓存命中兜底——图片命中浏览器缓存时 onLoad 可能不触发，loadedRatio 永不上报，
+    // 浮窗比例自适应被压制。挂载后与每次渲染后检查 img.complete && 已解码（等价 onLoad 语义），
+    // 立即上报真实比例；不设依赖数组以覆盖挂载、item.url 变化及解码晚于渲染的所有时序。
+    // 重复上报同值为无害 no-op（上层 setState 同值自动收敛）。
+    const imgRef = useRef<HTMLImageElement>(null);
+    useEffect(() => {
+        const img = imgRef.current;
+        if (!img || !onMediaRatio) return;
+        if (img.complete && img.naturalWidth > 0 && img.naturalHeight > 0) {
+            onMediaRatio(img.naturalWidth / img.naturalHeight);
+        }
+    });
 
     // Pinch zoom state
     const lastDist = useRef<number | null>(null);
@@ -240,6 +252,7 @@ export const ImageViewPane: React.FC<ImageViewPaneProps> = ({ item, onSlideNext,
                 onTouchEnd={handleTouchEnd}
             >
                 <motion.img
+                    ref={imgRef}
                     src={getAuthUrl(item.url)}
                     alt={item.name}
                     className="max-w-full max-h-full object-contain shadow-2xl rounded-sm"

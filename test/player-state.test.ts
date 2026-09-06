@@ -74,6 +74,14 @@ describe('displayMode 形态状态机', () => {
     expect(state.displayMode).toBe('fullscreen');
   });
 
+  it('SET_MODE 接受 maximized（浏览器视口内最大化，非系统全屏）并可与 window 互转', () => {
+    let state = playerReducer(createInitialPlayerState(), { type: 'open', source: source(2) });
+    state = playerReducer(state, { type: 'setMode', mode: 'maximized' });
+    expect(state.displayMode).toBe('maximized');
+    state = playerReducer(state, { type: 'setMode', mode: 'window' });
+    expect(state.displayMode).toBe('window');
+  });
+
   it('非法 mode 被拒绝且不改变状态（保持原引用）', () => {
     const opened = playerReducer(createInitialPlayerState(), { type: 'open', source: source(2) });
     const next = playerReducer(opened, { type: 'setMode', mode: 'dialog' as unknown as PlayerDisplayMode });

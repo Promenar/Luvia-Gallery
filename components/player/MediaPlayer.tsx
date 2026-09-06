@@ -1,8 +1,10 @@
 // components/player/MediaPlayer.tsx
 // 播放器调度器 + 信息面板持有层（Task B 起不再自渲染全屏遮罩）：
-// - isOpen 时按 displayMode 调度：window/mini/fab 渲染 PlayerWindow 浮窗，
+// - isOpen 时按 displayMode 调度：window/mini/fab/maximized 渲染 PlayerWindow 浮窗
+//   （maximized 为浏览器视口内最大化，容器样式由 PlayerWindow 按形态分支，不涉及系统全屏），
 //   fullscreen 渲染 PlayerFullscreen 独占全屏（Task D，宿主全屏 effect 在其内部）。
 // - 键盘导航（←→ 队列移动；Esc 按形态区分）保留在本层：window/mini/fab 形态 Esc 关闭；
+//   maximized 形态 Esc 回 window（视口内还原，不关闭播放器）；
 //   fullscreen 形态 Esc 交由浏览器原生全屏退出（fullscreenchange 监听回 window），
 //   requestFullscreen 不可用的兜底场景直接回 window，两种场景都不误关播放器。
 // - 信息面板（含 EXIF 拉取，hotfix-1 上移到壳层）仍由本层持有：状态与数据逻辑不变，
@@ -73,8 +75,8 @@ export const MediaPlayer: React.FC<MediaPlayerProps> = ({ onToggleFavorite }) =>
         setExifData(null);
     }, [currentItem?.id]);
 
-    // 键盘导航：Esc 按形态区分——window/mini/fab 关闭播放器；fullscreen 形态不误关
-    // （原生全屏激活时 Esc 由浏览器退出全屏、fullscreenchange 监听回 window，
+    // 键盘导航：Esc 按形态区分——window/mini/fab 关闭播放器；maximized 先回 window（视口内还原）；
+    // fullscreen 形态不误关（原生全屏激活时 Esc 由浏览器退出全屏、fullscreenchange 监听回 window，
     // requestFullscreen 不可用的兜底场景直接回 window 形态）；←→ 队列移动（边界自动 no-op）。
     // 输入控件放行：非模态浮窗打开时画廊行内可能存在聚焦输入框（重命名）或滑杆（音频控制），
     // 事件 target 落在可编辑元素/输入控件时直接放行，方向键与 Esc 优先作用于输入本身。
@@ -91,6 +93,9 @@ export const MediaPlayer: React.FC<MediaPlayerProps> = ({ onToggleFavorite }) =>
                     // 原生全屏未激活（兜底：jsdom/浏览器拒绝全屏）才主动回 window；
                     // 已激活时留给浏览器退出全屏，避免与 fullscreenchange 监听双重处理
                     if (!document.fullscreenElement) setMode('window');
+                } else if (displayMode === 'maximized') {
+                    // 视口内最大化：Esc 还原 window 形态（不关闭播放器，与 fullscreen 语义区分）
+                    setMode('window');
                 } else {
                     close();
                 }
@@ -234,8 +239,9 @@ export const MediaPlayer: React.FC<MediaPlayerProps> = ({ onToggleFavorite }) =>
         </AnimatePresence>
     );
 
-    // Task B/D：isOpen 时按 displayMode 调度——浮窗三形态走 PlayerWindow（无遮罩、可拖动、
-    // 比例自适应），fullscreen 走 PlayerFullscreen 独占全屏（宿主全屏 effect 在其内部）。
+    // Task B/D：isOpen 时按 displayMode 调度——window/mini/fab/maximized 走 PlayerWindow（无遮罩、
+    // 可拖动、比例自适应；maximized 由 PlayerWindow 按形态分支容器样式铺满视口），
+    // fullscreen 走 PlayerFullscreen 独占全屏（宿主全屏 effect 在其内部）。
     // 面板调度（图片/视频）随壳层迁入两形态组件；音频不渲染面板（仍由 AudioPlayer 承接）。
     if (displayMode === 'fullscreen') {
         // 调度兜底（hotfix-2）：close 后任何路径都不再渲染全屏空壳（reducer close 已把
