@@ -5,7 +5,7 @@ import { getAuthUrl } from '../../utils/fileUtils';
 import { resolveVideoSource } from './video-source';
 import type { MediaItem } from '../../types';
 
-export const VideoPane: React.FC<{ item: MediaItem }> = ({ item }) => {
+export const VideoPane: React.FC<{ item: MediaItem; onMediaRatio?: (ratio: number) => void }> = ({ item, onMediaRatio }) => {
   const [videoError, setVideoError] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const source = resolveVideoSource(item);
@@ -32,6 +32,14 @@ export const VideoPane: React.FC<{ item: MediaItem }> = ({ item }) => {
         src={source.url}
         controls autoPlay
         onError={() => setVideoError(true)}
+        onLoadedMetadata={() => {
+          // hotfix-5：视频元数据加载后上报真实宽高比（任一边为 0 时无效，不上报），
+          // 库内尺寸元数据缺失时浮窗据此把兜底形状校正为真实比例
+          const v = videoRef.current;
+          if (onMediaRatio && v && v.videoWidth > 0 && v.videoHeight > 0) {
+            onMediaRatio(v.videoWidth / v.videoHeight);
+          }
+        }}
         className="max-w-full max-h-full shadow-2xl rounded-sm focus:outline-none"
       />
     </div>

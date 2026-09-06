@@ -774,3 +774,84 @@ describe('hotfix-3：拖动/缩放 move 期直写 DOM（零重渲染），pointe
     root.unmount();
   });
 });
+
+describe('hotfix-5：加载后真实比例自适应（库内尺寸元数据缺失时的运行时校正）', () => {
+  // 生产库 thumb 宽高字段全 NULL → resolveAspect 只能兜底 16:9，窗口形状与媒体无关。
+  // hotfix-5：面板在媒体解码后（img onLoad / video onLoadedMetadata）回调上报真实比例，
+  // PlayerWindow 以 loadedRatio 覆盖兜底比例重算容器形状；切换队列项时重置回兜底。
+  // jsdom 不解码媒体：以 Object.defineProperty 直接注入 naturalWidth/naturalHeight、
+  // videoWidth/videoHeight，再 fireEvent 触发对应加载事件（React 合成事件 currentTarget 即媒体节点）。
+  const defineNaturalSize = (el: Element, props: Record<string, number>) => {
+    for (const [key, value] of Object.entries(props)) {
+      Object.defineProperty(el, key, { value, configurable: true });
+    }
+  };
+
+  it('图片 onLoad 上报真实比例：16:9 兜底形状收窄为真实竖图（以 80% 视口高预算定宽）', () => {
+    const { container, root } = setup([item('plain')]); // 无尺寸信息 → 兜底 16:9
+    openPlayer();
+    const win = screen.getByTestId('player-window');
+    // 兜底形状基线：宽度为默认记忆宽度，高度 = 宽/(16/9) + 头部 44
+    const fallbackWidth = parseFloat(win.style.width);
+    expect(parseFloat(win.style.height)).toBeCloseTo(fallbackWidth / (16 / 9) + 44, 6);
+    // 解码完成：真实竖图 600x1500（比例 0.4）→ 窗口形状随真实比例变化
+    const img = container.querySelector('img')!;
+    defineNaturalSize(img, { naturalWidth: 600, naturalHeight: 1500 });
+    fireEvent.load(img);
+    const budget = VH * 0.8;
+    // 竖图收窄：容器高 = 视口预算 + 头部 44，宽 = 预算 × 0.4（未触 240 宽度下限）
+    expect(parseFloat(win.style.width)).toBeCloseTo(budget * 0.4, 6);
+    expect(parseFloat(win.style.height)).toBeCloseTo(budget + 44, 6);
+    root.unmount();
+  });
+
+  it('视频 onLoadedMetadata 上报真实比例：容器从竖图兜底态转为 16:9', () => {
+    // 元数据假竖图（aspectRatio 0.5）：初始以高度定宽收窄
+    const { container, root } = setup([item('v', 'video', { aspectRatio: 0.5 })]);
+    openPlayer();
+    const win = screen.getByTestId('player-window');
+    const budget = VH * 0.8;
+    expect(parseFloat(win.style.height)).toBeCloseTo(budget + 44, 6);
+    expect(parseFloat(win.style.width)).toBeCloseTo(budget * 0.5, 6);
+    // 元数据加载：真实 1920x1080（16:9）→ 回到记忆宽度、高度按 16:9 推导
+    const video = container.querySelector('video')!;
+    defineNaturalSize(video, { videoWidth: 1920, videoHeight: 1080 });
+    fireEvent.loadedMetadata(video);
+    const width = parseFloat(win.style.width);
+    expect(width).toBeCloseTo(VW * 0.42, 6);
+    expect(parseFloat(win.style.height)).toBeCloseTo(width / (16 / 9) + 44, 6);
+    root.unmount();
+  });
+
+  it('切换队列项时 loadedRatio 重置：下一项加载前容器回 resolveAspect 兜底形状', () => {
+    const { container, root } = setup([item('a'), item('b')]); // 两项均无尺寸信息 → 兜底 16:9
+    openPlayer();
+    const win = screen.getByTestId('player-window');
+    // 第一项解码为竖图 → 收窄
+    const img = container.querySelector('img')!;
+    defineNaturalSize(img, { naturalWidth: 600, naturalHeight: 1500 });
+    fireEvent.load(img);
+    expect(parseFloat(win.style.width)).toBeCloseTo(VH * 0.8 * 0.4, 6);
+    // 切换到下一项：loadedRatio 重置为 null → 回兜底 16:9 形状（默认记忆宽度）
+    fireEvent.keyDown(window, { key: 'ArrowRight' });
+    const width = parseFloat(win.style.width);
+    expect(width).toBeCloseTo(VW * 0.42, 6);
+    expect(parseFloat(win.style.height)).toBeCloseTo(width / (16 / 9) + 44, 6);
+    root.unmount();
+  });
+
+  it('heightOverride 存在时 onMediaRatio 不改变容器高度（用户锁定优先），宽度仍随真实比例', () => {
+    stubStorage(JSON.stringify({ x: 10, y: 20, width: 400, mode: 'window', heightOverride: 500 }));
+    const { container, root } = setup([item('plain')]);
+    openPlayer();
+    const win = screen.getByTestId('player-window');
+    expect(parseFloat(win.style.height)).toBe(500);
+    // 解码为竖图：容器高度保持锁定值 500（覆盖优先）；宽度仍随真实比例收窄（既有双向预算结构不变）
+    const img = container.querySelector('img')!;
+    defineNaturalSize(img, { naturalWidth: 600, naturalHeight: 1500 });
+    fireEvent.load(img);
+    expect(parseFloat(win.style.height)).toBe(500);
+    expect(parseFloat(win.style.width)).toBeCloseTo(VH * 0.8 * 0.4, 6);
+    root.unmount();
+  });
+});

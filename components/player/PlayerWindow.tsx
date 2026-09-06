@@ -6,6 +6,9 @@
 //   容器 height = 内容区高(宽/媒体比例) + 头部 44px——内容区正好贴合媒体比例（旧 aspectRatio 作用于含头部的
 //   整容器，系统性留白已消除）；内容区推导高超视口高 80% 时以高度定宽（竖图收窄），触 240px 宽度下限则
 //   高度按比例回推；边缘/角落拖动写高度覆盖（媒体 contain）；头部为完整画廊控制栏。
+//   hotfix-5 起比例来源增加运行时校正：库内尺寸元数据缺失（兜底 16:9）时，媒体解码完成
+//   （img onLoad / video onLoadedMetadata）由面板回调上报真实比例（loadedRatio）覆盖兜底重算形状，
+//   切换队列项重置回兜底；heightOverride 存在时仍锁定容器高度（用户语义优先）。
 // - mini：固定 240px 宽小窗，仍可拖动；头部只留展开回 window 与关闭的最小控制，
 //   画廊式完整控制栏与信息面板隐藏，内容区只保留媒体（视频沿用原生控件）。
 // - fab：56px 圆钮固定右下（16px 边距），不可拖动；背景为当前项缩略图（getAuthUrl 拼认证，
@@ -106,6 +109,13 @@ export const PlayerWindow: React.FC<PlayerWindowProps> = ({ onToggleFavorite, sh
     const [fabImageFailed, setFabImageFailed] = useState(false);
     useEffect(() => { setFabImageFailed(false); }, [currentItem?.id]);
 
+    // hotfix-5：当前媒体经浏览器解码后的真实比例（null = 未加载完成）。
+    // 生产库尺寸元数据全为 NULL，resolveAspect 只能兜底 16:9，窗口形状与媒体无关；
+    // 媒体实际解码后由面板（img onLoad / video onLoadedMetadata）回调上报真实比例校正形状。
+    // 切换队列项时重置为 null：回退兜底比例，等新媒体加载后再次校正（heightOverride 仍最优先）。
+    const [loadedRatio, setLoadedRatio] = useState<number | null>(null);
+    useEffect(() => { setLoadedRatio(null); }, [currentItem?.id]);
+
     // 打开播放器时恢复上次落盘的形态（仅 mini/fab；fullscreen 已在 loadWindowPrefs 归一化为 window）。
     // setMode 经 ref 间接调用：context value 随 state 重建，避免易变引用进入依赖导致偏好反复覆盖用户手动切换。
     const setModeRef = useRef(setMode);
@@ -138,7 +148,16 @@ export const PlayerWindow: React.FC<PlayerWindowProps> = ({ onToggleFavorite, sh
     // 容器总高 = 内容区高 + 头部 44px（hotfix-3 显式公式）——内容区（容器高 - 44）正好贴合媒体比例，
     // 消除旧 aspectRatio 作用于含头部整容器导致的系统性留白；高度覆盖期间容器高即覆盖值（媒体 contain）。
     // 退出动画期间 currentItem 为 null（aspect 为 null），width/height 保持基准值即可。
-    const aspect = currentItem ? resolveAspect(currentItem) : null;
+    // hotfix-5：比例取值优先级——浏览器解码后的真实比例（loadedRatio，须为正有限值）优先，
+    // 元数据缺失/未加载完成时回 resolveAspect 兜底；收窄公式与覆盖语义均保持原结构不变。
+    const aspect = currentItem
+        ? {
+            ratio:
+                loadedRatio !== null && Number.isFinite(loadedRatio) && loadedRatio > 0
+                    ? loadedRatio
+                    : resolveAspect(currentItem).ratio,
+        }
+        : null;
     const maxWidth = viewportW - WINDOW_MARGIN * 2;
     let shellWidth = isMini ? MINI_WIDTH : width;
     let contentHeight = aspect ? shellWidth / aspect.ratio : 0;
@@ -463,9 +482,9 @@ export const PlayerWindow: React.FC<PlayerWindowProps> = ({ onToggleFavorite, sh
                         信息面板仅在 window 形态渲染（mini 只保留媒体，fab 无内容区）。 */}
                     <div className="relative min-h-0 flex-1 bg-black/50">
                         {currentItem.mediaType === 'video' ? (
-                            <VideoPane item={currentItem} />
+                            <VideoPane item={currentItem} onMediaRatio={setLoadedRatio} />
                         ) : currentItem.mediaType === 'image' ? (
-                            <ImageViewPane item={currentItem} onSlideNext={next} />
+                            <ImageViewPane item={currentItem} onSlideNext={next} onMediaRatio={setLoadedRatio} />
                         ) : null}
                         {isWindow && infoPanel}
                     </div>
