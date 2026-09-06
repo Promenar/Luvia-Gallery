@@ -195,7 +195,7 @@ describe('GalleryNavigationController', () => {
     expect(controller.getSnapshot()).toMatchObject({ capturedAt: 100, fallbackScrollTop: 420 });
   });
 
-  it('同一路径两次打开查看器分别恢复打开前位置，旧节流快照不能覆盖第二次捕获', () => {
+  it('同一路径重复捕获快照时第二次即时捕获胜过旧节流样本，History 条目可恢复', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(1_000));
     const controller = createController();
@@ -203,14 +203,14 @@ describe('GalleryNavigationController', () => {
     const replace = vi.spyOn(window.history, 'replaceState');
 
     controller.captureImmediateSnapshot({ ...makeSnapshot(1_000), anchorItemId: 'media-a', fallbackScrollTop: 120 });
-    controller.updateLocation({ mediaId: 'viewer-a' }, 'push');
+    controller.flush();
     const firstDirectoryState = replace.mock.calls.at(-1)![0];
     controller.applyPopState(firstDirectoryState);
     expect(controller.getSnapshot(directory.key)).toMatchObject({ anchorItemId: 'media-a', fallbackScrollTop: 120 });
 
     controller.captureImmediateSnapshot({ ...makeSnapshot(1_000), anchorItemId: 'media-b', fallbackScrollTop: 860 });
     controller.captureSnapshot({ ...makeSnapshot(1_000), anchorItemId: 'stale-media', fallbackScrollTop: 420 });
-    controller.updateLocation({ mediaId: 'viewer-b' }, 'push');
+    controller.flush();
     const secondDirectoryState = replace.mock.calls.at(-1)![0];
     controller.applyPopState(secondDirectoryState);
 

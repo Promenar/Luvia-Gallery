@@ -22,7 +22,6 @@ export interface GalleryLocation {
   filter: GalleryFilterOption;
   layout: GalleryLayout;
   randomSeed?: string;
-  mediaId?: string;
 }
 
 export interface ViewportSnapshot {

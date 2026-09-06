@@ -9,7 +9,7 @@ describe('导航领域模型', () => {
     expect(location.folderPath).toBe('果库/C:/Albums/2026');
   });
 
-  it('序列化链接包含 folders 深链兼容字段', () => {
+  it('序列化不再输出 media 参数，旧链接中的 mediaId 被静默忽略', () => {
     const location = {
       key: '',
       view: 'folders' as const,
@@ -19,7 +19,6 @@ describe('导航领域模型', () => {
       filter: 'video' as const,
       layout: 'grid' as const,
       randomSeed: 'seed-01',
-      mediaId: 'm-1',
     };
     const url = serializeGalleryUrl(location);
 
@@ -27,7 +26,12 @@ describe('导航领域模型', () => {
     expect(url).toContain('view=folders');
     expect(url).toContain('sort=nameAsc');
     expect(url).toContain('q=cat');
-    expect(parseGalleryUrl(url).mediaId).toBe('m-1');
+    expect(url).not.toContain('mediaId=');
+
+    // 旧 URL 兼容：含 media=<id> 的历史链接解析为同一浏览位置，参数被静默忽略
+    const legacyParsed = parseGalleryUrl('#folder=Vacation%2F2026&mediaId=m-1');
+    expect(legacyParsed).not.toHaveProperty('mediaId');
+    expect(legacyParsed).toEqual(parseGalleryUrl('#folder=Vacation%2F2026'));
     expect(parseGalleryUrl(url).randomSeed).toBe('seed-01');
   });
 

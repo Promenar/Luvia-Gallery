@@ -48,15 +48,12 @@ describe('createGalleryQueryKey', () => {
     expect(withFilter).toEqual(withLayoutTimeline);
   });
 
-  it('打开媒体和切换布局不会改变数据集身份', () => {
+  it('数据集身份不再包含媒体查看维度，布局变化继续复用同一查询键', () => {
     const base = createGalleryQueryKey(createInput({ layout: 'grid' }));
-    const mediaOpened = createGalleryQueryKey(createInput({ layout: 'grid', mediaId: 'media-1' }));
-    const mediaSwitched = createGalleryQueryKey(createInput({ layout: 'grid', mediaId: 'media-2' }));
-    const layoutChanged = createGalleryQueryKey(createInput({ layout: 'masonry', mediaId: 'media-2' }));
+    const layoutChanged = createGalleryQueryKey(createInput({ layout: 'masonry' }));
 
-    expect(mediaOpened).toEqual(base);
-    expect(mediaSwitched).toEqual(base);
     expect(layoutChanged).toEqual(base);
+    expect(JSON.stringify(base)).not.toContain('mediaId');
   });
 
   it('应输出路径规范化后的稳定键', () => {

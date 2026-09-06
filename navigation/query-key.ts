@@ -9,7 +9,6 @@ export type GalleryQueryKeyInput = {
   filter?: FilterOption;
   randomSeed: number;
   layout?: GridLayout;
-  mediaId?: string;
 };
 
 export type GalleryQueryKey = readonly [

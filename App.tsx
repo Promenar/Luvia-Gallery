@@ -6,7 +6,9 @@ import { Icons } from './components/ui/Icon';
 import { Navigation } from './components/Navigation';
 import { MediaCard, useStableMediaItemClick } from './components/PhotoCard';
 import { FolderCard } from './components/FolderCard';
-import { ImageViewer } from './components/ImageViewer';
+import { MediaPlayer } from './components/player/MediaPlayer';
+import { PlayerProvider, useMediaPlayer } from './components/player/PlayerProvider';
+import { buildPlayerQueue } from './components/player/player-state';
 import { UnifiedProgressModal } from './components/UnifiedProgressModal';
 import { VirtualGallery } from './components/VirtualGallery';
 import type { ViewportCaptureHandle } from './components/gallery/viewport-types';
@@ -330,11 +332,10 @@ export const createTopLevelViewLocationUpdate = (
     currentView: ViewMode,
     targetView: ViewMode,
     layout: GridLayout,
-): Partial<Pick<GalleryLocation, 'view' | 'folderPath' | 'search' | 'layout' | 'mediaId'>> => ({
+): Partial<Pick<GalleryLocation, 'view' | 'folderPath' | 'search' | 'layout'>> => ({
     view: targetView,
     folderPath: '',
     layout,
-    mediaId: undefined,
     ...(currentView !== targetView ? { search: '' } : {}),
 });
 
@@ -406,7 +407,7 @@ export const resolveScopedGalleryLayout = (
     return resolveGalleryLayoutPreference(storage, { serverId, userId, view }) ?? 'grid';
 };
 
-type UnifiedToolbarLocationUpdate = Partial<Pick<GalleryLocation, 'search' | 'sort' | 'filter' | 'layout' | 'mediaId'>>;
+type UnifiedToolbarLocationUpdate = Partial<Pick<GalleryLocation, 'search' | 'sort' | 'filter' | 'layout'>>;
 type UnifiedGalleryToolbarProps = Omit<
     GalleryNavigationBarProps,
     'compact' | 'className' | 'enableSearchShortcut' | 'location' | 'view' | 'folderPath' | 'currentPath'
@@ -430,19 +431,19 @@ export const UnifiedGalleryToolbar: React.FC<UnifiedGalleryToolbarProps> = ({
         ...navigationProps,
         location,
         onSearch: (search) => {
-            if (search !== location.search) onLocationChange({ search, mediaId: undefined }, 'push');
+            if (search !== location.search) onLocationChange({ search }, 'push');
         },
         sortOption: location.sort,
         onSortChange: (sort) => {
-            if (sort !== location.sort) onLocationChange({ sort, mediaId: undefined }, 'replace');
+            if (sort !== location.sort) onLocationChange({ sort }, 'replace');
         },
         layoutMode: location.layout,
         onLayoutChange: (layout) => {
-            if (layout !== location.layout) onLocationChange({ layout, mediaId: undefined }, 'replace');
+            if (layout !== location.layout) onLocationChange({ layout }, 'replace');
         },
         filter: location.filter,
         onFilterChange: (filter) => {
-            if (filter !== location.filter) onLocationChange({ filter, mediaId: undefined }, 'replace');
+            if (filter !== location.filter) onLocationChange({ filter }, 'replace');
         },
     };
 
@@ -495,7 +496,7 @@ export const SearchEmptyState: React.FC<SearchEmptyStateProps> = ({
             <button
                 type="button"
                 className="mt-6 px-5 py-2 rounded-full bg-primary-600 hover:bg-primary-700 text-white font-medium transition-colors"
-                onClick={() => onLocationChange({ search: '', mediaId: undefined }, 'push')}
+                onClick={() => onLocationChange({ search: '' }, 'push')}
             >
                 {isChinese ? '清除搜索' : 'Clear search'}
             </button>
@@ -549,16 +550,6 @@ export const getGalleryCacheEvictionKeys = (
         retainedEntries += 1;
         return [];
     });
-};
-
-export const getAdjacentMediaId = (
-    items: Pick<MediaItem, 'id'>[],
-    currentId: string,
-    direction: 'next' | 'previous',
-) => {
-    const currentIndex = items.findIndex((item) => item.id === currentId);
-    const targetIndex = direction === 'next' ? currentIndex + 1 : currentIndex - 1;
-    return currentIndex >= 0 ? items[targetIndex]?.id : undefined;
 };
 
 const STORAGE_KEYS = {
@@ -619,10 +610,11 @@ const removeStorageItem = (key: string, legacyKey?: string) => {
 
 
 
-export default function App() {
+function GalleryApp() {
     const { t, language, setLanguage } = useLanguage();
     const queryClient = useQueryClient();
     const galleryNavigation = useGalleryNavigation();
+    const { open: openPlayer, close: closePlayer } = useMediaPlayer();
     const { canApplyLayoutPreference, applyInitialLayoutPreference } = galleryNavigation;
     const galleryViewportRef = useRef<ViewportCaptureHandle>(null);
 
@@ -759,8 +751,6 @@ export default function App() {
         localStorage.setItem(IS_DESKTOP_SIDEBAR_OPEN_KEY, String(isDesktopSidebarOpen));
     }, [isDesktopSidebarOpen]);
 
-    const [selectedItem, setSelectedItem] = useState<MediaItem | null>(null);
-
     // --- REFS for Polling (Fixes Stale Closure) ---
     // These refs ensure the polling loop always accesses the latest state without closure issues
     const viewModeRef = useRef<ViewMode>('home');
@@ -776,6 +766,7 @@ export default function App() {
         else if (viewMode === 'home' || viewMode === 'all') removeStorageItem(CURRENT_PATH_KEY, LEGACY_KEYS.currentPath);
     }, [currentPath, viewMode]);
 
+    // 导航位置 → 渲染镜像同步；播放器不再占用导航位置字段，打开/关闭与历史彻底解耦。
     useEffect(() => {
         const location = galleryNavigation.location;
         if (viewMode !== location.view) setViewMode(location.view);
@@ -787,14 +778,19 @@ export default function App() {
             lastSearchLocationKeyRef.current = location.key;
             setActiveSearch(location.search);
         }
+    }, [currentPath, filterOption, galleryNavigation.location, layoutMode, sortOption, viewMode]);
 
-        if (!location.mediaId) {
-            setSelectedItem((item) => item ? null : item);
-            return;
-        }
-        const openedItem = files.find((item) => item.id === location.mediaId);
-        if (openedItem) setSelectedItem(openedItem);
-    }, [currentPath, files, filterOption, galleryNavigation.location, layoutMode, sortOption, viewMode]);
+    // 导航位置与播放器联动：位置 key 变化（后退/前进/任意视图切换）时收起播放器，
+    // 保证"后退总能回到浏览流"；同位置内的关闭仍由 Esc/背景点击/关闭按钮完成。
+    // 用上一次 key 的 ref 做比较：closePlayer 随 provider state 变化重建，
+    // 若按 brief 以身份变化触发会在打开播放器后立即误关。
+    const lastLocationKeyRef = useRef(galleryNavigation.location.key);
+    useEffect(() => {
+        const locationKey = galleryNavigation.location.key;
+        if (lastLocationKeyRef.current === locationKey) return;
+        lastLocationKeyRef.current = locationKey;
+        closePlayer();
+    }, [galleryNavigation.location.key, closePlayer]);
 
     useLayoutEffect(() => {
         const view = galleryNavigation.location.view;
@@ -2013,7 +2009,6 @@ export default function App() {
         const update = {
             view: 'folders',
             folderPath: path,
-            mediaId: undefined,
             layout: resolveTargetLayout('folders'),
         } as const;
         advanceGalleryDatasetNavigation(resolveNextGalleryLocation(update));
@@ -2024,7 +2019,6 @@ export default function App() {
         advanceGalleryDatasetNavigation(resolveNextGalleryLocation({
             view: 'folders',
             folderPath: getParentFolderPath(galleryNavigation.location.folderPath),
-            mediaId: undefined,
         }));
         galleryNavigation.up();
     };
@@ -2160,11 +2154,6 @@ export default function App() {
                 [currentUser.username]: { ...allUserData[currentUser.username], files: updatedFiles }
             });
 
-            // Update selected item if open
-            if (selectedItem && selectedItem.id === targetId) {
-                setSelectedItem(prev => prev ? { ...prev, isFavorite: newStatus } : null);
-            }
-
             // Update ID list
             if (newStatus) {
                 setServerFavoriteIds(prev => ({ ...prev, files: [...prev.files, targetId] }));
@@ -2207,9 +2196,6 @@ export default function App() {
                         ...allUserData,
                         [currentUser.username]: { ...allUserData[currentUser.username], files: updatedFiles }
                     });
-                    if (selectedItem && selectedItem.id === targetId) {
-                        setSelectedItem(prev => prev ? { ...prev, isFavorite: currentStatus } : null);
-                    }
                     if (currentStatus) { // If it was favorite, add back
                         setServerFavoriteIds(prev => ({ ...prev, files: [...prev.files, targetId] }));
                     } else { // If it was not favorite, remove
@@ -2232,11 +2218,6 @@ export default function App() {
                 const updatedUserData = { ...allUserData, [currentUser.username]: { ...allUserData[currentUser.username], files: updatedFiles } };
                 setAllUserData(updatedUserData);
                 persistData(undefined, undefined, updatedUserData);
-
-                // Critical: Update selectedItem if it is currently open in ImageViewer
-                if (selectedItem && (selectedItem.id === targetId)) {
-                    setSelectedItem(prev => prev ? { ...prev, isFavorite: !prev.isFavorite } : null);
-                }
             } else {
                 // Toggle folder path in favorites list
                 const currentFavs = allUserData[currentUser.username].favoriteFolderPaths || [];
@@ -2248,61 +2229,6 @@ export default function App() {
                 setAllUserData(updatedUserData);
                 persistData(undefined, undefined, updatedUserData);
             }
-        }
-    };
-
-    const handleRename = async (item: MediaItem, newName: string) => {
-        if (!currentUser) return;
-        if (isServerMode) {
-            try {
-                const res = await apiFetch('/api/file/rename', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ oldPath: item.path, newName: newName })
-                });
-                const data = await res.json();
-                if (data.success) {
-                    if (viewMode === 'all') fetchServerFiles(currentUser.username, allUserData, 0, true, null);
-                    else if (viewMode === 'folders') fetchServerFiles(currentUser.username, allUserData, 0, true, currentPath);
-                } else {
-                    alert("Rename failed: " + data.error);
-                }
-            } catch (e) { alert("Network error"); }
-        } else {
-            const updatedFiles = files.map(f => {
-                if (f.id === item.id) return { ...f, name: newName };
-                return f;
-            });
-            const updatedUserData = { ...allUserData, [currentUser.username]: { ...allUserData[currentUser.username], files: updatedFiles } };
-            setAllUserData(updatedUserData);
-            persistData(undefined, undefined, updatedUserData);
-        }
-    };
-
-    const handleDelete = async (item: MediaItem) => {
-        if (!currentUser) return;
-        if (isServerMode) {
-            try {
-                const res = await apiFetch('/api/file/delete', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ filePath: item.path })
-                });
-                const data = await res.json();
-                if (data.success) {
-                    setSelectedItem(null);
-                    if (viewMode === 'all') fetchServerFiles(currentUser.username, allUserData, 0, true, null);
-                    else if (viewMode === 'folders') fetchServerFiles(currentUser.username, allUserData, 0, true, currentPath);
-                } else {
-                    alert("Delete failed: " + data.error);
-                }
-            } catch (e) { alert("Network error"); }
-        } else {
-            const updatedFiles = files.filter(f => f.id !== item.id);
-            const updatedUserData = { ...allUserData, [currentUser.username]: { ...allUserData[currentUser.username], files: updatedFiles } };
-            setAllUserData(updatedUserData);
-            persistData(undefined, undefined, updatedUserData);
-            setSelectedItem(null);
         }
     };
 
@@ -2378,13 +2304,13 @@ export default function App() {
         }
     };
 
+    // 打开媒体：捕获当前视口快照后交给播放器，不再写入导航历史（打开即无历史条目）。
     const handleOpenMedia = (item: MediaItem) => {
         const snapshot = galleryViewportRef.current?.captureSnapshot();
         if (snapshot?.locationKey === galleryNavigation.location.key) {
             galleryNavigation.captureImmediateSnapshot({ ...snapshot, loadedOffset: serverOffset });
         }
-        setSelectedItem(item);
-        galleryNavigation.updateLocation({ mediaId: item.id }, 'push');
+        openPlayer(buildPlayerQueue(processedFiles, item.id));
     };
 
     const handleFolderGalleryItemClick = useStableMediaItemClick((item) => {
@@ -2414,13 +2340,6 @@ export default function App() {
             handleOpenMedia(item);
         }
     });
-
-    const handleCloseMedia = () => {
-        setSelectedItem(null);
-        if (!galleryNavigation.location.mediaId || !galleryNavigation.back()) {
-            galleryNavigation.updateLocation({ mediaId: undefined }, 'replace');
-        }
-    };
 
     const handleScrollToTop = () => {
         galleryNavigation.requestRestore({
@@ -3129,32 +3048,7 @@ export default function App() {
                 }}
             />
 
-            <ImageViewer
-                item={selectedItem}
-                onClose={handleCloseMedia}
-                onNext={() => {
-                    if (!selectedItem) return;
-                    const mediaId = getAdjacentMediaId(processedFiles, selectedItem.id, 'next');
-                    const nextItem = mediaId ? processedFiles.find((item) => item.id === mediaId) : undefined;
-                    if (nextItem) {
-                        setSelectedItem(nextItem);
-                        galleryNavigation.updateLocation({ mediaId }, 'replace');
-                    }
-                }}
-                onPrev={() => {
-                    if (!selectedItem) return;
-                    const mediaId = getAdjacentMediaId(processedFiles, selectedItem.id, 'previous');
-                    const previousItem = mediaId ? processedFiles.find((item) => item.id === mediaId) : undefined;
-                    if (previousItem) {
-                        setSelectedItem(previousItem);
-                        galleryNavigation.updateLocation({ mediaId }, 'replace');
-                    }
-                }}
-                onDelete={handleDelete}
-                onRename={handleRename}
-                onJumpToFolder={handleJumpToFolder}
-                onToggleFavorite={handleToggleFavorite}
-            />
+            <MediaPlayer onToggleFavorite={handleToggleFavorite} />
 
             {/* Audio Player */}
             {
@@ -3249,5 +3143,14 @@ export default function App() {
                 }}
             />
         </div >
+    );
+}
+
+/** 应用默认导出：PlayerProvider 包裹整个应用，画廊主体与播放器共享同一上下文。 */
+export default function App() {
+    return (
+        <PlayerProvider>
+            <GalleryApp />
+        </PlayerProvider>
     );
 }
