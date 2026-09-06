@@ -13,7 +13,7 @@ export interface WindowPrefs {
   width: number;
   /** 上次会话的浮窗形态；fullscreen 不作为持久形态，载入时归一化为 window */
   mode: PlayerDisplayMode;
-  /** 高度覆盖（px，hotfix-2）：下边缘拖动自定义高度时写入；缺省/undefined = 高度按媒体比例自适应 */
+  /** 高度覆盖（px，hotfix-2）：边缘/角落拖动自定义高度时写入（hotfix-4 起含右缘锁定起点渲染总高与右下角独立跟随）；缺省/undefined = 高度按媒体比例自适应 */
   heightOverride?: number;
 }
 

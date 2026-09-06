@@ -5,14 +5,15 @@
 // - window：宽度取 localStorage 偏好或 clamp(280, 视口宽*0.42, 视口宽-48)；hotfix-3 起等比模式写显式高度：
 //   容器 height = 内容区高(宽/媒体比例) + 头部 44px——内容区正好贴合媒体比例（旧 aspectRatio 作用于含头部的
 //   整容器，系统性留白已消除）；内容区推导高超视口高 80% 时以高度定宽（竖图收窄），触 240px 宽度下限则
-//   高度按比例回推；下边缘拖动可写高度覆盖（媒体 contain）；头部为完整画廊控制栏。
+//   高度按比例回推；边缘/角落拖动写高度覆盖（媒体 contain）；头部为完整画廊控制栏。
 // - mini：固定 240px 宽小窗，仍可拖动；头部只留展开回 window 与关闭的最小控制，
 //   画廊式完整控制栏与信息面板隐藏，内容区只保留媒体（视频沿用原生控件）。
 // - fab：56px 圆钮固定右下（16px 边距），不可拖动；背景为当前项缩略图（getAuthUrl 拼认证，
 //   加载失败回退 Icons.Image），视频项带播放角标；点击回 window。fab 不暂停播放（音频继续，视频随容器卸载）。
-// - 边缘拖拽自定义大小（hotfix-2，仅 window 形态）：右边缘/右下角拖宽（高度随比例跟随），
-//   下边缘拖高写高度覆盖（heightOverride 落盘，覆盖期间容器显式 height、媒体 contain）；
-//   宽度变化即清除覆盖（高度回比例自适应）。复用头部抓手同款 pointer 三段式。
+// - 边缘拖拽自定义大小（hotfix-2，hotfix-4 起标准窗口语义，仅 window 形态）：三个抓手全部自由缩放
+//   （非等比）——右缘只改宽（heightOverride 锁定为起点容器渲染总高，宽度变化后高度不再按比例跟随）、
+//   右下角宽高各自独立跟随（+dx/+dy）、下边缘只改高；覆盖落盘（heightOverride 字段，覆盖期间容器显式
+//   height、媒体 contain）；双击右缘/右下角清除覆盖回等比自适应。复用头部抓手同款 pointer 三段式。
 // - 拖动：头部抓手自实现 pointerdown→move→up（fab 无抓手不可拖动），位置 clamp 视口内，pointerup 落库。
 // - 跟手（hotfix-3）：拖动/缩放 pointermove 直写容器 style.left/top/width/height（起点增量推算，零 setState
 //   零重渲染）；会话期间 isInteracting 置 true 禁用 framer-motion layout 补间；pointerup 一次性 setState 同步
@@ -82,15 +83,16 @@ export const PlayerWindow: React.FC<PlayerWindowProps> = ({ onToggleFavorite, sh
 
     // 宽度：首次挂载读一次偏好（Task A loadWindowPrefs），无偏好按视口宽 42% clamp。
     // 该宽度始终是 window 形态的记忆宽度：mini 固定 240、fab 无宽度，均不改写此值。
-    // hotfix-2 起可变：右边缘/右下角拖拽直接改写（clamp [280, 视口宽-48]），高度由比例自动跟随。
+    // hotfix-2 起可变：右缘/右下角拖拽直接改写（clamp [280, 视口宽-48]）；右缘拖拽同时锁定高度覆盖（hotfix-4）。
     const [width, setWidth] = useState(() => {
         const preferred = loadWindowPrefs()?.width;
         return typeof preferred === 'number' && Number.isFinite(preferred)
             ? clamp(preferred, MIN_WIDTH, window.innerWidth - WINDOW_MARGIN * 2)
             : clamp(window.innerWidth * 0.42, MIN_WIDTH, window.innerWidth - WINDOW_MARGIN * 2);
     });
-    // 高度覆盖（px，hotfix-2）：下边缘拖动自定义高度后落盘（window-prefs 可选字段）；
-    // null = 无覆盖，高度按媒体比例自适应。仅 window 形态生效；宽度变化即清除。
+    // 高度覆盖（px，hotfix-2）：边缘/角落拖动自定义高度后落盘（window-prefs 可选字段）——
+    // 下缘/右下角写拖拽高，右缘锁定起点容器渲染总高（hotfix-4）；null = 无覆盖，高度按媒体比例自适应。
+    // 仅 window 形态生效；双击右缘/右下角清除回等比。
     const [heightOverride, setHeightOverride] = useState<number | null>(() => {
         const override = loadWindowPrefs()?.heightOverride;
         return typeof override === 'number' ? override : null;
@@ -151,7 +153,7 @@ export const PlayerWindow: React.FC<PlayerWindowProps> = ({ onToggleFavorite, sh
         contentHeight = shellWidth / aspect.ratio;
     }
     if (isMini) contentHeight = Math.max(contentHeight, MINI_MIN_HEIGHT);
-    // 高度覆盖（仅 window 形态）：下边缘拖动写入，覆盖期间容器显式 height、媒体 contain 显示
+    // 高度覆盖（仅 window 形态）：边缘/角落拖动写入（hotfix-4），覆盖期间容器显式 height、媒体 contain 显示
     const heightOverrideActive = isWindow && heightOverride !== null;
     // 容器总高：等比 = 内容区高 + 头部；覆盖 = 覆盖值本身（显式 height 语义沿用 hotfix-2）
     const containerHeight = heightOverrideActive ? heightOverride! : contentHeight + HEADER_HEIGHT;
@@ -207,47 +209,87 @@ export const PlayerWindow: React.FC<PlayerWindowProps> = ({ onToggleFavorite, sh
         saveWindowPrefs({ x, y, width, mode: displayMode, heightOverride: heightOverride ?? undefined });
     };
 
-    // 边缘 resize 会话（hotfix-2）：与拖动同款三段式——起点指针 + 起点尺寸，
-    // move/up 都从起点增量推算，避免闭包读到过期状态。横向改宽（高度由比例跟随），
-    // 纵向写高度覆盖；宽度变化即清除覆盖（高度回比例自适应）。
+    // 边缘 resize 会话（hotfix-2，hotfix-4 起标准窗口语义）：与拖动同款三段式——起点指针 + 起点尺寸，
+    // move/up 都从起点增量推算，避免闭包读到过期状态。三个抓手各自独立会话：
+    // 右缘只改宽（高度锁定起点渲染总高）；右下角宽高各自独立跟随（+dx/+dy，互不推导）；下缘只改高。
     // hotfix-3：move 期直写 DOM 不 setState，pointerup 才同步状态并落盘。
-    const hResizeRef = useRef<{ px: number; startWidth: number } | null>(null);
+    const rightResizeRef = useRef<{ px: number; startWidth: number; startHeight: number } | null>(null);
+    const cornerResizeRef = useRef<{ px: number; py: number; startWidth: number; startHeight: number } | null>(null);
     const vResizeRef = useRef<{ py: number; startHeight: number } | null>(null);
 
-    const startResize = (e: React.PointerEvent<HTMLDivElement>, axis: 'h' | 'v') => {
+    const startResize = (e: React.PointerEvent<HTMLDivElement>, kind: 'right' | 'corner' | 'bottom') => {
         if (e.button !== 0) return;
         // 阻断冒泡：边缘抓手不得触发头部拖动等父级 pointer 逻辑
         e.stopPropagation();
         e.preventDefault();
         // 真实浏览器锁定指针到抓手（jsdom 无此 API，可选调用）
         e.currentTarget.setPointerCapture?.(e.pointerId);
-        if (axis === 'h') hResizeRef.current = { px: e.clientX, startWidth: shellWidth };
-        else vResizeRef.current = { py: e.clientY, startHeight: containerHeight };
+        if (kind === 'right') {
+            rightResizeRef.current = { px: e.clientX, startWidth: shellWidth, startHeight: containerHeight };
+        } else if (kind === 'corner') {
+            cornerResizeRef.current = { px: e.clientX, py: e.clientY, startWidth: shellWidth, startHeight: containerHeight };
+        } else {
+            vResizeRef.current = { py: e.clientY, startHeight: containerHeight };
+        }
         setIsInteracting(true);
     };
 
-    const applyHResize = (clientX: number, session: { px: number; startWidth: number }) => {
-        const next = clamp(session.startWidth + (clientX - session.px), MIN_WIDTH, maxWidth);
-        // hotfix-3：直写 DOM——宽度变化即清除覆盖，高度按等比公式跟随（内容区 = 宽/比例，容器再 + 头部 44）；
-        // hotfix-3 起等比模式不写 aspectRatio，无需额外清理
+    // 右缘：宽度自由变化（起点 + dx，clamp [280, 视口宽-48]）；高度直写为锁定值（起点容器渲染总高），
+    // 不再按 宽/ratio+44 推导——宽度变化后高度保持不变（hotfix-4 自由缩放语义）
+    const applyRightResize = (clientX: number, session: { px: number; startWidth: number; startHeight: number }) => {
+        const nextWidth = clamp(session.startWidth + (clientX - session.px), MIN_WIDTH, maxWidth);
         const el = windowRef.current;
-        if (el && aspect) {
-            el.style.width = `${next}px`;
-            el.style.height = `${next / aspect.ratio + HEADER_HEIGHT}px`;
+        if (el) {
+            el.style.width = `${nextWidth}px`;
+            el.style.height = `${session.startHeight}px`;
         }
-        return next;
+        return nextWidth;
     };
 
-    const finishHResize = (e: React.PointerEvent<HTMLDivElement>) => {
-        const session = hResizeRef.current;
+    const finishRightResize = (e: React.PointerEvent<HTMLDivElement>) => {
+        const session = rightResizeRef.current;
         if (!session) return;
-        hResizeRef.current = null;
-        const next = applyHResize(e.clientX, session);
-        // pointerup：一次性同步状态（与直写值一致）+ 落盘（宽度 + 覆盖清除状态一并写入）
-        setWidth(next);
-        setHeightOverride(null);
+        rightResizeRef.current = null;
+        const nextWidth = applyRightResize(e.clientX, session);
+        // pointerup：宽度写入记忆；高度覆盖锁定为起点渲染总高（后续宽度变化不再触发比例重算）
+        setWidth(nextWidth);
+        setHeightOverride(session.startHeight);
         setIsInteracting(false);
-        saveWindowPrefs({ x: currentPos.x, y: currentPos.y, width: next, mode: displayMode, heightOverride: undefined });
+        saveWindowPrefs({ x: currentPos.x, y: currentPos.y, width: nextWidth, mode: displayMode, heightOverride: session.startHeight });
+    };
+
+    // 右下角：宽高各自独立跟随（宽 = 起点 + dx，高 = 起点 + dy），互不推导、不锁比例（hotfix-4）
+    const applyCornerResize = (
+        clientX: number,
+        clientY: number,
+        session: { px: number; py: number; startWidth: number; startHeight: number },
+    ) => {
+        const nextWidth = clamp(session.startWidth + (clientX - session.px), MIN_WIDTH, maxWidth);
+        const nextHeight = clamp(session.startHeight + (clientY - session.py), MIN_SHELL_HEIGHT, viewportH - WINDOW_MARGIN);
+        const el = windowRef.current;
+        if (el) {
+            el.style.width = `${nextWidth}px`;
+            el.style.height = `${nextHeight}px`;
+        }
+        return { width: nextWidth, height: nextHeight };
+    };
+
+    const finishCornerResize = (e: React.PointerEvent<HTMLDivElement>) => {
+        const session = cornerResizeRef.current;
+        if (!session) return;
+        cornerResizeRef.current = null;
+        const { width: nextWidth, height: nextHeight } = applyCornerResize(e.clientX, e.clientY, session);
+        // pointerup：宽高一次性同步状态（与直写值一致）+ 落盘
+        setWidth(nextWidth);
+        setHeightOverride(nextHeight);
+        setIsInteracting(false);
+        saveWindowPrefs({ x: currentPos.x, y: currentPos.y, width: nextWidth, mode: displayMode, heightOverride: nextHeight });
+    };
+
+    // 双击右缘/右下角：清除高度覆盖回等比模式（容器高 = 宽/媒体比例 + 头部 44），并同步落盘
+    const resetHeightOverride = () => {
+        setHeightOverride(null);
+        saveWindowPrefs({ x: currentPos.x, y: currentPos.y, width, mode: displayMode, heightOverride: undefined });
     };
 
     const applyVResize = (clientY: number, session: { py: number; startHeight: number }) => {
@@ -428,41 +470,44 @@ export const PlayerWindow: React.FC<PlayerWindowProps> = ({ onToggleFavorite, sh
                         {isWindow && infoPanel}
                     </div>
 
-                    {/* 边缘 resize 抓手（hotfix-2，仅 window 形态）：右边缘/右下角拖宽（高度随比例跟随），
-                        下边缘拖高写高度覆盖。抓手置于内容区之后保证可命中；stopPropagation 避免触发头部拖动。
+                    {/* 边缘 resize 抓手（hotfix-2，hotfix-4 起三向自由缩放，仅 window 形态）：右缘拖宽（高度锁定
+                        起点渲染总高）、右下角宽高独立跟随、下缘拖高写覆盖；双击右缘/右下角回等比自适应。
+                        抓手置于内容区之后保证可命中；stopPropagation 避免触发头部拖动。
                         mini 固定 240 宽、fab 无窗体，均不渲染抓手。 */}
                     {isWindow && (
                         <>
                             <div
                                 data-testid="player-resize-right"
                                 className="absolute right-0 top-0 bottom-0 z-50 w-1.5 cursor-ew-resize touch-none"
-                                onPointerDown={(e) => startResize(e, 'h')}
+                                onPointerDown={(e) => startResize(e, 'right')}
                                 onPointerMove={(e) => {
-                                    if (hResizeRef.current) applyHResize(e.clientX, hResizeRef.current);
+                                    if (rightResizeRef.current) applyRightResize(e.clientX, rightResizeRef.current);
                                 }}
-                                onPointerUp={finishHResize}
-                                onPointerCancel={finishHResize}
+                                onPointerUp={finishRightResize}
+                                onPointerCancel={finishRightResize}
+                                onDoubleClick={resetHeightOverride}
                             />
                             <div
                                 data-testid="player-resize-bottom"
                                 className="absolute bottom-0 left-0 right-0 z-50 h-1.5 cursor-ns-resize touch-none"
-                                onPointerDown={(e) => startResize(e, 'v')}
+                                onPointerDown={(e) => startResize(e, 'bottom')}
                                 onPointerMove={(e) => {
                                     if (vResizeRef.current) applyVResize(e.clientY, vResizeRef.current);
                                 }}
                                 onPointerUp={finishVResize}
                                 onPointerCancel={finishVResize}
                             />
-                            {/* 右下角：与右边缘同一横向改宽逻辑；置于最后声明，重叠区优先命中角抓手 */}
+                            {/* 右下角：宽高各自独立跟随（互不推导）；置于最后声明，重叠区优先命中角抓手 */}
                             <div
                                 data-testid="player-resize-corner"
                                 className="absolute right-0 bottom-0 z-50 w-4 h-4 cursor-nwse-resize touch-none"
-                                onPointerDown={(e) => startResize(e, 'h')}
+                                onPointerDown={(e) => startResize(e, 'corner')}
                                 onPointerMove={(e) => {
-                                    if (hResizeRef.current) applyHResize(e.clientX, hResizeRef.current);
+                                    if (cornerResizeRef.current) applyCornerResize(e.clientX, e.clientY, cornerResizeRef.current);
                                 }}
-                                onPointerUp={finishHResize}
-                                onPointerCancel={finishHResize}
+                                onPointerUp={finishCornerResize}
+                                onPointerCancel={finishCornerResize}
+                                onDoubleClick={resetHeightOverride}
                             />
                         </>
                     )}
