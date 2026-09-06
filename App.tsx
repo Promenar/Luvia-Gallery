@@ -614,7 +614,8 @@ function GalleryApp() {
     const { t, language, setLanguage } = useLanguage();
     const queryClient = useQueryClient();
     const galleryNavigation = useGalleryNavigation();
-    const { open: openPlayer, close: closePlayer } = useMediaPlayer();
+    // patchItem：把收藏等外部状态变化实时回写播放器队列快照（播放器未打开时为无害 no-op）
+    const { open: openPlayer, close: closePlayer, patchItem } = useMediaPlayer();
     const { canApplyLayoutPreference, applyInitialLayoutPreference } = galleryNavigation;
     const galleryViewportRef = useRef<ViewportCaptureHandle>(null);
 
@@ -2153,6 +2154,8 @@ function GalleryApp() {
                 ...allUserData,
                 [currentUser.username]: { ...allUserData[currentUser.username], files: updatedFiles }
             });
+            // 同步回写播放器队列快照，播放器内收藏心形实时翻转
+            patchItem(targetId, { isFavorite: newStatus });
 
             // Update ID list
             if (newStatus) {
@@ -2196,6 +2199,8 @@ function GalleryApp() {
                         ...allUserData,
                         [currentUser.username]: { ...allUserData[currentUser.username], files: updatedFiles }
                     });
+                    // 回滚同步播放器队列快照，保持播放器与画廊数据一致
+                    patchItem(targetId, { isFavorite: currentStatus });
                     if (currentStatus) { // If it was favorite, add back
                         setServerFavoriteIds(prev => ({ ...prev, files: [...prev.files, targetId] }));
                     } else { // If it was not favorite, remove
@@ -2217,6 +2222,8 @@ function GalleryApp() {
                 const updatedFiles = files.map(f => f.id === targetId ? { ...f, isFavorite: newStatus } : f);
                 const updatedUserData = { ...allUserData, [currentUser.username]: { ...allUserData[currentUser.username], files: updatedFiles } };
                 setAllUserData(updatedUserData);
+                // 同步回写播放器队列快照，播放器内收藏心形实时翻转
+                patchItem(targetId, { isFavorite: newStatus });
                 persistData(undefined, undefined, updatedUserData);
             } else {
                 // Toggle folder path in favorites list

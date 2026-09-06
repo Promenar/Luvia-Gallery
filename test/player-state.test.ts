@@ -1,6 +1,7 @@
 // test/player-state.test.ts
 import { describe, expect, it } from 'vitest';
 import { buildPlayerQueue, createInitialPlayerState, playerReducer, selectCurrentItem } from '../components/player/player-state';
+import type { PlayerDisplayMode } from '../components/player/types';
 import type { MediaItem } from '../types';
 
 const item = (id: string): MediaItem => ({
@@ -47,6 +48,45 @@ describe('播放器队列状态机', () => {
     state = playerReducer(state, { type: 'close' });
     expect(state.isOpen).toBe(false);
     expect(state.items).toHaveLength(2);
+  });
+});
+
+describe('displayMode 形态状态机', () => {
+  it('初始状态与 open 后默认为 window 形态', () => {
+    expect(createInitialPlayerState().displayMode).toBe('window');
+    const opened = playerReducer(createInitialPlayerState(), { type: 'open', source: source(2) });
+    expect(opened.displayMode).toBe('window');
+  });
+
+  it('SET_MODE 在 window/mini/fab 之间自由切换', () => {
+    let state = playerReducer(createInitialPlayerState(), { type: 'open', source: source(2) });
+    state = playerReducer(state, { type: 'setMode', mode: 'mini' });
+    expect(state.displayMode).toBe('mini');
+    state = playerReducer(state, { type: 'setMode', mode: 'fab' });
+    expect(state.displayMode).toBe('fab');
+    state = playerReducer(state, { type: 'setMode', mode: 'window' });
+    expect(state.displayMode).toBe('window');
+  });
+
+  it('SET_MODE 接受 fullscreen（由宿主全屏 effect 驱动，reducer 不做宿主校验）', () => {
+    let state = playerReducer(createInitialPlayerState(), { type: 'open', source: source(2) });
+    state = playerReducer(state, { type: 'setMode', mode: 'fullscreen' });
+    expect(state.displayMode).toBe('fullscreen');
+  });
+
+  it('非法 mode 被拒绝且不改变状态（保持原引用）', () => {
+    const opened = playerReducer(createInitialPlayerState(), { type: 'open', source: source(2) });
+    const next = playerReducer(opened, { type: 'setMode', mode: 'dialog' as unknown as PlayerDisplayMode });
+    expect(next).toBe(opened);
+  });
+
+  it('close 保留形态供退出动画，再次 open 重置为 window', () => {
+    let state = playerReducer(createInitialPlayerState(), { type: 'open', source: source(2) });
+    state = playerReducer(state, { type: 'setMode', mode: 'fab' });
+    state = playerReducer(state, { type: 'close' });
+    expect(state.displayMode).toBe('fab');
+    state = playerReducer(state, { type: 'open', source: source(2) });
+    expect(state.displayMode).toBe('window');
   });
 });
 

@@ -62,4 +62,24 @@ describe('PlayerProvider', () => {
     expect(screen.getByTestId('current').textContent).toBe('none');
     root.unmount();
   });
+
+  it('open 后 displayMode 默认 window，setMode 切换形态', () => {
+    let api: ReturnType<typeof useMediaPlayer> | undefined;
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    act(() => {
+      root.render(
+        <PlayerProvider>
+          <Probe onReady={(value) => { api = value; }} />
+        </PlayerProvider>
+      );
+    });
+    act(() => api!.open({ items: [item('a')], startIndex: 0 }));
+    expect(api!.displayMode).toBe('window');
+    act(() => api!.setMode('mini'));
+    expect(api!.displayMode).toBe('mini');
+    expect(api!.state.displayMode).toBe('mini');
+    root.unmount();
+  });
 });
