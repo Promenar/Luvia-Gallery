@@ -7,8 +7,10 @@
 //   整容器，系统性留白已消除）；内容区推导高超视口高 80% 时以高度定宽（竖图收窄），触 240px 宽度下限则
 //   高度按比例回推；边缘/角落拖动写高度覆盖（媒体 contain）；头部为完整画廊控制栏。
 //   hotfix-5 起比例来源增加运行时校正：库内尺寸元数据缺失（兜底 16:9）时，媒体解码完成
-//   （img onLoad / video onLoadedMetadata）由面板回调上报真实比例（loadedRatio）覆盖兜底重算形状，
-//   切换队列项重置回兜底；heightOverride 存在时仍锁定容器高度（用户语义优先）。
+//   （img onLoad / video onLoadedMetadata）由面板回调上报真实比例（loadedRatio）覆盖兜底重算形状；
+//   hotfix-6 起切换队列项不再重置回兜底——窗口保持上一媒体比例，新媒体上报后经 CSS transition
+//   平滑过渡到新形状（加载失败/不上报则保持旧比例，媒体 contain）；heightOverride 存在时仍锁定
+//   容器高度（用户语义优先）。
 //   hotfix-6 起缓存命中兜底：图片命中浏览器缓存时 onLoad 可能不触发，面板在挂载/换项后的渲染中
 //   检查 img.complete（video readyState≥1）并等价上报，保证已缓存媒体同样触发比例自适应。
 // - heightOverride 会话生命周期（hotfix-6）：高度覆盖为"当前打开会话内的临时锁定"——open 与切换
@@ -118,12 +120,14 @@ export const PlayerWindow: React.FC<PlayerWindowProps> = ({ onToggleFavorite, sh
     const [fabImageFailed, setFabImageFailed] = useState(false);
     useEffect(() => { setFabImageFailed(false); }, [currentItem?.id]);
 
-    // hotfix-5：当前媒体经浏览器解码后的真实比例（null = 未加载完成）。
+    // hotfix-5：当前媒体经浏览器解码后的真实比例（null = 尚无解码上报）。
     // 生产库尺寸元数据全为 NULL，resolveAspect 只能兜底 16:9，窗口形状与媒体无关；
     // 媒体实际解码后由面板（img onLoad / video onLoadedMetadata）回调上报真实比例校正形状。
-    // 切换队列项时重置为 null：回退兜底比例，等新媒体加载后再次校正（heightOverride 仍最优先）。
+    // hotfix-6：切换队列项时不再重置——loadedRatio 保持上一个媒体的比例，切换瞬间窗口形状
+    // 不变（消除"闪回 16:9 再弹开"的中间跳变），新媒体上报后经 0.25s CSS transition 平滑
+    // 过渡到新比例；新媒体加载失败/不上报时窗口保持旧比例（媒体 contain 显示，可接受的取舍）。
+    // heightOverride 存在时仍最优先（覆盖期间高度锁定，上报只影响宽度推导）。
     const [loadedRatio, setLoadedRatio] = useState<number | null>(null);
-    useEffect(() => { setLoadedRatio(null); }, [currentItem?.id]);
 
     // hotfix-6：高度覆盖会话清除——打开播放器（open 翻转）与切换队列项时回到等比自适应；
     // 会话内的手动缩放覆盖在下一项打开前保持有效。
@@ -163,7 +167,8 @@ export const PlayerWindow: React.FC<PlayerWindowProps> = ({ onToggleFavorite, sh
     // 消除旧 aspectRatio 作用于含头部整容器导致的系统性留白；高度覆盖期间容器高即覆盖值（媒体 contain）。
     // 退出动画期间 currentItem 为 null（aspect 为 null），width/height 保持基准值即可。
     // hotfix-5：比例取值优先级——浏览器解码后的真实比例（loadedRatio，须为正有限值）优先，
-    // 元数据缺失/未加载完成时回 resolveAspect 兜底；收窄公式与覆盖语义均保持原结构不变。
+    // 无上报时回 resolveAspect 兜底；hotfix-6 起切项不清空 loadedRatio，无上报时兜底值之前
+    // 先保持上一媒体的比例；收窄公式与覆盖语义均保持原结构不变。
     const aspect = currentItem
         ? {
             ratio:

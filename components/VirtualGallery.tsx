@@ -30,7 +30,9 @@ export interface VirtualGalleryProps {
     onRestoreComplete?: (token: number) => void;
 }
 
-export const VirtualGallery = React.forwardRef<ViewportCaptureHandle, VirtualGalleryProps>((props, ref) => {
+// 先定义 forwardRef 内核，再包 memo：props 浅比较通过时跳过子树重渲染，
+// 阻断播放器 item 切换等无关父级更新向视口链路传播；ref 透传不受 memo 影响。
+const VirtualGalleryImpl = React.forwardRef<ViewportCaptureHandle, VirtualGalleryProps>((props, ref) => {
     const {
         layout,
         viewKey = layout,
@@ -56,3 +58,5 @@ export const VirtualGallery = React.forwardRef<ViewportCaptureHandle, VirtualGal
 
     return <GridViewport ref={ref} {...commonProps} />;
 });
+
+export const VirtualGallery = React.memo(VirtualGalleryImpl);

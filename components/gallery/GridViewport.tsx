@@ -349,7 +349,9 @@ const GridViewportInner = React.forwardRef<ViewportCaptureHandle, InnerProps>(({
   );
 });
 
-export const GridViewport = React.forwardRef<ViewportCaptureHandle, CommonViewportProps>((props, ref) => {
+// 先定义 forwardRef 内核，再包 memo：拦截 props 未变化的父级重渲染，
+// 避免 FixedSizeGrid cells 全量重新执行；ref 透传与快照捕获协议不受影响。
+const GridViewportImpl = React.forwardRef<ViewportCaptureHandle, CommonViewportProps>((props, ref) => {
   return (
     <div className={`flex-1 w-full h-full ${GRID_TOP_SAFE_AREA_CLASSES}`}>
       <AutoSizer>
@@ -363,3 +365,5 @@ export const GridViewport = React.forwardRef<ViewportCaptureHandle, CommonViewpo
     </div>
   );
 });
+
+export const GridViewport = React.memo(GridViewportImpl);

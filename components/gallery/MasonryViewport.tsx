@@ -39,7 +39,9 @@ const MasonrySkeleton = ({ index, phase }: { index: number; phase: 'initial' | '
   </div>
 );
 
-export const MasonryViewport = React.forwardRef<ViewportCaptureHandle, CommonViewportProps>(({
+// 先定义 forwardRef 内核，再包 memo：拦截 props 未变化的父级重渲染，
+// 避免全量列分块与卡片链路重新执行；ref 透传与快照捕获协议不受影响。
+const MasonryViewportImpl = React.forwardRef<ViewportCaptureHandle, CommonViewportProps>(({
   items,
   onItemClick,
   hasNextPage,
@@ -483,3 +485,5 @@ export const MasonryViewport = React.forwardRef<ViewportCaptureHandle, CommonVie
     </div>
   );
 });
+
+export const MasonryViewport = React.memo(MasonryViewportImpl);

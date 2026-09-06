@@ -800,7 +800,10 @@ describe('hotfix-3：拖动/缩放 move 期直写 DOM（零重渲染），pointe
 describe('hotfix-5：加载后真实比例自适应（库内尺寸元数据缺失时的运行时校正）', () => {
   // 生产库 thumb 宽高字段全 NULL → resolveAspect 只能兜底 16:9，窗口形状与媒体无关。
   // hotfix-5：面板在媒体解码后（img onLoad / video onLoadedMetadata）回调上报真实比例，
-  // PlayerWindow 以 loadedRatio 覆盖兜底比例重算容器形状；切换队列项时重置回兜底。
+  // PlayerWindow 以 loadedRatio 覆盖兜底比例重算容器形状。
+  // hotfix-6：切换队列项不再把 loadedRatio 重置回兜底——容器保持上一媒体比例（形状不变、
+  // 无中间闪跳），新媒体上报后经 0.25s CSS transition 平滑过渡到新比例；
+  // 新媒体加载失败/不上报时窗口保持旧比例（媒体 contain 显示，可接受）。
   // jsdom 不解码媒体：以 Object.defineProperty 直接注入 naturalWidth/naturalHeight、
   // videoWidth/videoHeight，再 fireEvent 触发对应加载事件（React 合成事件 currentTarget 即媒体节点）。
   const defineNaturalSize = (el: Element, props: Record<string, number>) => {
@@ -845,7 +848,7 @@ describe('hotfix-5：加载后真实比例自适应（库内尺寸元数据缺�
     root.unmount();
   });
 
-  it('切换队列项时 loadedRatio 重置：下一项加载前容器回 resolveAspect 兜底形状', () => {
+  it('切换队列项保持上一媒体比例：容器形状不变，新项 onLoad 上报后过渡到新比例', () => {
     const { container, root } = setup([item('a'), item('b')]); // 两项均无尺寸信息 → 兜底 16:9
     openPlayer();
     const win = screen.getByTestId('player-window');
@@ -853,9 +856,17 @@ describe('hotfix-5：加载后真实比例自适应（库内尺寸元数据缺�
     const img = container.querySelector('img')!;
     defineNaturalSize(img, { naturalWidth: 600, naturalHeight: 1500 });
     fireEvent.load(img);
-    expect(parseFloat(win.style.width)).toBeCloseTo(VH * 0.8 * 0.4, 6);
-    // 切换到下一项：loadedRatio 重置为 null → 回兜底 16:9 形状（默认记忆宽度）
+    const narrowWidth = VH * 0.8 * 0.4;
+    expect(parseFloat(win.style.width)).toBeCloseTo(narrowWidth, 6);
+    expect(parseFloat(win.style.height)).toBeCloseTo(VH * 0.8 + 44, 6);
+    // 切换到下一项：loadedRatio 保持上一媒体的竖图比例 → 容器形状不变（不闪回兜底 16:9）
     fireEvent.keyDown(window, { key: 'ArrowRight' });
+    expect(parseFloat(win.style.width)).toBeCloseTo(narrowWidth, 6);
+    expect(parseFloat(win.style.height)).toBeCloseTo(VH * 0.8 + 44, 6);
+    // 新媒体解码完成上报 16:9 横图 → 容器过渡到新形状（回记忆宽度，高度按比例推导）
+    const img2 = container.querySelector('img')!;
+    defineNaturalSize(img2, { naturalWidth: 1920, naturalHeight: 1080 });
+    fireEvent.load(img2);
     const width = parseFloat(win.style.width);
     expect(width).toBeCloseTo(VW * 0.42, 6);
     expect(parseFloat(win.style.height)).toBeCloseTo(width / (16 / 9) + 44, 6);
