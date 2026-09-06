@@ -1,22 +1,20 @@
 // components/player/ImageViewPane.tsx
 // 自旧版图片查看器组件（Task 5 已删除）迁移的图片面板：
 // - 状态/处理逻辑源行号：31-104（transform/slideshow/exif）、224-330（wheel/drag/touch/zoom）、
-//   481-590（信息面板含 EXIF）、592-673 的图片分支（650-671 motion.img）。
+//   592-673 的图片分支（650-671 motion.img）。
 // - 结构性改动仅三处：item 来自 props；删除 onClose/onNext/onPrev/onDelete/onRename/onJumpToFolder
-//   相关 props 与逻辑；showInfo 由壳层控制栏（MediaPlayer）驱动，经 props 传入。
+//   相关 props 与逻辑；信息面板（含 EXIF 拉取）已于 hotfix-1 上移到壳层 MediaPlayer 统一渲染，
+//   否则视频分支点 Info 无任何面板出现。
 // - 幻灯片定时器保留在面板内部（4s），推进经 onSlideNext 回调（MediaPlayer 传队列 next）。
 import React, { useEffect, useState, useRef } from 'react';
-import { motion, AnimatePresence, PanInfo } from 'framer-motion';
-import { MediaItem, ExifData } from '../../types';
+import { motion, PanInfo } from 'framer-motion';
+import { MediaItem } from '../../types';
 import { getAuthUrl } from '../../utils/fileUtils';
 import { Icons } from '../ui/Icon';
 import { useLanguage } from '../../contexts/LanguageContext';
-import { formatDate as utilsFormatDate, formatSize as utilsFormatSize } from '../../utils/formatters';
 
 interface ImageViewPaneProps {
     item: MediaItem;
-    /** 信息面板开合：由 MediaPlayer 控制栏的 Info 按钮驱动 */
-    showInfo: boolean;
     /** 幻灯片推进回调（MediaPlayer 传入队列 next） */
     onSlideNext: () => void;
 }
@@ -29,7 +27,8 @@ interface TransformState {
 
 // 面板可能在未挂 LanguageProvider 的隔离环境（单元测试）渲染；
 // 用 try/catch 包装保持 hook 调用顺序稳定，缺失 Provider 时回退英文与翻译 key 原文。
-const usePaneLanguage = (): { t: (key: string) => string; language: 'en' | 'zh' } => {
+// 信息面板（含 EXIF）已上移至 MediaPlayer，本 hook 由 ImageViewPane 与 MediaPlayer 共用。
+export const usePaneLanguage = (): { t: (key: string) => string; language: 'en' | 'zh' } => {
     try {
         return useLanguage();
     } catch {
@@ -37,8 +36,7 @@ const usePaneLanguage = (): { t: (key: string) => string; language: 'en' | 'zh' 
     }
 };
 
-export const ImageViewPane: React.FC<ImageViewPaneProps> = ({ item, showInfo, onSlideNext }) => {
-    const { t, language } = usePaneLanguage();
+export const ImageViewPane: React.FC<ImageViewPaneProps> = ({ item, onSlideNext }) => {
     const [transform, setTransform] = useState<TransformState>({ scale: 1, x: 0, y: 0 });
     const containerRef = useRef<HTMLDivElement>(null);
     const [dragConstraints, setDragConstraints] = useState<{ left: number, right: number, top: number, bottom: number } | null>(null);
@@ -46,10 +44,6 @@ export const ImageViewPane: React.FC<ImageViewPaneProps> = ({ item, showInfo, on
     // Slideshow State
     const [isPlaying, setIsPlaying] = useState(false);
     const slideshowIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-    // Info Panel（showInfo 来自 props，EXIF 数据仍为面板本地状态）
-    const [exifData, setExifData] = useState<ExifData | null>(null);
-    const [isExifLoading, setIsExifLoading] = useState(false);
 
     // Ref for callback to prevent hook dependency loops
     const onSlideNextRef = useRef(onSlideNext);
@@ -66,37 +60,7 @@ export const ImageViewPane: React.FC<ImageViewPaneProps> = ({ item, showInfo, on
         setTransform({ scale: 1, x: 0, y: 0 });
         setDragConstraints(null);
         lastDist.current = null;
-        setExifData(null);
     }, [item?.id]);
-
-    // EXIF Parsing Logic (Server-Side)
-    useEffect(() => {
-        if (showInfo && item && item.mediaType === 'image') {
-            const fetchExif = async () => {
-                setIsExifLoading(true);
-                try {
-                    // Use Server-Side API instead of client-side parsing (avoids Auth/CORS issues)
-                    const token = localStorage.getItem('luvia_token') || localStorage.getItem('lumina_token');
-                    const headers: any = {};
-                    if (token) headers['Authorization'] = `Bearer ${token}`;
-
-                    const res = await fetch(`/api/file/${item.id}/exif`, { headers });
-                    if (res.ok) {
-                        const data = await res.json();
-                        setExifData(data);
-                    } else {
-                        setExifData(null);
-                    }
-                } catch (e) {
-                    console.warn("Failed to fetch EXIF", e);
-                    setExifData(null);
-                } finally {
-                    setIsExifLoading(false);
-                }
-            };
-            fetchExif();
-        }
-    }, [showInfo, item]);
 
     // Slideshow Logic
     useEffect(() => {
@@ -257,22 +221,10 @@ export const ImageViewPane: React.FC<ImageViewPaneProps> = ({ item, showInfo, on
         }
     };
 
-    const formatDate = (ts: number | Date | undefined) => {
-        return utilsFormatDate(ts, language);
-    };
-
-    const formatSize = (bytes: number) => {
-        return utilsFormatSize(bytes);
-    };
-
-    const formatExposure = (t: number | undefined) => {
-        if (!t) return '-';
-        if (t >= 1) return t + 's';
-        return '1/' + Math.round(1 / t);
-    };
-
+    // Task B 适配浮窗：根容器由旧全屏壳层铺满改为 absolute inset-0 铺满 PlayerWindow 内容区，
+    // 内容 contain 显示（flex 居中 + max-w/h-full）；缩放/双击/拖拽等 transform 逻辑保持不变。
     return (
-        <>
+        <div className="absolute inset-0">
             {/* Content Container：自 旧图片查看器源 592-672 行迁移，仅保留图片分支。
                 onWheel 原挂在壳层 overlay（源 381 行），随缩放逻辑一并迁入本面板根容器。 */}
             <div
@@ -307,120 +259,12 @@ export const ImageViewPane: React.FC<ImageViewPaneProps> = ({ item, showInfo, on
                 />
             </div>
 
-            {/* Info Panel Overlay：自 旧图片查看器源 481-590 行 原样迁移，仅 item 改为 props */}
-            <AnimatePresence>
-                {showInfo && (
-                    <motion.div
-                        initial={{ x: '100%' }}
-                        animate={{ x: 0 }}
-                        exit={{ x: '100%' }}
-                        className="absolute top-0 right-0 bottom-0 w-80 bg-black/90 z-40 p-6 pt-20 border-l border-white/10 text-white overflow-y-auto transform translate-z-0"
-                        onClick={(e) => e.stopPropagation()}
-                    >
-                        <h3 className="text-xl font-bold mb-6 flex items-center gap-2"><Icons.Info size={20} /> {t('file_info')}</h3>
-                        <div className="space-y-6 text-sm">
-                            <section>
-                                <h4 className="text-white/60 text-xs font-bold uppercase tracking-wider mb-3 border-b border-white/10 pb-1">{t('file_details')}</h4>
-                                <div className="space-y-3">
-                                    <div>
-                                        <p className="text-white/40 uppercase text-[10px] tracking-wider mb-0.5">{t('name')}</p>
-                                        <p className="font-medium break-all">{item.name}</p>
-                                    </div>
-                                    <div>
-                                        <p className="text-white/40 uppercase text-[10px] tracking-wider mb-0.5">{t('path')}</p>
-                                        <p className="text-white/80 break-all text-xs font-mono">{item.path}</p>
-                                    </div>
-                                    <div className="grid grid-cols-2 gap-4">
-                                        <div>
-                                            <p className="text-white/40 uppercase text-[10px] tracking-wider mb-0.5">{t('size')}</p>
-                                            <p className="text-white/80">{formatSize(item.size)}</p>
-                                        </div>
-                                        <div>
-                                            <p className="text-white/40 uppercase text-[10px] tracking-wider mb-0.5">{t('type')}</p>
-                                            <p className="text-white/80">{item.mediaType.toUpperCase()}</p>
-                                        </div>
-                                    </div>
-                                    <div>
-                                        <p className="text-white/40 uppercase text-[10px] tracking-wider mb-0.5">{t('date_modified')}</p>
-                                        <p className="text-white/80">{formatDate(item.lastModified)}</p>
-                                    </div>
-                                </div>
-                            </section>
-
-                            {/* EXIF Section */}
-                            {item.mediaType === 'image' && (
-                                <section>
-                                    <h4 className="text-white/60 text-xs font-bold uppercase tracking-wider mb-3 border-b border-white/10 pb-1 mt-6">{t('camera_details')}</h4>
-                                    {isExifLoading ? (
-                                        <div className="flex items-center gap-2 text-white/50 text-xs">
-                                            <Icons.Loader size={12} className="animate-spin" /> {t('loading_metadata')}
-                                        </div>
-                                    ) : exifData ? (
-                                        <div className="space-y-3">
-                                            {(exifData.Make || exifData.Model) && (
-                                                <div>
-                                                    <p className="text-white/40 uppercase text-[10px] tracking-wider mb-0.5">{t('camera')}</p>
-                                                    <p className="text-white/80">{exifData.Make} {exifData.Model}</p>
-                                                </div>
-                                            )}
-                                            {exifData.LensModel && (
-                                                <div>
-                                                    <p className="text-white/40 uppercase text-[10px] tracking-wider mb-0.5">{t('lens')}</p>
-                                                    <p className="text-white/80">{exifData.LensModel}</p>
-                                                </div>
-                                            )}
-                                            <div className="grid grid-cols-2 gap-4">
-                                                {exifData.FNumber && (
-                                                    <div>
-                                                        <p className="text-white/40 uppercase text-[10px] tracking-wider mb-0.5">{t('aperture')}</p>
-                                                        <p className="text-white/80">f/{exifData.FNumber}</p>
-                                                    </div>
-                                                )}
-                                                {exifData.ExposureTime && (
-                                                    <div>
-                                                        <p className="text-white/40 uppercase text-[10px] tracking-wider mb-0.5">{t('shutter')}</p>
-                                                        <p className="text-white/80">{formatExposure(exifData.ExposureTime)}</p>
-                                                    </div>
-                                                )}
-                                                {exifData.ISO && (
-                                                    <div>
-                                                        <p className="text-white/40 uppercase text-[10px] tracking-wider mb-0.5">{t('iso')}</p>
-                                                        <p className="text-white/80">{exifData.ISO}</p>
-                                                    </div>
-                                                )}
-                                                {exifData.FocalLength && (
-                                                    <div>
-                                                        <p className="text-white/40 uppercase text-[10px] tracking-wider mb-0.5">{t('focal_length')}</p>
-                                                        <p className="text-white/80">{exifData.FocalLength}mm</p>
-                                                    </div>
-                                                )}
-                                                {(exifData.width || exifData.height) && (
-                                                    <div>
-                                                        <p className="text-white/40 uppercase text-[10px] tracking-wider mb-0.5">{t('dimensions')}</p>
-                                                        <p className="text-white/80">{exifData.width || '?'} x {exifData.height || '?'}</p>
-                                                    </div>
-                                                )}
-                                            </div>
-                                            {exifData.DateTimeOriginal && (
-                                                <div>
-                                                    <p className="text-white/40 uppercase text-[10px] tracking-wider mb-0.5">{t('date_taken')}</p>
-                                                    <p className="text-white/80">{formatDate(exifData.DateTimeOriginal)}</p>
-                                                </div>
-                                            )}
-                                        </div>
-                                    ) : (
-                                        <p className="text-xs text-white/40 italic">{t('no_exif')}</p>
-                                    )}
-                                </section>
-                            )}
-                        </div>
-                    </motion.div>
-                )}
-            </AnimatePresence>
+            {/* 信息面板已上移至壳层 MediaPlayer（hotfix-1）：图片与视频共用同一面板，
+                EXIF 相机区块在壳层面板内仍仅对图片显示。 */}
 
             {/* 面板最小覆盖按钮组：幻灯片播放/暂停（源 444-452）与缩放切换（源 452-463）
                 依赖 isPlaying/transform 面板内部状态，随状态一并留在面板内；
-                位置改挂右下角，避免与 MediaPlayer 顶部控制栏重叠。 */}
+                位置挂窗口内容区右下角，不与浮窗头部控制栏重叠（Task B 起锚定本面板根容器）。 */}
             <div className="absolute bottom-4 right-4 z-50 flex items-center gap-2">
                 <button
                     onClick={(e) => { e.stopPropagation(); setIsPlaying(!isPlaying); }}
@@ -440,6 +284,6 @@ export const ImageViewPane: React.FC<ImageViewPaneProps> = ({ item, showInfo, on
                     {transform.scale > 1 ? <Icons.ZoomOut size={24} /> : <Icons.ZoomIn size={24} />}
                 </button>
             </div>
-        </>
+        </div>
     );
 };
