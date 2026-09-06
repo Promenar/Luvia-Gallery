@@ -238,6 +238,10 @@ export const MediaPlayer: React.FC<MediaPlayerProps> = ({ onToggleFavorite }) =>
     // 比例自适应），fullscreen 走 PlayerFullscreen 独占全屏（宿主全屏 effect 在其内部）。
     // 面板调度（图片/视频）随壳层迁入两形态组件；音频不渲染面板（仍由 AudioPlayer 承接）。
     if (displayMode === 'fullscreen') {
+        // 调度兜底（hotfix-2）：close 后任何路径都不再渲染全屏空壳（reducer close 已把
+        // displayMode 重置为 window，此处防形态状态异常时黑底容器残留锁死用户）；
+        // window/mini/fab 的关闭动画走 PlayerWindow 自身 AnimatePresence，不受影响。
+        if (!state.isOpen) return null;
         return (
             <PlayerFullscreen
                 onToggleFavorite={onToggleFavorite}

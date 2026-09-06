@@ -80,6 +80,17 @@ export const PlayerFullscreen: React.FC<PlayerFullscreenProps> = ({ onToggleFavo
         setMode('window');
     };
 
+    // 完整关闭（hotfix-2，Close 按钮）：先请求浏览器退出原生全屏再关闭播放器。
+    // 只调 close 时系统全屏不会退出、黑底容器残留，用户会被锁在灰屏；exitFullscreen
+    // 失败（权限等）被 catch 吞掉不阻断关闭（浏览器侧由卸载清理兜底）。
+    // close 后 reducer 已把 displayMode 重置为 window，调度层不再渲染全屏空壳。
+    const closeFromFullscreen = () => {
+        void document.exitFullscreen?.()?.catch(() => {
+            // 退出原生全屏失败（权限等）：播放器仍完整关闭
+        });
+        close();
+    };
+
     return (
         <AnimatePresence>
             {/* 关闭动画期间 currentItem 为 null 自动收敛；displayMode 由壳层调度保证只挂一份 */}
@@ -125,7 +136,7 @@ export const PlayerFullscreen: React.FC<PlayerFullscreenProps> = ({ onToggleFavo
                                 <Icons.Minimize size={24} />
                             </button>
                             <button
-                                onClick={(e) => { e.stopPropagation(); close(); }}
+                                onClick={(e) => { e.stopPropagation(); closeFromFullscreen(); }}
                                 className="p-2 hover:bg-white/10 rounded-full transition-colors"
                                 title="Close"
                             >

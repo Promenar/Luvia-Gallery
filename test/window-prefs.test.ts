@@ -85,4 +85,24 @@ describe('window-prefs 持久化', () => {
     seedRaw('{"x":10,"y":20,"width":480,"mode":"fullscreen"}');
     expect(loadWindowPrefs()).toEqual({ x: 10, y: 20, width: 480, mode: 'window' });
   });
+
+  it('hotfix-2：heightOverride 可选字段完整往返（下边缘拖动的高度覆盖）', () => {
+    const prefs: WindowPrefs = { x: 10, y: 20, width: 400, mode: 'window', heightOverride: 320 };
+    saveWindowPrefs(prefs);
+    expect(loadWindowPrefs()).toEqual(prefs);
+  });
+
+  it('hotfix-2：无 heightOverride 的旧记录照常载入（字段缺省 = 高度按媒体比例自适应）', () => {
+    seedRaw('{"x":10,"y":20,"width":400,"mode":"window"}');
+    expect(loadWindowPrefs()).toEqual({ x: 10, y: 20, width: 400, mode: 'window' });
+  });
+
+  it('hotfix-2：heightOverride 损坏（非有限数字/非正数）时仅丢弃覆盖字段，不丢弃其余偏好', () => {
+    seedRaw('{"x":10,"y":20,"width":400,"mode":"window","heightOverride":"abc"}');
+    expect(loadWindowPrefs()).toEqual({ x: 10, y: 20, width: 400, mode: 'window' });
+    seedRaw('{"x":10,"y":20,"width":400,"mode":"window","heightOverride":-5}');
+    expect(loadWindowPrefs()).toEqual({ x: 10, y: 20, width: 400, mode: 'window' });
+    seedRaw('{"x":10,"y":20,"width":400,"mode":"window","heightOverride":null}');
+    expect(loadWindowPrefs()).toEqual({ x: 10, y: 20, width: 400, mode: 'window' });
+  });
 });
