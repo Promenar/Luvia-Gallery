@@ -431,7 +431,7 @@ describe('Task C：mini/FAB 形态与切换动画', () => {
     root2.unmount();
   });
 
-  it('动画取证：window/mini 切换为同一 DOM 节点形变（layout），fab 经 AnimatePresence 互斥出现', async () => {
+  it('动画取证：window/mini 切换为同一 DOM 节点形变（CSS transition），fab 经 AnimatePresence 互斥出现', async () => {
     const { root } = setup([item('a')]);
     openPlayer();
     const win = screen.getByTestId('player-window');
@@ -439,7 +439,7 @@ describe('Task C：mini/FAB 形态与切换动画', () => {
     fireEvent.click(screen.getByTitle('Mini Mode'));
     const mini = screen.getByTestId('player-window');
     expect(mini.getAttribute('data-mode')).toBe('mini');
-    // 同一 DOM 节点：window↔mini 同 key 容器不卸载，形态形变由 framer-motion layout 驱动
+    // 同一 DOM 节点：window↔mini 同 key 容器不卸载，形态形变由容器 CSS transition 承担（hotfix-6 起移除 layout）
     expect(mini).toBe(win);
     // mini 仅保留最小控制（无 FAB 直达按钮），经 window 再切 fab
     expect(screen.queryByTitle('FAB Mode')).toBeNull();
@@ -513,20 +513,21 @@ describe('Task C 附加修复：键盘守卫与 EXIF 依赖', () => {
 });
 
 describe('hotfix-2/hotfix-4：边缘拖拽自定义大小（仅 window 形态，三向自由缩放）', () => {
-  it('右缘拖拽自由改宽（clamp 视口预算）：高度锁定起点渲染总高不被比例重算，pointerup 落盘覆盖', () => {
+  it('右缘拖拽自由改宽（clamp 视口预算）：高度锁定起点渲染总高不被比例重算（覆盖为会话内存态，不落盘）', () => {
     // 超宽媒体（比例 5）：宽度触上限时推导高度仍远低于 80% 视口高预算，clamp 断言不受双向预算收窄干扰
-    const storage = stubStorage(JSON.stringify({ x: 10, y: 20, width: 400, mode: 'window', heightOverride: 500 }));
+    const storage = stubStorage(JSON.stringify({ x: 10, y: 20, width: 400, mode: 'window' }));
     const { root } = setup([item('a', 'image', { width: 3000, height: 600 })]);
     openPlayer();
     const win = screen.getByTestId('player-window');
-    // 预置高度覆盖生效：起点渲染总高即 500
-    expect(parseFloat(win.style.height)).toBe(500);
+    // 起点等比渲染总高 = 400/5 + 44
+    const startHeight = 400 / 5 + 44;
+    expect(parseFloat(win.style.height)).toBeCloseTo(startHeight, 6);
     const handle = screen.getByTestId('player-resize-right');
     fireEvent.pointerDown(handle, { clientX: 100, button: 0, pointerId: 1 });
     fireEvent.pointerMove(handle, { clientX: 260, pointerId: 1 }); // dx=+160 → 400+160=560
     expect(parseFloat(win.style.width)).toBe(560);
-    // hotfix-4：高度保持起点值 500，不按比例重算（旧语义 560/5+44 已废除）
-    expect(parseFloat(win.style.height)).toBe(500);
+    // hotfix-4：高度保持起点值，不按比例重算（旧语义 560/5+44 已废除）
+    expect(parseFloat(win.style.height)).toBeCloseTo(startHeight, 6);
     // 大幅拖动触上限 clamp（视口宽 - 48）
     fireEvent.pointerMove(handle, { clientX: 5000, pointerId: 1 });
     expect(parseFloat(win.style.width)).toBe(VW - 48);
@@ -535,8 +536,8 @@ describe('hotfix-2/hotfix-4：边缘拖拽自定义大小（仅 window 形态，
     fireEvent.pointerUp(handle, { clientX: 260, pointerId: 1 });
     const saved = JSON.parse(storage.setItem.mock.calls.at(-1)![1] as string) as { width: number; heightOverride?: number; mode: string };
     expect(saved.width).toBe(560);
-    // 覆盖锁定为起点渲染总高（而非清空回比例）
-    expect(saved.heightOverride).toBe(500);
+    // hotfix-6：高度覆盖不再落盘（会话内存态）；会话内锁定语义由上方高度断言承载
+    expect(saved.heightOverride).toBeUndefined();
     expect(saved.mode).toBe('window');
     root.unmount();
   });
@@ -556,13 +557,16 @@ describe('hotfix-2/hotfix-4：边缘拖拽自定义大小（仅 window 形态，
     // 高度保持起点等比总高（若按比例跟随应为 600/1.5+44=444）
     expect(parseFloat(win.style.height)).toBeCloseTo(startHeight, 6);
     fireEvent.pointerUp(handle, { clientX: 300, pointerId: 1 });
+    // pointerup 后会话内高度覆盖继续生效（容器显式高度保持）
+    expect(parseFloat(win.style.height)).toBeCloseTo(startHeight, 6);
     const saved = JSON.parse(storage.setItem.mock.calls.at(-1)![1] as string);
     expect(saved.width).toBe(600);
-    expect(saved.heightOverride).toBeCloseTo(startHeight, 6);
+    // hotfix-6：覆盖为会话内存态，不再落盘
+    expect(saved.heightOverride).toBeUndefined();
     root.unmount();
   });
 
-  it('下边缘指针拖动设置高度覆盖：容器显式 height、移除 aspectRatio（媒体 contain），pointerup 落盘覆盖', () => {
+  it('下边缘指针拖动设置高度覆盖：容器显式 height、移除 aspectRatio（媒体 contain）；覆盖仅会话内生效不落盘', () => {
     const storage = stubStorage(JSON.stringify({ x: 10, y: 20, width: 400, mode: 'window' }));
     const { root } = setup([item('a', 'image', { width: 900, height: 600 })]);
     openPlayer();
@@ -577,52 +581,66 @@ describe('hotfix-2/hotfix-4：边缘拖拽自定义大小（仅 window 形态，
     expect(parseFloat(win.style.height)).toBeCloseTo(400 / 1.5 + 44 + 300, 6);
     expect(win.style.aspectRatio).toBe('');
     fireEvent.pointerUp(handle, { clientY: 400, pointerId: 1 });
+    // 覆盖在当前会话内继续生效（容器显式高度保持）
+    expect(parseFloat(win.style.height)).toBeCloseTo(400 / 1.5 + 44 + 300, 6);
     const saved = JSON.parse(storage.setItem.mock.calls.at(-1)![1] as string) as { width: number; heightOverride?: number };
-    expect(saved.heightOverride).toBeCloseTo(400 / 1.5 + 44 + 300, 6);
+    // hotfix-6：覆盖不再落盘（会话内存态）
+    expect(saved.heightOverride).toBeUndefined();
     expect(saved.width).toBe(400);
     root.unmount();
   });
 
-  it('右下角拖拽宽高各自独立跟随：height 只由 dy 决定不受媒体比例影响，pointerup 落盘宽高', () => {
-    const storage = stubStorage(JSON.stringify({ x: 10, y: 20, width: 400, mode: 'window', heightOverride: 500 }));
+  it('右下角拖拽宽高各自独立跟随：height 只由 dy 决定不受媒体比例影响（覆盖为会话内存态，不落盘）', () => {
+    const storage = stubStorage(JSON.stringify({ x: 10, y: 20, width: 400, mode: 'window' }));
     const { root } = setup([item('a', 'image', { width: 900, height: 600 })]);
     openPlayer();
     const win = screen.getByTestId('player-window');
-    expect(parseFloat(win.style.height)).toBe(500);
+    // 起点等比渲染总高 = 400/1.5 + 44
+    const startHeight = 400 / 1.5 + 44;
     const handle = screen.getByTestId('player-resize-corner');
     fireEvent.pointerDown(handle, { clientX: 100, clientY: 100, button: 0, pointerId: 1 });
     fireEvent.pointerMove(handle, { clientX: 220, clientY: 340, pointerId: 1 }); // dx=+120、dy=+240
     expect(parseFloat(win.style.width)).toBe(520);
-    // 高度只由 dy 决定：500+240=740（旧等比语义为 520/1.5+44≈390.7，锁起点覆盖则为 500，均不符）
-    expect(parseFloat(win.style.height)).toBeCloseTo(740, 6);
+    // 高度只由 dy 决定：起点等比总高 + 240（旧等比语义为 520/1.5+44≈390.7，不符）
+    expect(parseFloat(win.style.height)).toBeCloseTo(startHeight + 240, 6);
     fireEvent.pointerUp(handle, { clientX: 220, clientY: 340, pointerId: 1 });
     const saved = JSON.parse(storage.setItem.mock.calls.at(-1)![1] as string);
     expect(saved.width).toBe(520);
-    expect(saved.heightOverride).toBeCloseTo(740, 6);
+    // hotfix-6：覆盖不再落盘（会话内存态）
+    expect(saved.heightOverride).toBeUndefined();
     root.unmount();
   });
 
-  it('双击右缘/右下角：清除高度覆盖回等比（容器高 = width/ratio + 44）并落盘', () => {
-    const storage = stubStorage(JSON.stringify({ x: 10, y: 20, width: 400, mode: 'window', heightOverride: 500 }));
+  it('双击右缘/右下角：清除高度覆盖回等比（容器高 = width/ratio + 44），落盘不含覆盖字段', () => {
+    const storage = stubStorage(JSON.stringify({ x: 10, y: 20, width: 400, mode: 'window' }));
     const { root } = setup([item('a', 'image', { width: 900, height: 600 })]);
     openPlayer();
     const win = screen.getByTestId('player-window');
-    expect(parseFloat(win.style.height)).toBe(500);
-    // 双击右缘：覆盖清除，高度回等比公式（400/1.5 + 头部 44）
+    // 先经下缘拖拽建立高度覆盖（hotfix-6 起为会话内存态）：起点等比总高 400/1.5+44，dy=+300
+    const ratioHeight = 400 / 1.5 + 44;
+    const bottom = screen.getByTestId('player-resize-bottom');
+    fireEvent.pointerDown(bottom, { clientY: 100, button: 0, pointerId: 1 });
+    fireEvent.pointerUp(bottom, { clientY: 400, pointerId: 1 });
+    expect(parseFloat(win.style.height)).toBeCloseTo(ratioHeight + 300, 6);
+    // 双击右缘：覆盖清除，高度回等比公式
     fireEvent.doubleClick(screen.getByTestId('player-resize-right'));
-    expect(parseFloat(win.style.height)).toBeCloseTo(400 / 1.5 + 44, 6);
+    expect(parseFloat(win.style.height)).toBeCloseTo(ratioHeight, 6);
     const saved = JSON.parse(storage.setItem.mock.calls.at(-1)![1] as string);
     expect(saved.heightOverride).toBeUndefined();
     expect(saved.width).toBe(400);
     root.unmount();
     cleanup();
-    // 右下角双击同理
-    const storage2 = stubStorage(JSON.stringify({ x: 10, y: 20, width: 400, mode: 'window', heightOverride: 500 }));
+    // 右下角双击同理：先建立覆盖再双击清除
+    const storage2 = stubStorage(JSON.stringify({ x: 10, y: 20, width: 400, mode: 'window' }));
     const { root: root2 } = setup([item('a', 'image', { width: 900, height: 600 })]);
     openPlayer();
-    expect(parseFloat(screen.getByTestId('player-window').style.height)).toBe(500);
+    const win2 = screen.getByTestId('player-window');
+    const bottom2 = screen.getByTestId('player-resize-bottom');
+    fireEvent.pointerDown(bottom2, { clientY: 100, button: 0, pointerId: 1 });
+    fireEvent.pointerUp(bottom2, { clientY: 400, pointerId: 1 });
+    expect(parseFloat(win2.style.height)).toBeCloseTo(ratioHeight + 300, 6);
     fireEvent.doubleClick(screen.getByTestId('player-resize-corner'));
-    expect(parseFloat(screen.getByTestId('player-window').style.height)).toBeCloseTo(400 / 1.5 + 44, 6);
+    expect(parseFloat(win2.style.height)).toBeCloseTo(ratioHeight, 6);
     expect(JSON.parse(storage2.setItem.mock.calls.at(-1)![1] as string).heightOverride).toBeUndefined();
     root2.unmount();
   });
@@ -730,25 +748,28 @@ describe('hotfix-3：拖动/缩放 move 期直写 DOM（零重渲染），pointe
     root.unmount();
   });
 
-  it('右缘 resize pointermove：宽度即时更新、高度直写锁定起点值（不按比例）、不落盘、零渲染；pointerup 落盘覆盖', () => {
-    const storage = stubStorage(JSON.stringify({ x: 10, y: 20, width: 400, mode: 'window', heightOverride: 500 }));
+  it('右缘 resize pointermove：宽度即时更新、高度直写锁定起点等比总高（不按比例）、不落盘、零渲染；pointerup 落盘', () => {
+    const storage = stubStorage(JSON.stringify({ x: 10, y: 20, width: 400, mode: 'window' }));
     const { root } = setup([item('a', 'image', { width: 3000, height: 600 })]); // 比例 5
     openPlayer();
     const win = screen.getByTestId('player-window');
+    // 起点等比渲染总高 = 400/5 + 44
+    const startHeight = 400 / 5 + 44;
     const handle = screen.getByTestId('player-resize-right');
     fireEvent.pointerDown(handle, { clientX: 100, button: 0, pointerId: 1 });
     const rendersAtStart = playerRenderCount;
     fireEvent.pointerMove(handle, { clientX: 220, pointerId: 1 }); // dx=+120 → 520
-    // 直写即时生效：宽度 520、高度锁定起点渲染总高 500（旧语义按比例推导 520/5+44 已废除）
+    // 直写即时生效：宽度 520、高度锁定起点渲染总高（旧语义按比例推导 520/5+44 已废除）
     expect(parseFloat(win.style.width)).toBe(520);
-    expect(parseFloat(win.style.height)).toBe(500);
+    expect(parseFloat(win.style.height)).toBeCloseTo(startHeight, 6);
     expect(win.style.aspectRatio).toBe('');
     expect(storage.setItem).not.toHaveBeenCalled();
     expect(playerRenderCount).toBe(rendersAtStart);
     fireEvent.pointerUp(handle, { clientX: 220, pointerId: 1 });
     const saved = JSON.parse(storage.setItem.mock.calls.at(-1)![1] as string);
     expect(saved.width).toBe(520);
-    expect(saved.heightOverride).toBe(500);
+    // hotfix-6：覆盖不再落盘（会话内存态）
+    expect(saved.heightOverride).toBeUndefined();
     root.unmount();
   });
 
@@ -769,7 +790,8 @@ describe('hotfix-3：拖动/缩放 move 期直写 DOM（零重渲染），pointe
     expect(playerRenderCount).toBe(rendersAtStart);
     fireEvent.pointerUp(handle, { clientY: 400, pointerId: 1 });
     const saved = JSON.parse(storage.setItem.mock.calls.at(-1)![1] as string);
-    expect(saved.heightOverride).toBeCloseTo(expected, 6);
+    // hotfix-6：覆盖不再落盘（会话内存态）；会话内直写与锁定语义由上方断言承载
+    expect(saved.heightOverride).toBeUndefined();
     expect(saved.width).toBe(400);
     root.unmount();
   });
@@ -841,10 +863,15 @@ describe('hotfix-5：加载后真实比例自适应（库内尺寸元数据缺�
   });
 
   it('heightOverride 存在时 onMediaRatio 不改变容器高度（用户锁定优先），宽度仍随真实比例', () => {
-    stubStorage(JSON.stringify({ x: 10, y: 20, width: 400, mode: 'window', heightOverride: 500 }));
+    stubStorage(JSON.stringify({ x: 10, y: 20, width: 400, mode: 'window' }));
     const { container, root } = setup([item('plain')]);
     openPlayer();
     const win = screen.getByTestId('player-window');
+    // hotfix-6：先经下缘拖拽建立高度覆盖 500（会话内存态）——起点等比总高 = 400/(16/9) + 44，dy=+231
+    const startHeight = 400 / (16 / 9) + 44;
+    const bottom = screen.getByTestId('player-resize-bottom');
+    fireEvent.pointerDown(bottom, { clientY: 100, button: 0, pointerId: 1 });
+    fireEvent.pointerUp(bottom, { clientY: 100 + 231, pointerId: 1 });
     expect(parseFloat(win.style.height)).toBe(500);
     // 解码为竖图：容器高度保持锁定值 500（覆盖优先）；宽度仍随真实比例收窄（既有双向预算结构不变）
     const img = container.querySelector('img')!;
@@ -852,6 +879,159 @@ describe('hotfix-5：加载后真实比例自适应（库内尺寸元数据缺�
     fireEvent.load(img);
     expect(parseFloat(win.style.height)).toBe(500);
     expect(parseFloat(win.style.width)).toBeCloseTo(VH * 0.8 * 0.4, 6);
+    root.unmount();
+  });
+});
+
+describe('hotfix-6：heightOverride 会话生命周期、缓存命中比例兜底与尺寸变化动画', () => {
+  it('open 时忽略偏好中的 heightOverride：覆盖为会话内存态，打开即回等比自适应', () => {
+    // 旧语义会从偏好恢复覆盖高 500 并锁死比例自适应；新语义打开即等比
+    stubStorage(JSON.stringify({ x: 10, y: 20, width: 400, mode: 'window', heightOverride: 500 }));
+    const { root } = setup([item('a', 'image', { width: 900, height: 600 })]);
+    openPlayer();
+    const win = screen.getByTestId('player-window');
+    expect(parseFloat(win.style.height)).toBeCloseTo(400 / 1.5 + 44, 6);
+    root.unmount();
+  });
+
+  it('切换队列项清除会话内高度覆盖：新项回等比自适应', () => {
+    stubStorage(JSON.stringify({ x: 10, y: 20, width: 400, mode: 'window' }));
+    const { root } = setup([item('a', 'image', { width: 900, height: 600 }), item('b')]);
+    openPlayer();
+    const win = screen.getByTestId('player-window');
+    // 当前会话内经下缘拖拽建立覆盖：起点等比总高 400/1.5+44，dy=+300
+    const bottom = screen.getByTestId('player-resize-bottom');
+    fireEvent.pointerDown(bottom, { clientY: 100, button: 0, pointerId: 1 });
+    fireEvent.pointerUp(bottom, { clientY: 400, pointerId: 1 });
+    expect(parseFloat(win.style.height)).toBeCloseTo(400 / 1.5 + 44 + 300, 6);
+    // 切换到下一项：覆盖清除，容器回新项的等比形状（b 无尺寸信息 → 16:9 兜底）
+    fireEvent.keyDown(window, { key: 'ArrowRight' });
+    expect(parseFloat(win.style.height)).toBeCloseTo(400 / (16 / 9) + 44, 6);
+    root.unmount();
+  });
+
+  it('缓存命中兜底：img.complete 且已解码时无需 onLoad 即上报真实比例（容器按真实比例成形）', () => {
+    const { container, root } = setup([item('plain')]); // 无尺寸信息 → 兜底 16:9
+    openPlayer();
+    const win = screen.getByTestId('player-window');
+    const fallbackWidth = parseFloat(win.style.width);
+    expect(parseFloat(win.style.height)).toBeCloseTo(fallbackWidth / (16 / 9) + 44, 6);
+    // 模拟浏览器缓存命中：complete = true + 已解码尺寸，全程不触发 load 事件
+    const img = container.querySelector('img')!;
+    Object.defineProperty(img, 'complete', { value: true, configurable: true });
+    Object.defineProperty(img, 'naturalWidth', { value: 600, configurable: true });
+    Object.defineProperty(img, 'naturalHeight', { value: 1500, configurable: true });
+    // 任意一次重渲染后的兜底检查即上报（等价 onLoad）；用同 id patch 触发重渲染
+    fireEvent.click(screen.getByTestId('patch-first'));
+    const budget = VH * 0.8;
+    expect(parseFloat(win.style.width)).toBeCloseTo(budget * 0.4, 6);
+    expect(parseFloat(win.style.height)).toBeCloseTo(budget + 44, 6);
+    root.unmount();
+  });
+
+  it('视频缓存命中兜底：readyState ≥ 1 且已解码时无需 onLoadedMetadata 即上报真实比例', () => {
+    // 元数据假竖图（aspectRatio 0.5）：初始以高度定宽收窄
+    const { container, root } = setup([item('v', 'video', { aspectRatio: 0.5 })]);
+    openPlayer();
+    const win = screen.getByTestId('player-window');
+    const budget = VH * 0.8;
+    expect(parseFloat(win.style.height)).toBeCloseTo(budget + 44, 6);
+    expect(parseFloat(win.style.width)).toBeCloseTo(budget * 0.5, 6);
+    // 模拟元数据已就绪的缓存命中（不派发 loadedmetadata 事件）
+    const video = container.querySelector('video')!;
+    Object.defineProperty(video, 'readyState', { value: 1, configurable: true });
+    Object.defineProperty(video, 'videoWidth', { value: 1920, configurable: true });
+    Object.defineProperty(video, 'videoHeight', { value: 1080, configurable: true });
+    fireEvent.click(screen.getByTestId('patch-first'));
+    const width = parseFloat(win.style.width);
+    expect(width).toBeCloseTo(VW * 0.42, 6);
+    expect(parseFloat(win.style.height)).toBeCloseTo(width / (16 / 9) + 44, 6);
+    root.unmount();
+  });
+
+  it('尺寸变化动画：非交互期容器 transition 含 width/height/left/top；交互期为 none（跟手直写），结束后恢复', () => {
+    stubStorage(JSON.stringify({ x: 10, y: 20, width: 400, mode: 'window' }));
+    const { root } = setup([item('a', 'image', { width: 900, height: 600 })]);
+    openPlayer();
+    const win = screen.getByTestId('player-window');
+    expect(win.style.transition).toContain('width');
+    expect(win.style.transition).toContain('height');
+    expect(win.style.transition).toContain('left');
+    expect(win.style.transition).toContain('top');
+    const handle = screen.getByTestId('player-window-handle');
+    fireEvent.pointerDown(handle, { clientX: 100, clientY: 100, button: 0, pointerId: 1 });
+    expect(win.style.transition).toBe('none');
+    fireEvent.pointerUp(handle, { clientX: 120, clientY: 110, pointerId: 1 });
+    expect(win.style.transition).toContain('width');
+    root.unmount();
+  });
+});
+
+describe('maximized：浏览器视口内最大化（非系统全屏）', () => {
+  it('点击最大化按钮：容器 data-mode=maximized 且铺满视口留 12px 边距；不落盘偏好、不渲染系统全屏', () => {
+    const storage = stubStorage(JSON.stringify({ x: 10, y: 20, width: 400, mode: 'window' }));
+    const { root } = setup([item('a')]);
+    openPlayer();
+    fireEvent.click(screen.getByTestId('player-maximize-btn'));
+    const win = screen.getByTestId('player-window');
+    expect(win.getAttribute('data-mode')).toBe('maximized');
+    expect(parseFloat(win.style.left)).toBe(12);
+    expect(parseFloat(win.style.top)).toBe(12);
+    expect(parseFloat(win.style.width)).toBe(VW - 24);
+    expect(parseFloat(win.style.height)).toBe(VH - 24);
+    // maximized 为视口内临时形态：与 fullscreen 同不落盘偏好
+    expect(storage.setItem).not.toHaveBeenCalled();
+    // 不走系统全屏分支
+    expect(screen.queryByTestId('player-fullscreen')).toBeNull();
+    root.unmount();
+  });
+
+  it('maximized 形态信息面板可用、resize 抓手不渲染、全屏按钮仍在', () => {
+    stubStorage(JSON.stringify({ x: 10, y: 20, width: 400, mode: 'window' }));
+    const { root } = setup([item('a')]);
+    openPlayer();
+    fireEvent.click(screen.getByTestId('player-maximize-btn'));
+    fireEvent.click(screen.getByTitle('File Info'));
+    expect(screen.getByText('file_details')).toBeTruthy();
+    expect(screen.queryByTestId('player-resize-right')).toBeNull();
+    expect(screen.queryByTestId('player-resize-bottom')).toBeNull();
+    expect(screen.queryByTestId('player-resize-corner')).toBeNull();
+    expect(screen.getByTestId('player-fullscreen-btn')).toBeTruthy();
+    root.unmount();
+  });
+
+  it('再次点击最大化按钮（图标切为 Minimize）回 window 且恢复记忆宽度与位置', () => {
+    stubStorage(JSON.stringify({ x: 10, y: 20, width: 400, mode: 'window' }));
+    const { root } = setup([item('a')]);
+    openPlayer();
+    fireEvent.click(screen.getByTestId('player-maximize-btn'));
+    expect(screen.getByTestId('player-window').getAttribute('data-mode')).toBe('maximized');
+    fireEvent.click(screen.getByTestId('player-maximize-btn'));
+    const win = screen.getByTestId('player-window');
+    expect(win.getAttribute('data-mode')).toBe('window');
+    expect(parseFloat(win.style.width)).toBe(400);
+    expect(parseFloat(win.style.left)).toBe(10);
+    expect(parseFloat(win.style.top)).toBe(20);
+    root.unmount();
+  });
+
+  it('Esc 在 maximized 形态回 window（不关闭播放器，与 fullscreen 兜底分支区分）', () => {
+    stubStorage(JSON.stringify({ x: 10, y: 20, width: 400, mode: 'window' }));
+    const { root } = setup([item('a')]);
+    openPlayer();
+    fireEvent.click(screen.getByTestId('player-maximize-btn'));
+    fireEvent.keyDown(window, { key: 'Escape' });
+    const win = screen.getByTestId('player-window');
+    expect(win.getAttribute('data-mode')).toBe('window');
+    expect(screen.getByTestId('player-window')).toBeTruthy();
+    root.unmount();
+  });
+
+  it('偏好中的 mode=maximized 不能作为持久形态恢复：重开播放器为 window', () => {
+    stubStorage(JSON.stringify({ x: 10, y: 20, width: 400, mode: 'maximized' }));
+    const { root } = setup([item('a')]);
+    openPlayer();
+    expect(screen.getByTestId('player-window').getAttribute('data-mode')).toBe('window');
     root.unmount();
   });
 });

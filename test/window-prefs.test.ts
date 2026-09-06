@@ -86,6 +86,11 @@ describe('window-prefs 持久化', () => {
     expect(loadWindowPrefs()).toEqual({ x: 10, y: 20, width: 480, mode: 'window' });
   });
 
+  it('maximized 不能作为持久形态恢复：载入时归一化为 window（与 fullscreen 同）', () => {
+    seedRaw('{"x":10,"y":20,"width":480,"mode":"maximized"}');
+    expect(loadWindowPrefs()).toEqual({ x: 10, y: 20, width: 480, mode: 'window' });
+  });
+
   it('hotfix-2：heightOverride 可选字段完整往返（下边缘拖动的高度覆盖）', () => {
     const prefs: WindowPrefs = { x: 10, y: 20, width: 400, mode: 'window', heightOverride: 320 };
     saveWindowPrefs(prefs);

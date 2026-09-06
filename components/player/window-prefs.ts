@@ -11,7 +11,7 @@ export interface WindowPrefs {
   y: number;
   /** 窗口宽度（px） */
   width: number;
-  /** 上次会话的浮窗形态；fullscreen 不作为持久形态，载入时归一化为 window */
+  /** 上次会话的浮窗形态；fullscreen / maximized 不作为持久形态，载入时归一化为 window */
   mode: PlayerDisplayMode;
   /** 高度覆盖（px，hotfix-2）：边缘/角落拖动自定义高度时写入（hotfix-4 起含右缘锁定起点渲染总高与右下角独立跟随）；缺省/undefined = 高度按媒体比例自适应 */
   heightOverride?: number;
@@ -38,8 +38,9 @@ export const loadWindowPrefs = (): WindowPrefs | null => {
       typeof heightOverride === 'number' && Number.isFinite(heightOverride) && heightOverride > 0
         ? heightOverride
         : undefined;
-    // fullscreen 依赖真实全屏 API（宿主 effect），重载页面后无 gesture 不应恢复，回落到 window。
-    return { x, y, width, mode: mode === 'fullscreen' ? 'window' : mode, heightOverride: resolvedHeightOverride };
+    // fullscreen 依赖真实全屏 API（宿主 effect）、maximized 为视口内临时形态：两者重载页面后
+    // 均不应恢复（fullscreen 无 gesture 无法 requestFullscreen，maximized 属临时视图状态），回落到 window。
+    return { x, y, width, mode: mode === 'fullscreen' || mode === 'maximized' ? 'window' : mode, heightOverride: resolvedHeightOverride };
   } catch {
     return null;
   }

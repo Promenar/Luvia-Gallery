@@ -25,6 +25,13 @@ export const getGridEffectiveItemCount = (
 
 export const GRID_SKELETON_CLASSES = 'bg-white/[0.045] dark:bg-white/[0.035] rounded-2xl animate-pulse flex items-center justify-center';
 
+// 网格顶部安全区：App.tsx 的统一工具栏浮岛在 md 及以上为 `md:absolute md:inset-x-0 md:top-0`
+// 悬浮遮挡内容，移动端为普通流布局无需避让。md 语义（64px 顶部内边距）与瀑布流的
+// MASONRY_TOP_SAFE_AREA_CLASSES（components/gallery/MasonryViewport.tsx）对齐。
+// 该类只加在 FixedSizeGrid（滚动容器）的外层 wrapper 上：虚拟化定位以滚动容器顶为原点，
+// padding 由 AutoSizer 测量时自然扣除，滚动、锚点快照与骨架数学不受影响。
+export const GRID_TOP_SAFE_AREA_CLASSES = 'md:pt-16';
+
 interface InnerProps extends CommonViewportProps {
   width: number;
   height: number;
@@ -344,7 +351,7 @@ const GridViewportInner = React.forwardRef<ViewportCaptureHandle, InnerProps>(({
 
 export const GridViewport = React.forwardRef<ViewportCaptureHandle, CommonViewportProps>((props, ref) => {
   return (
-    <div className="flex-1 w-full h-full">
+    <div className={`flex-1 w-full h-full ${GRID_TOP_SAFE_AREA_CLASSES}`}>
       <AutoSizer>
         {({ height, width }: { height: number; width: number }) => {
           if (!height || !width || height <= 0 || width <= 0) {

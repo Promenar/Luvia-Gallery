@@ -1,5 +1,5 @@
 // components/player/PlayerWindow.tsx
-// Task B+C：非模态悬浮播放窗壳（取代 MediaPlayer 原全屏遮罩形态），三形态：window 浮窗 / mini 小窗 / fab 圆钮。
+// Task B+C：非模态悬浮播放窗壳（取代 MediaPlayer 原全屏遮罩形态），形态：window 浮窗 / mini 小窗 / fab 圆钮 / maximized 视口内最大化。
 // - 非模态：不渲染任何 inset-0 遮罩层，容器 fixed z-40，页面其余区域保持可交互。
 // - 材质：复用全站浮岛类 glass-1 gallery-toolbar-glass rounded-2xl（与 GalleryNavigationBar 一致）。
 // - window：宽度取 localStorage 偏好或 clamp(280, 视口宽*0.42, 视口宽-48)；hotfix-3 起等比模式写显式高度：
@@ -9,22 +9,31 @@
 //   hotfix-5 起比例来源增加运行时校正：库内尺寸元数据缺失（兜底 16:9）时，媒体解码完成
 //   （img onLoad / video onLoadedMetadata）由面板回调上报真实比例（loadedRatio）覆盖兜底重算形状，
 //   切换队列项重置回兜底；heightOverride 存在时仍锁定容器高度（用户语义优先）。
+//   hotfix-6 起缓存命中兜底：图片命中浏览器缓存时 onLoad 可能不触发，面板在挂载/换项后的渲染中
+//   检查 img.complete（video readyState≥1）并等价上报，保证已缓存媒体同样触发比例自适应。
+// - heightOverride 会话生命周期（hotfix-6）：高度覆盖为"当前打开会话内的临时锁定"——open 与切换
+//   队列项时清除回等比自适应；手动拖下缘/角落/右缘仍在当前媒体会话内生效；不再持久化落盘
+//   （width 与位置偏好仍持久，历史记录中的 heightOverride 字段载入时被忽略）。
 // - mini：固定 240px 宽小窗，仍可拖动；头部只留展开回 window 与关闭的最小控制，
 //   画廊式完整控制栏与信息面板隐藏，内容区只保留媒体（视频沿用原生控件）。
 // - fab：56px 圆钮固定右下（16px 边距），不可拖动；背景为当前项缩略图（getAuthUrl 拼认证，
 //   加载失败回退 Icons.Image），视频项带播放角标；点击回 window。fab 不暂停播放（音频继续，视频随容器卸载）。
+// - maximized（hotfix-6）：浏览器视口内最大化（非系统全屏，不涉及 Fullscreen API）——容器铺满视口
+//   留 12px 边距，保留圆角与浮岛材质；媒体 contain、信息面板可用；进入/退出不改写位置/宽度偏好，
+//   还原 window 时恢复原位置与记忆宽度；Esc 回 window（与 fullscreen 的系统全屏语义区分）。
 // - 边缘拖拽自定义大小（hotfix-2，hotfix-4 起标准窗口语义，仅 window 形态）：三个抓手全部自由缩放
 //   （非等比）——右缘只改宽（heightOverride 锁定为起点容器渲染总高，宽度变化后高度不再按比例跟随）、
-//   右下角宽高各自独立跟随（+dx/+dy）、下边缘只改高；覆盖落盘（heightOverride 字段，覆盖期间容器显式
-//   height、媒体 contain）；双击右缘/右下角清除覆盖回等比自适应。复用头部抓手同款 pointer 三段式。
+//   右下角宽高各自独立跟随（+dx/+dy）、下边缘只改高；双击右缘/右下角清除覆盖回等比自适应。
+//   复用头部抓手同款 pointer 三段式。maximized 形态窗口尺寸固定铺满，不渲染抓手且头部拖动不生效。
 // - 拖动：头部抓手自实现 pointerdown→move→up（fab 无抓手不可拖动），位置 clamp 视口内，pointerup 落库。
 // - 跟手（hotfix-3）：拖动/缩放 pointermove 直写容器 style.left/top/width/height（起点增量推算，零 setState
-//   零重渲染）；会话期间 isInteracting 置 true 禁用 framer-motion layout 补间；pointerup 一次性 setState 同步
-//   React 状态（与直写值一致，无视觉跳变）并 saveWindowPrefs 落盘。
-// - 动画：AnimatePresence mode="popLayout" 下 window/mini 共用同 key 容器（不卸载，媒体子树跨形态保持），
-//   形变由 framer-motion layout 驱动（交互会话期间禁用）；window 与 fab 为不同 key 互斥出现（fade + scale）。
-// - 形态偏好：切换形态即落盘 saveWindowPrefs（mode 字段）；重新 open 时按偏好恢复 mini/fab
-//   （fullscreen 不作为持久形态，loadWindowPrefs 已归一化为 window）。
+//   零重渲染）；会话期间 isInteracting 置 true、容器 transition 置 none（直写样式不被过渡拖慢）；
+//   pointerup 一次性 setState 同步 React 状态（与直写值一致，无视觉跳变）并 saveWindowPrefs 落盘。
+// - 动画（hotfix-6）：媒体加载/形态切换引起的容器尺寸变化平滑过渡——非交互期 transition
+//   width/height/left/top 0.25s ease；window↔mini 形变由该 CSS transition 承担（framer-motion layout
+//   已移除，避免双重补间），window 与 fab 为不同 key 互斥出现，出入场仍由 AnimatePresence scale/fade 承担。
+// - 形态偏好：切换 mini/fab 即落盘 saveWindowPrefs（mode 字段）；fullscreen/maximized 为临时形态不落盘，
+//   loadWindowPrefs 载入时同样归一化为 window；重新 open 时按偏好恢复 mini/fab。
 import React, { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useMediaPlayer } from './PlayerProvider';
@@ -67,6 +76,8 @@ const FAB_SIZE = 56;
 const FAB_MARGIN = 16;
 /** 无尺寸信息媒体的比例兜底（16:9） */
 const FALLBACK_ASPECT = 16 / 9;
+/** maximized 形态距视口边缘的边距（px，hotfix-6）：容器铺满视口留此边距（非系统全屏） */
+const MAXIMIZED_MARGIN = 12;
 
 const clamp = (value: number, lo: number, hi: number) => Math.min(Math.max(value, lo), Math.max(lo, hi));
 
@@ -93,13 +104,11 @@ export const PlayerWindow: React.FC<PlayerWindowProps> = ({ onToggleFavorite, sh
             ? clamp(preferred, MIN_WIDTH, window.innerWidth - WINDOW_MARGIN * 2)
             : clamp(window.innerWidth * 0.42, MIN_WIDTH, window.innerWidth - WINDOW_MARGIN * 2);
     });
-    // 高度覆盖（px，hotfix-2）：边缘/角落拖动自定义高度后落盘（window-prefs 可选字段）——
-    // 下缘/右下角写拖拽高，右缘锁定起点容器渲染总高（hotfix-4）；null = 无覆盖，高度按媒体比例自适应。
-    // 仅 window 形态生效；双击右缘/右下角清除回等比。
-    const [heightOverride, setHeightOverride] = useState<number | null>(() => {
-        const override = loadWindowPrefs()?.heightOverride;
-        return typeof override === 'number' ? override : null;
-    });
+    // 高度覆盖（px，hotfix-2）：边缘/角落拖动自定义高度——下缘/右下角写拖拽高，右缘锁定起点容器
+    // 渲染总高（hotfix-4）；null = 无覆盖，高度按媒体比例自适应。仅 window 形态生效；双击右缘/右下角清除。
+    // hotfix-6：覆盖改为"当前打开会话内的临时锁定"——不再从偏好读取、不再落盘持久化，
+    // open 与切换队列项（currentItem.id 变化）时清除回等比自适应，避免历史手动缩放永久压制比例自适应。
+    const [heightOverride, setHeightOverride] = useState<number | null>(null);
     // 记忆位置：偏好坐标原样保存，渲染/拖动时统一 clamp 进视口；null 表示未拖动过 → 按右下角锚定
     const [pos, setPos] = useState<{ x: number; y: number } | null>(() => {
         const prefs = loadWindowPrefs();
@@ -116,7 +125,11 @@ export const PlayerWindow: React.FC<PlayerWindowProps> = ({ onToggleFavorite, sh
     const [loadedRatio, setLoadedRatio] = useState<number | null>(null);
     useEffect(() => { setLoadedRatio(null); }, [currentItem?.id]);
 
-    // 打开播放器时恢复上次落盘的形态（仅 mini/fab；fullscreen 已在 loadWindowPrefs 归一化为 window）。
+    // hotfix-6：高度覆盖会话清除——打开播放器（open 翻转）与切换队列项时回到等比自适应；
+    // 会话内的手动缩放覆盖在下一项打开前保持有效。
+    useEffect(() => { setHeightOverride(null); }, [state.isOpen, currentItem?.id]);
+
+    // 打开播放器时恢复上次落盘的形态（仅 mini/fab；fullscreen/maximized 均已在 loadWindowPrefs 归一化为 window）。
     // setMode 经 ref 间接调用：context value 随 state 重建，避免易变引用进入依赖导致偏好反复覆盖用户手动切换。
     const setModeRef = useRef(setMode);
     useEffect(() => { setModeRef.current = setMode; });
@@ -133,7 +146,7 @@ export const PlayerWindow: React.FC<PlayerWindowProps> = ({ onToggleFavorite, sh
     // 绕过 React 状态更新消除整树重渲染延迟；pointerup 才 setState 同步 + 落盘。
     const windowRef = useRef<HTMLDivElement>(null);
     // hotfix-3：拖动/缩放交互会话标记。pointerdown/pointerup 各 setState 一次（move 中零 setState）；
-    // 会话期间 layout 补间禁用（layout={!isInteracting}），位置/尺寸由直写样式全权接管，结束后恢复。
+    // 交互会话（拖动/缩放）期间 CSS transition 置 none，位置/尺寸由直写样式全权接管，结束后恢复过渡。
     const [isInteracting, setIsInteracting] = useState(false);
 
     const viewportW = window.innerWidth;
@@ -142,6 +155,7 @@ export const PlayerWindow: React.FC<PlayerWindowProps> = ({ onToggleFavorite, sh
     const isMini = displayMode === 'mini';
     const isWindow = displayMode === 'window';
     const isFab = displayMode === 'fab';
+    const isMaximized = displayMode === 'maximized';
 
     // 形状贴合媒体（hotfix-3，双向预算）：宽度基准 = 记忆/拖拽宽度，内容区高按比例推导；
     // 推导高度超视口高 80% 时以高度定宽（竖图收窄）；触 240px 宽度下限则高度按比例回推（保持比例）。
@@ -183,11 +197,25 @@ export const PlayerWindow: React.FC<PlayerWindowProps> = ({ onToggleFavorite, sh
         ? { x: clamp(pos.x, 0, viewportW - shellWidth), y: clamp(pos.y, 0, viewportH - containerHeight) }
         : { x: Math.max(0, viewportW - shellWidth - WINDOW_MARGIN), y: Math.max(0, viewportH - containerHeight - WINDOW_MARGIN) };
 
+    // maximized 形态容器盒（hotfix-6）：铺满浏览器视口留少量边距，保留圆角与浮岛材质；
+    // 不涉及系统全屏 API，也不改写 window 形态的位置/宽度偏好（changeMode 仍保存 currentPos/width）。
+    const stylePos = isMaximized ? { x: MAXIMIZED_MARGIN, y: MAXIMIZED_MARGIN } : currentPos;
+    const styleWidth = isMaximized ? viewportW - MAXIMIZED_MARGIN * 2 : shellWidth;
+    const styleHeight = isMaximized ? viewportH - MAXIMIZED_MARGIN * 2 : containerHeight;
+
+    // hotfix-6：容器尺寸/位置变化平滑过渡（媒体加载比例校正、window↔mini 形变、maximized 切换）；
+    // 交互会话期间置 none——拖动/缩放 pointermove 直写样式不被过渡拖慢（保持 hotfix-3 跟手机制），
+    // 形态形变不再由 framer-motion layout 补间（已移除，避免与 CSS transition 双重补间）。
+    const containerTransition = isInteracting
+        ? 'none'
+        : 'width 0.25s ease, height 0.25s ease, left 0.25s ease, top 0.25s ease';
+
     // 形态切换统一入口：reducer 切换 + 立即落盘偏好。
-    // width 沿用 window 记忆宽度（mini/fab 不改写），坐标保留当前位置——恢复 window 时可直接复用。
+    // width 沿用 window 记忆宽度（mini/fab 不改写），坐标保留 window 形态位置——恢复 window 时可直接复用。
+    // （fullscreen/maximized 为临时形态，不走本入口、不落盘；heightOverride 为会话内存态不再写入偏好。）
     const changeMode = (mode: PlayerDisplayMode) => {
         setMode(mode);
-        saveWindowPrefs({ x: currentPos.x, y: currentPos.y, width, mode, heightOverride: heightOverride ?? undefined });
+        saveWindowPrefs({ x: currentPos.x, y: currentPos.y, width, mode });
     };
 
     // fab 背景：当前项缩略图（相对路径经 getAuthUrl 拼认证参数）；无缩略图或加载失败回退图标
@@ -195,10 +223,12 @@ export const PlayerWindow: React.FC<PlayerWindowProps> = ({ onToggleFavorite, sh
 
     const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
         if (e.button !== 0) return;
+        // maximized 形态窗口固定铺满视口：头部拖动不生效（避免拖动残留坐标污染记忆位置）
+        if (isMaximized) return;
         // 真实浏览器锁定指针到抓手（jsdom 无此 API，可选调用）
         e.currentTarget.setPointerCapture?.(e.pointerId);
         dragRef.current = { px: e.clientX, py: e.clientY, ox: currentPos.x, oy: currentPos.y };
-        // 会话开始：禁用 layout 补间（手势起止各一次渲染，move 不触发）
+        // 会话开始：禁用尺寸/位置过渡（手势起止各一次渲染，move 不触发）
         setIsInteracting(true);
         e.preventDefault();
     };
@@ -225,7 +255,7 @@ export const PlayerWindow: React.FC<PlayerWindowProps> = ({ onToggleFavorite, sh
         const y = clamp(drag.oy + (e.clientY - drag.py), 0, viewportH - containerHeight);
         setPos({ x, y });
         setIsInteracting(false);
-        saveWindowPrefs({ x, y, width, mode: displayMode, heightOverride: heightOverride ?? undefined });
+        saveWindowPrefs({ x, y, width, mode: displayMode });
     };
 
     // 边缘 resize 会话（hotfix-2，hotfix-4 起标准窗口语义）：与拖动同款三段式——起点指针 + 起点尺寸，
@@ -270,11 +300,12 @@ export const PlayerWindow: React.FC<PlayerWindowProps> = ({ onToggleFavorite, sh
         if (!session) return;
         rightResizeRef.current = null;
         const nextWidth = applyRightResize(e.clientX, session);
-        // pointerup：宽度写入记忆；高度覆盖锁定为起点渲染总高（后续宽度变化不再触发比例重算）
+        // pointerup：宽度写入记忆；高度覆盖锁定为起点渲染总高（后续宽度变化不再触发比例重算；
+        // hotfix-6 起覆盖为会话内存态，不落盘）
         setWidth(nextWidth);
         setHeightOverride(session.startHeight);
         setIsInteracting(false);
-        saveWindowPrefs({ x: currentPos.x, y: currentPos.y, width: nextWidth, mode: displayMode, heightOverride: session.startHeight });
+        saveWindowPrefs({ x: currentPos.x, y: currentPos.y, width: nextWidth, mode: displayMode });
     };
 
     // 右下角：宽高各自独立跟随（宽 = 起点 + dx，高 = 起点 + dy），互不推导、不锁比例（hotfix-4）
@@ -298,17 +329,18 @@ export const PlayerWindow: React.FC<PlayerWindowProps> = ({ onToggleFavorite, sh
         if (!session) return;
         cornerResizeRef.current = null;
         const { width: nextWidth, height: nextHeight } = applyCornerResize(e.clientX, e.clientY, session);
-        // pointerup：宽高一次性同步状态（与直写值一致）+ 落盘
+        // pointerup：宽高一次性同步状态（与直写值一致）；高度覆盖为会话内存态（hotfix-6 起不落盘）
         setWidth(nextWidth);
         setHeightOverride(nextHeight);
         setIsInteracting(false);
-        saveWindowPrefs({ x: currentPos.x, y: currentPos.y, width: nextWidth, mode: displayMode, heightOverride: nextHeight });
+        saveWindowPrefs({ x: currentPos.x, y: currentPos.y, width: nextWidth, mode: displayMode });
     };
 
     // 双击右缘/右下角：清除高度覆盖回等比模式（容器高 = 宽/媒体比例 + 头部 44），并同步落盘
+    // （heightOverride 为会话内存态，落盘内容不含覆盖字段）
     const resetHeightOverride = () => {
         setHeightOverride(null);
-        saveWindowPrefs({ x: currentPos.x, y: currentPos.y, width, mode: displayMode, heightOverride: undefined });
+        saveWindowPrefs({ x: currentPos.x, y: currentPos.y, width, mode: displayMode });
     };
 
     const applyVResize = (clientY: number, session: { py: number; startHeight: number }) => {
@@ -327,10 +359,10 @@ export const PlayerWindow: React.FC<PlayerWindowProps> = ({ onToggleFavorite, sh
         if (!session) return;
         vResizeRef.current = null;
         const next = applyVResize(e.clientY, session);
-        // pointerup：一次性同步状态（与直写值一致）+ 落盘覆盖
+        // pointerup：一次性同步状态（与直写值一致）；高度覆盖为会话内存态（hotfix-6 起不落盘）
         setHeightOverride(next);
         setIsInteracting(false);
-        saveWindowPrefs({ x: currentPos.x, y: currentPos.y, width, mode: displayMode, heightOverride: next });
+        saveWindowPrefs({ x: currentPos.x, y: currentPos.y, width, mode: displayMode });
     };
 
     // window 形态头部控制栏按钮（完整画廊控制栏：导航/收藏/信息/全屏占位 + 收起 mini/fab + 关闭）。
@@ -384,6 +416,18 @@ export const PlayerWindow: React.FC<PlayerWindowProps> = ({ onToggleFavorite, sh
             >
                 <Icons.Maximize size={18} />
             </button>
+            {/* 视口内最大化（hotfix-6）：铺满浏览器视口留 12px 边距，非系统全屏、不涉及 Fullscreen API。
+                与 fullscreen 同为临时形态：只 setMode 不落盘偏好。图标用 Icons.Grid（Icons.Maximize
+                已被系统全屏按钮占用；maximized 形态下切换为 Icons.Minimize 表示还原）。
+                再次点击回 window：位置/宽度偏好未被最大化改动，直接恢复记忆值。 */}
+            <button
+                data-testid="player-maximize-btn"
+                title={isMaximized ? 'Unmaximize' : 'Maximize'}
+                onClick={(e) => { e.stopPropagation(); setMode(isMaximized ? 'window' : 'maximized'); }}
+                className="p-1.5 rounded-full text-white/70 transition-colors hover:bg-white/10"
+            >
+                {isMaximized ? <Icons.Minimize size={18} /> : <Icons.Grid size={18} />}
+            </button>
             {/* 收起为 mini / fab：形态偏好即刻落盘 */}
             <button
                 title="Mini Mode"
@@ -434,29 +478,30 @@ export const PlayerWindow: React.FC<PlayerWindowProps> = ({ onToggleFavorite, sh
     return (
         <AnimatePresence mode="popLayout">
             {/* window/mini：同 key 容器——形态切换不卸载（媒体子树跨形态保持，video 不重载），
-                尺寸/内容差异由 framer-motion layout 形变过渡；退出动画期间 currentItem 为 null 自动收敛为不渲染 */}
+                尺寸/内容差异由 CSS transition 形变过渡；退出动画期间 currentItem 为 null 自动收敛为不渲染 */}
             {state.isOpen && currentItem && aspect && !isFab && (
                 <motion.div
                     key="player-window"
                     ref={windowRef}
                     data-testid="player-window"
                     data-mode={displayMode}
-                    // hotfix-3：交互会话期间禁用 layout 补间（直写样式全权接管，pointerup 的 setState
-                    // 不会触发位置/尺寸补间）；会话结束恢复，形态切换 window↔mini 动画不受影响
-                    layout={!isInteracting}
                     initial={{ opacity: 0, scale: 0.85 }}
                     animate={{ opacity: 1, scale: 1 }}
                     exit={{ opacity: 0, scale: 0.85 }}
                     transition={{ duration: 0.25, ease: 'easeOut' }}
                     className="fixed z-40 pointer-events-auto flex flex-col overflow-hidden text-white glass-1 gallery-toolbar-glass rounded-2xl border border-white/5 shadow-2xl"
                     style={{
-                        left: currentPos.x,
-                        top: currentPos.y,
-                        width: `${shellWidth}px`,
+                        left: stylePos.x,
+                        top: stylePos.y,
+                        width: `${styleWidth}px`,
                         // hotfix-3：显式高度公式——等比模式容器高 = 内容区高(宽/媒体比例) + 头部 44，
                         // 内容区正好贴合媒体比例（不写 aspectRatio，消除含头部整容器的比例误差留白）；
-                        // 高度覆盖期间容器高即覆盖值（媒体 contain）
-                        height: `${containerHeight}px`,
+                        // 高度覆盖期间容器高即覆盖值（媒体 contain）；maximized 铺满视口留边距
+                        height: `${styleHeight}px`,
+                        // hotfix-6：尺寸/位置变化平滑过渡；交互会话期间为 none（直写样式不被过渡拖慢）。
+                        // window↔mini 形变与媒体加载后的比例校正均由本 transition 承担
+                        // （framer-motion layout 已移除，出入场动画仍由 AnimatePresence scale/fade 承担）
+                        transition: containerTransition,
                     }}
                 >
                     {/* 头部：抓手（标题区）+ 控制栏。拖动仅绑定在标题抓手区域，按钮区不受影响 */}
@@ -474,7 +519,9 @@ export const PlayerWindow: React.FC<PlayerWindowProps> = ({ onToggleFavorite, sh
                             {/* mini 窗体空间有限，仅 window 显示路径副标题 */}
                             {!isMini && <span className="truncate text-[10px] opacity-60">{currentItem.folderPath || 'Root'}</span>}
                         </div>
-                        {isWindow ? windowControls : miniControls}
+                        {/* window 与 maximized 共用完整画廊控制栏（maximized 下最大化按钮切为还原图标）；
+                            mini 仅保留最小控制 */}
+                        {(isWindow || isMaximized) ? windowControls : miniControls}
                     </div>
 
                     {/* 内容区：媒体 contain 显示。图片面板（含缩放/幻灯片按钮）以 absolute inset-0 铺满本区域，
@@ -486,7 +533,8 @@ export const PlayerWindow: React.FC<PlayerWindowProps> = ({ onToggleFavorite, sh
                         ) : currentItem.mediaType === 'image' ? (
                             <ImageViewPane item={currentItem} onSlideNext={next} onMediaRatio={setLoadedRatio} />
                         ) : null}
-                        {isWindow && infoPanel}
+                        {/* 信息面板在 window 与 maximized 形态渲染（mini 只保留媒体，fab 无内容区） */}
+                        {(isWindow || isMaximized) && infoPanel}
                     </div>
 
                     {/* 边缘 resize 抓手（hotfix-2，hotfix-4 起三向自由缩放，仅 window 形态）：右缘拖宽（高度锁定

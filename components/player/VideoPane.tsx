@@ -11,6 +11,16 @@ export const VideoPane: React.FC<{ item: MediaItem; onMediaRatio?: (ratio: numbe
   const source = resolveVideoSource(item);
   useEffect(() => setVideoError(false), [item.id]);
 
+  // hotfix-6：缓存命中兜底——视频元数据已就绪（readyState ≥ 1 且已解码）但 onLoadedMetadata
+  // 错过时（如命中缓存），挂载后与每次渲染后补检一次，等价上报真实比例（同值重复上报无害）。
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v || !onMediaRatio) return;
+    if (v.readyState >= 1 && v.videoWidth > 0 && v.videoHeight > 0) {
+      onMediaRatio(v.videoWidth / v.videoHeight);
+    }
+  });
+
   if (videoError) {
     return (
       <div data-testid="video-fallback" className="flex flex-col items-center justify-center p-8 bg-gray-900 rounded-xl border border-gray-700 text-center max-w-md" onClick={(e) => e.stopPropagation()}>
