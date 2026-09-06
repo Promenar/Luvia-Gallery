@@ -2,6 +2,8 @@
 // Task B（PlayerWindow 浮窗壳）TDD 测试：非模态浮窗、默认右下定位与媒体比例自适应、
 // 头部抓手指针拖动（clamp 视口内 + 偏好落库）、Esc/关闭按钮、收藏与信息面板、
 // 队列边界导航隐藏、开合动画（scale 0.85→1 + fade）。
+// hotfix-2：容器形状贴合媒体（只设 width+aspectRatio，双向预算竖图收窄，无显式 height）、
+// 边缘拖拽自定义大小（右/下边缘与右下角抓手，高度覆盖落盘）。
 // 沿用 test/media-player.test.tsx 的 localStorage stub + Harness/setup 模式（Node 26 环境）。
 import React from 'react';
 import { act } from 'react';
@@ -97,21 +99,22 @@ describe('PlayerWindow 非模态浮窗壳', () => {
     root.unmount();
   });
 
-  it('默认位置视口右下（右/下 24px），宽度 clamp(320, 42%vw, 560)，媒体比例反映在 aspect-ratio 且高度 clamp(24vh, 72vh)', () => {
+  it('默认位置视口右下（右/下 24px），宽度 clamp(280, vw-48)，容器只设 width+aspectRatio（高度由比例推导，无显式 height）', () => {
     const { root } = setup([item('a', 'image', { width: 900, height: 600 })]);
     openPlayer();
     const win = screen.getByTestId('player-window');
     const width = parseFloat(win.style.width);
-    const height = parseFloat(win.style.height);
+    // hotfix-2：高度按媒体比例由浏览器推导，容器不写显式 height（旧实现显式 height 会覆盖 aspect-ratio，
+    // 使窗口永远呈"记忆宽 × clamp 高"的矩形，脱离媒体形状）
+    const height = width / 1.5;
     const left = parseFloat(win.style.left);
     const top = parseFloat(win.style.top);
-    expect(width).toBeGreaterThanOrEqual(320);
-    expect(width).toBeLessThanOrEqual(560);
+    expect(width).toBeGreaterThanOrEqual(280);
+    expect(width).toBeLessThanOrEqual(VW - 48);
     // 900x600 → 3:2 比例写入容器 style.aspectRatio
     expect(win.style.aspectRatio).toBe('900 / 600');
-    // 高度 = 宽度/比例，clamp 在 24vh~72vh
-    expect(height).toBeCloseTo(Math.min(Math.max(width / 1.5, VH * 0.24), VH * 0.72), 6);
-    // 默认锚点：距右/下各 24px
+    expect(win.style.height).toBe('');
+    // 默认锚点：距右/下各 24px（下边距按比例推导高度计算）
     expect(VW - (left + width)).toBeCloseTo(24, 6);
     expect(VH - (top + height)).toBeCloseTo(24, 6);
     root.unmount();
@@ -121,6 +124,52 @@ describe('PlayerWindow 非模态浮窗壳', () => {
     const { root } = setup([item('plain')]);
     openPlayer();
     expect(screen.getByTestId('player-window').style.aspectRatio).toBe('16 / 9');
+    root.unmount();
+  });
+
+  it('hotfix-2：竖图以高度定宽收窄（双向预算），容器形状贴合媒体比例', () => {
+    // 竖图 600x1500（比例 0.4）：默认宽度推导高超出视口高 80% → 以高度定宽收窄
+    const { root } = setup([item('tall', 'image', { width: 600, height: 1500 })]);
+    openPlayer();
+    const tall = screen.getByTestId('player-window');
+    const tallWidth = parseFloat(tall.style.width);
+    const tallHeight = tallWidth / 0.4;
+    expect(tall.style.aspectRatio).toBe('600 / 1500');
+    expect(tall.style.height).toBe('');
+    // 双向预算：推导高度恰收进 80% 视口高预算（比例保持）
+    expect(tallHeight).toBeLessThanOrEqual(VH * 0.8 + 1e-6);
+    root.unmount();
+    cleanup();
+    // 对照：横图 16:9 同一宽度基准不触高度顶 → 宽度明显大于竖图收窄结果
+    const { root: root2 } = setup([item('wide', 'image', { width: 1600, height: 900 })]);
+    openPlayer();
+    const wide = screen.getByTestId('player-window');
+    expect(parseFloat(wide.style.width)).toBeGreaterThan(tallWidth);
+    root2.unmount();
+  });
+
+  it('hotfix-2：极端竖图触宽度下限 240 后高度按比例回推（保持形状贴合）', () => {
+    // 比例 0.2：以 80% 视口高定宽 ≈ 0.2*0.8*768 < 240 → 触底 240，高度回推（比例仍保持）
+    const { root } = setup([item('extreme', 'image', { width: 200, height: 1000 })]);
+    openPlayer();
+    const win = screen.getByTestId('player-window');
+    expect(parseFloat(win.style.width)).toBe(240);
+    expect(win.style.aspectRatio).toBe('200 / 1000');
+    expect(win.style.height).toBe('');
+    root.unmount();
+  });
+
+  it('hotfix-2：切换队列项比例变化 → 窗口尺寸随新比例更新（同一宽度基准）', () => {
+    const { root } = setup([
+      item('wide', 'image', { width: 1600, height: 900 }),
+      item('tall', 'image', { width: 600, height: 1500 }),
+    ]);
+    openPlayer();
+    const before = parseFloat(screen.getByTestId('player-window').style.width);
+    fireEvent.keyDown(window, { key: 'ArrowRight' });
+    const win = screen.getByTestId('player-window');
+    expect(parseFloat(win.style.width)).toBeLessThan(before);
+    expect(win.style.aspectRatio).toBe('600 / 1500');
     root.unmount();
   });
 
@@ -142,7 +191,8 @@ describe('PlayerWindow 非模态浮窗壳', () => {
     const win = screen.getByTestId('player-window');
     const handle = screen.getByTestId('player-window-handle');
     const width = parseFloat(win.style.width);
-    const height = parseFloat(win.style.height);
+    // 高度由媒体比例（900/600 → 1.5）推导，容器不写显式 height（hotfix-2）
+    const height = width / 1.5;
     fireEvent.pointerDown(handle, { clientX: 100, clientY: 100, button: 0, pointerId: 1 });
     // 大幅向左上拖动 → clamp 到视口左上边界
     fireEvent.pointerMove(handle, { clientX: -2000, clientY: -2000, pointerId: 1 });
@@ -235,6 +285,13 @@ describe('Task C：mini/FAB 形态与切换动画', () => {
     const win = screen.getByTestId('player-window');
     expect(win.getAttribute('data-mode')).toBe('mini');
     expect(parseFloat(win.style.width)).toBe(240);
+    // mini 高度同样由比例推导（无显式 height）；内容区以 minHeight 兜底（hotfix-2）
+    expect(win.style.height).toBe('');
+    expect(win.style.aspectRatio).toBe('16 / 9');
+    // mini 不支持边缘 resize（固定 240 宽）
+    expect(screen.queryByTestId('player-resize-right')).toBeNull();
+    expect(screen.queryByTestId('player-resize-bottom')).toBeNull();
+    expect(screen.queryByTestId('player-resize-corner')).toBeNull();
     // 仍可拖动：抓手保留
     expect(screen.getByTestId('player-window-handle')).toBeTruthy();
     // 画廊式完整控制栏隐藏（收藏/信息/导航/全屏），仅保留展开与关闭
@@ -441,5 +498,96 @@ describe('Task C 附加修复：键盘守卫与 EXIF 依赖', () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
     expect(fetchMock.mock.calls[1][0]).toBe('/api/file/b/exif');
     root.unmount();
+  });
+});
+
+describe('hotfix-2：边缘拖拽自定义大小（仅 window 形态）', () => {
+  it('右边缘指针拖动改宽（clamp 视口预算），宽度变化清除高度覆盖，pointerup 落盘', () => {
+    // 超宽媒体（比例 5）：宽度触上限时推导高度仍远低于 80% 视口高预算，clamp 断言不受双向预算收窄干扰
+    const storage = stubStorage(JSON.stringify({ x: 10, y: 20, width: 400, mode: 'window', heightOverride: 500 }));
+    const { root } = setup([item('a', 'image', { width: 3000, height: 600 })]);
+    openPlayer();
+    const win = screen.getByTestId('player-window');
+    // 预置高度覆盖生效：容器显式 height、不设 aspectRatio
+    expect(parseFloat(win.style.height)).toBe(500);
+    expect(win.style.aspectRatio).toBe('');
+    const handle = screen.getByTestId('player-resize-right');
+    fireEvent.pointerDown(handle, { clientX: 100, button: 0, pointerId: 1 });
+    fireEvent.pointerMove(handle, { clientX: 260, pointerId: 1 }); // dx=+160 → 400+160=560
+    expect(parseFloat(win.style.width)).toBe(560);
+    // 宽度变化 → 高度覆盖清除，回媒体比例自适应
+    expect(win.style.height).toBe('');
+    expect(win.style.aspectRatio).toBe('3000 / 600');
+    // 大幅拖动触上限 clamp（视口宽 - 48）
+    fireEvent.pointerMove(handle, { clientX: 5000, pointerId: 1 });
+    expect(parseFloat(win.style.width)).toBe(VW - 48);
+    // 回到 560 再落盘
+    fireEvent.pointerMove(handle, { clientX: 260, pointerId: 1 });
+    fireEvent.pointerUp(handle, { clientX: 260, pointerId: 1 });
+    const saved = JSON.parse(storage.setItem.mock.calls.at(-1)![1] as string) as { width: number; heightOverride?: number; mode: string };
+    expect(saved.width).toBe(560);
+    expect(saved.heightOverride).toBeUndefined();
+    expect(saved.mode).toBe('window');
+    root.unmount();
+  });
+
+  it('下边缘指针拖动设置高度覆盖：容器显式 height、移除 aspectRatio（媒体 contain），pointerup 落盘覆盖', () => {
+    const storage = stubStorage(JSON.stringify({ x: 10, y: 20, width: 400, mode: 'window' }));
+    const { root } = setup([item('a', 'image', { width: 900, height: 600 })]);
+    openPlayer();
+    const win = screen.getByTestId('player-window');
+    // 比例态基线：无显式 height
+    expect(win.style.height).toBe('');
+    expect(win.style.aspectRatio).toBe('900 / 600');
+    const handle = screen.getByTestId('player-resize-bottom');
+    // 起点高 = 400/1.5，dy=+300 → 覆盖高 = 400/1.5+300
+    fireEvent.pointerDown(handle, { clientY: 100, button: 0, pointerId: 1 });
+    fireEvent.pointerMove(handle, { clientY: 400, pointerId: 1 });
+    expect(parseFloat(win.style.height)).toBeCloseTo(400 / 1.5 + 300, 6);
+    expect(win.style.aspectRatio).toBe('');
+    fireEvent.pointerUp(handle, { clientY: 400, pointerId: 1 });
+    const saved = JSON.parse(storage.setItem.mock.calls.at(-1)![1] as string) as { width: number; heightOverride?: number };
+    expect(saved.heightOverride).toBeCloseTo(400 / 1.5 + 300, 6);
+    expect(saved.width).toBe(400);
+    root.unmount();
+  });
+
+  it('右下角拖动改宽并清除高度覆盖（宽度变了 → 高度回比例自适应）', () => {
+    stubStorage(JSON.stringify({ x: 10, y: 20, width: 400, mode: 'window', heightOverride: 500 }));
+    const { root } = setup([item('a', 'image', { width: 900, height: 600 })]);
+    openPlayer();
+    const win = screen.getByTestId('player-window');
+    expect(parseFloat(win.style.height)).toBe(500);
+    const handle = screen.getByTestId('player-resize-corner');
+    fireEvent.pointerDown(handle, { clientX: 100, button: 0, pointerId: 1 });
+    fireEvent.pointerMove(handle, { clientX: 220, pointerId: 1 }); // dx=+120 → 520
+    expect(parseFloat(win.style.width)).toBe(520);
+    // 覆盖清除：高度回比例推导
+    expect(win.style.height).toBe('');
+    expect(win.style.aspectRatio).toBe('900 / 600');
+    fireEvent.pointerUp(handle, { clientX: 220, pointerId: 1 });
+    root.unmount();
+  });
+
+  it('宽度 clamp 下限 280；mini 形态渲染后无 resize 抓手', async () => {
+    stubStorage(JSON.stringify({ x: 10, y: 20, width: 300, mode: 'window' }));
+    const { root } = setup([item('a')]);
+    openPlayer();
+    const handle = screen.getByTestId('player-resize-right');
+    fireEvent.pointerDown(handle, { clientX: 100, button: 0, pointerId: 1 });
+    fireEvent.pointerMove(handle, { clientX: -1000, pointerId: 1 }); // 大幅左拖 → clamp 280
+    expect(parseFloat(screen.getByTestId('player-window').style.width)).toBe(280);
+    fireEvent.pointerUp(handle, { clientX: -1000, pointerId: 1 });
+    root.unmount();
+    // mini 形态：无任何边缘抓手
+    cleanup();
+    stubStorage(JSON.stringify({ x: 10, y: 20, width: 400, mode: 'mini' }));
+    const { root: root2 } = setup([item('a')]);
+    openPlayer();
+    await waitFor(() => expect(screen.getByTestId('player-window').getAttribute('data-mode')).toBe('mini'));
+    expect(screen.queryByTestId('player-resize-right')).toBeNull();
+    expect(screen.queryByTestId('player-resize-bottom')).toBeNull();
+    expect(screen.queryByTestId('player-resize-corner')).toBeNull();
+    root2.unmount();
   });
 });

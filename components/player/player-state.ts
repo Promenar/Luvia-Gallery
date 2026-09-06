@@ -28,8 +28,10 @@ export const playerReducer = (state: PlayerState, action: PlayerAction): PlayerS
         displayMode: 'window',
       };
     case 'close':
-      // 保留 items/index/displayMode 供关闭动画期间渲染，下次 open 会整体覆盖。
-      return { ...state, isOpen: false };
+      // 保留 items/index 供关闭动画期间渲染，下次 open 会整体覆盖；
+      // displayMode 重置为 window（hotfix-2：close 语义 = 完全关闭。若保留 fullscreen，
+      // 调度层会继续渲染全屏空壳 + 系统全屏未退出，用户被锁在黑底；重开形态从偏好恢复）。
+      return { ...state, isOpen: false, displayMode: 'window' };
     case 'setMode':
       // 只校验枚举合法性（非法值 no-op）；fullscreen 同样接受，真实全屏 API 由宿主 effect 驱动。
       return isDisplayMode(action.mode) ? { ...state, displayMode: action.mode } : state;

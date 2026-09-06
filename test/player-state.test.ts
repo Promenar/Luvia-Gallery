@@ -80,12 +80,21 @@ describe('displayMode 形态状态机', () => {
     expect(next).toBe(opened);
   });
 
-  it('close 保留形态供退出动画，再次 open 重置为 window', () => {
+  it('close 重置为 window 形态（hotfix-2：关闭 = 完全关闭，重开形态从偏好恢复）', () => {
     let state = playerReducer(createInitialPlayerState(), { type: 'open', source: source(2) });
     state = playerReducer(state, { type: 'setMode', mode: 'fab' });
     state = playerReducer(state, { type: 'close' });
-    expect(state.displayMode).toBe('fab');
+    expect(state.isOpen).toBe(false);
+    expect(state.displayMode).toBe('window');
     state = playerReducer(state, { type: 'open', source: source(2) });
+    expect(state.displayMode).toBe('window');
+  });
+
+  it('全屏形态 close 重置为 window 且关闭（hotfix-2：防全屏空壳残留把用户锁在黑底）', () => {
+    let state = playerReducer(createInitialPlayerState(), { type: 'open', source: source(2) });
+    state = playerReducer(state, { type: 'setMode', mode: 'fullscreen' });
+    state = playerReducer(state, { type: 'close' });
+    expect(state.isOpen).toBe(false);
     expect(state.displayMode).toBe('window');
   });
 });

@@ -198,6 +198,35 @@ describe('PlayerFullscreen 独占全屏形态', () => {
     root.unmount();
   });
 
+  it('hotfix-2：全屏形态点 Close 完整关闭——先退出系统全屏（exitFullscreen 被调用），调度层不再渲染全屏空壳', async () => {
+    const exitMock = vi.fn(() => Promise.resolve());
+    Object.defineProperty(document, 'exitFullscreen', { configurable: true, value: exitMock });
+    const { root } = setup([item('a')]);
+    openPlayer();
+    await enterFullscreen();
+    fireEvent.click(screen.getByTitle('Close'));
+    // 完整关闭第一步：先请求浏览器退出原生全屏（否则黑底容器残留 + 系统全屏锁死）
+    expect(exitMock).toHaveBeenCalledTimes(1);
+    // 容器收敛：全屏空壳不再渲染
+    await waitFor(() => expect(screen.queryByTestId('player-fullscreen')).toBeNull());
+    // 调度层兜底：close 后任何路径都不再渲染全屏空壳，window 浮窗也不出现（isOpen=false 即完全关闭）
+    expect(screen.queryByTestId('player-window')).toBeNull();
+    root.unmount();
+  });
+
+  it('hotfix-2：exitFullscreen 拒绝（权限等）被 catch 吞掉，不阻断关闭', async () => {
+    const exitMock = vi.fn(() => Promise.reject(new Error('denied')));
+    Object.defineProperty(document, 'exitFullscreen', { configurable: true, value: exitMock });
+    const { root } = setup([item('a')]);
+    openPlayer();
+    await enterFullscreen();
+    fireEvent.click(screen.getByTitle('Close'));
+    expect(exitMock).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(screen.queryByTestId('player-fullscreen')).toBeNull());
+    expect(screen.queryByTestId('player-window')).toBeNull();
+    root.unmount();
+  });
+
   it('左右导航在全屏形态生效且队列边界隐藏', async () => {
     const { root } = setup([item('a'), item('b')]);
     // index=0：左边界隐藏
