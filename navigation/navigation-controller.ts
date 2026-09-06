@@ -186,7 +186,7 @@ export class GalleryNavigationController {
 
   navigatePath(folderPath: string): GalleryLocation {
     const current = this.requireLocation();
-    return this.push({ ...current, key: '', view: 'folders', folderPath, mediaId: undefined });
+    return this.push({ ...current, key: '', view: 'folders', folderPath });
   }
 
   updateLocation(update: LocationUpdate, mode?: NavigationWriteMode): GalleryLocation {
@@ -220,7 +220,7 @@ export class GalleryNavigationController {
       return undefined;
     }
 
-    return this.push({ ...current, key: '', view: 'folders', folderPath: parentPath, mediaId: undefined });
+    return this.push({ ...current, key: '', view: 'folders', folderPath: parentPath });
   }
 
   applyPopState(state: unknown): GalleryLocation {
@@ -290,8 +290,7 @@ export class GalleryNavigationController {
   private getUpdateMode(update: LocationUpdate): NavigationWriteMode {
     const shouldPush = Object.prototype.hasOwnProperty.call(update, 'folderPath')
       || Object.prototype.hasOwnProperty.call(update, 'view')
-      || Object.prototype.hasOwnProperty.call(update, 'search')
-      || Object.prototype.hasOwnProperty.call(update, 'mediaId');
+      || Object.prototype.hasOwnProperty.call(update, 'search');
     return shouldPush ? 'push' : 'replace';
   }
 

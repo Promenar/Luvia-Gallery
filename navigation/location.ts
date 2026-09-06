@@ -21,7 +21,6 @@ const SEARCH_PARAMS = {
   FILTER: 'filter',
   LAYOUT: 'layout',
   RANDOM_SEED: 'randomSeed',
-  MEDIA_ID: 'mediaId',
 } as const;
 
 const hashToken = (value: string) => encodeURIComponent(value);
@@ -102,7 +101,6 @@ const createLocationKeyFromNormalizedLocation = (location: GalleryLocation): str
     `filter=${location.filter}`,
     `layout=${location.layout}`,
     `seed=${location.randomSeed ?? ''}`,
-    `media=${location.mediaId ?? ''}`,
   ];
 
   return components.map((value) => hashToken(value)).join('|');
@@ -171,7 +169,6 @@ const buildParams = (location: GalleryLocation): URLSearchParams => {
   if (location.filter !== DEFAULT_FILTER) params.set(SEARCH_PARAMS.FILTER, location.filter);
   if (location.layout !== DEFAULT_LAYOUT) params.set(SEARCH_PARAMS.LAYOUT, location.layout);
   if (location.randomSeed) params.set(SEARCH_PARAMS.RANDOM_SEED, location.randomSeed);
-  if (location.mediaId) params.set(SEARCH_PARAMS.MEDIA_ID, location.mediaId);
   return params;
 };
 
@@ -230,11 +227,6 @@ export const parseGalleryUrl = (input: string): GalleryLocation => {
   const randomSeed = params.get(SEARCH_PARAMS.RANDOM_SEED);
   if (randomSeed) {
     location.randomSeed = randomSeed;
-  }
-
-  const mediaId = params.get(SEARCH_PARAMS.MEDIA_ID);
-  if (mediaId) {
-    location.mediaId = mediaId;
   }
 
   const normalizedLocation = buildNormalizedGalleryLocation(location);

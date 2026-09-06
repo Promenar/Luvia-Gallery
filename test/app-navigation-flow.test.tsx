@@ -6,7 +6,7 @@ import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import App, { activateGalleryLocation, appendGalleryFolderQuery, appendGalleryMediaTypeQuery, appendGalleryScanScopeQuery, canLoadNextGalleryPage, createGalleryHomeCachePayload, createTopLevelViewLocationUpdate, GalleryLoadErrorBanner, GALLERY_PAGE_SIZE, getAdjacentMediaId, getGalleryCacheEvictionKeys, getGalleryDatasetIdentity, getGalleryUserScopeFingerprint, hasVisibleGallerySearchResults, isActiveGalleryRequest, isDefaultGalleryCacheScope, isGalleryRequestGuardActive, readGalleryHomeCache, resolveGalleryRenderItems, resolveGalleryRequestGuard, resolveLibraryTotalCountForScope, resolveReadyGalleryDatasetIdentity, resolveScopedGalleryLayout, resolveVisibleGalleryFolders, runWithGalleryPaginationLock, SearchEmptyState, shouldAdvanceGalleryNavigationEpoch, shouldCacheCurrentGallery, shouldCoverGalleryWithInitialSkeleton, shouldPreserveGalleryHydratedFiles, shouldRenderUnifiedGalleryToolbar, shouldShowFavoritesEmptyState, shouldShowGallerySearchEmptyState, shouldShowServerEmptyLibrary, shouldSyncSearchDraft, shouldUpdateGalleryFetchingState, sortGalleryCombinedItems, UnifiedGalleryToolbar, waitForGalleryLocationResults } from '../App';
+import App, { activateGalleryLocation, appendGalleryFolderQuery, appendGalleryMediaTypeQuery, appendGalleryScanScopeQuery, canLoadNextGalleryPage, createGalleryHomeCachePayload, createTopLevelViewLocationUpdate, GalleryLoadErrorBanner, GALLERY_PAGE_SIZE, getGalleryCacheEvictionKeys, getGalleryDatasetIdentity, getGalleryUserScopeFingerprint, hasVisibleGallerySearchResults, isActiveGalleryRequest, isDefaultGalleryCacheScope, isGalleryRequestGuardActive, readGalleryHomeCache, resolveGalleryRenderItems, resolveGalleryRequestGuard, resolveLibraryTotalCountForScope, resolveReadyGalleryDatasetIdentity, resolveScopedGalleryLayout, resolveVisibleGalleryFolders, runWithGalleryPaginationLock, SearchEmptyState, shouldAdvanceGalleryNavigationEpoch, shouldCacheCurrentGallery, shouldCoverGalleryWithInitialSkeleton, shouldPreserveGalleryHydratedFiles, shouldRenderUnifiedGalleryToolbar, shouldShowFavoritesEmptyState, shouldShowGallerySearchEmptyState, shouldShowServerEmptyLibrary, shouldSyncSearchDraft, shouldUpdateGalleryFetchingState, sortGalleryCombinedItems, UnifiedGalleryToolbar, waitForGalleryLocationResults } from '../App';
 import { FolderCard } from '../components/FolderCard';
 import { LanguageProvider } from '../contexts/LanguageContext';
 import { useGalleryNavigation, type GalleryNavigationApi } from '../hooks/useGalleryNavigation';
@@ -130,23 +130,23 @@ describe('应用导航最小闭环', () => {
     const searchInput = desktop.getByLabelText(/搜索输入框|Search input/);
     fireEvent.change(searchInput, { target: { value: '人物' } });
     fireEvent.keyDown(searchInput, { key: 'Enter' });
-    expect(onLocationChange).toHaveBeenLastCalledWith({ search: '人物', mediaId: undefined }, 'push');
+    expect(onLocationChange).toHaveBeenLastCalledWith({ search: '人物' }, 'push');
     expect(onLocationChange).toHaveBeenCalledTimes(1);
 
     onLocationChange.mockClear();
     fireEvent.click(desktop.getByLabelText(/当前排序：|Sort by:/));
     fireEvent.click(desktop.getByText(/最早优先|Oldest/));
-    expect(onLocationChange).toHaveBeenCalledWith({ sort: 'dateAsc', mediaId: undefined }, 'replace');
+    expect(onLocationChange).toHaveBeenCalledWith({ sort: 'dateAsc' }, 'replace');
 
     onLocationChange.mockClear();
     fireEvent.click(desktop.getByLabelText(/切换布局|Change layout/));
     fireEvent.click(desktop.getByText(/瀑布流|Masonry/));
-    expect(onLocationChange).toHaveBeenCalledWith({ layout: 'masonry', mediaId: undefined }, 'replace');
+    expect(onLocationChange).toHaveBeenCalledWith({ layout: 'masonry' }, 'replace');
 
     onLocationChange.mockClear();
     fireEvent.click(desktop.getByLabelText(/当前筛选：|Current filter:/));
     fireEvent.click(desktop.getByText(/视频|Video/));
-    expect(onLocationChange).toHaveBeenCalledWith({ filter: 'video', mediaId: undefined }, 'replace');
+    expect(onLocationChange).toHaveBeenCalledWith({ filter: 'video' }, 'replace');
 
     rerender(
       <LanguageProvider>
@@ -339,19 +339,19 @@ describe('应用导航最小闭环', () => {
     expect(shouldSyncSearchDraft('folders:albums', 'folders:albums?search=cat')).toBe(true);
   });
 
-  it('切换顶级视图会清除 q 和 mediaId，同一文件夹视图内导航保留搜索', () => {
+  it('切换顶级视图会清除 q，同一文件夹视图内导航保留搜索', () => {
     const fake = createEnvironment();
     const controller = new GalleryNavigationController({ environment: fake.environment });
     controller.initialize();
-    controller.updateLocation({ view: 'all', folderPath: '', search: '人物', mediaId: 'media-1' }, 'replace');
+    controller.updateLocation({ view: 'all', folderPath: '', search: '人物' }, 'replace');
     controller.updateLocation(createTopLevelViewLocationUpdate('all', 'favorites', 'grid'), 'push');
 
     expect(controller.getLocation()).toMatchObject({
       view: 'favorites',
       search: '',
     });
-    expect(controller.getLocation()).not.toHaveProperty('mediaId');
     expect(fake.environment.location.hash).not.toContain('q=');
+    expect(fake.environment.location.hash).not.toContain('mediaId=');
 
     controller.updateLocation({ view: 'folders', folderPath: '相册', search: '人物' }, 'replace');
     controller.navigatePath('相册/旅行');
@@ -630,10 +630,8 @@ describe('应用导航最小闭环', () => {
       filter: 'all' as const,
       randomSeed: '1',
       layout: 'grid' as const,
-      mediaId: undefined,
     };
     expect(shouldAdvanceGalleryNavigationEpoch('alice', current, { ...current, layout: 'masonry' })).toBe(false);
-    expect(shouldAdvanceGalleryNavigationEpoch('alice', current, { ...current, mediaId: 'media-1' })).toBe(false);
     expect(shouldAdvanceGalleryNavigationEpoch('alice', current, { ...current })).toBe(false);
     expect(shouldAdvanceGalleryNavigationEpoch('alice', current, { ...current, search: '人物' })).toBe(true);
     expect(shouldAdvanceGalleryNavigationEpoch('alice', current, { ...current, sort: 'sizeDesc' })).toBe(true);
@@ -741,7 +739,7 @@ describe('应用导航最小闭环', () => {
 
     expect(screen.getByTestId('search-empty-state').textContent).toContain('旅行');
     fireEvent.click(screen.getByRole('button', { name: /清除搜索|Clear search/ }));
-    expect(onLocationChange).toHaveBeenCalledWith({ search: '', mediaId: undefined }, 'push');
+    expect(onLocationChange).toHaveBeenCalledWith({ search: '' }, 'push');
   });
 
   it('FolderCard 封面 URL 变化后复位图片错误并恢复新封面', async () => {
@@ -781,27 +779,14 @@ describe('应用导航最小闭环', () => {
     });
   });
 
-  it('媒体条目回退后恢复无 mediaId 的目录位置', () => {
-    const fake = createEnvironment();
-    const controller = new GalleryNavigationController({ environment: fake.environment });
-    const directory = controller.initialize();
-    controller.updateLocation({ mediaId: 'media-1' }, 'push');
-    fake.environment.history.back();
-
-    expect(controller.applyPopState(fake.environment.history.state)).toEqual(directory);
-    expect(controller.getLocation().mediaId).toBeUndefined();
-  });
-
-  it('查看器上一项使用 replace 保持返回目标仍是目录', () => {
-    const fake = createEnvironment();
-    const controller = new GalleryNavigationController({ environment: fake.environment });
-    controller.initialize();
-    controller.updateLocation({ mediaId: 'media-1' }, 'push');
-    const nextId = getAdjacentMediaId([{ id: 'media-1' }, { id: 'media-2' }], 'media-1', 'next');
-    controller.updateLocation({ mediaId: nextId }, 'replace');
-    fake.environment.history.back();
-    controller.applyPopState(fake.environment.history.state);
-    expect(controller.getLocation().mediaId).toBeUndefined();
+  it('打开媒体由播放器接管，导航位置不再携带 mediaId 维度', () => {
+    const source = readFileSync(path.join(process.cwd(), 'App.tsx'), 'utf8');
+    expect(source).not.toContain('mediaId');
+    // 队列构建收敛到纯函数 buildPlayerQueue（先过滤图片/视频，再在过滤后的队列内定位起点）；
+    // 旧内联表达式 openPlayer({ items: ... }) 在未过滤列表上定位起点，存在索引错位，必须保持移除。
+    expect(source).toContain('openPlayer(buildPlayerQueue(');
+    expect(source).not.toContain('openPlayer({ items:');
+    expect(source).toContain('<MediaPlayer onToggleFavorite={handleToggleFavorite} />');
   });
 
   it('深链初始化只写入一次 History 状态', () => {
@@ -832,9 +817,9 @@ describe('应用导航最小闭环', () => {
     // 模拟用户异步恢复后，在 Gallery 首次可见前由 useLayoutEffect 应用 all 偏好。
     controller.applyInitialLayoutPreference(resolveScopedGalleryLayout(storage, serverId, 'alice', 'all'));
     const allEntry = fake.environment.history.state;
-    controller.updateLocation({ view: 'favorites', folderPath: '', mediaId: undefined, layout: resolveScopedGalleryLayout(storage, serverId, 'alice', 'favorites') }, 'push');
+    controller.updateLocation({ view: 'favorites', folderPath: '', layout: resolveScopedGalleryLayout(storage, serverId, 'alice', 'favorites') }, 'push');
     const favoritesEntry = fake.environment.history.state;
-    controller.updateLocation({ view: 'folders', folderPath: 'Trips/2026', mediaId: undefined, layout: resolveScopedGalleryLayout(storage, serverId, 'alice', 'folders') }, 'push');
+    controller.updateLocation({ view: 'folders', folderPath: 'Trips/2026', layout: resolveScopedGalleryLayout(storage, serverId, 'alice', 'folders') }, 'push');
 
     expect(controller.getLocation()).toMatchObject({ view: 'folders', layout: 'grid' });
     fake.environment.history.back();
