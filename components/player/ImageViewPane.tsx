@@ -226,10 +226,12 @@ export const ImageViewPane: React.FC<ImageViewPaneProps> = ({ item, onSlideNext 
     return (
         <div className="absolute inset-0">
             {/* Content Container：自 旧图片查看器源 592-672 行迁移，仅保留图片分支。
-                onWheel 原挂在壳层 overlay（源 381 行），随缩放逻辑一并迁入本面板根容器。 */}
+                onWheel 原挂在壳层 overlay（源 381 行），随缩放逻辑一并迁入本面板根容器。
+                hotfix-3：移除 scale===1 时的 p-4 md:p-10 内边距——浮窗内容区已按媒体比例贴合，
+                内边距会在浮窗内叠加出系统性留白（媒体贴边 contain）；缩放/平移手势逻辑不变。 */}
             <div
                 ref={containerRef}
-                className={`relative w-full h-full flex items-center justify-center transition-all duration-300 ${transform.scale === 1 ? 'p-4 md:p-10' : 'p-0'}`}
+                className="relative w-full h-full flex items-center justify-center transition-all duration-300"
                 onWheel={handleWheel}
                 onTouchStart={handleTouchStart}
                 onTouchMove={handleTouchMove}

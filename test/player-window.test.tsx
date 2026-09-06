@@ -2,8 +2,9 @@
 // Task B（PlayerWindow 浮窗壳）TDD 测试：非模态浮窗、默认右下定位与媒体比例自适应、
 // 头部抓手指针拖动（clamp 视口内 + 偏好落库）、Esc/关闭按钮、收藏与信息面板、
 // 队列边界导航隐藏、开合动画（scale 0.85→1 + fade）。
-// hotfix-2：容器形状贴合媒体（只设 width+aspectRatio，双向预算竖图收窄，无显式 height）、
-// 边缘拖拽自定义大小（右/下边缘与右下角抓手，高度覆盖落盘）。
+// hotfix-2：容器形状贴合媒体（双向预算竖图收窄）、边缘拖拽自定义大小（右/下边缘与右下角抓手，高度覆盖落盘）。
+// hotfix-3：等比高度显式公式（容器高 = 内容区高 + 头部 44，移除 aspectRatio）、ImageViewPane 去内边距、
+// 拖动/缩放 move 期直写 DOM（渲染次数不随 move 增加、不落盘），pointerup 才同步状态并落盘。
 // 沿用 test/media-player.test.tsx 的 localStorage stub + Harness/setup 模式（Node 26 环境）。
 import React from 'react';
 import { act } from 'react';
@@ -34,6 +35,7 @@ const stubStorage = (value: string | null = null) => {
 beforeEach(() => {
   (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
   outsideClicks = 0;
+  playerRenderCount = 0;
   stubStorage();
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
@@ -46,6 +48,9 @@ const item = (id: string, mediaType: 'image' | 'video' = 'image', extra: Partial
 });
 
 let outsideClicks = 0;
+// hotfix-3：渲染探针——统计 MediaPlayer 子树的 React 渲染次数。
+// 拖动/缩放 pointermove 直写 DOM 时不触发渲染，渲染次数不随 move 增加（状态未被改写）。
+let playerRenderCount = 0;
 
 const Harness = ({ items, onToggleFavorite }: {
   items: MediaItem[];
@@ -61,7 +66,9 @@ const Harness = ({ items, onToggleFavorite }: {
       <input data-testid="rename-input" defaultValue="rename" />
       {/* 收藏回写探针：模拟 App 层收藏后 patchItem 同 id 回写（currentItem 引用变、id 不变） */}
       <button data-testid="patch-first" onClick={() => player.patchItem(items[0].id, { isFavorite: true })}>patch</button>
-      <MediaPlayer onToggleFavorite={onToggleFavorite} />
+      <React.Profiler id="media-player" onRender={() => { playerRenderCount += 1; }}>
+        <MediaPlayer onToggleFavorite={onToggleFavorite} />
+      </React.Profiler>
     </>
   );
 };
@@ -99,45 +106,46 @@ describe('PlayerWindow 非模态浮窗壳', () => {
     root.unmount();
   });
 
-  it('默认位置视口右下（右/下 24px），宽度 clamp(280, vw-48)，容器只设 width+aspectRatio（高度由比例推导，无显式 height）', () => {
+  it('默认位置视口右下（右/下 24px），宽度 clamp(280, vw-48)，容器 height = width/ratio + 44（hotfix-3 显式公式）', () => {
     const { root } = setup([item('a', 'image', { width: 900, height: 600 })]);
     openPlayer();
     const win = screen.getByTestId('player-window');
     const width = parseFloat(win.style.width);
-    // hotfix-2：高度按媒体比例由浏览器推导，容器不写显式 height（旧实现显式 height 会覆盖 aspect-ratio，
-    // 使窗口永远呈"记忆宽 × clamp 高"的矩形，脱离媒体形状）
-    const height = width / 1.5;
+    // hotfix-3：内容区高（容器高 - 44）= width/1.5 正好贴合媒体比例，不再用 aspectRatio 推导整容器
+    const height = width / 1.5 + 44;
     const left = parseFloat(win.style.left);
     const top = parseFloat(win.style.top);
     expect(width).toBeGreaterThanOrEqual(280);
     expect(width).toBeLessThanOrEqual(VW - 48);
-    // 900x600 → 3:2 比例写入容器 style.aspectRatio
-    expect(win.style.aspectRatio).toBe('900 / 600');
-    expect(win.style.height).toBe('');
-    // 默认锚点：距右/下各 24px（下边距按比例推导高度计算）
+    expect(win.style.aspectRatio).toBe('');
+    expect(parseFloat(win.style.height)).toBeCloseTo(height, 6);
+    // 默认锚点：距右/下各 24px（下边距按容器总高计算）
     expect(VW - (left + width)).toBeCloseTo(24, 6);
     expect(VH - (top + height)).toBeCloseTo(24, 6);
     root.unmount();
   });
 
-  it('无尺寸信息的媒体兜底 16:9 比例', () => {
+  it('无尺寸信息的媒体兜底 16:9 比例推导容器高度', () => {
     const { root } = setup([item('plain')]);
     openPlayer();
-    expect(screen.getByTestId('player-window').style.aspectRatio).toBe('16 / 9');
+    const win = screen.getByTestId('player-window');
+    const width = parseFloat(win.style.width);
+    expect(parseFloat(win.style.height)).toBeCloseTo(width / (16 / 9) + 44, 6);
+    expect(win.style.aspectRatio).toBe('');
     root.unmount();
   });
 
-  it('hotfix-2：竖图以高度定宽收窄（双向预算），容器形状贴合媒体比例', () => {
+  it('hotfix-2：竖图以高度定宽收窄（双向预算），内容区高度收进 80% 视口预算', () => {
     // 竖图 600x1500（比例 0.4）：默认宽度推导高超出视口高 80% → 以高度定宽收窄
     const { root } = setup([item('tall', 'image', { width: 600, height: 1500 })]);
     openPlayer();
     const tall = screen.getByTestId('player-window');
     const tallWidth = parseFloat(tall.style.width);
-    const tallHeight = tallWidth / 0.4;
-    expect(tall.style.aspectRatio).toBe('600 / 1500');
-    expect(tall.style.height).toBe('');
-    // 双向预算：推导高度恰收进 80% 视口高预算（比例保持）
-    expect(tallHeight).toBeLessThanOrEqual(VH * 0.8 + 1e-6);
+    const budget = VH * 0.8;
+    // 容器总高 = 预算高 + 头部 44；内容区（总高 - 44）按比例贴合竖图（宽 = 预算高 × 比例）
+    expect(parseFloat(tall.style.height)).toBeCloseTo(budget + 44, 6);
+    expect(tallWidth).toBeCloseTo(budget * 0.4, 6);
+    expect(tall.style.aspectRatio).toBe('');
     root.unmount();
     cleanup();
     // 对照：横图 16:9 同一宽度基准不触高度顶 → 宽度明显大于竖图收窄结果
@@ -154,8 +162,8 @@ describe('PlayerWindow 非模态浮窗壳', () => {
     openPlayer();
     const win = screen.getByTestId('player-window');
     expect(parseFloat(win.style.width)).toBe(240);
-    expect(win.style.aspectRatio).toBe('200 / 1000');
-    expect(win.style.height).toBe('');
+    expect(parseFloat(win.style.height)).toBeCloseTo(240 / 0.2 + 44, 6);
+    expect(win.style.aspectRatio).toBe('');
     root.unmount();
   });
 
@@ -165,11 +173,12 @@ describe('PlayerWindow 非模态浮窗壳', () => {
       item('tall', 'image', { width: 600, height: 1500 }),
     ]);
     openPlayer();
-    const before = parseFloat(screen.getByTestId('player-window').style.width);
+    const beforeWidth = parseFloat(screen.getByTestId('player-window').style.width);
     fireEvent.keyDown(window, { key: 'ArrowRight' });
     const win = screen.getByTestId('player-window');
-    expect(parseFloat(win.style.width)).toBeLessThan(before);
-    expect(win.style.aspectRatio).toBe('600 / 1500');
+    expect(parseFloat(win.style.width)).toBeLessThan(beforeWidth);
+    // 竖图以高度定宽：容器总高 = 80% 视口预算 + 头部 44
+    expect(parseFloat(win.style.height)).toBeCloseTo(VH * 0.8 + 44, 6);
     root.unmount();
   });
 
@@ -191,8 +200,8 @@ describe('PlayerWindow 非模态浮窗壳', () => {
     const win = screen.getByTestId('player-window');
     const handle = screen.getByTestId('player-window-handle');
     const width = parseFloat(win.style.width);
-    // 高度由媒体比例（900/600 → 1.5）推导，容器不写显式 height（hotfix-2）
-    const height = width / 1.5;
+    // hotfix-3：容器总高 = width/1.5 + 头部 44
+    const height = width / 1.5 + 44;
     fireEvent.pointerDown(handle, { clientX: 100, clientY: 100, button: 0, pointerId: 1 });
     // 大幅向左上拖动 → clamp 到视口左上边界
     fireEvent.pointerMove(handle, { clientX: -2000, clientY: -2000, pointerId: 1 });
@@ -285,9 +294,9 @@ describe('Task C：mini/FAB 形态与切换动画', () => {
     const win = screen.getByTestId('player-window');
     expect(win.getAttribute('data-mode')).toBe('mini');
     expect(parseFloat(win.style.width)).toBe(240);
-    // mini 高度同样由比例推导（无显式 height）；内容区以 minHeight 兜底（hotfix-2）
-    expect(win.style.height).toBe('');
-    expect(win.style.aspectRatio).toBe('16 / 9');
+    // mini 高度 = 240/ratio + 头部 44（16:9 → 240/(16/9)+44）；等比公式同样适用 mini（hotfix-3）
+    expect(parseFloat(win.style.height)).toBeCloseTo(240 / (16 / 9) + 44, 6);
+    expect(win.style.aspectRatio).toBe('');
     // mini 不支持边缘 resize（固定 240 宽）
     expect(screen.queryByTestId('player-resize-right')).toBeNull();
     expect(screen.queryByTestId('player-resize-bottom')).toBeNull();
@@ -508,16 +517,16 @@ describe('hotfix-2：边缘拖拽自定义大小（仅 window 形态）', () => 
     const { root } = setup([item('a', 'image', { width: 3000, height: 600 })]);
     openPlayer();
     const win = screen.getByTestId('player-window');
-    // 预置高度覆盖生效：容器显式 height、不设 aspectRatio
+    // 预置高度覆盖生效：容器显式 height、无 aspectRatio
     expect(parseFloat(win.style.height)).toBe(500);
     expect(win.style.aspectRatio).toBe('');
     const handle = screen.getByTestId('player-resize-right');
     fireEvent.pointerDown(handle, { clientX: 100, button: 0, pointerId: 1 });
     fireEvent.pointerMove(handle, { clientX: 260, pointerId: 1 }); // dx=+160 → 400+160=560
     expect(parseFloat(win.style.width)).toBe(560);
-    // 宽度变化 → 高度覆盖清除，回媒体比例自适应
-    expect(win.style.height).toBe('');
-    expect(win.style.aspectRatio).toBe('3000 / 600');
+    // 宽度变化 → 覆盖清除，高度回等比公式（560/5 + 头部 44）
+    expect(parseFloat(win.style.height)).toBeCloseTo(560 / 5 + 44, 6);
+    expect(win.style.aspectRatio).toBe('');
     // 大幅拖动触上限 clamp（视口宽 - 48）
     fireEvent.pointerMove(handle, { clientX: 5000, pointerId: 1 });
     expect(parseFloat(win.style.width)).toBe(VW - 48);
@@ -536,18 +545,18 @@ describe('hotfix-2：边缘拖拽自定义大小（仅 window 形态）', () => 
     const { root } = setup([item('a', 'image', { width: 900, height: 600 })]);
     openPlayer();
     const win = screen.getByTestId('player-window');
-    // 比例态基线：无显式 height
-    expect(win.style.height).toBe('');
-    expect(win.style.aspectRatio).toBe('900 / 600');
+    // 比例态基线：容器总高 = 400/1.5 + 头部 44
+    expect(parseFloat(win.style.height)).toBeCloseTo(400 / 1.5 + 44, 6);
+    expect(win.style.aspectRatio).toBe('');
     const handle = screen.getByTestId('player-resize-bottom');
-    // 起点高 = 400/1.5，dy=+300 → 覆盖高 = 400/1.5+300
+    // 起点容器高 = 400/1.5 + 44，dy=+300 → 覆盖高 = 400/1.5 + 44 + 300
     fireEvent.pointerDown(handle, { clientY: 100, button: 0, pointerId: 1 });
     fireEvent.pointerMove(handle, { clientY: 400, pointerId: 1 });
-    expect(parseFloat(win.style.height)).toBeCloseTo(400 / 1.5 + 300, 6);
+    expect(parseFloat(win.style.height)).toBeCloseTo(400 / 1.5 + 44 + 300, 6);
     expect(win.style.aspectRatio).toBe('');
     fireEvent.pointerUp(handle, { clientY: 400, pointerId: 1 });
     const saved = JSON.parse(storage.setItem.mock.calls.at(-1)![1] as string) as { width: number; heightOverride?: number };
-    expect(saved.heightOverride).toBeCloseTo(400 / 1.5 + 300, 6);
+    expect(saved.heightOverride).toBeCloseTo(400 / 1.5 + 44 + 300, 6);
     expect(saved.width).toBe(400);
     root.unmount();
   });
@@ -562,9 +571,9 @@ describe('hotfix-2：边缘拖拽自定义大小（仅 window 形态）', () => 
     fireEvent.pointerDown(handle, { clientX: 100, button: 0, pointerId: 1 });
     fireEvent.pointerMove(handle, { clientX: 220, pointerId: 1 }); // dx=+120 → 520
     expect(parseFloat(win.style.width)).toBe(520);
-    // 覆盖清除：高度回比例推导
-    expect(win.style.height).toBe('');
-    expect(win.style.aspectRatio).toBe('900 / 600');
+    // 覆盖清除：高度回等比公式（520/1.5 + 头部 44）
+    expect(parseFloat(win.style.height)).toBeCloseTo(520 / 1.5 + 44, 6);
+    expect(win.style.aspectRatio).toBe('');
     fireEvent.pointerUp(handle, { clientX: 220, pointerId: 1 });
     root.unmount();
   });
@@ -589,5 +598,130 @@ describe('hotfix-2：边缘拖拽自定义大小（仅 window 形态）', () => 
     expect(screen.queryByTestId('player-resize-bottom')).toBeNull();
     expect(screen.queryByTestId('player-resize-corner')).toBeNull();
     root2.unmount();
+  });
+});
+
+describe('hotfix-3：等比高度显式公式（容器高 = 内容区高 + 头部 44）', () => {
+  it('横图等比：容器 height = width/ratio + 44（头部），不再写 aspectRatio', () => {
+    stubStorage(JSON.stringify({ x: 10, y: 20, width: 400, mode: 'window' }));
+    const { root } = setup([item('a', 'image', { width: 900, height: 600 })]);
+    openPlayer();
+    const win = screen.getByTestId('player-window');
+    expect(parseFloat(win.style.width)).toBe(400);
+    // 内容区高（容器高 - 44）= 400/1.5 正好贴合媒体比例，零系统性留白
+    expect(parseFloat(win.style.height)).toBeCloseTo(400 / 1.5 + 44, 6);
+    expect(win.style.aspectRatio).toBe('');
+    root.unmount();
+  });
+
+  it('竖图以高度定宽：容器 height = 视口预算高 + 44，宽度 = 预算高 × 比例', () => {
+    stubStorage(JSON.stringify({ x: 10, y: 20, width: 400, mode: 'window' }));
+    const { root } = setup([item('tall', 'image', { width: 600, height: 1500 })]);
+    openPlayer();
+    const win = screen.getByTestId('player-window');
+    const budget = VH * 0.8;
+    expect(parseFloat(win.style.width)).toBeCloseTo(budget * 0.4, 6);
+    expect(parseFloat(win.style.height)).toBeCloseTo(budget + 44, 6);
+    expect(win.style.aspectRatio).toBe('');
+    root.unmount();
+  });
+
+  it('mini 形态：容器高度 = 240/ratio + 44', async () => {
+    stubStorage(JSON.stringify({ x: 10, y: 20, width: 400, mode: 'mini' }));
+    const { root } = setup([item('a', 'image', { width: 900, height: 600 })]);
+    openPlayer();
+    await waitFor(() => expect(screen.getByTestId('player-window').getAttribute('data-mode')).toBe('mini'));
+    const win = screen.getByTestId('player-window');
+    expect(parseFloat(win.style.width)).toBe(240);
+    expect(parseFloat(win.style.height)).toBeCloseTo(240 / 1.5 + 44, 6);
+    root.unmount();
+  });
+
+  it('ImageViewPane 内容容器无 p-4/p-10 内边距（浮窗内媒体贴边 contain）', () => {
+    const { root } = setup([item('a', 'image', { width: 900, height: 600 })]);
+    openPlayer();
+    const win = screen.getByTestId('player-window');
+    // 内容区（relative min-h-0 flex-1）内第一个 absolute inset-0 即 ImageViewPane 根
+    const paneRoot = win.querySelector('.min-h-0.flex-1 > .absolute.inset-0');
+    expect(paneRoot).toBeTruthy();
+    const content = paneRoot!.children[0] as HTMLElement;
+    expect(content.className).not.toContain('p-4');
+    expect(content.className).not.toContain('p-10');
+    root.unmount();
+  });
+});
+
+describe('hotfix-3：拖动/缩放 move 期直写 DOM（零重渲染），pointerup 才同步状态并落盘', () => {
+  it('拖动 pointermove：style.left/top 即时更新、不落盘、渲染次数不随 move 增加；pointerup 落 state + 落盘', () => {
+    const storage = stubStorage(JSON.stringify({ x: 10, y: 20, width: 400, mode: 'window' }));
+    const { root } = setup([item('a', 'image', { width: 900, height: 600 })]);
+    openPlayer();
+    const win = screen.getByTestId('player-window');
+    const handle = screen.getByTestId('player-window-handle');
+    fireEvent.pointerDown(handle, { clientX: 100, clientY: 100, button: 0, pointerId: 1 });
+    const rendersAtStart = playerRenderCount;
+    // 多次 move（不 pointerup）：直写覆盖，最后一次 (160,150) → dx=+60/dy=+50 → 位置即时跟手
+    fireEvent.pointerMove(handle, { clientX: 130, clientY: 120, pointerId: 1 });
+    fireEvent.pointerMove(handle, { clientX: 150, clientY: 140, pointerId: 1 });
+    fireEvent.pointerMove(handle, { clientX: 160, clientY: 150, pointerId: 1 });
+    expect(parseFloat(win.style.left)).toBeCloseTo(70, 6);
+    expect(parseFloat(win.style.top)).toBeCloseTo(70, 6);
+    // 交互期未落盘
+    expect(storage.setItem).not.toHaveBeenCalled();
+    // 渲染次数不随 move 增加（React 状态未变，直写 DOM 全权接管）
+    expect(playerRenderCount).toBe(rendersAtStart);
+    // pointerup：一次性同步状态并落盘（与直写值一致）
+    fireEvent.pointerUp(handle, { clientX: 160, clientY: 150, pointerId: 1 });
+    expect(parseFloat(win.style.left)).toBeCloseTo(70, 6);
+    expect(parseFloat(win.style.top)).toBeCloseTo(70, 6);
+    const saved = JSON.parse(storage.setItem.mock.calls.at(-1)![1] as string);
+    expect(saved.x).toBeCloseTo(70, 6);
+    expect(saved.y).toBeCloseTo(70, 6);
+    expect(saved.width).toBe(400);
+    root.unmount();
+  });
+
+  it('右缘 resize pointermove：宽度即时更新（高度按比例直写、清覆盖）、不落盘、零渲染；pointerup 落盘', () => {
+    const storage = stubStorage(JSON.stringify({ x: 10, y: 20, width: 400, mode: 'window', heightOverride: 500 }));
+    const { root } = setup([item('a', 'image', { width: 3000, height: 600 })]); // 比例 5
+    openPlayer();
+    const win = screen.getByTestId('player-window');
+    const handle = screen.getByTestId('player-resize-right');
+    fireEvent.pointerDown(handle, { clientX: 100, button: 0, pointerId: 1 });
+    const rendersAtStart = playerRenderCount;
+    fireEvent.pointerMove(handle, { clientX: 220, pointerId: 1 }); // dx=+120 → 520
+    // 直写即时生效：宽度 520，覆盖清除、高度回比例公式（520/5 + 44）；等比模式不写 aspectRatio（hotfix-3）
+    expect(parseFloat(win.style.width)).toBe(520);
+    expect(parseFloat(win.style.height)).toBeCloseTo(520 / 5 + 44, 6);
+    expect(win.style.aspectRatio).toBe('');
+    expect(storage.setItem).not.toHaveBeenCalled();
+    expect(playerRenderCount).toBe(rendersAtStart);
+    fireEvent.pointerUp(handle, { clientX: 220, pointerId: 1 });
+    const saved = JSON.parse(storage.setItem.mock.calls.at(-1)![1] as string);
+    expect(saved.width).toBe(520);
+    expect(saved.heightOverride).toBeUndefined();
+    root.unmount();
+  });
+
+  it('下缘 resize pointermove：高度即时直写（移除 aspectRatio）、不落盘、零渲染；pointerup 落盘覆盖', () => {
+    const storage = stubStorage(JSON.stringify({ x: 10, y: 20, width: 400, mode: 'window' }));
+    const { root } = setup([item('a', 'image', { width: 900, height: 600 })]);
+    openPlayer();
+    const win = screen.getByTestId('player-window');
+    const handle = screen.getByTestId('player-resize-bottom');
+    fireEvent.pointerDown(handle, { clientY: 100, button: 0, pointerId: 1 });
+    const rendersAtStart = playerRenderCount;
+    fireEvent.pointerMove(handle, { clientY: 400, pointerId: 1 }); // dy=+300
+    // 起点 = 400/1.5 + 44（等比公式容器高），直写 +300 后覆盖生效
+    const expected = 400 / 1.5 + 44 + 300;
+    expect(parseFloat(win.style.height)).toBeCloseTo(expected, 6);
+    expect(win.style.aspectRatio).toBe('');
+    expect(storage.setItem).not.toHaveBeenCalled();
+    expect(playerRenderCount).toBe(rendersAtStart);
+    fireEvent.pointerUp(handle, { clientY: 400, pointerId: 1 });
+    const saved = JSON.parse(storage.setItem.mock.calls.at(-1)![1] as string);
+    expect(saved.heightOverride).toBeCloseTo(expected, 6);
+    expect(saved.width).toBe(400);
+    root.unmount();
   });
 });

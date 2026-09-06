@@ -2,20 +2,23 @@
 // Task B+C：非模态悬浮播放窗壳（取代 MediaPlayer 原全屏遮罩形态），三形态：window 浮窗 / mini 小窗 / fab 圆钮。
 // - 非模态：不渲染任何 inset-0 遮罩层，容器 fixed z-40，页面其余区域保持可交互。
 // - 材质：复用全站浮岛类 glass-1 gallery-toolbar-glass rounded-2xl（与 GalleryNavigationBar 一致）。
-// - window：宽度取 localStorage 偏好或 clamp(280, 视口宽*0.42, 视口宽-48)；hotfix-2 起形状贴合媒体：
-//   容器只设 width + aspectRatio（不写显式 height，高度由浏览器按比例推导）；高度推导超视口高 80%
-//   时以高度定宽（竖图收窄），触 240px 宽度下限则高度按比例回推；下边缘拖动可写高度覆盖（媒体 contain）；
-//   头部为完整画廊控制栏（导航/收藏/信息/全屏/收起 mini/收起 fab/关闭）。
+// - window：宽度取 localStorage 偏好或 clamp(280, 视口宽*0.42, 视口宽-48)；hotfix-3 起等比模式写显式高度：
+//   容器 height = 内容区高(宽/媒体比例) + 头部 44px——内容区正好贴合媒体比例（旧 aspectRatio 作用于含头部的
+//   整容器，系统性留白已消除）；内容区推导高超视口高 80% 时以高度定宽（竖图收窄），触 240px 宽度下限则
+//   高度按比例回推；下边缘拖动可写高度覆盖（媒体 contain）；头部为完整画廊控制栏。
 // - mini：固定 240px 宽小窗，仍可拖动；头部只留展开回 window 与关闭的最小控制，
 //   画廊式完整控制栏与信息面板隐藏，内容区只保留媒体（视频沿用原生控件）。
 // - fab：56px 圆钮固定右下（16px 边距），不可拖动；背景为当前项缩略图（getAuthUrl 拼认证，
 //   加载失败回退 Icons.Image），视频项带播放角标；点击回 window。fab 不暂停播放（音频继续，视频随容器卸载）。
 // - 边缘拖拽自定义大小（hotfix-2，仅 window 形态）：右边缘/右下角拖宽（高度随比例跟随），
-//   下边缘拖高写高度覆盖（heightOverride 落盘，覆盖期间容器显式 height、不设 aspectRatio）；
+//   下边缘拖高写高度覆盖（heightOverride 落盘，覆盖期间容器显式 height、媒体 contain）；
 //   宽度变化即清除覆盖（高度回比例自适应）。复用头部抓手同款 pointer 三段式。
 // - 拖动：头部抓手自实现 pointerdown→move→up（fab 无抓手不可拖动），位置 clamp 视口内，pointerup 落库。
+// - 跟手（hotfix-3）：拖动/缩放 pointermove 直写容器 style.left/top/width/height（起点增量推算，零 setState
+//   零重渲染）；会话期间 isInteracting 置 true 禁用 framer-motion layout 补间；pointerup 一次性 setState 同步
+//   React 状态（与直写值一致，无视觉跳变）并 saveWindowPrefs 落盘。
 // - 动画：AnimatePresence mode="popLayout" 下 window/mini 共用同 key 容器（不卸载，媒体子树跨形态保持），
-//   形变由 framer-motion layout 驱动；window 与 fab 为不同 key 互斥出现（fade + scale）。
+//   形变由 framer-motion layout 驱动（交互会话期间禁用）；window 与 fab 为不同 key 互斥出现（fade + scale）。
 // - 形态偏好：切换形态即落盘 saveWindowPrefs（mode 字段）；重新 open 时按偏好恢复 mini/fab
 //   （fullscreen 不作为持久形态，loadWindowPrefs 已归一化为 window）。
 import React, { useEffect, useRef, useState } from 'react';
@@ -53,6 +56,8 @@ const MINI_WIDTH = 240;
 const MINI_MIN_HEIGHT = 120;
 /** 高度覆盖/推导的最小高度下限（px）：下边缘拖高与覆盖值的共同下限 */
 const MIN_SHELL_HEIGHT = 120;
+/** 头部高度（px，hotfix-3）：与头部 h-11 对应；等比模式容器高 = 内容区高 + 头部高 */
+const HEADER_HEIGHT = 44;
 /** fab 圆钮边长（px）与右下边距（px） */
 const FAB_SIZE = 56;
 const FAB_MARGIN = 16;
@@ -61,15 +66,15 @@ const FALLBACK_ASPECT = 16 / 9;
 
 const clamp = (value: number, lo: number, hi: number) => Math.min(Math.max(value, lo), Math.max(lo, hi));
 
-/** 媒体显示比例：优先 item.width/height，其次 aspectRatio 字段，最后 16:9 兜底（style 供容器 aspect-ratio 表达） */
-const resolveAspect = (item: MediaItem): { ratio: number; style: string } => {
+/** 媒体显示比例：优先 item.width/height，其次 aspectRatio 字段，最后 16:9 兜底（hotfix-3 起容器高由 ratio 公式推导） */
+const resolveAspect = (item: MediaItem): { ratio: number } => {
     if (item.width && item.height && item.width > 0 && item.height > 0) {
-        return { ratio: item.width / item.height, style: `${item.width} / ${item.height}` };
+        return { ratio: item.width / item.height };
     }
     if (item.aspectRatio && Number.isFinite(item.aspectRatio) && item.aspectRatio > 0) {
-        return { ratio: item.aspectRatio, style: String(item.aspectRatio) };
+        return { ratio: item.aspectRatio };
     }
-    return { ratio: FALLBACK_ASPECT, style: '16 / 9' };
+    return { ratio: FALLBACK_ASPECT };
 };
 
 export const PlayerWindow: React.FC<PlayerWindowProps> = ({ onToggleFavorite, showInfo, onToggleInfo, infoPanel }) => {
@@ -112,6 +117,12 @@ export const PlayerWindow: React.FC<PlayerWindowProps> = ({ onToggleFavorite, sh
 
     // 拖动会话：起点指针坐标 + 起点窗口坐标（move/up 都从起点增量推算，避免闭包读到过期状态）
     const dragRef = useRef<{ px: number; py: number; ox: number; oy: number } | null>(null);
+    // hotfix-3：浮窗容器 ref——拖动/缩放 pointermove 直接写 style（left/top/width/height），
+    // 绕过 React 状态更新消除整树重渲染延迟；pointerup 才 setState 同步 + 落盘。
+    const windowRef = useRef<HTMLDivElement>(null);
+    // hotfix-3：拖动/缩放交互会话标记。pointerdown/pointerup 各 setState 一次（move 中零 setState）；
+    // 会话期间 layout 补间禁用（layout={!isInteracting}），位置/尺寸由直写样式全权接管，结束后恢复。
+    const [isInteracting, setIsInteracting] = useState(false);
 
     const viewportW = window.innerWidth;
     const viewportH = window.innerHeight;
@@ -120,34 +131,36 @@ export const PlayerWindow: React.FC<PlayerWindowProps> = ({ onToggleFavorite, sh
     const isWindow = displayMode === 'window';
     const isFab = displayMode === 'fab';
 
-    // 形状贴合媒体（hotfix-2，双向预算）：宽度基准 = 记忆/拖拽宽度，高度按比例推导；
+    // 形状贴合媒体（hotfix-3，双向预算）：宽度基准 = 记忆/拖拽宽度，内容区高按比例推导；
     // 推导高度超视口高 80% 时以高度定宽（竖图收窄）；触 240px 宽度下限则高度按比例回推（保持比例）。
-    // 容器只写 width + aspectRatio（不写显式 height，高度由浏览器按比例推导，天然贴合媒体形状）；
-    // mini 固定 240 宽走同一比例推导，内容区以 minHeight 兜底。
+    // 容器总高 = 内容区高 + 头部 44px（hotfix-3 显式公式）——内容区（容器高 - 44）正好贴合媒体比例，
+    // 消除旧 aspectRatio 作用于含头部整容器导致的系统性留白；高度覆盖期间容器高即覆盖值（媒体 contain）。
     // 退出动画期间 currentItem 为 null（aspect 为 null），width/height 保持基准值即可。
     const aspect = currentItem ? resolveAspect(currentItem) : null;
     const maxWidth = viewportW - WINDOW_MARGIN * 2;
     let shellWidth = isMini ? MINI_WIDTH : width;
-    let shellHeight = aspect ? shellWidth / aspect.ratio : 0;
-    if (aspect && !isMini && shellHeight > viewportH * MAX_HEIGHT_RATIO) {
+    let contentHeight = aspect ? shellWidth / aspect.ratio : 0;
+    if (aspect && !isMini && contentHeight > viewportH * MAX_HEIGHT_RATIO) {
         // 超高媒体：以高度定宽（竖图收窄）
-        shellHeight = viewportH * MAX_HEIGHT_RATIO;
-        shellWidth = shellHeight * aspect.ratio;
+        contentHeight = viewportH * MAX_HEIGHT_RATIO;
+        shellWidth = contentHeight * aspect.ratio;
     }
     if (aspect && !isMini && shellWidth < MIN_FIT_WIDTH) {
         // 极端竖图触宽度下限：宽度收在 240，高度按比例回推（比例仍保持，优先形状贴合）
         shellWidth = MIN_FIT_WIDTH;
-        shellHeight = shellWidth / aspect.ratio;
+        contentHeight = shellWidth / aspect.ratio;
     }
-    if (isMini) shellHeight = Math.max(shellHeight, MINI_MIN_HEIGHT);
-    // 高度覆盖（仅 window 形态）：下边缘拖动写入，覆盖期间容器显式 height、不设 aspectRatio（媒体 contain 显示）
+    if (isMini) contentHeight = Math.max(contentHeight, MINI_MIN_HEIGHT);
+    // 高度覆盖（仅 window 形态）：下边缘拖动写入，覆盖期间容器显式 height、媒体 contain 显示
     const heightOverrideActive = isWindow && heightOverride !== null;
-    if (heightOverrideActive) shellHeight = heightOverride;
+    // 容器总高：等比 = 内容区高 + 头部；覆盖 = 覆盖值本身（显式 height 语义沿用 hotfix-2）
+    const containerHeight = heightOverrideActive ? heightOverride! : contentHeight + HEADER_HEIGHT;
 
     // 当前渲染位置：有记忆/拖动坐标则 clamp 进视口，否则锚定视口右下（右/下各 24px）
+    // （下边界按容器总高 clamp，hotfix-3 起容器高含头部）
     const currentPos = pos
-        ? { x: clamp(pos.x, 0, viewportW - shellWidth), y: clamp(pos.y, 0, viewportH - shellHeight) }
-        : { x: Math.max(0, viewportW - shellWidth - WINDOW_MARGIN), y: Math.max(0, viewportH - shellHeight - WINDOW_MARGIN) };
+        ? { x: clamp(pos.x, 0, viewportW - shellWidth), y: clamp(pos.y, 0, viewportH - containerHeight) }
+        : { x: Math.max(0, viewportW - shellWidth - WINDOW_MARGIN), y: Math.max(0, viewportH - containerHeight - WINDOW_MARGIN) };
 
     // 形态切换统一入口：reducer 切换 + 立即落盘偏好。
     // width 沿用 window 记忆宽度（mini/fab 不改写），坐标保留当前位置——恢复 window 时可直接复用。
@@ -164,32 +177,40 @@ export const PlayerWindow: React.FC<PlayerWindowProps> = ({ onToggleFavorite, sh
         // 真实浏览器锁定指针到抓手（jsdom 无此 API，可选调用）
         e.currentTarget.setPointerCapture?.(e.pointerId);
         dragRef.current = { px: e.clientX, py: e.clientY, ox: currentPos.x, oy: currentPos.y };
+        // 会话开始：禁用 layout 补间（手势起止各一次渲染，move 不触发）
+        setIsInteracting(true);
         e.preventDefault();
     };
 
     const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
         const drag = dragRef.current;
         if (!drag) return;
-        setPos({
-            x: drag.ox + (e.clientX - drag.px),
-            y: drag.oy + (e.clientY - drag.py),
-        });
+        // hotfix-3：直写 DOM——起点增量 + clamp（与渲染公式同源），不 setState；
+        // 交互期零重渲染，位置即时跟手，落库延迟到 pointerup
+        const el = windowRef.current;
+        if (el) {
+            el.style.left = `${clamp(drag.ox + (e.clientX - drag.px), 0, viewportW - shellWidth)}px`;
+            el.style.top = `${clamp(drag.oy + (e.clientY - drag.py), 0, viewportH - containerHeight)}px`;
+        }
     };
 
     const finishDrag = (e: React.PointerEvent<HTMLDivElement>) => {
         const drag = dragRef.current;
         if (!drag) return;
         dragRef.current = null;
-        // pointerup 落库：clamp 后的位置 + 当前宽度/高度覆盖与形态写入偏好（写入失败由 saveWindowPrefs 静默忽略）
+        // hotfix-3：pointerup 一次性同步 React 状态（与直写值一致，无视觉跳变）并落库
+        // （clamp 后的位置 + 当前宽度/高度覆盖与形态写入偏好，写入失败由 saveWindowPrefs 静默忽略）
         const x = clamp(drag.ox + (e.clientX - drag.px), 0, viewportW - shellWidth);
-        const y = clamp(drag.oy + (e.clientY - drag.py), 0, viewportH - shellHeight);
+        const y = clamp(drag.oy + (e.clientY - drag.py), 0, viewportH - containerHeight);
         setPos({ x, y });
+        setIsInteracting(false);
         saveWindowPrefs({ x, y, width, mode: displayMode, heightOverride: heightOverride ?? undefined });
     };
 
     // 边缘 resize 会话（hotfix-2）：与拖动同款三段式——起点指针 + 起点尺寸，
     // move/up 都从起点增量推算，避免闭包读到过期状态。横向改宽（高度由比例跟随），
     // 纵向写高度覆盖；宽度变化即清除覆盖（高度回比例自适应）。
+    // hotfix-3：move 期直写 DOM 不 setState，pointerup 才同步状态并落盘。
     const hResizeRef = useRef<{ px: number; startWidth: number } | null>(null);
     const vResizeRef = useRef<{ py: number; startHeight: number } | null>(null);
 
@@ -201,14 +222,19 @@ export const PlayerWindow: React.FC<PlayerWindowProps> = ({ onToggleFavorite, sh
         // 真实浏览器锁定指针到抓手（jsdom 无此 API，可选调用）
         e.currentTarget.setPointerCapture?.(e.pointerId);
         if (axis === 'h') hResizeRef.current = { px: e.clientX, startWidth: shellWidth };
-        else vResizeRef.current = { py: e.clientY, startHeight: shellHeight };
+        else vResizeRef.current = { py: e.clientY, startHeight: containerHeight };
+        setIsInteracting(true);
     };
 
     const applyHResize = (clientX: number, session: { px: number; startWidth: number }) => {
         const next = clamp(session.startWidth + (clientX - session.px), MIN_WIDTH, maxWidth);
-        setWidth(next);
-        // 宽度变化 → 高度回比例自适应，覆盖一并清除
-        setHeightOverride(null);
+        // hotfix-3：直写 DOM——宽度变化即清除覆盖，高度按等比公式跟随（内容区 = 宽/比例，容器再 + 头部 44）；
+        // hotfix-3 起等比模式不写 aspectRatio，无需额外清理
+        const el = windowRef.current;
+        if (el && aspect) {
+            el.style.width = `${next}px`;
+            el.style.height = `${next / aspect.ratio + HEADER_HEIGHT}px`;
+        }
         return next;
     };
 
@@ -217,14 +243,21 @@ export const PlayerWindow: React.FC<PlayerWindowProps> = ({ onToggleFavorite, sh
         if (!session) return;
         hResizeRef.current = null;
         const next = applyHResize(e.clientX, session);
-        // pointerup 落盘：宽度 + 覆盖清除状态一并写入
+        // pointerup：一次性同步状态（与直写值一致）+ 落盘（宽度 + 覆盖清除状态一并写入）
+        setWidth(next);
+        setHeightOverride(null);
+        setIsInteracting(false);
         saveWindowPrefs({ x: currentPos.x, y: currentPos.y, width: next, mode: displayMode, heightOverride: undefined });
     };
 
     const applyVResize = (clientY: number, session: { py: number; startHeight: number }) => {
-        // 高度 = 起点高 + 垂直位移，clamp [120, 视口高-边距]；覆盖生效期间容器高度固定（媒体 contain）
+        // 高度 = 起点容器高 + 垂直位移，clamp [120, 视口高-边距]；覆盖生效期间容器高度固定（媒体 contain）
         const next = clamp(session.startHeight + (clientY - session.py), MIN_SHELL_HEIGHT, viewportH - WINDOW_MARGIN);
-        setHeightOverride(next);
+        // hotfix-3：直写 DOM 高度（等比模式本就不写 aspectRatio，覆盖即显式 height 生效）
+        const el = windowRef.current;
+        if (el) {
+            el.style.height = `${next}px`;
+        }
         return next;
     };
 
@@ -233,6 +266,9 @@ export const PlayerWindow: React.FC<PlayerWindowProps> = ({ onToggleFavorite, sh
         if (!session) return;
         vResizeRef.current = null;
         const next = applyVResize(e.clientY, session);
+        // pointerup：一次性同步状态（与直写值一致）+ 落盘覆盖
+        setHeightOverride(next);
+        setIsInteracting(false);
         saveWindowPrefs({ x: currentPos.x, y: currentPos.y, width, mode: displayMode, heightOverride: next });
     };
 
@@ -341,9 +377,12 @@ export const PlayerWindow: React.FC<PlayerWindowProps> = ({ onToggleFavorite, sh
             {state.isOpen && currentItem && aspect && !isFab && (
                 <motion.div
                     key="player-window"
+                    ref={windowRef}
                     data-testid="player-window"
                     data-mode={displayMode}
-                    layout
+                    // hotfix-3：交互会话期间禁用 layout 补间（直写样式全权接管，pointerup 的 setState
+                    // 不会触发位置/尺寸补间）；会话结束恢复，形态切换 window↔mini 动画不受影响
+                    layout={!isInteracting}
                     initial={{ opacity: 0, scale: 0.85 }}
                     animate={{ opacity: 1, scale: 1 }}
                     exit={{ opacity: 0, scale: 0.85 }}
@@ -353,11 +392,10 @@ export const PlayerWindow: React.FC<PlayerWindowProps> = ({ onToggleFavorite, sh
                         left: currentPos.x,
                         top: currentPos.y,
                         width: `${shellWidth}px`,
-                        // hotfix-2：默认只设 width + aspectRatio，高度由浏览器按比例推导（形状贴合媒体）；
-                        // 高度覆盖期间（下边缘拖动）改写显式 height 且不设 aspectRatio，媒体 contain 显示
-                        ...(heightOverrideActive
-                            ? { height: `${shellHeight}px` }
-                            : { aspectRatio: aspect.style, ...(isMini ? { minHeight: `${MINI_MIN_HEIGHT}px` } : {}) }),
+                        // hotfix-3：显式高度公式——等比模式容器高 = 内容区高(宽/媒体比例) + 头部 44，
+                        // 内容区正好贴合媒体比例（不写 aspectRatio，消除含头部整容器的比例误差留白）；
+                        // 高度覆盖期间容器高即覆盖值（媒体 contain）
+                        height: `${containerHeight}px`,
                     }}
                 >
                     {/* 头部：抓手（标题区）+ 控制栏。拖动仅绑定在标题抓手区域，按钮区不受影响 */}
