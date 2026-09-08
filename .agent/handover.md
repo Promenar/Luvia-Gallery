@@ -2192,3 +2192,35 @@ React.memo 固有限制：未来新增每帧新引用的 prop 会静默击穿隔
 
 ### HLG
 本记录经标准 append dry-run 与 apply 追加并重建派生索引，continuity=waiting（media-player-refactor）；过程台账存于 .superpowers/sdd/progress.md；无新增长期规则候选。
+
+## 2026-09-09T02:22:48+08:00 · 收藏夹/时间轴安全区与点阵光场背景热修 2f8388e 已发布至 FNOS 生产
+
+type: release
+scope: ["Luvia-Gallery", "WebUI", "FNOS"]
+status: done
+tags: ["safe-area", "ambient-background", "webgl", "hotfix", "fnos", "production"]
+continuity: waiting
+continuity-key: media-player-refactor
+event-date: 2026-09-07
+record-fingerprint: 82ad64e679971c846e64aaea34350c84d9edd9b057472fb2a2df9bed28c27a76
+
+### Summary
+用户验收反馈两项改动后发布：①收藏夹视图第一行（收藏文件夹卡片）补 96px 顶部安全区，时间轴视图补齐 64px 安全区；②新增 AmbientDotField WebGL 点阵光场背景特效（参考页 shader 原值移植）。生产运行精确修订 2f8388e5ef6b。
+
+### Changed
+App.tsx 收藏夹文件夹卡片区块 md:pt-24（96px=32px 页边距语义+64px 安全区；Tailwind 同元素上 md:pt-16 会被 md:p-8 覆盖而非叠加，评审以编译 CSS 字节序实证后修正）；TimelineViewport 新增 TIMELINE_TOP_SAFE_AREA_CLASSES 外层 wrapper（方案 b，AutoSizer 自然扣除 padding，虚拟化数学零改动）；新增 components/AmbientDotField.tsx（canvas fixed z-0 pointer-events-none，window 级 mousemove/touchmove，rAF 循环内零 setState 鼠标走 ref+uniform；WebGL 不可用返 null、hidden 暂停、reduced-motion 单帧、dpr≤2、卸载 loseContext 全量清理；StrictMode 双挂载经 effect 命令式创建 canvas 规避 lost-context 复用）。
+
+### Validation
+TDD 红→绿（安全区契约测试 4 项 + 光场组件 mock 测试）；独立评审 Approved with fixes（shader 机械 diff 原值保真、StrictMode/层级/性能红线/虚拟化数学四项定向核实，其中收藏夹安全区同元素覆盖语义由评审以编译产物字节序实证 64px≠96px 后主控修正为 md:pt-24 并同步契约测试）；全量前端 280/283（3 失败为既有 Node 26 localStorage 环境问题）、build ✓、tsc 零新增；FNOS 构建+备份 quick_check=ok+旁路候选（产物含 u_mouse shader 特征）+切换；生产零重启、首页/资产 200、API 401 正常。
+
+### Next
+用户人工验收收藏夹/时间轴首行与光场背景观感（含亮色主题下的深空呈现是否接受——当前未做主题分支）；阶段三清单：下缘抓手回等比可发现性、极竖图收敛策略、fab 画中画、EXIF apiFetch 重构、控制栏自动隐藏、TimelineScrubber 既有比例近似误差、contentEditable 守卫测试；Docker Hub 补推 2f8388e-amd64 与 latest。
+
+### Risks
+深空光场背景在亮色主题下同样呈现（产品取舍已记录，若需主题分支另立任务）；全屏 WebGL 每帧渲染与大型媒体库页面的叠加性能在低端设备待观察（已做 hidden 暂停与 dpr 上限缓解）。
+
+### DIA
+已同步 release_notes.md（v1.3.2 热修 2f8388e 段：两项改动、已知取舍、备份与生产验证）；README、API、数据结构、registry 无新增影响。
+
+### HLG
+本记录经标准 append dry-run 与 apply 追加并重建派生索引，continuity=waiting（media-player-refactor）；过程台账存于 .superpowers/sdd/progress.md；无新增长期规则候选。

@@ -1,6 +1,6 @@
 # Handover Index
 
-> generated_at: 2026-09-07T03:54:08+08:00
+> generated_at: 2026-09-09T02:22:48+08:00
 > generated: true; do not edit manually
 > recovery_window_days: 7
 
@@ -14,7 +14,7 @@
 | macos-floating-widget | resume | 2026-07-25T13:18:00+08:00 | done | macos-widget/desktop-widget-mode | Dock 隐藏/菜单栏入口/分屏记忆/点击穿透/WidgetKit 清理 | `.agent/handover.md` · `2026-07-25T13:18:00+08:00` · `fp:3e60e6d4d0` |
 | macos-per-display-placement-v2 | waiting | 2026-07-30T01:18:25+08:00 | done | ["Luvia-Gallery", "macOS-widget", "local-install"] | macOS 每显示器位置 V2 已安装 | `.agent/handover.md` · `2026-07-30T01:18:25+08:00` · `fp:22f05e2741` |
 | macos-release-signing | resume | 2026-07-31T00:36:50+08:00 | done | ["macos-widget", "local-install", "release-signing"] | macOS 应用安装后无法启动根因诊断 | `.agent/handover.md` · `2026-07-31T00:36:50+08:00` · `fp:f7c14e00f0` |
-| media-player-refactor | waiting | 2026-09-07T03:54:08+08:00 | done | ["Luvia-Gallery", "WebUI", "FNOS"] | 弹窗切换保持比例与网格渲染隔离热修 fc90482 已发布至 FNOS 生产 | `.agent/handover.md` · `2026-09-07T03:54:08+08:00` · `fp:8217805b81` |
+| media-player-refactor | waiting | 2026-09-09T02:22:48+08:00 | done | ["Luvia-Gallery", "WebUI", "FNOS"] | 收藏夹/时间轴安全区与点阵光场背景热修 2f8388e 已发布至 FNOS 生产 | `.agent/handover.md` · `2026-09-09T02:22:48+08:00` · `fp:82ad64e679` |
 | pdec-initialization | waiting | 2026-09-07T02:41:08+08:00 | done | ["Luvia-Gallery", "PDEC", "Android"] | PDEC 批准：Android 执行主机设为 MAIN | `.agent/handover.md` · `2026-09-07T02:41:08+08:00` · `fp:8ee7b2686f` |
 | webui-large-library-performance | waiting | 2026-08-13T02:03:17+08:00 | waiting | ["Luvia-Gallery", "webui", "server", "sqlite"] | WebUI 大媒体库候选提交收口 | `.agent/handover.md` · `2026-08-13T02:03:17+08:00` · `fp:e4e4629bec` |
 
@@ -22,6 +22,7 @@
 
 | date | format | status | continuity | scope | tags | title | source |
 | :---: | :---: | :---: | :---: | :--- | :--- | :--- | :--- |
+| 2026-09-09T02:22:48+08:00 | iso | done | waiting | ["Luvia-Gallery", "WebUI", "FNOS"] | ["safe-area", "ambient-background", "webgl", "hotfix", "fnos", "production"] | 收藏夹/时间轴安全区与点阵光场背景热修 2f8388e 已发布至 FNOS 生产 | `.agent/handover.md` · `2026-09-09T02:22:48+08:00` · `fp:82ad64e679` |
 | 2026-09-07T03:54:08+08:00 | iso | done | waiting | ["Luvia-Gallery", "WebUI", "FNOS"] | ["media-player", "floating-window", "performance", "hotfix", "fnos", "production"] | 弹窗切换保持比例与网格渲染隔离热修 fc90482 已发布至 FNOS 生产 | `.agent/handover.md` · `2026-09-07T03:54:08+08:00` · `fp:8217805b81` |
 | 2026-09-07T03:19:34+08:00 | iso | done | waiting | ["Luvia-Gallery", "FNOS", "PDEC"] | ["source-sync", "fnos", "devfleet", "pdec"] | FNOS 建立 Luvia-Gallery 源码裸仓库与定时同步 | `.agent/handover.md` · `2026-09-07T03:19:34+08:00` · `fp:d1514553f5` |
 | 2026-09-07T03:08:08+08:00 | iso | done | none | ["Luvia-Gallery", "Git"] | ["branch-cleanup", "discard", "worktree", "git"] | 按用户确认丢弃无价值分支与 Android worktree | `.agent/handover.md` · `2026-09-07T03:08:08+08:00` · `fp:0ac150c5cf` |
