@@ -8,6 +8,12 @@ import { TimelineScrubber } from '../TimelineScrubber';
 
 const VariableSizeList = (ReactWindow as any).VariableSizeList;
 
+// 顶部安全区：md 及以上日期头第一行避开统一工具栏浮岛，语义与
+// MASONRY_TOP_SAFE_AREA_CLASSES / GRID_TOP_SAFE_AREA_CLASSES 对齐（均为 64px）。
+// 挂载点采用方案 b：滚动内容外层 wrapper 承担 padding，AutoSizer 测得的内容高度
+// 自然扣除该内边距，不触碰 react-window 的虚拟化与滚动定位数学。
+export const TIMELINE_TOP_SAFE_AREA_CLASSES = 'md:pt-16';
+
 interface VisualRow {
   type: 'header' | 'media';
   date?: string; // For header
@@ -391,7 +397,7 @@ const TimelineViewportInner = React.forwardRef<ViewportCaptureHandle, InnerProps
 // 先定义 forwardRef 内核，再包 memo：与 Grid/Masonry 视口保持一致的无关重渲染隔离；ref 透传不受影响。
 const TimelineViewportImpl = React.forwardRef<ViewportCaptureHandle, CommonViewportProps>((props, ref) => {
   return (
-    <div className="w-full h-full relative">
+    <div className={`w-full h-full relative ${TIMELINE_TOP_SAFE_AREA_CLASSES}`}>
       <AutoSizer>
         {({ height, width }: { height: number; width: number }) => {
           if (!height || !width || height <= 0 || width <= 0) {
