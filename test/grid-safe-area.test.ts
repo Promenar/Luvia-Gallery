@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { GRID_TOP_SAFE_AREA_CLASSES } from '../components/gallery/GridViewport';
 import { MASONRY_TOP_SAFE_AREA_CLASSES } from '../components/gallery/MasonryViewport';
+import { TIMELINE_TOP_SAFE_AREA_CLASSES } from '../components/gallery/TimelineViewport';
 
 // 契约来源：App.tsx 顶部工具栏浮岛为 `md:absolute md:inset-x-0 md:top-0`，
 // md 及以上悬浮遮挡内容；移动端为普通流布局，无需顶部避让。
@@ -21,5 +22,28 @@ describe('网格视图顶部安全区', () => {
     const source = readFileSync(join(__dirname, '..', 'components', 'gallery', 'GridViewport.tsx'), 'utf-8');
     // 外层内容容器（包裹 AutoSizer 的 wrapper）必须引用该常量
     expect(source).toMatch(/className=\{`[^`]*\$\{GRID_TOP_SAFE_AREA_CLASSES\}/);
+  });
+});
+
+describe('时间轴与收藏夹顶部安全区', () => {
+  it('时间轴滚动内容外层在 md 及以上带 64px 顶部安全区（md:pt-16）', () => {
+    expect(TIMELINE_TOP_SAFE_AREA_CLASSES).toContain('md:pt-16');
+  });
+
+  it('与网格/瀑布流安全区常量的 md 语义对齐（均为 md:pt-16）', () => {
+    expect(GRID_TOP_SAFE_AREA_CLASSES).toContain('md:pt-16');
+    expect(MASONRY_TOP_SAFE_AREA_CLASSES).toContain('md:pt-16');
+    expect(TIMELINE_TOP_SAFE_AREA_CLASSES).toContain('md:pt-16');
+  });
+
+  it('安全区常量已挂载到 TimelineViewport 的内容容器上（防止常量悬空）', () => {
+    const source = readFileSync(join(__dirname, '..', 'components', 'gallery', 'TimelineViewport.tsx'), 'utf-8');
+    // 外层内容容器（包裹 AutoSizer 的 wrapper，方案 b）必须引用该常量
+    expect(source).toMatch(/className=\{`[^`]*\$\{TIMELINE_TOP_SAFE_AREA_CLASSES\}/);
+  });
+
+  it('收藏夹文件夹卡片区块使用 96px 顶部安全区（md:pt-24，与网格视图 32+64 观感一致）', () => {
+    const source = readFileSync(join(__dirname, '..', 'App.tsx'), 'utf-8');
+    expect(source).toContain('p-4 pb-0 md:px-8 md:pb-8 md:pt-24');
   });
 });

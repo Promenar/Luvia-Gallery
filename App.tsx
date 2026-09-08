@@ -4,6 +4,7 @@ import { MediaItem, ViewMode, GridLayout, User, UserData, SortOption, FilterOpti
 import { buildFolderTree, generateId, isVideo, isAudio, sortMedia, getImmediateSubfolders } from './utils/fileUtils';
 import { Icons } from './components/ui/Icon';
 import { Navigation } from './components/Navigation';
+import { AmbientDotField } from './components/AmbientDotField';
 import { MediaCard, useStableMediaItemClick } from './components/PhotoCard';
 import { FolderCard } from './components/FolderCard';
 import { MediaPlayer } from './components/player/MediaPlayer';
@@ -2814,6 +2815,8 @@ function GalleryApp() {
     // Main App Render
     return (
         <div className={`flex h-screen w-full bg-surface-primary overflow-hidden text-text-primary font-sans transition-colors duration-200 ${isServerMode ? 'server-mode' : ''}`}>
+            {/* WebGL 点阵光场背景：fixed z-0 铺底，根容器后续定位子元素（侧栏/主内容/浮岛）按 DOM 顺序自然绘制其上 */}
+            <AmbientDotField />
             <Navigation
                 appTitle={appTitle}
                 viewMode={viewMode}
@@ -2926,8 +2929,10 @@ function GalleryApp() {
                         ) : (
                             <div className="w-full h-full flex flex-col">
                                 {/* Favorite Folders Section (only in favorites view) */}
+                                {/* md:pt-24 = 96px（32px 页边距语义 + 64px 浮岛安全区），与网格视图观感一致；
+                                    注意不能用 md:p-8 + md:pt-16 叠加——同元素上 pt 会覆盖 p 的 top 分量 */}
                                 {viewMode === 'favorites' && isServerMode && !isInitialGallerySkeletonCovering && serverFavoriteIds.folders.length > 0 && (
-                                    <div className="p-4 md:p-8 pb-0">
+                                    <div className="p-4 pb-0 md:px-8 md:pb-8 md:pt-24">
                                         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 md:gap-6 mb-6">
                                             {serverFolders
                                                 .filter(folder => serverFavoriteIds.folders.includes(folder.path))
