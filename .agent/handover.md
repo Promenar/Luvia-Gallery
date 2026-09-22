@@ -2224,3 +2224,34 @@ TDD 红→绿（安全区契约测试 4 项 + 光场组件 mock 测试）；独�
 
 ### HLG
 本记录经标准 append dry-run 与 apply 追加并重建派生索引，continuity=waiting（media-player-refactor）；过程台账存于 .superpowers/sdd/progress.md；无新增长期规则候选。
+
+## 2026-09-22T10:05:29+08:00 · WebUI 缩略图加载状态竞态与短暂失败恢复修复
+
+type: maintenance
+scope: ["Luvia-Gallery", "WebUI", "thumbnail"]
+status: done
+tags: ["thumbnail", "masonry", "race", "retry", "browser-qa"]
+continuity: waiting
+continuity-key: webui-thumbnail-recovery
+record-fingerprint: 7554a77819060acd72b344dafa8dd845bff7746a21377cd2e2653351b0ea81d5
+
+### Summary
+用户报告瀑布流滚动时偶发缩略图持续空白，等待无效、滚走滚回极少恢复。已完成本地修复及对照验证，尚未提交、推送或部署；真实生产验收待明确发布授权。
+
+### Changed
+PhotoCard 读取 complete/naturalWidth 同步缓存图显示；按媒体 ID、原始/缩略图 URL 与类型隔离组件状态，移除被动 effect 重置；缩略图失败后以 500/1000ms 退避最多重试两次，成功和卸载清理任务；原图回退按原始来源判断，避免鉴权 query 比较失效；合成 thumb URL 编码 ID。新增 12 项测试与实施/验证计划。保留分页、懒加载、首屏优先级和现有布局。
+
+### Validation
+PDEC inspect/validate approved、execution_ready=true、无漂移；前端全套295/295，定向19/19，Vite构建和涉及组件/测试的独立tsconfig类型检查通过，git diff --check通过。初始9项回归测试在旧代码上7项失败。Chromium 1440x960/390x844、4倍CPU降速、600条合成媒体和受控首次503：旧代码6处采样缺图6/8/9/8/6/14，复访9张可见图complete=true、naturalWidth=300但opacity=0且state=loading；修复版6处121个可见卡全部加载，最多每图2个请求且原图请求0，窄屏首中尾重排、缓存刷新、点击回调通过。Luna xhigh独立只读审阅无阻断发现，主控核对实际diff与运行证据。
+
+### Next
+需要发布时以明确授权执行候选提交、推送、FNOS构建和生产验收；在用户实际浏览器/真实媒体库验证滚动缺图是否消失，若持续发生则区分网络pending、代理/磁盘响应和长列表DOM压力。
+
+### Risks
+未将合成复现认作生产唯一根因；未测试Safari、真实生产网络或长时间百万库滚动。重试只处理onError，长期pending请求没有新增watchdog。完整仓库tsc被utils/animation.ts既有JSX语法错误阻断（文件hash与HEAD一致）；播放器测试act/EXIF mock、构建CJS/Browserslist/chunk告警为既有项。浏览器最终有效运行只有注入503，测试服务重启期两次connection refused另行排除。HLG inspect已有混合顺序、1处continuity和7条无日期历史问题保持原样。
+
+### DIA
+已同步release_notes.md待发布说明、.agent/registry.md及.agent/plans/2026-09-22-thumbnail-recovery.md；README启动/功能概览、API、数据结构和PDEC字段无新增影响。
+
+### HLG
+使用标准append先dry-run再apply追加本记录并重建handover-index；continuity=waiting，保留本地验证完成与生产未发布的边界。

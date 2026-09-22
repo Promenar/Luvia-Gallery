@@ -10,6 +10,7 @@
 - .agent/project_memory.md — 项目记忆存档
 
 ## 按需文档
+- .agent/plans/2026-09-22-thumbnail-recovery.md — WebUI 缩略图缓存显示、失败重试与浏览器回归验证
 - .agent/plans/2026-08-13-webui-large-library-performance.md — WebUI 近百万媒体首包查询、分页骨架与滚动预取优化计划
 - .agent/plans/2026-08-12-webui-folder-stability.md — WebUI 文件夹稳定性、写时封面缓存和轻量轮询修复计划
 - .agent/plans/2026-07-30-macos-remote-folder-browser.md — macOS 在线目录可视化选择器、权限和测试计划
