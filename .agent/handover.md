@@ -2255,3 +2255,34 @@ PDEC inspect/validate approved、execution_ready=true、无漂移；前端全套
 
 ### HLG
 使用标准append先dry-run再apply追加本记录并重建handover-index；continuity=waiting，保留本地验证完成与生产未发布的边界。
+
+## 2026-09-22T10:37:52+08:00 · WebUI 缩略图恢复修复 60ce8ca 已发布至 FNOS
+
+type: release
+scope: ["Luvia-Gallery", "WebUI", "FNOS"]
+status: done
+tags: ["thumbnail", "masonry", "retry", "fnos", "production"]
+continuity: none
+continuity-key: webui-thumbnail-recovery
+record-fingerprint: fad853d71457c4d5d6fefa57d40c21d5b2cc48cc6b5dcf8a58d713505b89473d
+
+### Summary
+按用户明确授权完成修复提交、GitHub main 推送和 FNOS 生产部署。生产运行60ce8cae2c31ac41d2bf63f9e711fd3e417d379a；发布流程与机器健康验收完成。
+
+### Changed
+功能提交60ce8ca已回读远端SHA一致。FNOS从校验一致的Git归档原生构建promenarleng/luvia-gallery:60ce8ca-amd64，镜像ID sha256:79b3bea7f8a421e44b7d7651b22373e29ea3deb0b3af83210f21308f71a21235，OCI revision正确；以该镜像更新本机latest并通过既有Compose只重建luvia-gallery，未改变Compose、挂载和网络配置。
+
+### Validation
+复用相同代码的295项前端测试和合成浏览器验证；PDEC approved/execution_ready=true、无漂移。FNOS Node v20.20.2候选独立数据库/缓存、只读媒体，生产SQLite一致性备份quick_check=ok、908152条、2460454912字节。Luna独立审阅发布脚本，固定新旧镜像ID、运行状态、完整回滚健康检查及24样本断言均经修订复审闭合；旧镜像回滚健康验证实际通过。生产切换及验证17.81秒；零重启、OOM false；首页/3001/3002/API均200，匿名scan/results为401，首批120条13ms、扫描和缩略图idle、队列0，24张缓存WebP全部通过（最大21ms）。JS index-DS_ssdF1.js SHA-256 daa440148a2f6ff29006525f1a9af132cee66cf04fbd53e50ba930bdc8a5fe58，Mac经Tailscale读取hash与候选一致。Chrome登录页非空、无错误遮罩、无pageerror，加载新JS。
+
+### Next
+用户刷新WebUI后正常浏览；如果持续缺图，针对实际浏览器收集长期pending、网络与代理响应及长列表压力证据。该观察不影响已完成的部署事实。
+
+### Risks
+备份保留于FNOS /vol2/1000/APPDATA/Lumina/.deploy/backups/60ce8ca；回滚镜像promenarleng/luvia-gallery:rollback-60ce8ca-pre。候选数据保留，临时候选容器由本任务清理。没有向Docker Hub发布镜像，本任务Git推送与FNOS更新均完成。未覆盖Safari与真实用户长时间连续滚动；完整仓库tsc既有utils/animation.ts JSX问题仍独立存在。
+
+### DIA
+已同步release_notes.md的已部署状态及.agent/plans/2026-09-22-thumbnail-recovery.md发布证据；README、API、数据结构、PDEC与registry无额外变化。
+
+### HLG
+使用append先dry-run再apply追加发布记录并重建handover-index；以相同continuity_key和none关闭本次缩略图修复发布工作流。

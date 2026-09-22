@@ -1,6 +1,6 @@
 # Handover Index
 
-> generated_at: 2026-09-22T10:05:29+08:00
+> generated_at: 2026-09-22T10:37:52+08:00
 > generated: true; do not edit manually
 > recovery_window_days: 7
 
@@ -17,12 +17,12 @@
 | media-player-refactor | waiting | 2026-09-09T02:22:48+08:00 | done | ["Luvia-Gallery", "WebUI", "FNOS"] | 收藏夹/时间轴安全区与点阵光场背景热修 2f8388e 已发布至 FNOS 生产 | `.agent/handover.md` · `2026-09-09T02:22:48+08:00` · `fp:82ad64e679` |
 | pdec-initialization | waiting | 2026-09-07T02:41:08+08:00 | done | ["Luvia-Gallery", "PDEC", "Android"] | PDEC 批准：Android 执行主机设为 MAIN | `.agent/handover.md` · `2026-09-07T02:41:08+08:00` · `fp:8ee7b2686f` |
 | webui-large-library-performance | waiting | 2026-08-13T02:03:17+08:00 | waiting | ["Luvia-Gallery", "webui", "server", "sqlite"] | WebUI 大媒体库候选提交收口 | `.agent/handover.md` · `2026-08-13T02:03:17+08:00` · `fp:e4e4629bec` |
-| webui-thumbnail-recovery | waiting | 2026-09-22T10:05:29+08:00 | done | ["Luvia-Gallery", "WebUI", "thumbnail"] | WebUI 缩略图加载状态竞态与短暂失败恢复修复 | `.agent/handover.md` · `2026-09-22T10:05:29+08:00` · `fp:7554a77819` |
 
 ## Recent 7-Day Catalog
 
 | date | format | status | continuity | scope | tags | title | source |
 | :---: | :---: | :---: | :---: | :--- | :--- | :--- | :--- |
+| 2026-09-22T10:37:52+08:00 | iso | done | none | ["Luvia-Gallery", "WebUI", "FNOS"] | ["thumbnail", "masonry", "retry", "fnos", "production"] | WebUI 缩略图恢复修复 60ce8ca 已发布至 FNOS | `.agent/handover.md` · `2026-09-22T10:37:52+08:00` · `fp:fad853d714` |
 | 2026-09-22T10:05:29+08:00 | iso | done | waiting | ["Luvia-Gallery", "WebUI", "thumbnail"] | ["thumbnail", "masonry", "race", "retry", "browser-qa"] | WebUI 缩略图加载状态竞态与短暂失败恢复修复 | `.agent/handover.md` · `2026-09-22T10:05:29+08:00` · `fp:7554a77819` |
 
 ## Undated Records

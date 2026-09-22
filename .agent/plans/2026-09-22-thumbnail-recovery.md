@@ -36,4 +36,14 @@ PDEC 当前校验为 approved、execution_ready=true，web-test/web-build 在本
 - Browser plugin/skill 未提供，使用已有 Playwright CLI 与 Chrome，无依赖安装。浏览器地址为 `http://127.0.0.1:4318/__qa`（HEAD 源码）和 `http://127.0.0.1:4319/__qa`（工作树）；1440×960 与 390×844，4 倍 CPU 降速。
 - 600 条合成媒体、120 条分页、120–360ms 响应延迟、每三张缩略图首次请求返回 503。旧代码六处滚动采样缺图分别为 6/8/9/8/6/14，缓存复访直接观察到 9 张图片 `complete=true`、`naturalWidth=300`、`opacity=0`、`state=loading`。证明加载状态与真实图片状态能够失步，不证明这是生产环境的唯一原因。
 - 修复代码在六处滚动采样中共 121 个可见卡片均完成解码和显示；最多每张两次请求，原图回退请求为 0。窄屏重排后的首、中、尾三处采样和缓存刷新通过；点击媒体回调、页面内容与无 Vite 错误遮罩检查通过。最终有效运行控制台仅有预设的 503，环境重启期间的两次连接拒绝不计作业务故障。
-- 未修改后端，因此未重复后端测试；未测试真实生产媒体、生产代理/磁盘压力及 Safari。
+- 未修改后端，因此未重复后端测试；生产代理/磁盘压力、真实用户长时间滚动及 Safari 未覆盖。
+
+## 发布结果
+
+- 用户授权提交、推送和 FNOS 部署后，功能提交 `60ce8cae2c31ac41d2bf63f9e711fd3e417d379a` 已推送 `origin/main` 并回读远端一致。源码归档及前后端关键文件 hash 在两台主机一致。
+- FNOS Linux x86_64 原生构建 `promenarleng/luvia-gallery:60ce8ca-amd64`，镜像 ID `sha256:79b3bea7f8a421e44b7d7651b22373e29ea3deb0b3af83210f21308f71a21235`，OCI revision 与功能提交一致；运行 Node v20.20.2。
+- 生产数据库使用 SQLite 在线备份，大小 2,460,454,912 字节，908,152 条媒体，`quick_check=ok`。备份位于 FNOS `/vol2/1000/APPDATA/Lumina/.deploy/backups/60ce8ca`；原镜像保留为 `promenarleng/luvia-gallery:rollback-60ce8ca-pre`。
+- 候选使用独立数据库/缓存、24 个已有缩略图副本、只读媒体，未挂载生产数据或 SSH 密钥。候选首页/API/3001/3002/鉴权/24 张 WebP 验证通过。
+- Luna 对发布脚本独立审阅提出镜像 ID 固定、运行状态复查、完整回滚健康验证和样本数量断言；主控补齐后经复审确认闭合，并在切换前实际验证旧镜像健康检查路径。
+- 使用同一候选镜像切换既有 Compose 服务，未改变 Compose 配置；切换及验证耗时 17.81 秒。生产零重启、未 OOM，首批 120 条媒体响应 13ms，扫描/缩略图任务 idle、队列 0；24 张缓存缩略图全部有效，样本最大请求耗时 21ms。
+- 生产 JS 为 `index-DS_ssdF1.js`，SHA-256 `daa440148a2f6ff29006525f1a9af132cee66cf04fbd53e50ba930bdc8a5fe58`。Mac 经 Tailscale 读取的 JS/CSS hash 与候选及容器文件一致，浏览器登录页正常并加载新 JS。浏览器未注入生产凭据，已登录业务通过容器内短时认证、仅输出汇总的只读 API 检查完成。
