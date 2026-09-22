@@ -123,14 +123,25 @@ const VisualMediaCard: React.FC<MediaCardProps> = ({
   const [isRepairing, setIsRepairing] = useState(false);
   const [isThumbnailLoaded, setIsThumbnailLoaded] = useState(false);
   const [retryQuery, setRetryQuery] = useState(''); // Cache busting
+  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const retryAttemptRef = useRef(0);
 
-  // Reset error when item changes
-  useEffect(() => {
-    setImgError(false);
-    setHasError(false);
-    setIsThumbnailLoaded(false);
-    setRetryQuery(''); // Reset retry query on item change
-  }, [item.id, item.url, item.thumbnailUrl]);
+  const clearThumbnailRetry = useCallback(() => {
+    if (retryTimerRef.current !== null) clearTimeout(retryTimerRef.current);
+    retryTimerRef.current = null;
+  }, []);
+
+  const handleThumbnailLoad = useCallback(() => {
+    clearThumbnailRetry();
+    setIsThumbnailLoaded(true);
+  }, [clearThumbnailRetry]);
+
+  // 缓存命中可能早于事件处理器就绪；读取实际解码状态，不能只等待 load 事件。
+  const attachThumbnail = useCallback((image: HTMLImageElement | null) => {
+    if (image?.complete && image.naturalWidth > 0) handleThumbnailLoad();
+  }, [handleThumbnailLoad]);
+
+  useEffect(() => clearThumbnailRetry, [clearThumbnailRetry]);
 
   const handleRepair = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -143,9 +154,11 @@ const VisualMediaCard: React.FC<MediaCardProps> = ({
         body: JSON.stringify({ id: item.id })
       });
       if (res.ok) {
-        // Reset error state to force reload of thumbnail
+        clearThumbnailRetry();
+        retryAttemptRef.current = 0;
         setHasError(false);
         setImgError(false);
+        setIsThumbnailLoaded(false);
         setRetryQuery(`?t=${Date.now()}`); // Force image reload
       } else {
         alert('Repair failed');
@@ -158,8 +171,10 @@ const VisualMediaCard: React.FC<MediaCardProps> = ({
     }
   };
 
-  // Determine thumbnail URL
-  // Determine thumbnail URL
+  // 保留未附加鉴权参数的来源身份，用于判断是否存在原图回退。
+  const usesThumbnail = Boolean(item.thumbnailUrl && item.thumbnailUrl !== item.url)
+    || (!item.thumbnailUrl && item.url.startsWith('/media-stream/'));
+
   const thumbnailSrc = useMemo(() => {
     if (item.mediaType === 'audio') return '';
     if (!item.url) return '';
@@ -170,11 +185,9 @@ const VisualMediaCard: React.FC<MediaCardProps> = ({
     if (item.thumbnailUrl) {
       src = item.thumbnailUrl;
     }
-    // For images from media-stream
-    // For images from media-stream
     else if (item.url.startsWith('/media-stream/')) {
       // Use standard thumbnail endpoint which expects base64 ID (which item.id should be)
-      src = `/api/thumb/${item.id}`;
+      src = `/api/thumb/${encodeURIComponent(item.id)}`;
     }
     // For regular images, use the URL directly as last resort
     else if (item.mediaType === 'image') {
@@ -183,11 +196,29 @@ const VisualMediaCard: React.FC<MediaCardProps> = ({
 
     // Append retry query if exists and src is valid
     if (src && retryQuery) {
-      return getAuthUrl(src + (src.includes('?') ? '&' : '?') + retryQuery.replace('?', ''));
+      const [base, fragment] = src.split('#');
+      const withQuery = base + (base.includes('?') ? '&' : '?') + retryQuery.replace('?', '');
+      return getAuthUrl(withQuery) + (fragment === undefined ? '' : `#${fragment}`);
     }
 
     return getAuthUrl(src);
-  }, [item.url, item.mediaType, item.thumbnailUrl, retryQuery]);
+  }, [item.id, item.url, item.mediaType, item.thumbnailUrl, retryQuery]);
+
+  const handleThumbnailError = () => {
+    setIsThumbnailLoaded(false);
+    if (retryTimerRef.current !== null) return;
+    // 短暂失败先退避重试小图，避免滚动时立即并发下载大量原图。
+    if (usesThumbnail && retryAttemptRef.current < 2) {
+      const attempt = ++retryAttemptRef.current;
+      retryTimerRef.current = setTimeout(() => {
+        retryTimerRef.current = null;
+        setRetryQuery(`?retry=${Date.now()}-${attempt}`);
+      }, 500 * (2 ** (attempt - 1)));
+      return;
+    }
+    if (item.mediaType === 'image' && usesThumbnail) setHasError(true);
+    else setImgError(true);
+  };
 
   const handleMouseEnter = () => {
     setIsHovered(true);
@@ -239,7 +270,7 @@ const VisualMediaCard: React.FC<MediaCardProps> = ({
       className={containerClasses}
       style={isGrid ? undefined : { aspectRatio }}
       data-media-aspect-ratio={aspectRatio}
-      data-thumbnail-state={isThumbnailLoaded ? 'loaded' : 'loading'}
+      data-thumbnail-state={imgError ? 'error' : isThumbnailLoaded ? 'loaded' : 'loading'}
       onClick={() => onClick(item)}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
@@ -267,12 +298,14 @@ const VisualMediaCard: React.FC<MediaCardProps> = ({
                 <div className="absolute inset-0 bg-white/[0.045] dark:bg-white/[0.035] animate-pulse" aria-hidden="true" />
               )}
               <img
+              key={thumbnailSrc}
+              ref={attachThumbnail}
               src={thumbnailSrc}
               alt={item.name}
               {...imageLoadingProps}
               className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-500 ${isThumbnailLoaded ? 'opacity-100' : 'opacity-0'}`}
-              onLoad={() => setIsThumbnailLoaded(true)}
-              onError={() => setImgError(true)}
+              onLoad={handleThumbnailLoad}
+              onError={handleThumbnailError}
               />
             </>
           ) : (
@@ -306,24 +339,14 @@ const VisualMediaCard: React.FC<MediaCardProps> = ({
               <div className="absolute inset-0 bg-white/[0.045] dark:bg-white/[0.035] animate-pulse" aria-hidden="true" />
             )}
             <img
+              key={thumbnailSrc}
+              ref={attachThumbnail}
               src={thumbnailSrc}
               alt={item.name}
               {...imageLoadingProps}
               className={getMediaThumbnailClasses(isGrid, mediaHoverZoomEnabled, isThumbnailLoaded)}
-              onLoad={() => setIsThumbnailLoaded(true)}
-              onError={() => {
-                setIsThumbnailLoaded(false);
-                // Smart Fallback Logic
-                if (item.thumbnailUrl && thumbnailSrc === item.thumbnailUrl) {
-                  // Start of fallback sequence: Switch to original URL via state
-                  setHasError(true);
-                } else if (thumbnailSrc.startsWith('/api/thumbnail')) { // Corrected from /api/thumb/
-                  setHasError(true);
-                } else {
-                  // Only error out completely if we were already using the original URL
-                  setImgError(true);
-                }
-              }}
+              onLoad={handleThumbnailLoad}
+              onError={handleThumbnailError}
             />
           </>
         ) : (
@@ -331,11 +354,12 @@ const VisualMediaCard: React.FC<MediaCardProps> = ({
           !imgError ? (
             <div className="relative w-full h-full">
               <img
+                ref={attachThumbnail}
                 src={getAuthUrl(item.url)} // Use original URL
                 alt={item.name}
                 {...imageLoadingProps}
                 className={getMediaThumbnailClasses(isGrid, mediaHoverZoomEnabled, isThumbnailLoaded)}
-                onLoad={() => setIsThumbnailLoaded(true)}
+                onLoad={handleThumbnailLoad}
                 onError={() => setImgError(true)}
               />
               {/* Repair Button / Warning Indicator */}
@@ -391,7 +415,8 @@ const MediaCardByType: React.FC<MediaCardProps> = (props) => {
       />
     );
   }
-  return <VisualMediaCard {...props} />;
+  // 来源切换时同步重建状态，避免被动 effect 把已完成的 load 覆盖成 loading。
+  return <VisualMediaCard key={JSON.stringify([props.item.id, props.item.url, props.item.thumbnailUrl, props.item.mediaType])} {...props} />;
 };
 
 export const MediaCard: React.FC<MediaCardProps> = React.memo(MediaCardByType, areMediaCardPropsEqual);
