@@ -75,7 +75,8 @@ services:
 
 - **后端**: Node.js / Express / SQLite (`better-sqlite3`)
 - **核心**: FFmpeg (视频转码与封面)
-- **前端**: React / Vite / Tailwind CSS
+- **前端**: React / Vite / Tailwind CSS v4 / shadcn/ui（Base UI）
+- **浏览器要求**: Chrome 111+、Safari / iOS 16.4+、Firefox 128+（Tailwind CSS v4 下限）
 - **移动**: React Native / Expo
 
 ## ⚠️ 使用须知
@@ -156,7 +157,8 @@ services:
 
 - **Backend**: Node.js / Express / SQLite (`better-sqlite3`)
 - **Processing**: FFmpeg
-- **Frontend**: React / Vite / Tailwind CSS
+- **Frontend**: React / Vite / Tailwind CSS v4 / shadcn/ui (Base UI)
+- **Browser support**: Chrome 111+, Safari / iOS 16.4+, Firefox 128+ (Tailwind CSS v4 baseline)
 - **Mobile**: React Native / Expo
 
 ---

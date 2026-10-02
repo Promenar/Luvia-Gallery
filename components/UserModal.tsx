@@ -61,7 +61,7 @@ export const UserModal: React.FC<UserModalProps> = ({
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                className="fixed inset-0 z-[60] bg-black/70 flex items-center justify-center p-4"
+                className="fixed inset-0 z-60 bg-black/70 flex items-center justify-center p-4"
                 onClick={onClose}
             >
                 <motion.div
@@ -88,7 +88,7 @@ export const UserModal: React.FC<UserModalProps> = ({
                                 <input
                                     type="text"
                                     required
-                                    className="w-full px-4 py-2 rounded-xl input-premium outline-none focus:border-accent-500/30 transition-all font-mono text-sm"
+                                    className="w-full px-4 py-2 rounded-xl input-premium outline-hidden focus:border-accent-500/30 transition-all font-mono text-sm"
                                     value={form.username}
                                     onChange={e => setForm({ ...form, username: e.target.value })}
                                 />
@@ -100,7 +100,7 @@ export const UserModal: React.FC<UserModalProps> = ({
                                 <input
                                     type="password"
                                     required
-                                    className="w-full px-4 py-2 rounded-xl input-premium outline-none focus:border-accent-500/30 transition-all font-mono text-sm"
+                                    className="w-full px-4 py-2 rounded-xl input-premium outline-hidden focus:border-accent-500/30 transition-all font-mono text-sm"
                                     value={form.password}
                                     onChange={e => setForm({ ...form, password: e.target.value })}
                                 />
@@ -113,7 +113,7 @@ export const UserModal: React.FC<UserModalProps> = ({
                                     id="isAdmin"
                                     checked={form.isAdmin}
                                     onChange={e => setForm({ ...form, isAdmin: e.target.checked })}
-                                    className="w-4 h-4 rounded text-primary-600 focus:ring-primary-500"
+                                    className="w-4 h-4 rounded-sm text-primary-600 focus:ring-primary-500"
                                 />
                                 <label htmlFor="isAdmin" className="text-sm font-medium">{t('is_admin')}</label>
                             </div>
@@ -133,7 +133,7 @@ export const UserModal: React.FC<UserModalProps> = ({
                                 </div>
                                 <p className="text-xs text-gray-500 mb-2">Separate multiple paths with new lines. Leave empty to deny all access.</p>
                                 <textarea
-                                    className="w-full px-4 py-2 rounded-xl input-premium outline-none focus:border-accent-500/30 min-h-[100px] text-sm font-mono transition-all"
+                                    className="w-full px-4 py-2 rounded-xl input-premium outline-hidden focus:border-accent-500/30 min-h-[100px] text-sm font-mono transition-all"
                                     placeholder="/data/media/user1&#10;/data/media/shared"
                                     value={form.allowedPaths}
                                     onChange={e => setForm({ ...form, allowedPaths: e.target.value })}

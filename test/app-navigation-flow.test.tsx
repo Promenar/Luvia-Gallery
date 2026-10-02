@@ -109,7 +109,7 @@ describe('应用导航最小闭环', () => {
       </LanguageProvider>,
     );
     const toolbarIsland = screen.getByTestId('unified-gallery-toolbar');
-    expect(toolbarIsland.className).toContain('z-[35]');
+    expect(toolbarIsland.className).toContain('z-35');
     expect(toolbarIsland.className).toContain('md:absolute');
     expect(toolbarIsland.className).toContain('md:pointer-events-none');
     expect(toolbarIsland.className).not.toContain('shrink-0');

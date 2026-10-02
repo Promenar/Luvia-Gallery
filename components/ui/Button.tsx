@@ -63,9 +63,9 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
     const baseClasses = cn(
       'inline-flex items-center justify-center rounded-xl font-medium',
       'transition-all duration-200 ease-out',
-      'focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-transparent focus-visible:ring-accent-500/40',
+      'focus:outline-hidden focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-transparent focus-visible:ring-accent-500/40',
       'disabled:opacity-50 disabled:cursor-not-allowed',
-      'backdrop-blur-sm',
+      'backdrop-blur-xs',
       buttonVariants[variant],
       buttonSizes[size],
       fullWidth && 'w-full',

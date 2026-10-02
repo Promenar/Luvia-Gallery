@@ -120,7 +120,7 @@ export const TimelineScrubber: React.FC<TimelineScrubberProps> = ({ groups, onSc
                  <div className="bg-white dark:bg-gray-800 text-primary-600 dark:text-primary-400 shadow-xl rounded-full px-4 py-2 font-bold text-sm border border-gray-100 dark:border-gray-700 flex items-center gap-2 whitespace-nowrap -translate-y-1/2 animate-in fade-in slide-in-from-right-4 duration-200">
                      {activeLabel}
                      {/* Triangle pointer */}
-                     <div className="absolute right-[-5px] top-1/2 -translate-y-1/2 w-2.5 h-2.5 bg-white dark:bg-gray-800 border-r border-t border-gray-100 dark:border-gray-700 transform rotate-45 rounded-sm" />
+                     <div className="absolute right-[-5px] top-1/2 -translate-y-1/2 w-2.5 h-2.5 bg-white dark:bg-gray-800 border-r border-t border-gray-100 dark:border-gray-700 transform rotate-45 rounded-xs" />
                  </div>
              </div>
         )}

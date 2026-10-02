@@ -642,7 +642,7 @@ describe('VirtualGallery 视口与协议流转测试', () => {
     expect(getGridEffectiveItemCount(121, 120, 4, true)).toBe(128);
     expect(getGridEffectiveItemCount(900_000, 120, 4, true)).toBe(900_000);
     expect(getGridEffectiveItemCount(121, 120, 4, false)).toBe(121);
-    expect(GRID_SKELETON_CLASSES).toContain('bg-white/[0.045]');
+    expect(GRID_SKELETON_CLASSES).toContain('bg-white/4.5');
     expect(GRID_SKELETON_CLASSES).not.toContain('border');
     expect(GRID_SKELETON_CLASSES).not.toContain('bg-white/3');
   });

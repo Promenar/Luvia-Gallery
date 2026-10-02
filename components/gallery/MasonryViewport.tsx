@@ -31,11 +31,11 @@ export const getMasonryPrefetchRootMargin = (viewportHeight: number): string =>
 const MasonrySkeleton = ({ index, phase }: { index: number; phase: 'initial' | 'next' }) => (
   <div
     data-testid={`masonry-${phase}-skeleton`}
-    className="relative w-full overflow-hidden rounded-2xl bg-white/[0.045] dark:bg-white/[0.035] animate-pulse"
+    className="relative w-full overflow-hidden rounded-2xl bg-white/4.5 dark:bg-white/[0.035] animate-pulse"
     style={{ aspectRatio: SKELETON_ASPECT_RATIOS[index % SKELETON_ASPECT_RATIOS.length] }}
     aria-hidden="true"
   >
-    <div className="absolute inset-0 bg-gradient-to-br from-white/[0.035] via-transparent to-black/[0.025]" />
+    <div className="absolute inset-0 bg-linear-to-br from-white/[0.035] via-transparent to-black/2.5" />
   </div>
 );
 

@@ -109,7 +109,7 @@ export const SystemTab: React.FC<SystemTabProps> = ({
 
                 <div className="flex justify-between items-center pt-3 mt-3 border-t border-white/10">
                   <span className="text-xs text-text-tertiary">Platform</span>
-                  <code className="text-xs font-mono text-text-secondary bg-black/20 px-2 py-0.5 rounded">
+                  <code className="text-xs font-mono text-text-secondary bg-black/20 px-2 py-0.5 rounded-sm">
                     {systemStatus.platform}
                   </code>
                 </div>

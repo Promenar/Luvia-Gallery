@@ -117,11 +117,11 @@ export const FolderCard: React.FC<FolderCardProps> = React.memo(({ folder, onCli
                 hover={true}
                 interactive={true}
             >
-                <div className={`${layout === 'masonry' ? 'flex-1 min-h-0' : 'aspect-[4/3]'} bg-surface-secondary relative overflow-hidden flex items-center justify-center w-full`}>
+                <div className={`${layout === 'masonry' ? 'flex-1 min-h-0' : 'aspect-4/3'} bg-surface-secondary relative overflow-hidden flex items-center justify-center w-full`}>
                     {folder.coverMedia && !imgError ? (
                         folder.coverMedia.mediaType === 'video' ? (
                             <div className="w-full h-full bg-gray-900 flex items-center justify-center group-hover:scale-105 transition-transform duration-700 relative overflow-hidden">
-                                <div className="absolute inset-0 bg-gradient-to-tr from-gray-900 to-gray-700 opacity-100" />
+                                <div className="absolute inset-0 bg-linear-to-tr from-gray-900 to-gray-700 opacity-100" />
                                 {thumbUrl && (
                                     <img
                                         src={thumbUrl}
@@ -143,13 +143,13 @@ export const FolderCard: React.FC<FolderCardProps> = React.memo(({ folder, onCli
                                     />
                                 )}
                                 <div className={`absolute inset-0 flex items-center justify-center z-10 transition-opacity ${isPlaying ? 'opacity-0' : 'opacity-100'}`}>
-                                    <div className="w-12 h-12 rounded-full bg-white/10 backdrop-blur-sm flex items-center justify-center border border-white/20">
+                                    <div className="w-12 h-12 rounded-full bg-white/10 backdrop-blur-xs flex items-center justify-center border border-white/20">
                                         <Icons.Video className="text-white/90" size={24} />
                                     </div>
                                 </div>
                             </div>
                         ) : folder.coverMedia.mediaType === 'audio' ? (
-                            <div className="w-full h-full bg-gradient-to-br from-pink-500 to-orange-400 flex items-center justify-center">
+                            <div className="w-full h-full bg-linear-to-br from-pink-500 to-orange-400 flex items-center justify-center">
                                 <Icons.Music className="text-white" size={48} />
                             </div>
                         ) : (
@@ -168,7 +168,7 @@ export const FolderCard: React.FC<FolderCardProps> = React.memo(({ folder, onCli
                     )}
 
                     {/* Overlay Gradient */}
-                    <div className="absolute inset-0 bg-gradient-to-t from-black/50 to-transparent opacity-60" />
+                    <div className="absolute inset-0 bg-linear-to-t from-black/50 to-transparent opacity-60" />
 
                     {/* Count Badge */}
                     <div className="absolute bottom-2 right-2 glass-1 bg-overlay-veil text-white text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 border border-border-glow">
@@ -240,7 +240,7 @@ export const FolderCard: React.FC<FolderCardProps> = React.memo(({ folder, onCli
                                     value={renameValue}
                                     onChange={(e) => setRenameValue(e.target.value)}
                                     onBlur={() => submitRename()}
-                                    className="w-full text-sm font-semibold text-text-primary bg-surface-secondary rounded px-1 outline-none border border-primary-500"
+                                    className="w-full text-sm font-semibold text-text-primary bg-surface-secondary rounded-sm px-1 outline-hidden border border-primary-500"
                                 />
                             </form>
                         ) : (

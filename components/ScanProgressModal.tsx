@@ -58,7 +58,7 @@ export const ScanProgressModal: React.FC<ScanProgressModalProps> = ({
                     initial={{ y: 100, opacity: 0 }}
                     animate={{ y: 0, opacity: 1 }}
                     exit={{ y: 100, opacity: 0 }}
-                    className="fixed bottom-6 right-6 z-[60] bg-surface-secondary backdrop-blur-3xl rounded-xl shadow-2xl border border-white/5 p-4 w-72 flex flex-col gap-3"
+                    className="fixed bottom-6 right-6 z-60 bg-surface-secondary backdrop-blur-3xl rounded-xl shadow-2xl border border-white/5 p-4 w-72 flex flex-col gap-3"
                 >
                     <div className="flex items-center justify-between">
                         <div className="flex items-center gap-2">
@@ -68,9 +68,9 @@ export const ScanProgressModal: React.FC<ScanProgressModalProps> = ({
                             </span>
                         </div>
                         <div className="flex items-center gap-1">
-                            <button onClick={() => setIsMinimized(false)} className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded transition-colors"><Icons.Maximize size={14} /></button>
+                            <button onClick={() => setIsMinimized(false)} className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-sm transition-colors"><Icons.Maximize size={14} /></button>
                             {(status === 'completed' || status === 'cancelled' || status === 'error') && (
-                                <button onClick={onClose} className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded transition-colors"><Icons.Close size={14} /></button>
+                                <button onClick={onClose} className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-sm transition-colors"><Icons.Close size={14} /></button>
                             )}
                         </div>
                     </div>
@@ -91,7 +91,7 @@ export const ScanProgressModal: React.FC<ScanProgressModalProps> = ({
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
                     exit={{ opacity: 0 }}
-                    className="fixed inset-0 z-[60] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4"
+                    className="fixed inset-0 z-60 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4"
                 >
                     <motion.div
                         initial={{ scale: 0.9, y: 20 }}

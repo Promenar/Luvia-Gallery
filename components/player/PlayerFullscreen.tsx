@@ -105,7 +105,7 @@ export const PlayerFullscreen: React.FC<PlayerFullscreenProps> = ({ onToggleFavo
                     className="fixed inset-0 z-50 bg-black/95 flex items-center justify-center overflow-hidden"
                 >
                     {/* 顶部控制栏：自旧 MediaPlayer 全屏布局迁移（收藏/信息/全屏退出/关闭） */}
-                    <div className="absolute top-0 left-0 right-0 p-4 flex justify-between items-center text-white/80 z-50 pointer-events-none bg-gradient-to-b from-black/70 to-transparent">
+                    <div className="absolute top-0 left-0 right-0 p-4 flex justify-between items-center text-white/80 z-50 pointer-events-none bg-linear-to-b from-black/70 to-transparent">
                         <div className="flex flex-col max-w-[50%] pointer-events-auto">
                             <span className="font-medium text-lg truncate flex items-center gap-2">{currentItem.name}</span>
                             <span className="text-xs opacity-60 truncate">{currentItem.folderPath || 'Root'}</span>

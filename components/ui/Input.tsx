@@ -51,7 +51,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
     const baseClasses = cn(
       'rounded-xl text-text-primary placeholder:text-text-muted',
       'transition-all duration-200 ease-out',
-      'focus:outline-none focus:ring-2 focus:ring-accent-500/20',
+      'focus:outline-hidden focus:ring-2 focus:ring-accent-500/20',
       'disabled:opacity-50 disabled:cursor-not-allowed',
       inputVariants[variant],
       inputSizes[size],
@@ -119,7 +119,7 @@ export const Textarea = forwardRef<HTMLTextAreaElement, TextareaProps>(
       'px-4 py-2 rounded-xl text-text-primary placeholder:text-text-muted',
       'bg-surface-secondary border border-border-default',
       'transition-all duration-200 ease-out',
-      'focus:outline-none focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500/50',
+      'focus:outline-hidden focus:ring-2 focus:ring-accent-500/20 focus:border-accent-500/50',
       'disabled:opacity-50 disabled:cursor-not-allowed',
       'resize-none',
       error && 'border-red-500/50 focus:border-red-500 focus:ring-red-500/20',

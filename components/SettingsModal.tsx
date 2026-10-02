@@ -226,13 +226,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                         aria-checked={mediaHoverZoomEnabled}
                                         aria-describedby="media-hover-zoom-description"
                                         onClick={() => onMediaHoverZoomChange(!mediaHoverZoomEnabled)}
-                                        className={`relative h-7 w-12 shrink-0 rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2 focus-visible:ring-offset-surface-primary ${
+                                        className={`relative h-7 w-12 shrink-0 rounded-full transition-colors focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2 focus-visible:ring-offset-surface-primary ${
                                             mediaHoverZoomEnabled ? 'bg-accent-500' : 'bg-white/15'
                                         }`}
                                     >
                                         <span
                                             aria-hidden="true"
-                                            className={`absolute left-0 top-1 h-5 w-5 rounded-full bg-white shadow-sm transition-transform ${
+                                            className={`absolute left-0 top-1 h-5 w-5 rounded-full bg-white shadow-xs transition-transform ${
                                                 mediaHoverZoomEnabled ? 'translate-x-6' : 'translate-x-1'
                                             }`}
                                         />
@@ -292,7 +292,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                         <h4 className="text-lg font-bold text-text-primary">{t('library_stats')}</h4>
                                     </div>
                                     <div className="glass-1 rounded-2xl overflow-hidden shadow-2xl border-none">
-                                        <div className="p-6 border-b border-white/5 bg-white/[0.02]">
+                                        <div className="p-6 border-b border-white/5 bg-white/2">
                                             <div className="flex items-center justify-between mb-2">
                                                 <h5 className="font-bold text-lg text-text-primary">{t('library_scan_paths')}</h5>
                                                 <button
@@ -328,7 +328,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                         <div className="bg-black/20 p-2 space-y-1 max-h-64 overflow-y-auto border-b border-white/10 custom-scrollbar">
                                             {libraryPaths.length === 0 && (
                                                 <div className="p-4 text-center text-sm text-text-tertiary italic">
-                                                    {t('scanning_default')} <span className="font-mono bg-white/10 px-1 rounded text-text-secondary">/media</span>
+                                                    {t('scanning_default')} <span className="font-mono bg-white/10 px-1 rounded-sm text-text-secondary">/media</span>
                                                 </div>
                                             )}
                                             {libraryPaths.map(path => (
@@ -375,7 +375,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                                                         <select
                                                                             value={systemStatus.scanInterval || 60}
                                                                             onChange={(e) => onMonitorUpdate('periodic', parseInt(e.target.value))}
-                                                                            className="bg-black/40 border border-white/5 hover:border-white/10 rounded px-2 py-1 text-xs outline-none focus:ring-2 focus:ring-accent-500/20 text-text-primary transition-all [&>option]:text-black"
+                                                                            className="bg-black/40 border border-white/5 hover:border-white/10 rounded-sm px-2 py-1 text-xs outline-hidden focus:ring-2 focus:ring-accent-500/20 text-text-primary transition-all [&>option]:text-black"
                                                                         >
                                                                             <option value="15">15 {t('minutes')}</option>
                                                                             <option value="30">30 {t('minutes')}</option>
@@ -518,7 +518,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                                 <div className="flex justify-between items-center">
                                                     <span className="text-sm text-text-secondary">FFmpeg (Video)</span>
                                                     <div className="flex items-center gap-2">
-                                                        <span className={`text-xs font-bold ${systemStatus.ffmpeg ? 'text-green-400 bg-green-500/10 border border-green-500/20' : 'text-red-400 bg-red-500/10 border border-red-500/20'} px-2 py-0.5 rounded`}>
+                                                        <span className={`text-xs font-bold ${systemStatus.ffmpeg ? 'text-green-400 bg-green-500/10 border border-green-500/20' : 'text-red-400 bg-red-500/10 border border-red-500/20'} px-2 py-0.5 rounded-sm`}>
                                                             {systemStatus.ffmpeg ? t('active') : t('missing')}
                                                         </span>
                                                         <div className={`w-2 h-2 rounded-full ${systemStatus.ffmpeg ? 'bg-green-500 shadow-glow-sm' : 'bg-red-500 shadow-glow-red'}`} />
@@ -527,7 +527,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                                 <div className="flex justify-between items-center">
                                                     <span className="text-sm text-text-secondary">{t('image_processor')}</span>
                                                     <div className="flex items-center gap-2">
-                                                        <span className={`text-xs font-bold ${systemStatus.ffmpeg || systemStatus.sharp ? 'text-green-400 bg-green-500/10 border border-green-500/20' : 'text-red-400 bg-red-500/10 border border-red-500/20'} px-2 py-0.5 rounded`}>
+                                                        <span className={`text-xs font-bold ${systemStatus.ffmpeg || systemStatus.sharp ? 'text-green-400 bg-green-500/10 border border-green-500/20' : 'text-red-400 bg-red-500/10 border border-red-500/20'} px-2 py-0.5 rounded-sm`}>
                                                             {systemStatus.ffmpeg || systemStatus.sharp ? (systemStatus.imageProcessor || 'Active') : t('missing')}
                                                         </span>
                                                         <div className={`w-2 h-2 rounded-full ${systemStatus.ffmpeg || systemStatus.sharp ? 'bg-green-500 shadow-glow-sm' : 'bg-red-500 shadow-glow-red'}`} />
@@ -536,7 +536,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                                 <div className="flex justify-between items-center">
                                                     <span className="text-sm text-text-secondary">Database</span>
                                                     <div className="flex items-center gap-2">
-                                                        <span className={`text-xs font-bold ${systemStatus.dbStatus === 'connected' ? 'text-green-400 bg-green-500/10 border border-green-500/20' : 'text-yellow-400 bg-yellow-500/10 border border-yellow-500/20'} px-2 py-0.5 rounded`}>
+                                                        <span className={`text-xs font-bold ${systemStatus.dbStatus === 'connected' ? 'text-green-400 bg-green-500/10 border border-green-500/20' : 'text-yellow-400 bg-yellow-500/10 border border-yellow-500/20'} px-2 py-0.5 rounded-sm`}>
                                                             {systemStatus.dbStatus === 'connected' ? 'Connected' : (systemStatus.dbStatus || 'Unknown')}
                                                         </span>
                                                         <div className={`w-2 h-2 rounded-full ${systemStatus.dbStatus === 'connected' ? 'bg-green-500 shadow-glow-sm' : 'bg-yellow-500 shadow-glow-yellow'}`} />
@@ -545,7 +545,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                                 <div className="flex justify-between items-center">
                                                     <span className="text-sm text-text-secondary">GPU Acceleration</span>
                                                     <div className="flex items-center gap-2">
-                                                        <span className={`text-xs font-bold ${systemStatus.hardwareAcceleration?.type && systemStatus.hardwareAcceleration.type !== 'none' ? 'text-green-400 bg-green-500/10 border border-green-500/20' : 'text-text-tertiary bg-white/5 border border-white/5'} px-2 py-0.5 rounded uppercase`}>
+                                                        <span className={`text-xs font-bold ${systemStatus.hardwareAcceleration?.type && systemStatus.hardwareAcceleration.type !== 'none' ? 'text-green-400 bg-green-500/10 border border-green-500/20' : 'text-text-tertiary bg-white/5 border border-white/5'} px-2 py-0.5 rounded-sm uppercase`}>
                                                             {systemStatus.hardwareAcceleration?.type === 'cuda' ? 'NVIDIA CUDA' : (systemStatus.hardwareAcceleration?.type === 'vaapi' ? 'Intel/AMD VAAPI' : 'Disabled')}
                                                         </span>
                                                         <div className={`w-2 h-2 rounded-full ${systemStatus.hardwareAcceleration?.type && systemStatus.hardwareAcceleration.type !== 'none' ? 'bg-green-500 shadow-glow-sm' : 'bg-white/20'}`} />
@@ -555,7 +555,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                         </div>
                                         <div className="flex justify-between items-center pt-3 mt-3 border-t border-white/10">
                                             <span className="text-xs text-header-secondary">Platform</span>
-                                            <span className="text-xs font-mono text-text-secondary bg-black/20 px-2 py-0.5 rounded border border-white/5">{systemStatus.platform}</span>
+                                            <span className="text-xs font-mono text-text-secondary bg-black/20 px-2 py-0.5 rounded-sm border border-white/5">{systemStatus.platform}</span>
                                         </div>
                                     </div>
                                     <div className="glass-1 border border-white/10 rounded-2xl p-5 shadow-lg">
@@ -612,10 +612,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                         <div className="flex items-center gap-3">
                                             <div className="w-10 h-10 rounded-full bg-accent-500/10 text-accent-400 flex items-center justify-center font-bold shadow-glow overflow-hidden relative group/avatar">
                                                 <span className="relative z-10">{u.username[0].toUpperCase()}</span>
-                                                <div className="absolute inset-0 bg-gradient-to-tr from-accent-500/20 to-transparent opacity-0 group-hover/avatar:opacity-100 transition-opacity" />
+                                                <div className="absolute inset-0 bg-linear-to-tr from-accent-500/20 to-transparent opacity-0 group-hover/avatar:opacity-100 transition-opacity" />
                                             </div>
                                             <div>
-                                                <div className="font-bold flex items-center gap-2 text-text-primary">{u.username} {u.username === currentUser?.username && <span className="text-[10px] bg-green-500/20 text-green-400 px-1.5 py-0.5 rounded font-bold uppercase">You</span>}</div>
+                                                <div className="font-bold flex items-center gap-2 text-text-primary">{u.username} {u.username === currentUser?.username && <span className="text-[10px] bg-green-500/20 text-green-400 px-1.5 py-0.5 rounded-sm font-bold uppercase">You</span>}</div>
                                                 <div className="text-xs text-text-secondary">{u.isAdmin ? 'Administrator' : 'User'}</div>
                                             </div>
                                         </div>
@@ -712,7 +712,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                                             value={wallpaperConfig.path}
                                                             onChange={(e) => setWallpaperConfig(prev => ({ ...prev, path: e.target.value }))}
                                                             placeholder={t('enter_rel_path')}
-                                                            className="flex-1 bg-black/40 border border-white/5 rounded-xl px-3 py-2 text-xs text-text-primary focus:border-accent-500/30 outline-none"
+                                                            className="flex-1 bg-black/40 border border-white/5 rounded-xl px-3 py-2 text-xs text-text-primary focus:border-accent-500/30 outline-hidden"
                                                         />
                                                         <button
                                                             onClick={() => {
@@ -836,7 +836,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                         <button
                                             key={tab}
                                             onClick={() => { setActiveTab(tab); onTabChange?.(tab); }}
-                                            className={`w-full text-left px-4 py-3 rounded-xl flex items-center gap-3 transition-all outline-none ${activeTab === tab ? 'glass-1 text-accent-500 shadow-glow font-semibold border border-white/10' : 'text-text-secondary hover:text-text-primary hover:bg-white/5 border border-transparent'}`}
+                                            className={`w-full text-left px-4 py-3 rounded-xl flex items-center gap-3 transition-all outline-hidden ${activeTab === tab ? 'glass-1 text-accent-500 shadow-glow font-semibold border border-white/10' : 'text-text-secondary hover:text-text-primary hover:bg-white/5 border border-transparent'}`}
                                         >
                                             <Icon size={18} /> {labels[tab]}
                                         </button>

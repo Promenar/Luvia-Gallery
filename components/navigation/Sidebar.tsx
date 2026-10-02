@@ -52,7 +52,7 @@ export const Sidebar: React.FC<SidebarProps> = React.memo(({
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          className="fixed inset-0 bg-black/50 backdrop-blur-sm z-30 md:hidden"
+          className="fixed inset-0 bg-black/50 backdrop-blur-xs z-30 md:hidden"
           onClick={onToggleSidebar}
         />
       )}
@@ -68,7 +68,7 @@ export const Sidebar: React.FC<SidebarProps> = React.memo(({
         className={`
           fixed inset-y-0 left-0 z-40 flex flex-col
           glass-2
-          md:!translate-x-0 md:relative
+          md:transform-none! md:relative
           shadow-xl md:shadow-none
           ${!isSidebarOpen && 'hidden md:flex'}
         `}
@@ -87,7 +87,7 @@ export const Sidebar: React.FC<SidebarProps> = React.memo(({
             <motion.span
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
-              className="font-display font-semibold text-lg tracking-tight truncate text-text-primary drop-shadow-sm ml-3 flex-1"
+              className="font-display font-semibold text-lg tracking-tight truncate text-text-primary drop-shadow-xs ml-3 flex-1"
               title={appTitle}
             >
               {appTitle}
@@ -213,7 +213,7 @@ export const Sidebar: React.FC<SidebarProps> = React.memo(({
       {/* Secondary Backdrop */}
       {isSidebarOpen && (
         <div
-          className="fixed inset-0 z-30 md:hidden backdrop-blur-sm bg-black/50"
+          className="fixed inset-0 z-30 md:hidden backdrop-blur-xs bg-black/50"
           onClick={onToggleSidebar}
         />
       )}

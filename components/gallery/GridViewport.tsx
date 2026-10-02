@@ -23,7 +23,7 @@ export const getGridEffectiveItemCount = (
   ? Math.max(itemCount, loadedItemCount + (Math.max(1, columnCount) * 2))
   : itemCount;
 
-export const GRID_SKELETON_CLASSES = 'bg-white/[0.045] dark:bg-white/[0.035] rounded-2xl animate-pulse flex items-center justify-center';
+export const GRID_SKELETON_CLASSES = 'bg-white/4.5 dark:bg-white/[0.035] rounded-2xl animate-pulse flex items-center justify-center';
 
 // 网格顶部安全区：App.tsx 的统一工具栏浮岛在 md 及以上为 `md:absolute md:inset-x-0 md:top-0`
 // 悬浮遮挡内容，移动端为普通流布局无需避让。md 语义（64px 顶部内边距）与瀑布流的
