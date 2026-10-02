@@ -2317,3 +2317,34 @@ server.js：EXIF 与缩略图 ffmpeg 改 execFile 参数数组；文件/文件�
 
 ### HLG
 本记录追加；continuity-key webui-security-hardening 等待部署授权与视觉改造评估。长期规则候选：口令哈希迁移导致回滚不兼容应在部署清单中固定为备份前置项，未经授权未写入项目规则。
+
+## 2026-10-02T09:28:01+08:00 · WebUI 视觉底座第 0 阶段（Tailwind v4 + shadcn/Base UI + 暗房影院令牌）已推送
+
+type: feature
+scope: ["Luvia-Gallery", "WebUI"]
+status: done
+tags: ["webui", "design-system", "tailwind-v4", "shadcn", "base-ui", "visual"]
+continuity: waiting
+continuity-key: webui-visual-foundation
+record-fingerprint: 56d0ce15a4d3079e1cb8e352a337e41e29f383f1178c4e360690558c65461965
+
+### Summary
+用户确认底座为 shadcn/ui（Base UI）+ Tailwind v4，视觉方向选择“A · 暗房影院”（时间线后续借用章节式日期）。完成第 0 阶段并推送：49434a6 因 git add 路径错误中断只含删除与改名（单独构建会失败），随即以 a051be3 前向修复补齐，origin/main 回读一致为 a051be31dbd0e7510d8a70b2eecfc5822143fb5e。未构建镜像、未部署。
+
+### Changed
+官方 @tailwindcss/upgrade 迁移 v4（人工还原被误改的 mobile/ 全部文件与 ui 组件变体字面量 'outline'/'rounded'），改用 @tailwindcss/vite，vite.config.ts 改为 .mts（ESM 插件），移除 postcss/autoprefixer/tailwind.config.js。新增 components.json（base-nova、ui 别名 @/components/kit、utils @/utils/cn，避开现有 components/ui 大小写冲突与后端 lib/）与 components/kit/button.tsx。index.css 重写：暗房/画廊白墙语义令牌、黄铜色阶、旧令牌改指向新色板、圆角保留 Tailwind 默认刻度、glass-1 去除 backdrop-filter、按钮指针光标。字体改 @fontsource-variable/inter + 系统中文字体，移除 Google Fonts；LanguageContext 同步 html lang；theme-color 与 PWA 颜色更新。删除 AmbientDotField 及其测试与全屏噪点注入。Sidebar 的 md:translate-x-0! 改为 md:transform-none!（v4 translate 属性无法覆盖 framer 行内 transform，曾导致桌面侧栏消失）。测试中字面类名断言更新为 v4 等价写法。
+
+### Validation
+本机 typecheck 0 错误、前端 300/300、后端契约与安全测试 28/28、vite build 通过。scratchpad 内零依赖模拟 API 承载构建产物，浏览器实测桌面浅色/深色、首页、文件夹、播放浮窗、设置弹窗与 375px 手机宽度；确认无外部字体请求、Inter Variable 已加载。
+
+### Next
+1. PDEC 因 README.md、package.json、package-lock.json 再次漂移，需用户确认重绑后在 FNOS Node 20 做容器构建与全量测试。2. 第 1 阶段外壳：侧栏、工具栏、设置与各弹窗迁移到 components/kit，alert/confirm 换 sonner 与确认对话框，重做登录页，解决移动端页头与工具栏重叠。3. AGENTS.md 技术栈描述更新需用户授权。
+
+### Risks
+49434a6 在 origin/main 上短暂处于不可构建状态（约 1 分钟），若 FNOS 源码同步恰在此窗口抓取，只影响同步副本，不影响生产。Tailwind v4 浏览器下限提升为 Chrome 111 / Safari 16.4 / Firefox 128。移动端非首页的页头与工具栏重叠推断为既有问题，未在旧版本实机对照。设置等旧弹窗仍为迁移期样式。
+
+### DIA
+已同步 release_notes.md、README.md（技术栈与浏览器下限）、.agent/registry.md（登记视觉底座计划）；AGENTS.md 技术栈描述待用户授权后更新。
+
+### HLG
+本记录追加；continuity-key webui-visual-foundation 等待 PDEC 重绑与第 1 阶段。长期规则候选：Tailwind 升级工具会改写非类名字符串字面量，后续批量迁移须做词级 diff 审计。

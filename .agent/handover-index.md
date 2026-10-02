@@ -1,6 +1,6 @@
 # Handover Index
 
-> generated_at: 2026-10-02T08:43:47+08:00
+> generated_at: 2026-10-02T09:28:01+08:00
 > generated: true; do not edit manually
 > recovery_window_days: 7
 
@@ -18,11 +18,13 @@
 | pdec-initialization | waiting | 2026-09-07T02:41:08+08:00 | done | ["Luvia-Gallery", "PDEC", "Android"] | PDEC 批准：Android 执行主机设为 MAIN | `.agent/handover.md` · `2026-09-07T02:41:08+08:00` · `fp:8ee7b2686f` |
 | webui-large-library-performance | waiting | 2026-08-13T02:03:17+08:00 | waiting | ["Luvia-Gallery", "webui", "server", "sqlite"] | WebUI 大媒体库候选提交收口 | `.agent/handover.md` · `2026-08-13T02:03:17+08:00` · `fp:e4e4629bec` |
 | webui-security-hardening | waiting | 2026-10-02T08:43:47+08:00 | done | ["Luvia-Gallery", "WebUI", "server", "runner"] | 安全加固与 WebUI 功能修复候选 13797cb 已推送（未部署） | `.agent/handover.md` · `2026-10-02T08:43:47+08:00` · `fp:469e36c2c7` |
+| webui-visual-foundation | waiting | 2026-10-02T09:28:01+08:00 | done | ["Luvia-Gallery", "WebUI"] | WebUI 视觉底座第 0 阶段（Tailwind v4 + shadcn/Base UI + 暗房影院令牌）已推送 | `.agent/handover.md` · `2026-10-02T09:28:01+08:00` · `fp:56d0ce15a4` |
 
 ## Recent 7-Day Catalog
 
 | date | format | status | continuity | scope | tags | title | source |
 | :---: | :---: | :---: | :---: | :--- | :--- | :--- | :--- |
+| 2026-10-02T09:28:01+08:00 | iso | done | waiting | ["Luvia-Gallery", "WebUI"] | ["webui", "design-system", "tailwind-v4", "shadcn", "base-ui", "visual"] | WebUI 视觉底座第 0 阶段（Tailwind v4 + shadcn/Base UI + 暗房影院令牌）已推送 | `.agent/handover.md` · `2026-10-02T09:28:01+08:00` · `fp:56d0ce15a4` |
 | 2026-10-02T08:43:47+08:00 | iso | done | waiting | ["Luvia-Gallery", "WebUI", "server", "runner"] | ["security", "audit", "webui", "typecheck", "pdec", "fnos"] | 安全加固与 WebUI 功能修复候选 13797cb 已推送（未部署） | `.agent/handover.md` · `2026-10-02T08:43:47+08:00` · `fp:469e36c2c7` |
 
 ## Undated Records
