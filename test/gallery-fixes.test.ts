@@ -105,3 +105,14 @@ describe('令牌参数清理', () => {
     expect(cleanTokenFromUrl('/api/thumb/a')).toBe('/api/thumb/a');
   });
 });
+
+describe('网格几何', () => {
+  it('手机宽度至少 3 列、4px 间距；桌面按 200px 目标列宽与 16px 间距', async () => {
+    const { resolveGridMetrics } = await import('../components/gallery/GridViewport');
+    expect(resolveGridMetrics(343)).toEqual({ gutter: 4, columnCount: 3 });
+    expect(resolveGridMetrics(300)).toEqual({ gutter: 4, columnCount: 3 });
+    expect(resolveGridMetrics(600)).toEqual({ gutter: 4, columnCount: 5 });
+    expect(resolveGridMetrics(1200)).toEqual({ gutter: 16, columnCount: 5 });
+    expect(resolveGridMetrics(640)).toEqual({ gutter: 16, columnCount: 3 });
+  });
+});

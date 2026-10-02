@@ -31,12 +31,10 @@ export const getMasonryPrefetchRootMargin = (viewportHeight: number): string =>
 const MasonrySkeleton = ({ index, phase }: { index: number; phase: 'initial' | 'next' }) => (
   <div
     data-testid={`masonry-${phase}-skeleton`}
-    className="relative w-full overflow-hidden rounded-2xl bg-white/4.5 dark:bg-white/[0.035] animate-pulse"
+    className="relative w-full overflow-hidden rounded-md bg-muted"
     style={{ aspectRatio: SKELETON_ASPECT_RATIOS[index % SKELETON_ASPECT_RATIOS.length] }}
     aria-hidden="true"
-  >
-    <div className="absolute inset-0 bg-linear-to-br from-white/[0.035] via-transparent to-black/2.5" />
-  </div>
+  />
 );
 
 // 先定义 forwardRef 内核，再包 memo：拦截 props 未变化的父级重渲染，
@@ -425,11 +423,11 @@ const MasonryViewportImpl = React.forwardRef<ViewportCaptureHandle, CommonViewpo
       className="w-full h-full overflow-y-auto pb-20 no-scrollbar"
     >
       <div
-        className={`flex gap-4 items-start ${MASONRY_TOP_SAFE_AREA_CLASSES}`}
+        className={`flex gap-2 sm:gap-4 items-start ${MASONRY_TOP_SAFE_AREA_CLASSES}`}
         data-testid="masonry-scroll-content"
       >
         {(isInitialLoading && items.length === 0 ? initialSkeletonColumns : columns).map((colItems, colIndex) => (
-          <div key={colIndex} className="flex-1 flex flex-col gap-4">
+          <div key={colIndex} className="flex-1 flex flex-col gap-2 sm:gap-4">
             {isInitialLoading && items.length === 0 ? (
               (colItems as number[]).map(index => <MasonrySkeleton key={`initial-${index}`} index={index} phase="initial" />)
             ) : (colItems as typeof items).filter(item => item && item.id).map((item) => {
