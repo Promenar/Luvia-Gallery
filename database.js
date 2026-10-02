@@ -27,6 +27,7 @@ function initDatabase() {
     }
 
     db.pragma('journal_mode = WAL'); // Enable WAL mode for high concurrency
+    registerSqlFunctions();
 
     // Create/Verify schema exists (for upgrades)
     ensureSchema();
@@ -42,6 +43,21 @@ function initDatabase() {
 
     // 清理历史遗留的孤立 FTS 条目（files_fts 中存在但 files 表中已删除的 rowid）
     repairOrphanedFTS();
+}
+
+/** 32 位 FNV-1a，用于按种子生成稳定的伪随机排序键。 */
+function seededRank(id, seed) {
+    const text = `${seed}:${id}`;
+    let hash = 2166136261;
+    for (let index = 0; index < text.length; index += 1) {
+        hash ^= text.charCodeAt(index);
+        hash = Math.imul(hash, 16777619);
+    }
+    return hash >>> 0;
+}
+
+function registerSqlFunctions() {
+    db.function('seeded_rank', { deterministic: true }, (id, seed) => seededRank(String(id), String(seed)));
 }
 
 /**
@@ -602,6 +618,7 @@ function queryFiles(options = {}) {
         offset = 0,
         limit = 500,
         random = false,
+        randomSeed = null,
         sortOption = 'dateDesc'
     } = options;
     const queryParts = buildFileQueryParts(options);
@@ -622,7 +639,11 @@ function queryFiles(options = {}) {
     let query = `SELECT f.*, ${favoriteProjection}
         FROM files f ${queryParts.joins} ${queryParts.where}`;
 
-    if (random) {
+    const seededRandom = random && Number.isSafeInteger(randomSeed);
+    if (seededRandom) {
+        // 种子化随机：同一种子下各页顺序稳定，分页不会重复或漏项
+        query += ' ORDER BY seeded_rank(f.id, ?), f.id ASC LIMIT ? OFFSET ?';
+    } else if (random) {
         query += ' ORDER BY RANDOM(), f.id ASC LIMIT ? OFFSET ?';
     } else {
         switch (sortOption) {
@@ -635,7 +656,7 @@ function queryFiles(options = {}) {
         }
     }
 
-    const params = [...projectionParams, ...queryParts.params, limit, offset];
+    const params = [...projectionParams, ...queryParts.params, ...(seededRandom ? [randomSeed] : []), limit, offset];
 
     const stmt = db.prepare(query);
     const results = stmt.all(...params);
@@ -1031,17 +1052,20 @@ function getFilesAfterRowid(afterRowid = 0, limit = 256) {
 }
 
 function deleteFilesByFolder(folderPath) {
+    // 目录名可能包含 LIKE 通配符（% 或 _），必须转义后再匹配子目录
+    const descendantPattern = buildDescendantPattern(folderPath);
+    const folderMatch = "folder_path = ? OR folder_path LIKE ? ESCAPE '\\'";
     const affectedCoverPaths = db.prepare(`
         SELECT path FROM folders
         WHERE cover_file_id IN (
-            SELECT id FROM files WHERE folder_path = ? OR folder_path LIKE ?
+            SELECT id FROM files WHERE ${folderMatch}
         )
-    `).all(folderPath, folderPath + '/%').map(row => row.path);
-    db.prepare('DELETE FROM thumbnails WHERE file_id IN (SELECT id FROM files WHERE folder_path = ? OR folder_path LIKE ?)').run(folderPath, folderPath + '/%');
+    `).all(folderPath, descendantPattern).map(row => row.path);
+    db.prepare(`DELETE FROM thumbnails WHERE file_id IN (SELECT id FROM files WHERE ${folderMatch})`).run(folderPath, descendantPattern);
     try {
-        db.prepare('DELETE FROM files_fts WHERE rowid IN (SELECT rowid FROM files WHERE folder_path = ? OR folder_path LIKE ?)').run(folderPath, folderPath + '/%');
+        db.prepare(`DELETE FROM files_fts WHERE rowid IN (SELECT rowid FROM files WHERE ${folderMatch})`).run(folderPath, descendantPattern);
     } catch (e) { }
-    db.prepare('DELETE FROM files WHERE folder_path = ? OR folder_path LIKE ?').run(folderPath, folderPath + '/%');
+    db.prepare(`DELETE FROM files WHERE ${folderMatch}`).run(folderPath, descendantPattern);
     refreshFolderCoversForPaths(affectedCoverPaths);
 }
 
@@ -1165,6 +1189,25 @@ function toggleFavorite(userId, itemId, itemType) {
     }
 }
 
+/** 用户改名时迁移收藏归属；目标用户名已有的同项收藏保留，不产生重复。 */
+function renameFavoritesUser(oldUserId, newUserId) {
+    if (!oldUserId || !newUserId || oldUserId === newUserId) return 0;
+    const migrate = db.transaction(() => {
+        db.prepare(`
+            DELETE FROM favorites
+            WHERE user_id = ?
+              AND EXISTS (
+                SELECT 1 FROM favorites existing
+                WHERE existing.user_id = ?
+                  AND existing.item_id = favorites.item_id
+                  AND existing.item_type = favorites.item_type
+              )
+        `).run(oldUserId, newUserId);
+        return db.prepare('UPDATE favorites SET user_id = ? WHERE user_id = ?').run(newUserId, oldUserId).changes;
+    });
+    return migrate();
+}
+
 function getFavoriteIds(userId) {
     const rows = db.prepare('SELECT item_id, item_type FROM favorites WHERE user_id = ?').all(userId);
     const files = [];
@@ -1286,6 +1329,7 @@ module.exports = {
     closeDatabase,
     toggleFavorite,
     getFavoriteIds,
+    renameFavoritesUser,
     queryFavoriteFiles,
     countFavoriteFiles,
     deleteFilesBatch,

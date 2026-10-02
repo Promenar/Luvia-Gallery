@@ -21,6 +21,12 @@ const {
     walkMediaFiles
 } = require('./lib/background-file-walker');
 const { createRequestTimingMiddleware } = require('./lib/request-timing');
+const {
+    isSafeEntryName,
+    normalizeStoredPassword,
+    resolveManagedPath,
+    verifyPassword
+} = require('./lib/security');
 
 const app = express();
 const port = process.env.PORT || 3001;
@@ -407,9 +413,17 @@ app.post('/api/auth/login', (req, res) => {
     const config = getConfig();
     if (config.users) {
         const user = config.users.find(u => u.username === username);
-        // Note: Storing plaintext passwords in config is still not ideal, but this is a step up.
-        // Ideally, we should hash them. But for now, we match existing structure.
-        if (user && user.password === password) {
+        const verification = user ? verifyPassword(password, user.password) : { valid: false, needsUpgrade: false };
+        if (user && verification.valid) {
+            // 历史明文口令在首次成功登录时就地升级为哈希
+            if (verification.needsUpgrade) {
+                try {
+                    user.password = normalizeStoredPassword(password);
+                    updateConfig(config);
+                } catch (e) {
+                    console.error('[Auth] Failed to upgrade legacy password hash', e);
+                }
+            }
             const token = jwt.sign({ username: user.username, role: user.isAdmin ? 'admin' : 'user' }, JWT_SECRET, { expiresIn: '7d' });
             // Return user info sans password
             const { password: _, ...userInfo } = user;
@@ -738,8 +752,7 @@ app.use((req, res, next) => {
         const whitelist = [
             '/api/auth',
             '/api/video/stream',
-            '/api/config', // GET /api/config is allowed for init checks
-            '/api/fs/list'  // Allow browsing for setup/config
+            '/api/config' // GET /api/config is allowed for init checks
         ];
 
         // If it's a whitelisted path (exact or startsWith for sub-routes like /api/auth/)
@@ -800,11 +813,10 @@ app.get('/api/config', (req, res) => {
         }
     }
 
-    // Scenario 3: Anonymous/Login stage (Public Info)
+    // Scenario 3: Anonymous/Login stage (Public Info)：不暴露用户名与角色，避免账户枚举
     return res.json({
         configured: true,
-        title: config.title || 'Luvia Gallery',
-        users: (config.users || []).map(u => ({ username: u.username, isAdmin: u.isAdmin }))
+        title: config.title || 'Luvia Gallery'
     });
 });
 
@@ -824,13 +836,19 @@ app.post('/api/config', adminOnly, (req, res) => {
                 return {
                     ...existingUser,
                     ...newUser,
-                    password: newUser.password || existingUser.password,
+                    password: newUser.password ? normalizeStoredPassword(newUser.password) : existingUser.password,
                     isAdmin: newUser.isAdmin !== undefined ? !!newUser.isAdmin : !!existingUser.isAdmin,
                     allowedPaths: newUser.allowedPaths !== undefined ? newUser.allowedPaths : (existingUser.allowedPaths || [])
                 };
             }
-            return newUser;
+            return { ...newUser, password: normalizeStoredPassword(newUser.password) };
         });
+    } else if (normalizedBody.users && Array.isArray(normalizedBody.users)) {
+        // 首次初始化：管理员口令同样以哈希落盘
+        normalizedBody.users = normalizedBody.users.map(newUser => ({
+            ...newUser,
+            password: normalizeStoredPassword(newUser.password)
+        }));
     }
 
     const newConfig = {
@@ -1050,7 +1068,7 @@ app.get('/api/library/folders', (req, res) => {
 });
 
 // Autocomplete API (matches PathAutocomplete.tsx)
-app.get('/api/fs/list', (req, res) => {
+app.get('/api/fs/list', adminOnly, (req, res) => {
     let queryPath = req.query.path || '/';
 
     // Allow browsing from system root if requested explicitly
@@ -1063,12 +1081,19 @@ app.get('/api/fs/list', (req, res) => {
     res.json({ dirs });
 });
 
-// File Operations (Delete/Rename)
-app.post('/api/file/delete', (req, res) => {
-    const { filePath } = req.body;
-    if (!filePath) return res.status(400).json({ error: 'Missing path' });
+// File Operations (Delete/Rename)：仅管理员可用，且目标必须位于媒体库根目录之内（不含根目录本身）
+function resolveAdminManagedPath(req, targetPath) {
+    return resolveManagedPath(targetPath, getUserLibraryPaths(req.user));
+}
+
+app.post('/api/file/delete', adminOnly, (req, res) => {
+    const filePath = resolveAdminManagedPath(req, req.body?.filePath);
+    if (!filePath) return res.status(400).json({ error: 'Invalid path' });
     try {
-        if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+        if (fs.existsSync(filePath)) {
+            if (!fs.statSync(filePath).isFile()) return res.status(400).json({ error: 'Not a file' });
+            fs.unlinkSync(filePath);
+        }
         database.deleteFile(filePath);
         res.json({ success: true });
     } catch (e) {
@@ -1077,12 +1102,12 @@ app.post('/api/file/delete', (req, res) => {
     }
 });
 
-app.post('/api/file/rename', (req, res) => {
-    const { oldPath, newName } = req.body;
-    if (!oldPath || !newName) return res.status(400).json({ error: 'Missing params' });
+app.post('/api/file/rename', adminOnly, (req, res) => {
+    const { newName } = req.body || {};
+    const oldPath = resolveAdminManagedPath(req, req.body?.oldPath);
+    if (!oldPath || !isSafeEntryName(newName)) return res.status(400).json({ error: 'Invalid params' });
 
-    const folder = path.dirname(oldPath);
-    const newPath = path.join(folder, newName);
+    const newPath = path.join(path.dirname(oldPath), newName);
 
     try {
         if (fs.existsSync(newPath)) return res.status(400).json({ error: 'File already exists' });
@@ -1099,14 +1124,15 @@ app.post('/api/file/rename', (req, res) => {
     }
 });
 
-app.post('/api/folder/delete', (req, res) => {
-    const { path: folderPath } = req.body;
-    if (!folderPath) return res.status(400).json({ error: 'Missing path' });
+app.post('/api/folder/delete', adminOnly, (req, res) => {
+    const folderPath = resolveAdminManagedPath(req, req.body?.path);
+    if (!folderPath) return res.status(400).json({ error: 'Invalid path' });
     try {
         if (fs.existsSync(folderPath)) {
+            if (!fs.statSync(folderPath).isDirectory()) return res.status(400).json({ error: 'Not a folder' });
             fs.rmSync(folderPath, { recursive: true, force: true });
-            database.deleteFilesByFolder(folderPath);
         }
+        database.deleteFilesByFolder(folderPath);
         res.json({ success: true });
     } catch (e) {
         console.error("Folder delete error:", e);
@@ -1114,11 +1140,12 @@ app.post('/api/folder/delete', (req, res) => {
     }
 });
 
-app.post('/api/folder/rename', (req, res) => {
-    const { oldPath, newName } = req.body;
+app.post('/api/folder/rename', adminOnly, (req, res) => {
+    const { newName } = req.body || {};
+    const oldPath = resolveAdminManagedPath(req, req.body?.oldPath);
+    if (!oldPath || !isSafeEntryName(newName)) return res.status(400).json({ error: 'Invalid params' });
     try {
-        const parent = path.dirname(oldPath);
-        const newPath = path.join(parent, newName);
+        const newPath = path.join(path.dirname(oldPath), newName);
         if (fs.existsSync(newPath)) return res.status(400).json({ error: 'Folder exists' });
 
         fs.renameSync(oldPath, newPath);
@@ -1414,6 +1441,8 @@ app.get('/api/scan/results', (req, res) => {
     const { offset, limit } = pagination;
     const favoritesOnly = req.query.favorites === 'true';
     const random = req.query.random === 'true';
+    const rawSeed = Number(req.query.seed);
+    const randomSeed = random && Number.isSafeInteger(rawSeed) && rawSeed >= 0 ? rawSeed : null;
     const recursive = req.query.recursive === 'true';
     const sortOption = req.query.sort || 'dateDesc';
     const mediaType = req.query.mediaType;
@@ -1453,7 +1482,8 @@ app.get('/api/scan/results', (req, res) => {
             mediaType,
             excludeMediaType,
             sortOption,
-            random
+            random,
+            randomSeed
         };
 
         const page = database.queryFilesPage({ ...filterOptions, offset, limit });
@@ -1522,7 +1552,7 @@ app.post('/api/favorites/toggle', (req, res) => {
     }
 });
 
-const { exec } = require('child_process');
+const { exec, execFile } = require('child_process');
 // CACHE_DIR removed (duplicate)
 
 
@@ -1649,7 +1679,7 @@ function extractThumbnailDimensions(thumbPath) {
 // Helper to get video duration
 async function getVideoDuration(filePath) {
     return new Promise((resolve) => {
-        const child = exec(`ffmpeg -i "${filePath}"`, { timeout: 10000 }, (err, stdout, stderr) => {
+        execFile('ffmpeg', ['-hide_banner', '-i', filePath], { timeout: 10000, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
             if (err && err.signal === 'SIGTERM') {
                 console.warn(`[VideoDuration] Timeout extracting duration for ${filePath}`);
                 resolve(0);
@@ -1725,16 +1755,18 @@ async function generateThumbnail(file, force = false) {
             }
         }
 
-        const flagsStr = inputFlags.join(' ');
-        let seekPart = file.mediaType === 'video' ? `-ss ${seekTime}` : '';
+        const seekArgs = file.mediaType === 'video' ? ['-ss', String(seekTime)] : [];
+        const outputArgs = (filter) => ['-vf', filter, '-vcodec', 'libwebp', '-q:v', '50', '-frames:v', '1', thumbPath];
+        const safeInputFlags = ['-probesize', '32M', '-analyzeduration', '16M', '-err_detect', 'ignore_err'];
 
         // Robustness: For videos, use "Output Seeking" (place -ss after -i) to ensure bitstream headers
         // are parsed correctly from the start. Fixes AV1 temporal unit errors in older FFmpeg.
-        let cmd = `ffmpeg -y ${flagsStr} -i "${file.path}" ${seekPart} -vf "${filterChain}" -vcodec libwebp -q:v 50 -frames:v 1 "${thumbPath}"`;
+        // 参数以数组传给 execFile，不经过 shell：文件名中的引号、$() 等字符不会被解释为命令。
+        const primaryArgs = ['-y', ...inputFlags, '-i', file.path, ...seekArgs, ...outputArgs(filterChain)];
 
-        const runFfmpeg = (command, timeoutMs) => {
+        const runFfmpeg = (args, timeoutMs) => {
             return new Promise((resolveExec) => {
-                exec(command, { timeout: timeoutMs }, (err, stdout, stderr) => {
+                execFile('ffmpeg', args, { timeout: timeoutMs, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
                     resolveExec({ err, stdout, stderr });
                 });
             });
@@ -1767,7 +1799,7 @@ async function generateThumbnail(file, force = false) {
         };
 
         // Execution Logic with Fallbacks
-        let result = await runFfmpeg(cmd, 15000);
+        let result = await runFfmpeg(primaryArgs, 15000);
 
         if (result.err) {
             console.error(`[Thumb] Primary FFmpeg command failed for ${file.path}`);
@@ -1775,15 +1807,13 @@ async function generateThumbnail(file, force = false) {
             if (hwAccel.type !== 'none' || file.mediaType === 'video') {
                 console.warn(`[Thumb] Retrying with software fallback (seeking)...`);
                 const swFilterChain = file.mediaType === 'video' ? 'scale=300:-1,thumbnail=n=50' : 'scale=300:-1';
-                const swCmd = `ffmpeg -y -probesize 32M -analyzeduration 16M -err_detect ignore_err -i "${file.path}" ${seekPart} -vf "${swFilterChain}" -vcodec libwebp -q:v 50 -frames:v 1 "${thumbPath}"`;
-                result = await runFfmpeg(swCmd, 20000);
+                result = await runFfmpeg(['-y', ...safeInputFlags, '-i', file.path, ...seekArgs, ...outputArgs(swFilterChain)], 20000);
             }
 
             // Fallback 2: If video seek point failed, try seeking to 0 (Ultra safe)
             if (result.err && file.mediaType === 'video') {
                 console.warn(`[Thumb] Retrying with software fallback (frame 0)...`);
-                const safeCmd = `ffmpeg -y -probesize 32M -analyzeduration 16M -err_detect ignore_err -i "${file.path}" -vf "scale=300:-1" -vcodec libwebp -q:v 50 -frames:v 1 "${thumbPath}"`;
-                result = await runFfmpeg(safeCmd, 10000);
+                result = await runFfmpeg(['-y', ...safeInputFlags, '-i', file.path, ...outputArgs('scale=300:-1')], 10000);
             }
         }
 
@@ -2181,6 +2211,10 @@ function processThumbnails() {
 
 // Thumb Gen API
 app.get('/api/thumb-gen/status', (req, res) => {
+    // 非管理员只看到空闲状态，不暴露库内路径与任务队列
+    if (!req.user || req.user.role !== 'admin') {
+        return res.json({ status: 'idle', count: 0, total: 0, currentPath: '', currentTaskName: null, queue: [] });
+    }
     // Return queue summary
     const queueSummary = thumbQueue.map(t => ({ id: t.id, name: t.name, total: t.total, type: t.type }));
 
@@ -2198,13 +2232,13 @@ app.get('/api/thumb-gen/status', (req, res) => {
 loadSmartResults();
 
 // Start Server
-app.post('/api/thumb-gen/start', (req, res) => {
+app.post('/api/thumb-gen/start', adminOnly, (req, res) => {
     // Start System Scan
     processThumbnails(); // This now queues
     res.json({ success: true, message: 'System scan queued' });
 });
 
-app.post('/api/thumb-gen/control', (req, res) => {
+app.post('/api/thumb-gen/control', adminOnly, (req, res) => {
     const { action, taskId } = req.body;
 
     if (action === 'pause') {
@@ -2228,7 +2262,7 @@ app.post('/api/thumb-gen/control', (req, res) => {
 });
 
 // Regenerate Endpoint (Queue Based)
-app.post('/api/thumb/smart-scan', (req, res) => {
+app.post('/api/thumb/smart-scan', adminOnly, (req, res) => {
     // Queue a smart scan
     enqueueTask({
         id: 'smart-scan-' + Date.now(),
@@ -2240,7 +2274,7 @@ app.post('/api/thumb/smart-scan', (req, res) => {
     res.json({ success: true, message: 'Smart scan queued' });
 });
 
-app.get('/api/thumb/smart-results', (req, res) => {
+app.get('/api/thumb/smart-results', adminOnly, (req, res) => {
     const summary = req.query.summary === 'true';
     if (summary) {
         return res.json({
@@ -2271,7 +2305,7 @@ app.post('/api/thumb/extract-dimensions', authenticateToken, adminOnly, (req, re
     });
 });
 
-app.post('/api/thumb/smart-repair', (req, res) => {
+app.post('/api/thumb/smart-repair', adminOnly, (req, res) => {
     const { repairMissing, repairError } = req.body;
 
     let filesToRepair = [];
@@ -2315,7 +2349,8 @@ app.post('/api/file/batch-delete', authenticateToken, adminOnly, (req, res) => {
 
     fileIds.forEach(id => {
         try {
-            const filePath = Buffer.from(id, 'base64').toString('utf8');
+            const filePath = resolveAdminManagedPath(req, Buffer.from(String(id), 'base64').toString('utf8'));
+            if (!filePath) throw new Error('Path outside library');
 
             // 1. Security Check (Path Traversal prevention is handled by checkFileAccess/LibraryPaths logic normally, 
             // but for deletion we must be extra careful. Here we rely on adminOnly and DB validation)
@@ -2362,8 +2397,9 @@ app.post('/api/thumb/regenerate', async (req, res) => {
 
     try {
         if (id) {
-            // Single File - Execute Immediately
-            const filePath = Buffer.from(id, 'base64').toString('utf8');
+            // Single File - Execute Immediately（有该文件访问权的用户均可修复单个缩略图）
+            const filePath = Buffer.from(String(id), 'base64').toString('utf8');
+            if (!checkFileAccess(req.user, filePath)) return res.status(403).json({ error: 'Access denied' });
             if (fs.existsSync(filePath)) {
                 const ext = path.extname(filePath).toLowerCase();
                 let mediaType = (['.mp4', '.webm', '.mov'].includes(ext)) ? 'video' : 'image';
@@ -2375,9 +2411,11 @@ app.post('/api/thumb/regenerate', async (req, res) => {
             return res.status(404).json({ error: 'File not found' });
         }
         else if (folderPath) {
-            // Batch Folder
-            let targetPath = folderPath;
-            if (targetPath === 'root') targetPath = PRIMARY_MEDIA_ROOT;
+            // Batch Folder：批量任务仅管理员可发起，且限定在媒体库之内
+            if (req.user?.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
+            let targetPath = folderPath === 'root' ? PRIMARY_MEDIA_ROOT : folderPath;
+            const roots = getUserLibraryPaths(req.user);
+            if (!roots.some(root => isPathWithin(targetPath, root))) return res.status(400).json({ error: 'Invalid path' });
 
             // Recursively find files
             // ensure { recursive: true } is supported by database.queryFiles (it was added in V6)
@@ -2472,12 +2510,13 @@ app.get('/api/thumb/:id', async (req, res) => {
 app.get('/api/file/:id/exif', async (req, res) => {
     try {
         const filePath = Buffer.from(req.params.id, 'base64').toString('utf8');
+        if (!checkFileAccess(req.user, filePath)) return res.status(403).json({});
         if (!fs.existsSync(filePath)) return res.json({});
         const ext = path.extname(filePath).toLowerCase();
         const videoExts = ['.mp4', '.webm', '.mov'];
         if (videoExts.includes(ext)) {
-            // Get video metadata via ffmpeg
-            exec(`ffmpeg -i "${filePath}"`, { timeout: 5000 }, (err, stdout, stderr) => {
+            // Get video metadata via ffmpeg：参数数组传递，不经过 shell，杜绝命令注入
+            execFile('ffmpeg', ['-hide_banner', '-i', filePath], { timeout: 5000 }, (err, stdout, stderr) => {
                 const output = stderr || stdout || '';
                 const durationMatch = output.match(/Duration: (\d{2}):(\d{2}):(\d{2}\.\d+)/);
                 const resolutionMatch = output.match(/, (\d{2,5})x(\d{2,5})/);
@@ -2858,7 +2897,7 @@ app.post('/api/users', adminOnly, (req, res) => {
 
         config.users.push({
             username,
-            password,
+            password: normalizeStoredPassword(password),
             isAdmin: !!isAdmin,
             allowedPaths: cleanedPaths
         });
@@ -2905,9 +2944,15 @@ app.post('/api/users/:targetUser', authenticateToken, (req, res) => {
                 return res.status(400).json({ error: 'Username already taken' });
             }
             config.users[userIndex].username = newUsername;
+            // 收藏以用户名为键，改名时同步迁移，避免收藏失联
+            try {
+                database.renameFavoritesUser(targetUser, newUsername);
+            } catch (e) {
+                console.error('[Users] Failed to migrate favorites on rename', e);
+            }
         }
 
-        if (newPassword) config.users[userIndex].password = newPassword;
+        if (newPassword) config.users[userIndex].password = normalizeStoredPassword(newPassword);
         if (allowedPaths !== undefined && isAdmin) {
             config.users[userIndex].allowedPaths = allowedPaths.map(p => p.trim()).filter(Boolean);
         }
@@ -2960,6 +3005,25 @@ app.get('*', (req, res) => {
 
 app.listen(port, () => {
     console.log(`Server listening on port ${port}`);
+
+    // 启动时把历史明文口令一次性迁移为哈希
+    try {
+        const config = getConfig();
+        let migrated = 0;
+        (config.users || []).forEach(user => {
+            const hashed = normalizeStoredPassword(user.password);
+            if (hashed !== user.password) {
+                user.password = hashed;
+                migrated++;
+            }
+        });
+        if (migrated > 0) {
+            updateConfig(config);
+            console.log(`[Auth] Migrated ${migrated} legacy plaintext password(s) to scrypt hashes.`);
+        }
+    } catch (e) {
+        console.error('[Auth] Password hash migration failed', e);
+    }
 
     // Check config for watcher auto-start
     try {

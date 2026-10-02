@@ -1,5 +1,5 @@
 import React, { ButtonHTMLAttributes, forwardRef } from 'react';
-import { motion } from 'framer-motion';
+import { motion, HTMLMotionProps } from 'framer-motion';
 
 // 图标按钮变体
 export type IconButtonVariant = 'default' | 'primary' | 'secondary' | 'ghost' | 'outline' | 'danger' | 'glass';
@@ -98,7 +98,7 @@ export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(
         whileTap={disabled ? {} : { scale: 0.95 }}
         transition={{ type: 'spring', stiffness: 400, damping: 25 }}
         title={tooltip}
-        {...props}
+        {...(props as unknown as HTMLMotionProps<'button'>)}
       >
         {icon}
         {badge !== undefined && badge > 0 && (

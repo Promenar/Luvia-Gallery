@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useLanguage } from '../contexts/LanguageContext';
 import { Icons } from './ui/Icon';
+import { getAuthHeaders } from '../utils/fileUtils';
 
 interface DirectoryPickerProps {
     isOpen: boolean;
@@ -32,7 +33,8 @@ export const DirectoryPicker: React.FC<DirectoryPickerProps> = ({
             try {
                 // Ensure query param handles root correctly
                 const query = (currentPath === '/' || currentPath === '') ? 'root' : currentPath;
-                const res = await fetch(`/api/fs/list?path=${encodeURIComponent(query)}`);
+                const res = await fetch(`/api/fs/list?path=${encodeURIComponent(query)}`, { headers: getAuthHeaders() });
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
                 const data = await res.json();
 
                 if (data.dirs) {

@@ -49,7 +49,7 @@ export const SystemTab: React.FC<SystemTabProps> = ({
                   : 'text-text-tertiary hover:bg-white/5'
               }`}
             >
-              {t(mode + '_mode')}
+              {t(mode === 'system' ? 'follow_system' : mode === 'light' ? 'light_mode' : 'dark_mode')}
             </button>
           ))}
         </div>

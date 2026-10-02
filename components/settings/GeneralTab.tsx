@@ -109,7 +109,7 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
                   {mode === 'system' ? <Icons.Monitor size={16} /> : 
                    mode === 'light' ? <Icons.Sun size={16} /> : 
                    <Icons.Moon size={16} />}
-                  <span className="ml-2 capitalize">{t(mode + '_mode')}</span>
+                  <span className="ml-2 capitalize">{t(mode === 'system' ? 'follow_system' : mode === 'light' ? 'light_mode' : 'dark_mode')}</span>
                 </Button>
               ))}
             </div>

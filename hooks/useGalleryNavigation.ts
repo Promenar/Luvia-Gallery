@@ -40,7 +40,7 @@ export interface GalleryNavigationApi {
 }
 
 export const useGalleryNavigation = (options: UseGalleryNavigationOptions = {}): GalleryNavigationApi => {
-  const controllerRef = useRef<GalleryNavigationController>();
+  const controllerRef = useRef<GalleryNavigationController | undefined>(undefined);
   if (!controllerRef.current) controllerRef.current = options.controller ?? new GalleryNavigationController(options);
   const controller = controllerRef.current;
   const [location, setLocation] = useState<GalleryLocation>(() => controller.initialize());

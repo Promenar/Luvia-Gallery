@@ -382,12 +382,20 @@ function checkAuth(req, res) {
         } catch (e) { }
     }
 
-    if (!requiredToken) return true; // No token set = open access
+    // 未配置更新令牌时默认拒绝：更新接口可改写代码来源并执行脚本，绝不能对外开放
+    if (!requiredToken) {
+        log(`Rejected ${req.url}: UPDATE_TOKEN is not configured`);
+        res.writeHead(403, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: "Update API disabled: set UPDATE_TOKEN (or data/update_secret.txt) to enable it." }));
+        return false;
+    }
 
     const authHeader = req.headers['authorization'];
-    const providedToken = authHeader && authHeader.split(' ')[1];
+    const providedToken = (authHeader && authHeader.split(' ')[1]) || '';
+    const expected = Buffer.from(requiredToken);
+    const provided = Buffer.from(providedToken);
 
-    if (providedToken !== requiredToken) {
+    if (expected.length !== provided.length || !crypto.timingSafeEqual(expected, provided)) {
         log(`Blocked unauthorized access attempt to ${req.url} from ${req.socket.remoteAddress}`);
         res.writeHead(401, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: "Unauthorized: Invalid or missing Update Token." }));
@@ -406,6 +414,7 @@ const server = http.createServer((req, res) => {
 
     // 1.1 Handle Update Status Check
     if (req.url === '/api/admin/system/update/status' && req.method === 'GET') {
+        if (!checkAuth(req, res)) return;
         const config = getUpdateConfig();
         const branch = config.branch || 'main';
         let repoUrl = config.repoUrl;

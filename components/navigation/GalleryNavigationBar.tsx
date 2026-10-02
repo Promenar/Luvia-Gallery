@@ -5,6 +5,7 @@ import { useLanguage } from '../../contexts/LanguageContext';
 import { Breadcrumbs } from './Breadcrumbs';
 import { GalleryLocation, GalleryViewMode, GallerySortOption, GalleryLayout, GalleryFilterOption } from '../../navigation/types';
 
+const SORT_OPTIONS: readonly GallerySortOption[] = ['dateDesc', 'dateAsc', 'nameAsc', 'nameDesc', 'sizeDesc', 'random'];
 const VISIBLE_LAYOUTS: readonly Extract<GalleryLayout, 'grid' | 'masonry'>[] = ['grid', 'masonry'];
 
 export interface NavigationLabels {
@@ -238,6 +239,7 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
       case 'dateAsc': return t('oldest_first') || '最早优先';
       case 'nameAsc': return t('sort_by_name_asc') || '名称 A-Z';
       case 'nameDesc': return t('sort_by_name_desc') || '名称 Z-A';
+      case 'sizeDesc': return isZh ? '文件从大到小' : 'Largest first';
       case 'random': return t('shuffle_random') || '随机打乱';
       default: return option;
     }
@@ -367,7 +369,7 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
               value={searchDraft}
               onChange={(e) => setSearchDraft(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder={t('search') || '搜索...'}
+              placeholder={isZh ? '搜索...' : 'Search...'}
               className="flex-1 bg-transparent border-none outline-none text-sm text-text-primary placeholder-text-muted focus:ring-0 min-w-0"
               aria-label={isZh ? '搜索输入框' : 'Search input'}
             />
@@ -519,7 +521,7 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
                       <div className="px-3 py-1 text-xs font-semibold text-text-muted select-none">
                         {isZh ? '排序' : 'Sort'}
                       </div>
-                      {(['dateDesc', 'dateAsc', 'nameAsc', 'nameDesc', 'random'] as GallerySortOption[]).map((opt) => (
+                      {SORT_OPTIONS.map((opt) => (
                             <button
                               key={opt}
                               onClick={() => {
@@ -646,7 +648,7 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
               value={searchDraft}
               onChange={(e) => setSearchDraft(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder={t('search') || '搜索 (Ctrl+K)...'}
+              placeholder={isZh ? '搜索 (Ctrl+K)...' : 'Search (Ctrl+K)...'}
               className="flex-1 bg-transparent border-none outline-none text-sm text-text-primary placeholder-text-muted focus:ring-0 min-w-0"
               aria-label={isZh ? '搜索输入框' : 'Search input'}
             />
@@ -769,7 +771,7 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
                 className="absolute right-0 top-full mt-2 w-48 bg-surface-secondary backdrop-blur-2xl rounded-xl shadow-2xl border border-white/10 p-1 z-20 animate-in fade-in slide-in-from-top-2 duration-200"
                 role="listbox"
               >
-                {(['dateDesc', 'dateAsc', 'nameAsc', 'nameDesc', 'random'] as GallerySortOption[]).map((opt) => (
+                {SORT_OPTIONS.map((opt) => (
                   <button
                     key={opt}
                     onClick={() => {

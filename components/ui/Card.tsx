@@ -69,7 +69,7 @@ export const Card = forwardRef<HTMLDivElement, CardProps>(
           whileHover={{ y: -2 }}
           whileTap={{ scale: 0.99 }}
           transition={{ type: 'spring', stiffness: 400, damping: 25 }}
-          {...(props as HTMLMotionProps<'div'>)}
+          {...(props as unknown as HTMLMotionProps<'div'>)}
         >
           {children}
         </motion.div>

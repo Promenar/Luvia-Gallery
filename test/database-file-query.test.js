@@ -578,3 +578,46 @@ test('目录元数据只聚合直属图片和视频，不扫描后代或音频',
     assert.deepEqual(metadata.get('/album'), { mediaCount: 1, lastModified: 20 });
     assert.deepEqual(metadata.get('/album/nested'), { mediaCount: 1, lastModified: 40 });
 });
+
+test('种子化随机排序跨页稳定、不重复不漏项，不同种子顺序不同', () => {
+    for (let index = 0; index < 30; index += 1) {
+        addFile({
+            id: `random-${index}`,
+            path: `/library/random/${index}.jpg`,
+            name: `${index}.jpg`,
+            folderPath: '/library/random'
+        });
+    }
+
+    const readAllPages = seed => [0, 10, 20].flatMap(offset =>
+        database.queryFiles({ random: true, randomSeed: seed, offset, limit: 10 }).map(file => file.id)
+    );
+    const first = readAllPages(42);
+    assert.deepEqual(readAllPages(42), first);
+    assert.equal(new Set(first).size, 30);
+    assert.notDeepEqual(readAllPages(7), first);
+});
+
+test('删除目录时百分号与下划线按字面匹配，不误删同形兄弟目录', () => {
+    addFile({ id: 'target', path: '/library/a_b/1.jpg', name: '1.jpg', folderPath: '/library/a_b' });
+    addFile({ id: 'target-child', path: '/library/a_b/sub/2.jpg', name: '2.jpg', folderPath: '/library/a_b/sub' });
+    addFile({ id: 'sibling', path: '/library/axb/sub/3.jpg', name: '3.jpg', folderPath: '/library/axb/sub' });
+
+    database.deleteFilesByFolder('/library/a_b');
+
+    assert.deepEqual(database.queryFiles({ folderPath: '/library', recursive: true }).map(file => file.id), ['sibling']);
+});
+
+test('用户改名迁移收藏，目标用户已有的同项收藏不重复', () => {
+    database.toggleFavorite('old-name', 'file-a', 'file');
+    database.toggleFavorite('old-name', 'file-b', 'file');
+    database.toggleFavorite('old-name', '/library/album', 'folder');
+    database.toggleFavorite('new-name', 'file-b', 'file');
+
+    database.renameFavoritesUser('old-name', 'new-name');
+
+    assert.deepEqual(database.getFavoriteIds('old-name'), { files: [], folders: [] });
+    const migrated = database.getFavoriteIds('new-name');
+    assert.deepEqual([...migrated.files].sort(), ['file-a', 'file-b']);
+    assert.deepEqual(migrated.folders, ['/library/album']);
+});

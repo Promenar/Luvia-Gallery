@@ -17,6 +17,7 @@ import { PlayerWindow } from './PlayerWindow';
 import { PlayerFullscreen } from './PlayerFullscreen';
 import { usePaneLanguage } from './ImageViewPane';
 import { Icons } from '../ui/Icon';
+import { getAuthHeaders } from '../../utils/fileUtils';
 import { formatDate as utilsFormatDate, formatSize as utilsFormatSize } from '../../utils/formatters';
 import type { MediaItem, ExifData } from '../../types';
 
@@ -48,11 +49,8 @@ export const MediaPlayer: React.FC<MediaPlayerProps> = ({ onToggleFavorite }) =>
             const fetchExif = async () => {
                 setIsExifLoading(true);
                 try {
-                    const token = localStorage.getItem('luvia_token') || localStorage.getItem('lumina_token');
-                    const headers: any = {};
-                    if (token) headers['Authorization'] = `Bearer ${token}`;
-
-                    const res = await fetch(`/api/file/${currentItem.id}/exif`, { headers });
+                    // 媒体 ID 为 base64，可能含 '/'、'+'，必须编码后再拼入路径
+                    const res = await fetch(`/api/file/${encodeURIComponent(currentItem.id)}/exif`, { headers: getAuthHeaders() });
                     if (res.ok) {
                         const data = await res.json();
                         setExifData(data);
