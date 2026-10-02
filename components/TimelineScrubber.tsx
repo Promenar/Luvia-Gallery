@@ -72,7 +72,7 @@ export const TimelineScrubber: React.FC<TimelineScrubberProps> = ({ marks, progr
         <span
           key={mark.year}
           aria-hidden="true"
-          className="absolute right-5 -translate-y-1/2 font-serif text-[10px] tabular-nums text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100 pointer-coarse:opacity-100"
+          className="absolute right-5 -translate-y-1/2 text-[10px] font-medium tabular-nums text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100 pointer-coarse:opacity-100"
           style={{ top: `${mark.ratio * 100}%` }}
         >
           {mark.year}
@@ -87,7 +87,7 @@ export const TimelineScrubber: React.FC<TimelineScrubberProps> = ({ marks, progr
       {dragRatio !== null && (
         <div
           aria-hidden="true"
-          className="pointer-events-none absolute right-8 -translate-y-1/2 whitespace-nowrap rounded-full border border-border bg-popover px-3 py-1.5 font-serif text-sm text-popover-foreground shadow-md"
+          className="pointer-events-none absolute right-8 -translate-y-1/2 whitespace-nowrap rounded-full border border-border bg-popover px-3 py-1.5 text-sm font-medium tabular-nums text-popover-foreground shadow-md"
           style={{ top: `${dragRatio * 100}%` }}
         >
           {labelAt(dragRatio)}
