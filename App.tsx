@@ -9,6 +9,7 @@ import { FolderCard } from './components/FolderCard';
 import { MediaPlayer } from './components/player/MediaPlayer';
 import { PlayerProvider, useMediaPlayer } from './components/player/PlayerProvider';
 import { buildPlayerQueue } from './components/player/player-state';
+import { runHeroTransition } from './components/player/hero-transition';
 import { UnifiedProgressModal } from './components/UnifiedProgressModal';
 import { VirtualGallery } from './components/VirtualGallery';
 import type { ViewportCaptureHandle } from './components/gallery/viewport-types';
@@ -680,7 +681,7 @@ function GalleryApp() {
     const queryClient = useQueryClient();
     const galleryNavigation = useGalleryNavigation();
     // patchItem：把收藏等外部状态变化实时回写播放器队列快照（播放器未打开时为无害 no-op）
-    const { open: openPlayer, close: closePlayer, patchItem } = useMediaPlayer();
+    const { open: openPlayer, close: closePlayer, patchItem, state: playerState } = useMediaPlayer();
     const { canApplyLayoutPreference, applyInitialLayoutPreference } = galleryNavigation;
     const galleryViewportRef = useRef<ViewportCaptureHandle>(null);
 
@@ -2361,7 +2362,10 @@ function GalleryApp() {
         if (snapshot?.locationKey === galleryNavigation.location.key) {
             galleryNavigation.captureImmediateSnapshot({ ...snapshot, loadedOffset: serverOffset });
         }
-        openPlayer(buildPlayerQueue(processedFiles, item.id));
+        const queue = buildPlayerQueue(processedFiles, item.id);
+        // 播放器未打开时以共享元素过渡从缩略图放大进入；已打开时直接切换，避免与现有查看器争用过渡名
+        if (playerState.isOpen) openPlayer(queue);
+        else runHeroTransition(item.id, () => openPlayer(queue));
     };
 
     const handleFolderGalleryItemClick = useStableMediaItemClick((item) => {

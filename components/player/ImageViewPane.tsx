@@ -12,6 +12,7 @@ import { MediaItem } from '../../types';
 import { getAuthUrl } from '../../utils/fileUtils';
 import { Icons } from '../ui/Icon';
 import { useLanguage } from '../../contexts/LanguageContext';
+import { getHeroTransitionName } from './hero-transition';
 
 interface ImageViewPaneProps {
     item: MediaItem;
@@ -19,7 +20,16 @@ interface ImageViewPaneProps {
     onSlideNext: () => void;
     /** hotfix-5：图片解码完成后的真实比例上报（naturalWidth/naturalHeight），供浮窗形状自适应 */
     onMediaRatio?: (ratio: number) => void;
+    /** 未缩放时单指横向轻扫切换：向左滑看下一张、向右滑看上一张 */
+    onSwipeNext?: () => void;
+    onSwipePrev?: () => void;
 }
+
+/** 单指轻扫判定：横向位移超过 60px 且明显大于纵向位移时视为切换手势。 */
+export const resolveSwipeDirection = (dx: number, dy: number): 'next' | 'prev' | null => {
+    if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.5) return null;
+    return dx < 0 ? 'next' : 'prev';
+};
 interface TransformState {
     scale: number;
     x: number;
@@ -37,7 +47,7 @@ export const usePaneLanguage = (): { t: (key: string) => string; language: 'en' 
     }
 };
 
-export const ImageViewPane: React.FC<ImageViewPaneProps> = ({ item, onSlideNext, onMediaRatio }) => {
+export const ImageViewPane: React.FC<ImageViewPaneProps> = ({ item, onSlideNext, onMediaRatio, onSwipeNext, onSwipePrev }) => {
     const [transform, setTransform] = useState<TransformState>({ scale: 1, x: 0, y: 0 });
     const containerRef = useRef<HTMLDivElement>(null);
     const [dragConstraints, setDragConstraints] = useState<{ left: number, right: number, top: number, bottom: number } | null>(null);
@@ -68,12 +78,20 @@ export const ImageViewPane: React.FC<ImageViewPaneProps> = ({ item, onSlideNext,
 
     // Pinch zoom state
     const lastDist = useRef<number | null>(null);
+    // 单指轻扫起点（仅未缩放时用于切换）
+    const swipeStart = useRef<{ x: number; y: number } | null>(null);
+
+    // 渐进加载：原图解码完成前先铺满缩略图（同为 contain 几何），原图就绪后淡入覆盖
+    const [isFullLoaded, setIsFullLoaded] = useState(false);
+    const thumbnailSrc = item.thumbnailUrl && item.thumbnailUrl !== item.url ? getAuthUrl(item.thumbnailUrl) : '';
 
     // Reset state when item changes
     useEffect(() => {
         setTransform({ scale: 1, x: 0, y: 0 });
         setDragConstraints(null);
         lastDist.current = null;
+        const img = imgRef.current;
+        setIsFullLoaded(Boolean(img?.complete && img.naturalWidth > 0));
     }, [item?.id]);
 
     // Slideshow Logic
@@ -177,6 +195,9 @@ export const ImageViewPane: React.FC<ImageViewPaneProps> = ({ item, onSlideNext,
     };
 
     const handleTouchStart = (e: React.TouchEvent) => {
+        swipeStart.current = e.touches.length === 1 && transform.scale === 1
+            ? { x: e.touches[0].clientX, y: e.touches[0].clientY }
+            : null;
         if (e.touches.length === 2) {
             const dist = Math.hypot(
                 e.touches[0].clientX - e.touches[1].clientX,
@@ -206,8 +227,15 @@ export const ImageViewPane: React.FC<ImageViewPaneProps> = ({ item, onSlideNext,
         }
     };
 
-    const handleTouchEnd = () => {
+    const handleTouchEnd = (e: React.TouchEvent) => {
         lastDist.current = null;
+        const start = swipeStart.current;
+        swipeStart.current = null;
+        if (!start || transform.scale !== 1 || e.changedTouches.length !== 1) return;
+        const touch = e.changedTouches[0];
+        const direction = resolveSwipeDirection(touch.clientX - start.x, touch.clientY - start.y);
+        if (direction === 'next') onSwipeNext?.();
+        if (direction === 'prev') onSwipePrev?.();
     };
 
     const toggleZoom = (e: React.MouseEvent) => {
@@ -238,7 +266,7 @@ export const ImageViewPane: React.FC<ImageViewPaneProps> = ({ item, onSlideNext,
     // Task B 适配浮窗：根容器由旧全屏壳层铺满改为 absolute inset-0 铺满 PlayerWindow 内容区，
     // 内容 contain 显示（flex 居中 + max-w/h-full）；缩放/双击/拖拽等 transform 逻辑保持不变。
     return (
-        <div className="absolute inset-0">
+        <div className="absolute inset-0" data-testid="image-view-pane">
             {/* Content Container：自 旧图片查看器源 592-672 行迁移，仅保留图片分支。
                 onWheel 原挂在壳层 overlay（源 381 行），随缩放逻辑一并迁入本面板根容器。
                 hotfix-3：移除 scale===1 时的 p-4 md:p-10 内边距——浮窗内容区已按媒体比例贴合，
@@ -251,15 +279,31 @@ export const ImageViewPane: React.FC<ImageViewPaneProps> = ({ item, onSlideNext,
                 onTouchMove={handleTouchMove}
                 onTouchEnd={handleTouchEnd}
             >
+                {thumbnailSrc && !isFullLoaded && (
+                    <img
+                        src={thumbnailSrc}
+                        alt=""
+                        aria-hidden="true"
+                        data-testid="image-pane-placeholder"
+                        style={{ viewTransitionName: getHeroTransitionName(item.id) }}
+                        className="pointer-events-none absolute inset-0 h-full w-full object-contain"
+                    />
+                )}
                 <motion.img
                     ref={imgRef}
+                    key={item.id}
                     src={getAuthUrl(item.url)}
                     alt={item.name}
-                    className="max-w-full max-h-full object-contain shadow-2xl rounded-xs"
-                    style={{ cursor: transform.scale > 1 ? 'grab' : 'zoom-in' }}
+                    className={`relative max-w-full max-h-full object-contain shadow-2xl rounded-xs transition-opacity duration-300 ${isFullLoaded || !thumbnailSrc ? 'opacity-100' : 'opacity-0'}`}
+                    style={{
+                        cursor: transform.scale > 1 ? 'grab' : 'zoom-in',
+                        // 无缩略图占位时由原图承接共享元素过渡
+                        viewTransitionName: thumbnailSrc && !isFullLoaded ? undefined : getHeroTransitionName(item.id),
+                    }}
                     onClick={(e) => e.stopPropagation()}
                     onDoubleClick={toggleZoom}
                     onLoad={(e) => {
+                        setIsFullLoaded(true);
                         // hotfix-5：浏览器解码后上报真实宽高比（任一边为 0 时无效，不上报），
                         // 库内尺寸元数据缺失时浮窗据此把 16:9 兜底形状校正为真实比例
                         const img = e.currentTarget;
@@ -293,8 +337,9 @@ export const ImageViewPane: React.FC<ImageViewPaneProps> = ({ item, onSlideNext,
             <div className="absolute bottom-4 right-4 z-50 flex items-center gap-2">
                 <button
                     onClick={(e) => { e.stopPropagation(); setIsPlaying(!isPlaying); }}
-                    className={`p-2 rounded-full transition-colors ${isPlaying ? 'bg-primary-600 text-white' : 'hover:bg-white/10 text-white/80'}`}
+                    className={`p-2 rounded-full transition-colors ${isPlaying ? 'bg-primary text-primary-foreground' : 'bg-black/35 hover:bg-black/55 text-white/85'}`}
                     title={isPlaying ? "Pause Slideshow" : "Play Slideshow"}
+                    aria-label={isPlaying ? "Pause Slideshow" : "Play Slideshow"}
                 >
                     {isPlaying ? <Icons.Pause size={24} /> : <Icons.Play size={24} />}
                 </button>
@@ -303,8 +348,9 @@ export const ImageViewPane: React.FC<ImageViewPaneProps> = ({ item, onSlideNext,
                         e.stopPropagation();
                         setTransform(prev => prev.scale > 1 ? { scale: 1, x: 0, y: 0 } : { scale: 2.5, x: 0, y: 0 });
                     }}
-                    className="p-2 hover:bg-white/10 rounded-full transition-colors hidden md:block text-white/80"
+                    className="p-2 bg-black/35 hover:bg-black/55 rounded-full transition-colors hidden md:block text-white/85"
                     title={transform.scale > 1 ? "Zoom Out" : "Zoom In"}
+                    aria-label={transform.scale > 1 ? "Zoom Out" : "Zoom In"}
                 >
                     {transform.scale > 1 ? <Icons.ZoomOut size={24} /> : <Icons.ZoomIn size={24} />}
                 </button>

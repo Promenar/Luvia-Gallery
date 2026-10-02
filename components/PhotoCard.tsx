@@ -303,6 +303,7 @@ const VisualMediaCard: React.FC<MediaCardProps> = ({
             <>
               <img
               key={thumbnailSrc}
+              data-media-thumb={item.id}
               ref={attachThumbnail}
               src={thumbnailSrc}
               alt={item.name}
@@ -341,6 +342,7 @@ const VisualMediaCard: React.FC<MediaCardProps> = ({
           <>
             <img
               key={thumbnailSrc}
+              data-media-thumb={item.id}
               ref={attachThumbnail}
               src={thumbnailSrc}
               alt={item.name}
