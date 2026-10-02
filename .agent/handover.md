@@ -2348,3 +2348,34 @@ record-fingerprint: 56d0ce15a4d3079e1cb8e352a337e41e29f383f1178c4e360690558c6546
 
 ### HLG
 本记录追加；continuity-key webui-visual-foundation 等待 PDEC 重绑与第 1 阶段。长期规则候选：Tailwind 升级工具会改写非类名字符串字面量，后续批量迁移须做词级 diff 审计。
+
+## 2026-10-02T09:45:15+08:00 · WebUI 视觉第 1 阶段（外壳：对话框、提示条、登录页）已推送
+
+type: feature
+scope: ["Luvia-Gallery", "WebUI"]
+status: done
+tags: ["webui", "design-system", "shadcn", "base-ui", "dialog", "a11y"]
+continuity: waiting
+continuity-key: webui-visual-foundation
+record-fingerprint: 80af2251a6e57b0510abf416fc771f6ae2e51c7216d1564eced13e420c40d51e
+
+### Summary
+用户同意 PDEC 重绑并授权更新 AGENTS.md 技术栈描述（84426af，FNOS node:20 验证后端 68/68、前端 300/300、typecheck、build 通过）。随后完成第 1 阶段外壳重构并推送 d919d24b7dbbc5a709a2798baa3a3e3e4c1f5c9d，origin/main 回读一致；未部署。
+
+### Changed
+新增 kit 组件 dialog、alert-dialog、sonner（改为观察 html.dark，移除 next-themes）、input、label、switch，遮罩调为 bg-black/55。新增 components/feedback/feedback.tsx：notify 与 ConfirmProvider/useFeedback（confirm/prompt Promise，Esc/遮罩/取消兑现取消，新请求顶替旧请求按取消兑现），在 App 默认导出挂载 ConfirmProvider 与 Toaster。App、PhotoCard、ScanReportModal、SettingsModal、SystemUpdater 中全部原生弹窗替换并新增中英文文案键。登录/初始化页改用 kit 与暗房光晕。SettingsModal、UserModal、DirectoryPicker、UnifiedProgressModal、ScanReportModal 迁移到 kit Dialog（Settings 在子对话框打开时 disablePointerDismissal；进度弹窗进行中关闭即最小化）。修复：UserModal 浏览路径通过 onBrowsePaths(onPick) 回填自身表单（移除 App 死状态 newUserForm）；MobileHeader 仅首页渲染；统一工具栏 z-35 改为 md:z-35（flex 子项下非定位 z 仍生效，曾压住移动侧栏遮罩）。外壳文件 white/black 半透明工具类映射为语义令牌，主要按钮统一 bg-primary。vitest 增加 @ 别名。
+
+### Validation
+本机 typecheck 0 错误、前端 307/307（新增 feedback.test.tsx 7 项：确认/取消/Esc/输入/顶替、路径回填、源码无原生弹窗约束）、后端契约与安全 28/28、build 通过。模拟 API 浏览器实测：深色登录页、设置弹窗、添加用户叠加设置、目录选择三层叠放与路径回填、Esc 只关闭最上层、清空缓存破坏性确认与提示条、浅色手机宽度无双层顶栏、移动侧栏点遮罩可关闭。
+
+### Next
+1. PDEC 因 package.json/package-lock.json（新增 sonner）再次漂移，需用户确认重绑后在 FNOS 以 d919d24 做 Node 20 全量验证。2. 第 2 阶段：媒体卡片去毛玻璃与逐张动效、浅色主题白色半透明写法清理、主色占位、手机网格列数。3. 清理候选：components/settings/GeneralTab、AccountTab、LibraryTab 未被引用；设置页仍有英文硬编码（Start Analysis 等）。
+
+### Risks
+Base UI 多个兄弟对话框的外部点击行为依赖 Settings 的 disablePointerDismissal 规避，已实测添加用户与目录选择链路，其它组合未逐一覆盖。SystemUpdater 仍把更新令牌明文存入 localStorage（既有行为）。
+
+### DIA
+已同步 release_notes.md 与视觉底座计划状态；AGENTS.md 技术栈已在 84426af 更新。
+
+### HLG
+本记录追加；continuity-key webui-visual-foundation 等待 PDEC 重绑与第 2 阶段。长期规则候选：仅依赖与文档变化导致的 PDEC 证据漂移，可在用户批准的阶段内统一重绑，需用户授权后写入 PDEC README。
