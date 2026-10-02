@@ -2441,3 +2441,34 @@ View Transitions 共享元素过渡与浮窗 framer 入场动画并行，仅在 
 
 ### HLG
 本记录追加；continuity-key webui-visual-foundation 等待第 4 阶段。
+
+## 2026-10-02T14:41:11+08:00 · WebUI 视觉第 4 阶段（时间线）已推送并通过 FNOS 验证，章节字体改为无衬线
+
+type: feature
+scope: ["Luvia-Gallery", "WebUI", "server", "sqlite"]
+status: done
+tags: ["webui", "timeline", "buckets", "virtualization", "typography"]
+continuity: waiting
+continuity-key: webui-visual-foundation
+record-fingerprint: 06991d3b29b1721df35494c53b03d9133ecb7b7357945972d83638c18d087751
+
+### Summary
+完成第 4 阶段时间线：68163caf5b66abea5fd10f94f5e96df5a5c8e39a 推送并经 FNOS node:20 验证（后端 72/72、前端 330/330、typecheck、build）。用户随后指出高密度网格不宜用衬线，改为无衬线并推送 821acf59746090e923f751bc85d7d8ca621ac3c8，FNOS 同样全量通过。未部署。四个视觉阶段已全部完成。
+
+### Changed
+database.js：buildFileQueryParts 新增 timeRange 条件；新增 queryTimelineBuckets（strftime localtime 年月分组，按过滤条件 + 媒体集合版本缓存 10 分钟）、clearTimelineBucketCache、resolveMonthRange。server.js：新增 GET /api/timeline/buckets（权限与范围过滤同 scan/results）、parseTimeRangeQuery 与 from/to 参数、扫描完成清空分桶缓存。前端：新增 components/gallery/timeline-layout.ts（行布局、偏移前缀和、二分定位、月+页映射、年份刻度、文案）；重写 TimelineViewport（VariableSizeList、按月按页懒加载、最多 2 并发、120ms 防抖、章节标题、当前月份浮签、视口快照按滚动偏移恢复）与 TimelineScrubber（pointer capture、键盘、年份刻度）；navigation/location 新增 getAvailableLayouts/normalizeLayoutForView，layout-preference 按视图规范化，导航栏布局菜单按视图提供；App 在全部照片/收藏夹且布局为 timeline 时渲染时间线并以已加载条目为查看器队列。删除未用的 groupMediaByDate。衬线字体令牌删除，章节以字重 600 与等宽数字区分。docs/DATA_SCHEMA.md 增加 TimelineBuckets。
+
+### Validation
+本机 typecheck、前端 330/330（新增 timeline.test.tsx 11 项，更新导航规范化测试）、后端契约 29/29、build；FNOS 确切 SHA 两次全量通过（runs/68163ca、runs/821acf5）。模拟 API（2000 条跨约 5 年）浏览器实测：章节渲染、拖动到约 70% 跳至 2025 年 1 月且仅 3 次分页请求、当前月份浮签仅在标题滚出后显示、时间线打开查看器并可左右翻页、手机深色 3 列。
+
+### Next
+视觉重构四阶段完成，待用户决定是否部署（部署前设置 UPDATE_TOKEN、备份 lumina-config.json；口令哈希迁移后不可直接回滚旧镜像）。可选后续：生产大库上实测分桶查询耗时；时间线跨月查看器队列仅含已加载条目。
+
+### Risks
+分桶分组依赖服务器本地时区，容器 TZ 与用户时区不同会导致月份边界偏移；900k 级 GROUP BY 首次查询耗时未在生产实测（有缓存）。查看器队列只含已加载页，跨未加载月份翻页会在边界停止。
+
+### DIA
+已同步 release_notes.md、docs/DATA_SCHEMA.md、视觉底座计划第 9 节与字体契约（1.2）。
+
+### HLG
+本记录追加；continuity-key webui-visual-foundation 等待部署决策。用户偏好：高密度网格界面不使用衬线字体（已写入视觉契约，未写入长期规则）。
