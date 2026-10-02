@@ -4,6 +4,7 @@ import { MediaItem } from '../types';
 import { getAuthHeaders, getAuthUrl } from '../utils/fileUtils';
 import { Icons } from './ui/Icon';
 import { useLanguage } from '../contexts/LanguageContext';
+import { notify } from './feedback/feedback';
 import { AudioCard } from './AudioCard';
 
 export interface MediaCardProps {
@@ -161,11 +162,11 @@ const VisualMediaCard: React.FC<MediaCardProps> = ({
         setIsThumbnailLoaded(false);
         setRetryQuery(`?t=${Date.now()}`); // Force image reload
       } else {
-        alert('Repair failed');
+        notify.error(t('repair_failed'));
       }
     } catch (e) {
       console.error("Repair failed", e);
-      alert('Repair failed');
+      notify.error(t('repair_failed'));
     } finally {
       setIsRepairing(false);
     }

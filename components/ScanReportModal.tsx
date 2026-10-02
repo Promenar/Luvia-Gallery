@@ -1,7 +1,9 @@
 import React, { useState, useMemo } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { Dialog, DialogContent, DialogTitle } from './kit/dialog';
+import { Button } from './kit/button';
 import { Icons } from './ui/Icon';
 import { useLanguage } from '../contexts/LanguageContext';
+import { notify, useFeedback } from './feedback/feedback';
 
 interface ScanReportModalProps {
     isOpen: boolean;
@@ -21,6 +23,7 @@ export const ScanReportModal: React.FC<ScanReportModalProps> = ({
     onNavigate
 }) => {
     const { t } = useLanguage();
+    const { confirm } = useFeedback();
     const [activeTab, setActiveTab] = useState<'error' | 'missing'>('error');
     const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
     const [isProcessing, setIsProcessing] = useState(false);
@@ -50,20 +53,21 @@ export const ScanReportModal: React.FC<ScanReportModalProps> = ({
 
     const handleExport = () => {
         const text = currentItems.map((f: any) => `${f.path} [${(f.size || 0)} bytes]`).join('\n');
-        navigator.clipboard.writeText(text);
-        alert(t('copied_to_clipboard') || "Copied to clipboard");
+        navigator.clipboard.writeText(text)
+            .then(() => notify.success(t('copied_to_clipboard')))
+            .catch(() => notify.error(t('copy_failed')));
     };
 
     const handleDelete = async () => {
         if (selectedIds.size === 0) return;
-        if (!confirm(t('batch_delete_confirm').replace('{count}', selectedIds.size.toString()) || `Permanently delete ${selectedIds.size} files?`)) return;
+        if (!await confirm({ title: t('batch_delete_confirm').replace('{count}', selectedIds.size.toString()), confirmText: t('delete_action'), destructive: true })) return;
 
         setIsProcessing(true);
         try {
             await onDelete(Array.from(selectedIds));
             setSelectedIds(new Set());
         } catch (e) {
-            alert("Delete failed");
+            notify.error(t('delete_failed'));
         } finally {
             setIsProcessing(false);
         }
@@ -78,134 +82,115 @@ export const ScanReportModal: React.FC<ScanReportModalProps> = ({
     const isAllSelected = currentItems.length > 0 && currentItems.every((item: any) => selectedIds.has(item.id));
     const selectedCount = selectedIds.size;
 
-    if (!isOpen) return null;
+    const checkboxClass = 'size-4 rounded-sm border-input accent-primary';
 
     return (
-        <AnimatePresence>
-            <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                className="fixed inset-0 z-60 bg-black/80 flex items-center justify-center p-4"
-                onClick={onClose}
-            >
-                <motion.div
-                    initial={{ scale: 0.95, y: 20 }}
-                    animate={{ scale: 1, y: 0 }}
-                    exit={{ scale: 0.95, y: 20 }}
-                    className="glass-3 w-full max-w-4xl h-[80vh] rounded-2xl shadow-2xl flex flex-col border border-white/10"
-                    onClick={e => e.stopPropagation()}
-                >
-                    {/* Header */}
-                    <div className="flex items-center justify-between p-6 border-b border-white/5 bg-black/20">
-                        <div className="flex items-center gap-3">
-                            <Icons.Alert size={24} className="text-red-400" />
-                            <h3 className="text-xl font-bold text-text-primary">Scan Report</h3>
-                        </div>
-                        <button onClick={onClose} className="p-2 hover:bg-white/10 rounded-full transition-colors">
-                            <Icons.Close size={20} className="text-text-secondary" />
-                        </button>
-                    </div>
+        <Dialog open={isOpen} onOpenChange={open => { if (!open) onClose(); }}>
+            <DialogContent className="flex h-[80vh] w-[calc(100%-1.5rem)] max-w-4xl flex-col gap-0 overflow-hidden p-0 sm:max-w-4xl">
+                <div className="flex items-center gap-3 border-b border-border p-4 pr-12">
+                    <Icons.Alert size={18} className="text-destructive" />
+                    <DialogTitle className="text-base font-semibold">{t('scan_report')}</DialogTitle>
+                </div>
 
-                    {/* Tabs */}
-                    <div className="flex border-b border-white/5">
-                        <button
-                            onClick={() => setActiveTab('error')}
-                            className={`flex-1 py-3 font-medium text-sm transition-colors border-b-2 ${activeTab === 'error' ? 'border-red-500 text-red-400 bg-red-500/5' : 'border-transparent text-text-secondary hover:text-text-primary'}`}
-                        >
-                            Errors ({smartResults?.error?.length || 0})
-                        </button>
-                        <button
-                            onClick={() => setActiveTab('missing')}
-                            className={`flex-1 py-3 font-medium text-sm transition-colors border-b-2 ${activeTab === 'missing' ? 'border-yellow-500 text-yellow-400 bg-yellow-500/5' : 'border-transparent text-text-secondary hover:text-text-primary'}`}
-                        >
-                            Missing ({smartResults?.missing?.length || 0})
-                        </button>
-                    </div>
-
-                    {/* Toolbar */}
-                    <div className="p-4 flex items-center justify-between bg-white/2">
-                        <div className="flex items-center gap-2">
-                            <input
-                                type="checkbox"
-                                checked={isAllSelected}
-                                onChange={(e) => handleSelectAll(e.target.checked)}
-                                className="w-4 h-4 rounded-sm border-gray-600 bg-black/40 text-accent-500 focus:ring-accent-500 focus:ring-offset-0"
-                            />
-                            <span className="text-sm text-text-secondary">{selectedIds.size} selected</span>
-                        </div>
-                        <div className="flex gap-2">
-                            <button onClick={handleExport} className="px-3 py-1.5 bg-white/5 hover:bg-white/10 border border-white/5 rounded-lg text-xs font-medium text-text-primary transition-colors">
-                                Export List
+                {/* 分类 */}
+                <div role="tablist" className="flex border-b border-border">
+                    {(['error', 'missing'] as const).map(tab => {
+                        const count = tab === 'error' ? (smartResults?.error?.length || 0) : (smartResults?.missing?.length || 0);
+                        const isActive = activeTab === tab;
+                        return (
+                            <button
+                                key={tab}
+                                type="button"
+                                role="tab"
+                                aria-selected={isActive}
+                                onClick={() => setActiveTab(tab)}
+                                className={`flex-1 border-b-2 py-2.5 text-sm font-medium transition-colors ${isActive ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'}`}
+                            >
+                                {tab === 'error' ? t('errors_tab') : t('missing_tab')} <span className="tabular-nums">({count})</span>
                             </button>
-                            {selectedIds.size > 0 && (
-                                <>
-                                    <button onClick={handleRepair} className="px-3 py-1.5 bg-accent-600/20 hover:bg-accent-600/30 text-accent-400 border border-accent-600/20 rounded-lg text-xs font-medium transition-colors">
-                                        Retry
-                                    </button>
-                                    <button onClick={handleDelete} disabled={isProcessing} className="px-3 py-1.5 bg-red-600 hover:bg-red-500 text-white rounded-lg text-xs font-medium transition-colors shadow-glow-red disabled:opacity-50">
-                                        {isProcessing ? 'Deleting...' : 'Delete Selected'}
-                                    </button>
-                                </>
-                            )}
-                        </div>
-                    </div>
+                        );
+                    })}
+                </div>
 
-                    {/* Content */}
-                    <div className="flex-1 overflow-auto custom-scrollbar p-0">
-                        <table className="w-full text-left border-collapse">
-                            <thead className="bg-black/40 sticky top-0 z-10 backdrop-blur-md">
-                                <tr>
-                                    <th className="p-4 py-3 w-12 border-b border-white/5"></th>
-                                    <th className="p-4 py-3 text-xs font-bold text-text-tertiary uppercase border-b border-white/5">Filename</th>
-                                    <th className="p-4 py-3 text-xs font-bold text-text-tertiary uppercase border-b border-white/5">Path</th>
-                                    <th className="p-4 py-3 text-xs font-bold text-text-tertiary uppercase border-b border-white/5 w-24">Size</th>
-                                </tr>
-                            </thead>
-                            <tbody className="divide-y divide-white/5">
-                                {currentItems.map((item: any) => (
-                                    <tr key={item.id} className={`hover:bg-white/5 transition-colors ${selectedIds.has(item.id) ? 'bg-accent-500/5' : ''}`}>
-                                        <td className="p-4 py-3 text-center">
-                                            <input
-                                                type="checkbox"
-                                                checked={selectedIds.has(item.id)}
-                                                onChange={(e) => handleToggleSelect(item.id, e.target.checked)}
-                                                className="w-4 h-4 rounded-sm border-gray-600 bg-black/40 text-accent-500 focus:ring-accent-500 focus:ring-offset-0"
-                                            />
-                                        </td>
-                                        <td className="p-4 py-3">
-                                            <div className="font-medium text-sm text-text-primary truncate max-w-[200px]" title={item.name}>{item.name}</div>
-                                        </td>
-                                        <td className="p-4 py-3">
-                                            <div
-                                                className={`text-xs font-mono truncate max-w-[300px] ${onNavigate ? 'text-blue-400 hover:text-blue-300 hover:underline cursor-pointer' : 'text-text-secondary'}`}
-                                                title={item.path}
-                                                onClick={(e) => {
-                                                    if (onNavigate) {
-                                                        e.stopPropagation();
-                                                        onNavigate(item);
-                                                    }
-                                                }}
-                                            >
-                                                {item.path}
-                                            </div>
-                                        </td>
-                                        <td className="p-4 py-3">
-                                            <span className="text-xs text-text-tertiary font-mono">{(item.size / 1024 / 1024).toFixed(2)} MB</span>
-                                        </td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                        {currentItems.length === 0 && (
-                            <div className="flex flex-col items-center justify-center h-48 text-text-tertiary">
-                                <Icons.Check size={32} className="mb-2 opacity-50" />
-                                <p>No items found in this category.</p>
-                            </div>
+                {/* 工具条 */}
+                <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-2">
+                    <label className="flex items-center gap-2 text-sm text-muted-foreground">
+                        <input
+                            type="checkbox"
+                            checked={isAllSelected}
+                            onChange={(e) => handleSelectAll(e.target.checked)}
+                            className={checkboxClass}
+                        />
+                        <span className="tabular-nums">{t('selected_count').replace('{count}', String(selectedIds.size))}</span>
+                    </label>
+                    <div className="flex gap-2">
+                        <Button variant="outline" size="sm" onClick={handleExport}>{t('export_list')}</Button>
+                        {selectedIds.size > 0 && (
+                            <>
+                                <Button variant="secondary" size="sm" onClick={handleRepair}>{t('retry')}</Button>
+                                <Button variant="destructive" size="sm" onClick={handleDelete} disabled={isProcessing}>
+                                    {isProcessing ? t('deleting') : t('delete_selected')}
+                                </Button>
+                            </>
                         )}
                     </div>
-                </motion.div>
-            </motion.div>
-        </AnimatePresence>
+                </div>
+
+                {/* 列表 */}
+                <div className="flex-1 overflow-auto custom-scrollbar">
+                    <table className="w-full border-collapse text-left">
+                        <thead className="sticky top-0 z-10 bg-popover">
+                            <tr className="border-b border-border text-xs text-muted-foreground">
+                                <th className="w-12 px-4 py-2.5"></th>
+                                <th className="px-4 py-2.5 font-medium">{t('filename')}</th>
+                                <th className="px-4 py-2.5 font-medium">{t('path')}</th>
+                                <th className="w-24 px-4 py-2.5 font-medium">{t('size')}</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-border">
+                            {currentItems.map((item: any) => (
+                                <tr key={item.id} className={`transition-colors hover:bg-accent/40 ${selectedIds.has(item.id) ? 'bg-accent/60' : ''}`}>
+                                    <td className="px-4 py-2.5 text-center">
+                                        <input
+                                            type="checkbox"
+                                            aria-label={item.name}
+                                            checked={selectedIds.has(item.id)}
+                                            onChange={(e) => handleToggleSelect(item.id, e.target.checked)}
+                                            className={checkboxClass}
+                                        />
+                                    </td>
+                                    <td className="px-4 py-2.5">
+                                        <div className="max-w-[200px] truncate text-sm font-medium" title={item.name}>{item.name}</div>
+                                    </td>
+                                    <td className="px-4 py-2.5">
+                                        {onNavigate ? (
+                                            <button
+                                                type="button"
+                                                className="max-w-[300px] truncate font-mono text-xs text-primary hover:underline"
+                                                title={item.path}
+                                                onClick={() => onNavigate(item)}
+                                            >
+                                                {item.path}
+                                            </button>
+                                        ) : (
+                                            <div className="max-w-[300px] truncate font-mono text-xs text-muted-foreground" title={item.path}>{item.path}</div>
+                                        )}
+                                    </td>
+                                    <td className="px-4 py-2.5">
+                                        <span className="font-mono text-xs tabular-nums text-muted-foreground">{(item.size / 1024 / 1024).toFixed(2)} MB</span>
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                    {currentItems.length === 0 && (
+                        <div className="flex h-48 flex-col items-center justify-center text-muted-foreground">
+                            <Icons.Check size={24} className="mb-2 opacity-60" />
+                            <p className="text-sm">{t('no_items_in_category')}</p>
+                        </div>
+                    )}
+                </div>
+            </DialogContent>
+        </Dialog>
     );
 };

@@ -1,6 +1,6 @@
 # WebUI 视觉底座与“暗房影院”视觉契约
 
-> 状态：第 0 阶段实施中（2026-10-02）
+> 状态：第 0 阶段已完成（a051be3）；第 1 阶段已完成，待提交验证（2026-10-02）
 > 决策来源：用户确认采用 shadcn/ui（Base UI 底层）+ Tailwind v4，视觉方向选择“A · 暗房影院”，时间线后续借用“章节式日期”。
 
 ## 1. 视觉契约
@@ -87,3 +87,25 @@
 2. 画廊卡片与浅色主题：移除卡片毛玻璃与逐张动效，替换旧白色半透明工具类，主色占位。
 3. 大图：共享元素过渡、渐进加载、预加载、氛围光晕取色；沉浸模式评估接入 yet-another-react-lightbox。
 4. 时间线：服务端年月分桶与游标分页，章节式日期标题与时间拖动条。
+
+## 6. 第 1 阶段（外壳）可执行计划
+
+**目标**：应用外壳与全部弹层迁移到 `components/kit`，具备对话框语义（焦点限制、Esc、焦点归还、`role="dialog"`），原生 `alert`/`confirm`/`prompt` 清零，登录页重做，修复移动端页头与工具栏重叠。
+
+**非目标**：媒体卡片与网格（第 2 阶段）、大图查看器（第 3 阶段）、工具栏菜单结构与导航行为（仅做令牌化换色，不改交互与测试契约）、`mobile/` 原生端。
+
+**步骤**
+
+1. 通过 shadcn CLI 添加 `dialog`、`alert-dialog`、`sonner`、`input`、`label`、`switch`（`separator`、`tabs` 暂未使用，未保留）；`sonner` 改为读取应用自身主题（`html.dark`），不引入 next-themes。
+2. 新增 `components/feedback/`：`notify`（成功/错误/信息提示，封装 sonner）与 `ConfirmProvider` + `useConfirm()`（基于 alert-dialog 的 Promise 确认，支持危险操作样式）；在应用根挂载。
+3. 替换 `App.tsx`、`PhotoCard`、`ScanReportModal`、`SettingsModal` 中的 `alert`/`confirm`；`SystemUpdater` 的令牌输入改为对话框内输入框。
+4. 登录/初始化页改用 kit 输入框、标签、按钮，暗房氛围背景（暖黑 + 黄铜低对比光晕），中英文案统一走语言包。
+5. 弹层外壳迁移到 kit `Dialog`：设置、用户编辑、目录选择、任务进度、扫描报告；内部 `bg-black/xx`、`border-white/xx` 等旧写法替换为语义令牌（`bg-muted`、`border-border`、`bg-card` 等），保证浅色主题可读。
+6. 侧栏与移动端页头令牌化；移动端非首页视图隐藏 `MobileHeader`（工具栏已提供菜单入口），首页保留透明页头。
+7. 工具栏与其下拉面板令牌化换色（`white/5` → `accent`/`muted`），结构与交互不变。
+
+**文件所有权**：`components/kit/*`、`components/feedback/*`、`App.tsx`（弹窗调用与登录页）、`components/SettingsModal.tsx`、`components/settings/*`、`components/UserModal.tsx`、`components/DirectoryPicker.tsx`、`components/UnifiedProgressModal.tsx`、`components/ScanReportModal.tsx`、`components/SystemUpdater.tsx`、`components/PhotoCard.tsx`（仅修复按钮反馈）、`components/Navigation.tsx`、`components/navigation/{Sidebar,MobileHeader,NavItem,NavSection,GalleryNavigationBar,Breadcrumbs}.tsx`、`index.css`、`contexts/LanguageContext.tsx`（新增文案键）、对应测试。
+
+**边界条件**：确认对话框在 Esc/点击遮罩时等同“取消”；危险操作按钮使用 destructive 样式；提示条不阻塞操作；弹层打开时焦点进入、关闭后回到触发元素；浅色/深色/375px 均可读；`prefers-reduced-motion` 下无缩放动画。
+
+**验收**：`npm run typecheck`、`npx vitest run`、`npm run build`；新增 `useConfirm` 行为测试与“源码中不再出现原生弹窗”的约束测试；模拟 API 下浏览器检查登录、设置五个分页、用户编辑、目录选择、确认删除、提示条，覆盖深浅色与手机宽度；FNOS Node 20 全量测试与构建。
