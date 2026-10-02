@@ -25,7 +25,7 @@ export const MobileHeader: React.FC<MobileHeaderProps> = React.memo(({
   onUpload,
 }) => {
   const headerClass = isHome
-    ? "glass-3 border-b border-white/10 text-white"
+    ? "glass-3 border-b border-border text-white"
     : "glass-3 border-b border-border-default text-text-primary";
 
   return (

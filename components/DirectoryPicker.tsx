@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from './kit/dialog';
+import { Button } from './kit/button';
 import { useLanguage } from '../contexts/LanguageContext';
 import { Icons } from './ui/Icon';
 import { getAuthHeaders } from '../utils/fileUtils';
@@ -44,7 +45,7 @@ export const DirectoryPicker: React.FC<DirectoryPickerProps> = ({
                 }
             } catch (err) {
                 console.error("Failed to load folders", err);
-                setError('Failed to load directory listing');
+                setError(t('load_folders_failed'));
             } finally {
                 setLoading(false);
             }
@@ -82,121 +83,73 @@ export const DirectoryPicker: React.FC<DirectoryPickerProps> = ({
     const isRoot = currentPath === '/' || currentPath === 'root' || currentPath === '';
 
     return (
-        <AnimatePresence>
-            {isOpen && (
-                <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/80">
-                    <motion.div
-                        initial={{ opacity: 0, scale: 0.95, y: 20 }}
-                        animate={{ opacity: 1, scale: 1, y: 0 }}
-                        exit={{ opacity: 0, scale: 0.95, y: 20 }}
-                        transition={{ duration: 0.2 }}
-                        className="glass-3 w-full max-w-2xl rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[80vh] transform translate-z-0 border border-white/5"
-                    >
-                        {/* Header */}
-                        <div className="p-4 border-b border-white/5 flex items-center gap-3 bg-black/20">
-                            <div className="p-2 bg-primary-100 dark:bg-primary-900/30 rounded-full text-primary-600 dark:text-primary-400">
-                                <Icons.FolderOpen size={20} />
-                            </div>
-                            <div className="flex-1 min-w-0">
-                                <h3 className="font-bold text-lg text-gray-900 dark:text-gray-100">{t('select_folder')}</h3>
-                                <div className="text-xs text-gray-500 dark:text-gray-400 font-mono truncate bg-black/20 px-2 py-1.5 rounded-lg border border-white/5 mt-1 flex items-center gap-2">
-                                    <Icons.Database size={12} />
-                                    <span className="truncate" title={currentPath}>{currentPath || '/'}</span>
-                                </div>
-                            </div>
-                            <button onClick={onClose} className="p-2 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-full transition-colors text-gray-500">
-                                <Icons.Close size={20} />
-                            </button>
-                        </div>
-
-                        {/* Toolbar */}
-                        <div className="px-4 py-3 border-b border-white/5 flex items-center gap-2 bg-transparent">
-                            <button
-                                onClick={handleUp}
-                                disabled={isRoot}
-                                className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-all duration-200 ${isRoot
-                                    ? 'text-gray-400 dark:text-gray-600 cursor-not-allowed bg-white/5'
-                                    : 'text-text-primary hover:bg-white/10 shadow-xs border border-white/5'
-                                    }`}
-                            >
-                                <Icons.ArrowUp size={16} />
-                                {t('go_up')}
-                            </button>
-                            <div className="w-px h-6 bg-white/5 mx-1" />
-                            <button
-                                onClick={() => setCurrentPath('/')}
-                                className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-all duration-200 ${isRoot
-                                    ? 'text-accent-500 bg-accent-500/10 border border-accent-500/20'
-                                    : 'text-text-secondary hover:bg-white/10'
-                                    }`}
-                            >
-                                <Icons.Server size={14} />
-                                System Root
-                            </button>
-                        </div>
-
-                        {/* Folder List */}
-                        <div className="flex-1 overflow-y-auto p-4 bg-gray-50/30 dark:bg-black/20 custom-scrollbar">
-                            {loading ? (
-                                <div className="flex flex-col items-center justify-center h-48 text-gray-400 gap-3">
-                                    <Icons.Loader size={32} className="animate-spin text-primary-500" />
-                                    <span className="text-sm font-medium">{t('loading_folders')}...</span>
-                                </div>
-                            ) : error ? (
-                                <div className="flex flex-col items-center justify-center h-48 text-red-400 gap-3">
-                                    <div className="p-3 bg-red-50 dark:bg-red-900/20 rounded-full">
-                                        <Icons.AlertTriangle size={32} />
-                                    </div>
-                                    <span className="text-sm font-medium">{error}</span>
-                                    <button
-                                        onClick={() => setCurrentPath('/')}
-                                        className="text-xs px-3 py-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-full shadow-xs hover:shadow-md transition-all"
-                                    >
-                                        Return to Root
-                                    </button>
-                                </div>
-                            ) : folders.length === 0 ? (
-                                <div className="flex flex-col items-center justify-center h-48 text-gray-400 gap-3">
-                                    <Icons.FolderOpen size={40} className="opacity-20" />
-                                    <span className="text-sm">{t('no_subfolders')}</span>
-                                </div>
-                            ) : (
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                                    {folders.map((folder) => (
-                                        <button
-                                            key={folder}
-                                            onClick={() => handleNavigate(folder)}
-                                            className="flex items-center gap-3 p-3 bg-white/3 hover:bg-accent-500/10 rounded-xl text-left transition-all duration-300 group border border-transparent hover:border-accent-500/20"
-                                        >
-                                            <div className="p-2 bg-accent-500/10 text-accent-500 rounded-lg group-hover:scale-110 transition-transform duration-300">
-                                                <Icons.Folder size={20} fill="currentColor" className="opacity-90" />
-                                            </div>
-                                            <span className="font-medium text-text-primary truncate flex-1 text-sm">{folder}</span>
-                                            <Icons.ChevronRight size={16} className="text-text-muted group-hover:text-accent-400 transition-colors" />
-                                        </button>
-                                    ))}
-                                </div>
-                            )}
-                        </div>
-
-                        {/* Footer */}
-                        <div className="p-4 border-t border-white/5 bg-transparent flex justify-end gap-3 rounded-b-2xl">
-                            <button
-                                onClick={onClose}
-                                className="px-5 py-2.5 bg-white/5 hover:bg-white/10 border border-transparent rounded-xl text-sm font-medium transition-all text-text-secondary"
-                            >
-                                {t('cancel')}
-                            </button>
-                            <button
-                                onClick={() => { onSelect(currentPath); onClose(); }}
-                                className="px-6 py-2.5 bg-accent-500 hover:bg-accent-600 text-black rounded-xl text-sm font-bold shadow-lg shadow-accent-500/10 transition-all active:scale-95 hover:-translate-y-0.5"
-                            >
-                                {t('select_this_folder')}
-                            </button>
-                        </div>
-                    </motion.div>
+        <Dialog open={isOpen} onOpenChange={open => { if (!open) onClose(); }}>
+            <DialogContent className="flex max-h-[80vh] w-[calc(100%-1.5rem)] max-w-2xl flex-col gap-0 overflow-hidden p-0 sm:max-w-2xl">
+                {/* 标题与当前路径 */}
+                <div className="flex items-start gap-3 border-b border-border p-4 pr-12">
+                    <div className="rounded-lg bg-accent p-2 text-primary">
+                        <Icons.FolderOpen size={18} />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                        <DialogTitle className="text-base font-semibold">{t('select_folder')}</DialogTitle>
+                        <DialogDescription className="mt-1 flex items-center gap-2 truncate rounded-md border border-border bg-muted/50 px-2 py-1 font-mono text-xs">
+                            <Icons.Database size={12} className="shrink-0" />
+                            <span className="truncate" title={currentPath}>{currentPath || '/'}</span>
+                        </DialogDescription>
+                    </div>
                 </div>
-            )}
-        </AnimatePresence>
+
+                {/* 工具条 */}
+                <div className="flex items-center gap-2 border-b border-border px-4 py-2">
+                    <Button variant="ghost" size="sm" onClick={handleUp} disabled={isRoot}>
+                        <Icons.ArrowUp /> {t('go_up')}
+                    </Button>
+                    <Button variant={isRoot ? 'secondary' : 'ghost'} size="sm" onClick={() => setCurrentPath('/')}>
+                        <Icons.Server /> {t('system_root')}
+                    </Button>
+                </div>
+
+                {/* 子目录列表 */}
+                <div className="min-h-48 flex-1 overflow-y-auto p-4 custom-scrollbar">
+                    {loading ? (
+                        <div className="flex h-48 flex-col items-center justify-center gap-3 text-muted-foreground">
+                            <Icons.Loader size={24} className="animate-spin text-primary" />
+                            <span className="text-sm">{t('loading_folders')}…</span>
+                        </div>
+                    ) : error ? (
+                        <div role="alert" className="flex h-48 flex-col items-center justify-center gap-3 text-destructive">
+                            <Icons.AlertTriangle size={24} />
+                            <span className="text-sm">{error}</span>
+                            <Button variant="outline" size="sm" onClick={() => setCurrentPath('/')}>{t('return_to_root')}</Button>
+                        </div>
+                    ) : folders.length === 0 ? (
+                        <div className="flex h-48 flex-col items-center justify-center gap-3 text-muted-foreground">
+                            <Icons.FolderOpen size={32} className="opacity-40" />
+                            <span className="text-sm">{t('no_subfolders')}</span>
+                        </div>
+                    ) : (
+                        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                            {folders.map((folder) => (
+                                <button
+                                    key={folder}
+                                    type="button"
+                                    onClick={() => handleNavigate(folder)}
+                                    className="group flex items-center gap-3 rounded-lg border border-transparent p-2.5 text-left transition-colors outline-none hover:border-border hover:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring/50"
+                                >
+                                    <Icons.Folder size={18} className="shrink-0 text-primary" />
+                                    <span className="min-w-0 flex-1 truncate text-sm">{folder}</span>
+                                    <Icons.ChevronRight size={16} className="text-muted-foreground transition-colors group-hover:text-foreground" />
+                                </button>
+                            ))}
+                        </div>
+                    )}
+                </div>
+
+                <DialogFooter className="mx-0 mb-0">
+                    <Button variant="outline" onClick={onClose}>{t('cancel')}</Button>
+                    <Button onClick={() => { onSelect(currentPath); onClose(); }}>{t('select_this_folder')}</Button>
+                </DialogFooter>
+            </DialogContent>
+        </Dialog>
     );
 };

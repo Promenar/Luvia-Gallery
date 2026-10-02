@@ -56,8 +56,8 @@ export const Navigation: React.FC<NavigationProps> = React.memo(({
 
   return (
     <>
-      {/* Mobile Header */}
-      <MobileHeader
+      {/* 移动端页头仅在首页显示；其余视图由统一工具栏提供菜单入口，避免两层顶栏重叠 */}
+      {isHome && <MobileHeader
         appTitle={appTitle}
         isHome={isHome}
         isSidebarOpen={isSidebarOpen}
@@ -66,7 +66,7 @@ export const Navigation: React.FC<NavigationProps> = React.memo(({
         onToggleSidebar={toggleSidebar}
         onToggleTheme={toggleTheme}
         onUpload={onUpload}
-      />
+      />}
 
       {/* Sidebar */}
       <Sidebar

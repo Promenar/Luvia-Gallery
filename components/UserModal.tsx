@@ -1,8 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
 import { Icons } from './ui/Icon';
 import { User } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from './kit/dialog';
+import { Button } from './kit/button';
+import { Input } from './kit/input';
+import { Label } from './kit/label';
+import { Switch } from './kit/switch';
 
 interface UserModalProps {
     isOpen: boolean;
@@ -11,8 +15,16 @@ interface UserModalProps {
     type: 'add' | 'reset' | 'rename';
     targetUser: User | null;
     isAdmin: boolean;
-    onBrowsePaths: () => void;
+    /** 打开目录选择器；选中的路径通过 onPick 回填到本弹窗的表单 */
+    onBrowsePaths: (onPick: (path: string) => void) => void;
 }
+
+/** 将新路径追加到多行路径文本末尾，已存在时不重复添加。 */
+export const appendAllowedPath = (current: string, path: string): string => {
+    const lines = current.split('\n').map(line => line.trim()).filter(Boolean);
+    if (lines.includes(path)) return lines.join('\n');
+    return [...lines, path].join('\n');
+};
 
 export const UserModal: React.FC<UserModalProps> = ({
     isOpen,
@@ -53,100 +65,94 @@ export const UserModal: React.FC<UserModalProps> = ({
         }
     }, [isOpen, type, targetUser]);
 
-    if (!isOpen) return null;
+    const title = type === 'add' ? t('add_user') : (type === 'rename' ? t('edit_user') : t('change_password'));
 
     return (
-        <AnimatePresence>
-            <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                className="fixed inset-0 z-60 bg-black/70 flex items-center justify-center p-4"
-                onClick={onClose}
-            >
-                <motion.div
-                    initial={{ scale: 0.95, y: 20 }}
-                    animate={{ scale: 1, y: 0 }}
-                    exit={{ scale: 0.95, y: 20 }}
-                    className="bg-surface-secondary backdrop-blur-3xl w-full max-w-md rounded-2xl shadow-2xl p-6 border border-transparent"
-                    onClick={e => e.stopPropagation()}
+        <Dialog open={isOpen} onOpenChange={open => { if (!open) onClose(); }}>
+            <DialogContent className="sm:max-w-md">
+                <form
+                    onSubmit={(e) => {
+                        e.preventDefault();
+                        onSubmit(form);
+                    }}
+                    className="grid gap-4"
                 >
-                    <h3 className="text-xl font-bold mb-4 flex items-center gap-2">
-                        <Icons.User size={24} className="text-primary-600" />
-                        {type === 'add' ? t('add_user') : (type === 'rename' ? 'Edit User' : t('change_password'))}
-                    </h3>
-                    <form
-                        onSubmit={(e) => {
-                            e.preventDefault();
-                            onSubmit(form);
-                        }}
-                        className="space-y-4"
-                    >
-                        {(type === 'add' || type === 'rename') && (
-                            <div>
-                                <label className="block text-sm font-medium mb-1">{t('username')}</label>
-                                <input
-                                    type="text"
-                                    required
-                                    className="w-full px-4 py-2 rounded-xl input-premium outline-hidden focus:border-accent-500/30 transition-all font-mono text-sm"
-                                    value={form.username}
-                                    onChange={e => setForm({ ...form, username: e.target.value })}
-                                />
-                            </div>
+                    <DialogHeader>
+                        <DialogTitle className="flex items-center gap-2 text-base font-semibold">
+                            <Icons.User size={18} className="text-primary" />
+                            {title}
+                        </DialogTitle>
+                        {targetUser && type !== 'add' && (
+                            <DialogDescription>{targetUser.username}</DialogDescription>
                         )}
-                        {type !== 'rename' && (
-                            <div>
-                                <label className="block text-sm font-medium mb-1">{t('password')}</label>
-                                <input
-                                    type="password"
-                                    required
-                                    className="w-full px-4 py-2 rounded-xl input-premium outline-hidden focus:border-accent-500/30 transition-all font-mono text-sm"
-                                    value={form.password}
-                                    onChange={e => setForm({ ...form, password: e.target.value })}
-                                />
-                            </div>
-                        )}
-                        {type === 'add' && isAdmin && (
-                            <div className="flex items-center gap-2">
-                                <input
-                                    type="checkbox"
-                                    id="isAdmin"
-                                    checked={form.isAdmin}
-                                    onChange={e => setForm({ ...form, isAdmin: e.target.checked })}
-                                    className="w-4 h-4 rounded-sm text-primary-600 focus:ring-primary-500"
-                                />
-                                <label htmlFor="isAdmin" className="text-sm font-medium">{t('is_admin')}</label>
-                            </div>
-                        )}
+                    </DialogHeader>
 
-                        {(type === 'add' || type === 'rename') && isAdmin && (
-                            <div>
-                                <div className="flex justify-between items-center mb-1">
-                                    <label className="block text-sm font-medium">Allowed Library Paths</label>
-                                    <button
-                                        type="button"
-                                        onClick={onBrowsePaths}
-                                        className="text-xs text-primary-600 hover:underline flex items-center gap-1"
-                                    >
-                                        <Icons.FolderOpen size={12} /> {t('browse')}
-                                    </button>
-                                </div>
-                                <p className="text-xs text-gray-500 mb-2">Separate multiple paths with new lines. Leave empty to deny all access.</p>
-                                <textarea
-                                    className="w-full px-4 py-2 rounded-xl input-premium outline-hidden focus:border-accent-500/30 min-h-[100px] text-sm font-mono transition-all"
-                                    placeholder="/data/media/user1&#10;/data/media/shared"
-                                    value={form.allowedPaths}
-                                    onChange={e => setForm({ ...form, allowedPaths: e.target.value })}
-                                />
-                            </div>
-                        )}
-                        <div className="flex justify-end gap-3 pt-4">
-                            <button type="button" onClick={onClose} className="px-4 py-2 text-text-tertiary hover:bg-white/5 rounded-lg transition-colors">{t('cancel')}</button>
-                            <button type="submit" className="px-6 py-2 bg-accent-500 hover:bg-accent-600 text-black font-bold rounded-lg transition-all hover:scale-105 active:scale-95 shadow-lg shadow-accent-500/20">{t('save_changes') || t('save')}</button>
+                    {(type === 'add' || type === 'rename') && (
+                        <div className="grid gap-2">
+                            <Label htmlFor="user-form-username">{t('username')}</Label>
+                            <Input
+                                id="user-form-username"
+                                required
+                                autoComplete="off"
+                                className="font-mono"
+                                value={form.username}
+                                onChange={e => setForm({ ...form, username: e.target.value })}
+                            />
                         </div>
-                    </form>
-                </motion.div>
-            </motion.div>
-        </AnimatePresence>
+                    )}
+                    {type !== 'rename' && (
+                        <div className="grid gap-2">
+                            <Label htmlFor="user-form-password">{t('password')}</Label>
+                            <Input
+                                id="user-form-password"
+                                type="password"
+                                required
+                                autoComplete="new-password"
+                                value={form.password}
+                                onChange={e => setForm({ ...form, password: e.target.value })}
+                            />
+                        </div>
+                    )}
+                    {type === 'add' && isAdmin && (
+                        <div className="flex items-center justify-between gap-3 rounded-lg border border-border px-3 py-2">
+                            <Label htmlFor="user-form-admin">{t('is_admin')}</Label>
+                            <Switch
+                                id="user-form-admin"
+                                checked={form.isAdmin}
+                                onCheckedChange={checked => setForm({ ...form, isAdmin: checked })}
+                            />
+                        </div>
+                    )}
+
+                    {(type === 'add' || type === 'rename') && isAdmin && (
+                        <div className="grid gap-2">
+                            <div className="flex items-center justify-between">
+                                <Label htmlFor="user-form-paths">{t('allowed_paths')}</Label>
+                                <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => onBrowsePaths(path => setForm(prev => ({ ...prev, allowedPaths: appendAllowedPath(prev.allowedPaths, path) })))}
+                                >
+                                    <Icons.FolderOpen /> {t('browse')}
+                                </Button>
+                            </div>
+                            <p className="text-xs text-muted-foreground">{t('allowed_paths_hint')}</p>
+                            <textarea
+                                id="user-form-paths"
+                                className="min-h-24 w-full rounded-lg border border-input bg-transparent px-3 py-2 font-mono text-sm outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/30"
+                                placeholder={'/data/media/user1\n/data/media/shared'}
+                                value={form.allowedPaths}
+                                onChange={e => setForm({ ...form, allowedPaths: e.target.value })}
+                            />
+                        </div>
+                    )}
+                    <DialogFooter>
+                        <Button type="button" variant="outline" onClick={onClose}>{t('cancel')}</Button>
+                        <Button type="submit">{t('save_changes') || t('save')}</Button>
+                    </DialogFooter>
+                </form>
+            </DialogContent>
+        </Dialog>
     );
 };

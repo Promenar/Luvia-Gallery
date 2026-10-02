@@ -1,9 +1,17 @@
 import React, { useState, useEffect } from 'react';
 import { RefreshCw, Package, GitBranch, AlertTriangle, Search, Save, CheckCircle, XCircle } from 'lucide-react';
 import { useLanguage } from '../contexts/LanguageContext';
+import { useFeedback } from './feedback/feedback';
 
 const SystemUpdater: React.FC = () => {
     const { t } = useLanguage();
+    const { confirm, prompt } = useFeedback();
+    const requestUpdateToken = () => prompt({
+        title: t('update_token_title'),
+        description: t('update_token_desc'),
+        label: t('update_token_label'),
+        inputType: 'password',
+    });
     const [authToken, setAuthToken] = useState<string>(localStorage.getItem('update_token') || '');
     const [updating, setUpdating] = useState(false);
     const [statusMsg, setStatusMsg] = useState('');
@@ -37,7 +45,7 @@ const SystemUpdater: React.FC = () => {
 
             if (res.status === 401) {
                 if (!interactive) throw new Error("Update Token required");
-                const userInput = window.prompt("Security Check: Please enter the Update Token to check status.");
+                const userInput = await requestUpdateToken();
                 if (userInput) {
                     setAuthToken(userInput);
                     localStorage.setItem('update_token', userInput);
@@ -74,7 +82,7 @@ const SystemUpdater: React.FC = () => {
             });
 
             if (res.status === 401) {
-                const userInput = window.prompt("Security Check: Please enter the Update Token to save config.");
+                const userInput = await requestUpdateToken();
                 if (userInput) {
                     setAuthToken(userInput);
                     localStorage.setItem('update_token', userInput);
@@ -98,7 +106,7 @@ const SystemUpdater: React.FC = () => {
     };
 
     const handleUpdate = async (token?: string) => {
-        if (!token && !window.confirm(t('update_description'))) return;
+        if (!token && !await confirm({ title: t('update_confirm_title'), description: t('update_description'), confirmText: t('confirm_action') })) return;
 
         setUpdating(true);
         setStatusMsg('Initiating update sequence...');
@@ -113,7 +121,7 @@ const SystemUpdater: React.FC = () => {
             if (!res.ok) {
                 if (res.status === 409) throw new Error('Update already in progress');
                 if (res.status === 401) {
-                    const userInput = window.prompt("Security Check: Please enter the Update Token to proceed.");
+                    const userInput = await requestUpdateToken();
                     if (userInput) {
                         setAuthToken(userInput);
                         localStorage.setItem('update_token', userInput);
@@ -160,7 +168,7 @@ const SystemUpdater: React.FC = () => {
     };
 
     return (
-        <div className="p-6 rounded-2xl bg-white/5 border border-white/5 space-y-6">
+        <div className="p-6 rounded-2xl bg-muted/50 border border-border space-y-6">
             <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
                     <Package className="text-accent-500" size={24} />
@@ -186,7 +194,7 @@ const SystemUpdater: React.FC = () => {
                                 value={config.repoUrl}
                                 onChange={e => setConfig(prev => ({ ...prev, repoUrl: e.target.value }))}
                                 placeholder="git@github.com:user/repo.git or https://github.com/user/repo.git"
-                                className="flex-1 px-3 py-2 bg-black/20 border border-white/5 rounded-xl text-sm font-mono text-text-secondary outline-hidden focus:border-accent-500/30"
+                                className="flex-1 px-3 py-2 bg-muted/50 border border-border rounded-xl text-sm font-mono text-text-secondary outline-hidden focus:border-accent-500/30"
                             />
                         </div>
                     </div>
@@ -197,12 +205,12 @@ const SystemUpdater: React.FC = () => {
                                 value={config.branch}
                                 onChange={e => setConfig(prev => ({ ...prev, branch: e.target.value }))}
                                 placeholder="main"
-                                className="flex-1 px-3 py-2 bg-black/20 border border-white/5 rounded-xl text-sm font-mono text-text-secondary outline-hidden focus:border-accent-500/30"
+                                className="flex-1 px-3 py-2 bg-muted/50 border border-border rounded-xl text-sm font-mono text-text-secondary outline-hidden focus:border-accent-500/30"
                             />
                             <button
                                 onClick={() => handleSaveConfig()}
                                 disabled={saveStatus === 'saving'}
-                                className={`h-[38px] px-4 rounded-xl border flex items-center justify-center gap-2 transition-all active:scale-95 shrink-0 ${saveStatus === 'success' ? 'bg-green-500/20 border-green-500/30 text-green-400 shadow-glow' : 'bg-white/5 border-transparent text-text-secondary hover:bg-white/10'}`}
+                                className={`h-[38px] px-4 rounded-xl border flex items-center justify-center gap-2 transition-all active:scale-95 shrink-0 ${saveStatus === 'success' ? 'bg-green-500/20 border-green-500/30 text-green-400 shadow-glow' : 'bg-muted/50 border-transparent text-text-secondary hover:bg-accent'}`}
                             >
                                 {saveStatus === 'success' ? <CheckCircle size={18} /> : <Save size={18} />}
                                 <span className="text-sm font-medium whitespace-nowrap">{saveStatus === 'success' ? t('config_saved') : t('save_config')}</span>
@@ -235,7 +243,7 @@ const SystemUpdater: React.FC = () => {
                     disabled={updating}
                     className={`flex-1 flex items-center justify-center gap-2 px-6 py-3 rounded-xl font-bold transition-all transform active:scale-95 shadow-glow ${updating
                         ? 'bg-gray-600 cursor-not-allowed opacity-50 text-white'
-                        : 'bg-accent-600 hover:bg-accent-500 text-white'
+                        : 'bg-primary hover:bg-primary/85 text-primary-foreground'
                         }`}
                 >
                     <RefreshCw size={20} className={updating ? "animate-spin" : ""} />
@@ -244,7 +252,7 @@ const SystemUpdater: React.FC = () => {
                 <button
                     onClick={() => checkUpdate()}
                     disabled={checking || updating}
-                    className="p-3 bg-white/5 hover:bg-white/10 border border-transparent rounded-xl text-text-secondary transition-all active:scale-95 flex items-center justify-center min-w-[48px]"
+                    className="p-3 bg-muted/50 hover:bg-accent border border-transparent rounded-xl text-text-secondary transition-all active:scale-95 flex items-center justify-center min-w-[48px]"
                     title={t('check_update')}
                 >
                     <Search size={22} className={`transition-all duration-500 ${checking ? "opacity-40 scale-90" : "opacity-100 scale-100"}`} />
