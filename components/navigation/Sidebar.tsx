@@ -77,7 +77,7 @@ export const Sidebar: React.FC<SidebarProps> = React.memo(({
         <div className={`
           h-16 flex items-center
           ${isDesktopSidebarOpen ? 'px-6' : 'justify-center px-2'}
-          shrink-0 border-b border-white/5
+          shrink-0 border-b border-border
         `}>
           <div className="w-9 h-9 glass-3 rounded-xl flex items-center justify-center shadow-glow shrink-0">
             <div className="w-4 h-4 bg-accent-500 rounded-full shadow-[0_0_12px_rgba(104,197,255,0.8)]" />
@@ -96,7 +96,7 @@ export const Sidebar: React.FC<SidebarProps> = React.memo(({
 
           <button
             onClick={onToggleSidebar}
-            className="md:hidden ml-auto p-2 text-text-tertiary hover:text-text-primary transition-colors rounded-lg hover:bg-white/5"
+            className="md:hidden ml-auto p-2 text-text-tertiary hover:text-text-primary transition-colors rounded-lg hover:bg-accent/60"
           >
             <Icons.Close size={20} />
           </button>
@@ -105,8 +105,8 @@ export const Sidebar: React.FC<SidebarProps> = React.memo(({
             onClick={onToggleDesktopSidebar}
             whileHover={{ scale: 1.1 }}
             whileTap={{ scale: 0.9 }}
-            className={`hidden md:flex p-2 text-text-tertiary hover:text-text-primary transition-colors rounded-lg hover:bg-white/5 ml-auto ${
-              !isDesktopSidebarOpen ? 'absolute right-[-12px] top-6 glass-2 rounded-full border border-white/10 shadow-md z-50' : ''
+            className={`hidden md:flex p-2 text-text-tertiary hover:text-text-primary transition-colors rounded-lg hover:bg-accent/60 ml-auto ${
+              !isDesktopSidebarOpen ? 'absolute right-[-12px] top-6 glass-2 rounded-full border border-border shadow-md z-50' : ''
             }`}
             title={isDesktopSidebarOpen ? 'Collapse' : 'Expand'}
           >
@@ -172,13 +172,13 @@ export const Sidebar: React.FC<SidebarProps> = React.memo(({
           {/* Upload Section (Client Mode) */}
           {!isServerMode && (
             <div className={`mt-8 ${isDesktopSidebarOpen ? 'px-2' : 'flex justify-center'}`}>
-              <div className="border-t border-white/5 pt-6">
+              <div className="border-t border-border pt-6">
                 <motion.label
                   whileHover={{ scale: 1.02 }}
                   whileTap={{ scale: 0.98 }}
                   className={`
                     flex flex-col items-center justify-center gap-2 w-full py-6 rounded-xl
-                    border border-white/5 cursor-pointer
+                    border border-border cursor-pointer
                     glass-1 hover:ring-1 hover:ring-accent-500/30
                     text-text-primary
                     ${!isDesktopSidebarOpen && 'border-0 hover:ring-0 py-3'}

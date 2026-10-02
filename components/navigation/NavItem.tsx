@@ -30,7 +30,7 @@ export const NavItem: React.FC<NavItemProps> = React.memo(({
     ${isExpanded ? 'px-4' : 'justify-center px-0'}
     ${active
       ? 'bg-accent-500/10 text-accent-500 ring-1 ring-inset ring-accent-500/20 font-semibold'
-      : 'text-text-secondary hover:text-text-primary hover:bg-white/10 dark:hover:bg-white/5 border border-transparent'
+      : 'text-text-secondary hover:text-text-primary hover:bg-accent  border border-transparent'
     }
     ${className}
   `;
@@ -55,7 +55,7 @@ export const NavItem: React.FC<NavItemProps> = React.memo(({
               ml-auto text-xs px-2 py-0.5 rounded-full border transition-colors
               ${active
                 ? 'bg-accent-500/10 text-accent-400 border-transparent ring-1 ring-inset ring-accent-500/20'
-                : 'bg-white/5 text-text-muted border-white/5'
+                : 'bg-muted/50 text-text-muted border-border'
               }
             `}>
               {badge}

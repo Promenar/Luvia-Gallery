@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from './kit/dialog';
 import { Icons } from './ui/Icon';
 import { User, ExtendedSystemStatus, HomeScreenConfig } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
+import { notify } from './feedback/feedback';
 import SystemUpdater from './SystemUpdater';
 import { formatMediaStatValue } from './settings/SystemTab';
 
@@ -11,6 +12,8 @@ export type SettingsTab = 'general' | 'library' | 'system' | 'account';
 interface SettingsModalProps {
     isOpen: boolean;
     onClose: () => void;
+    /** 子对话框（用户编辑、目录选择）打开期间禁止点击遮罩关闭设置，避免误关父级 */
+    disablePointerDismissal?: boolean;
     appTitle: string;
     homeSubtitle: string;
     language: 'en' | 'zh';
@@ -166,7 +169,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
             setTimeout(() => setJustCopied(false), 2000);
         } catch (err) {
             console.error('复制失败:', err);
-            alert('复制失败，请手动长按选中文本复制');
+            notify.error(t('copy_failed'));
         }
     };
 
@@ -227,7 +230,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                         aria-describedby="media-hover-zoom-description"
                                         onClick={() => onMediaHoverZoomChange(!mediaHoverZoomEnabled)}
                                         className={`relative h-7 w-12 shrink-0 rounded-full transition-colors focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2 focus-visible:ring-offset-surface-primary ${
-                                            mediaHoverZoomEnabled ? 'bg-accent-500' : 'bg-white/15'
+                                            mediaHoverZoomEnabled ? 'bg-accent-500' : 'bg-muted-foreground/30'
                                         }`}
                                     >
                                         <span
@@ -246,7 +249,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                             <button
                                                 key={m}
                                                 onClick={() => onUpdateHomeConfig({ ...homeConfig, mode: m as any })}
-                                                className={`px-4 py-2 rounded-lg text-sm font-medium capitalize transition-all border ${homeConfig.mode === m ? 'button-premium-active border-accent-500/30 shadow-glow' : 'button-premium-ghost hover:border-white/10'}`}
+                                                className={`px-4 py-2 rounded-lg text-sm font-medium capitalize transition-all border ${homeConfig.mode === m ? 'button-premium-active border-accent-500/30 shadow-glow' : 'button-premium-ghost hover:border-input'}`}
                                             >
                                                 {m === 'favorites' ? t('favorites') : t(m === 'random' ? 'random_all' : (m === 'folder' ? 'specific_folder' : 'single_item'))}
                                             </button>
@@ -269,8 +272,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                 return (
                     <div className="space-y-8 animate-in fade-in slide-in-from-right-4 duration-300">
                         {!isServerMode ? (
-                            <div className="flex flex-col items-center justify-center p-8 glass-1 rounded-2xl border border-dashed border-white/10">
-                                <div className="p-4 bg-white/5 rounded-full mb-4 text-text-secondary">
+                            <div className="flex flex-col items-center justify-center p-8 glass-1 rounded-2xl border border-dashed border-border">
+                                <div className="p-4 bg-muted/50 rounded-full mb-4 text-text-secondary">
                                     <Icons.Server size={32} />
                                 </div>
                                 <h4 className="text-lg font-bold mb-2 text-text-primary">{t('running_client_mode')}</h4>
@@ -279,7 +282,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                 </p>
                                 <button
                                     onClick={() => { setIsServerMode(true); setActiveTab('system'); }}
-                                    className="px-6 py-2 bg-accent-600 hover:bg-accent-500 text-white font-medium rounded-lg transition-colors shadow-glow"
+                                    className="px-6 py-2 bg-primary hover:bg-primary/85 text-primary-foreground font-medium rounded-lg transition-colors shadow-glow"
                                 >
                                     {t('switch_to_server')}
                                 </button>
@@ -292,7 +295,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                         <h4 className="text-lg font-bold text-text-primary">{t('library_stats')}</h4>
                                     </div>
                                     <div className="glass-1 rounded-2xl overflow-hidden shadow-2xl border-none">
-                                        <div className="p-6 border-b border-white/5 bg-white/2">
+                                        <div className="p-6 border-b border-border bg-muted/30">
                                             <div className="flex items-center justify-between mb-2">
                                                 <h5 className="font-bold text-lg text-text-primary">{t('library_scan_paths')}</h5>
                                                 <button
@@ -314,37 +317,37 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                                     <button
                                                         type="button"
                                                         onClick={() => { onSetDirPickerContext('library'); onShowDirPicker(true); }}
-                                                        className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-text-tertiary hover:text-accent-400 hover:bg-white/10 rounded-md transition-colors"
+                                                        className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-text-tertiary hover:text-accent-400 hover:bg-accent rounded-md transition-colors"
                                                         title={t('browse')}
                                                     >
                                                         <Icons.FolderOpen size={16} />
                                                     </button>
                                                 </div>
-                                                <button type="submit" className="px-4 py-2 bg-accent-500 hover:bg-accent-600 text-black font-bold rounded-lg transition-all hover:scale-105 active:scale-95 flex items-center gap-2 shadow-lg shadow-accent-500/20">
+                                                <button type="submit" className="px-4 py-2 bg-primary hover:bg-primary/85 text-primary-foreground font-bold rounded-lg transition-all hover:scale-105 active:scale-95 flex items-center gap-2 shadow-lg shadow-accent-500/20">
                                                     <Icons.Plus size={18} /> {t('add_path')}
                                                 </button>
                                             </form>
                                         </div>
-                                        <div className="bg-black/20 p-2 space-y-1 max-h-64 overflow-y-auto border-b border-white/10 custom-scrollbar">
+                                        <div className="bg-muted/50 p-2 space-y-1 max-h-64 overflow-y-auto border-b border-border custom-scrollbar">
                                             {libraryPaths.length === 0 && (
                                                 <div className="p-4 text-center text-sm text-text-tertiary italic">
-                                                    {t('scanning_default')} <span className="font-mono bg-white/10 px-1 rounded-sm text-text-secondary">/media</span>
+                                                    {t('scanning_default')} <span className="font-mono bg-muted px-1 rounded-sm text-text-secondary">/media</span>
                                                 </div>
                                             )}
                                             {libraryPaths.map(path => (
-                                                <div key={path} className="flex items-center justify-between p-3 glass-2 rounded-xl border border-white/5 shadow-inner group">
+                                                <div key={path} className="flex items-center justify-between p-3 glass-2 rounded-xl border border-border shadow-inner group">
                                                     <div className="flex items-center gap-3">
                                                         <Icons.Folder size={18} className="text-accent-500" />
                                                         <span className="font-mono text-sm text-text-primary">{path}</span>
                                                     </div>
-                                                    <button onClick={() => onRemoveLibraryPath(path)} className="text-red-400 opacity-0 group-hover:opacity-100 p-2 hover:bg-white/10 rounded-lg transition-all">
+                                                    <button onClick={() => onRemoveLibraryPath(path)} className="text-red-400 opacity-0 group-hover:opacity-100 p-2 hover:bg-accent rounded-lg transition-all">
                                                         <Icons.Trash size={16} />
                                                     </button>
                                                 </div>
                                             ))}
                                         </div>
                                         {systemStatus && (
-                                            <div className="p-4 bg-accent-500/5 border-t border-white/10">
+                                            <div className="p-4 bg-accent-500/5 border-t border-border">
                                                 <div className="mb-3">
                                                     <div className="flex items-center gap-2 mb-2">
                                                         <Icons.Activity size={18} className="text-text-secondary" />
@@ -365,7 +368,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                                                 </button>
                                                             ))}
                                                         </div>
-                                                        <div className="text-xs text-text-secondary bg-white/5 p-3 rounded-lg border border-white/5">
+                                                        <div className="text-xs text-text-secondary bg-muted/50 p-3 rounded-lg border border-border">
                                                             {(systemStatus.mode || 'manual') === 'manual' && <p>{t('monitoring_desc_manual')}</p>}
                                                             {(systemStatus.mode || 'manual') === 'periodic' && (
                                                                 <div className="space-y-2">
@@ -375,7 +378,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                                                         <select
                                                                             value={systemStatus.scanInterval || 60}
                                                                             onChange={(e) => onMonitorUpdate('periodic', parseInt(e.target.value))}
-                                                                            className="bg-black/40 border border-white/5 hover:border-white/10 rounded-sm px-2 py-1 text-xs outline-hidden focus:ring-2 focus:ring-accent-500/20 text-text-primary transition-all [&>option]:text-black"
+                                                                            className="bg-muted border border-border hover:border-input rounded-sm px-2 py-1 text-xs outline-hidden focus:ring-2 focus:ring-accent-500/20 text-text-primary transition-all [&>option]:text-black"
                                                                         >
                                                                             <option value="15">15 {t('minutes')}</option>
                                                                             <option value="30">30 {t('minutes')}</option>
@@ -394,7 +397,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                         )}
                                     </div>
                                 </section>
-                                <section className="mt-8 pt-6 border-t border-white/10">
+                                <section className="mt-8 pt-6 border-t border-border">
                                     <div className="flex items-center gap-2 mb-4">
                                         <div className="w-1.5 h-6 bg-blue-500 rounded-full shadow-[0_0_10px_var(--blue-500)]" />
                                         <h4 className="text-lg font-bold text-text-primary">{t('maintenance')}</h4>
@@ -407,7 +410,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                             <div className="flex-1">
                                                 <div className="text-2xl font-bold mb-1 font-mono text-text-primary text-glow">{systemStatus?.cacheCount.toLocaleString() || '0'} <span className="text-sm font-normal text-text-secondary">{t('cached')}</span></div>
                                                 <div className="flex gap-2 mt-4">
-                                                    <button onClick={onPruneCache} className="flex-1 px-3 py-2 bg-white/5 hover:bg-white/10 rounded-lg text-xs font-medium transition-colors text-text-secondary hover:text-text-primary border border-white/5">{t('clean_duplicate_cache')}</button>
+                                                    <button onClick={onPruneCache} className="flex-1 px-3 py-2 bg-muted/50 hover:bg-accent rounded-lg text-xs font-medium transition-colors text-text-secondary hover:text-text-primary border border-border">{t('clean_duplicate_cache')}</button>
                                                     <button onClick={onClearCache} className="px-3 py-2 bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 rounded-lg text-xs font-medium transition-colors">{t('clear_all_cache')}</button>
                                                 </div>
                                             </div>
@@ -431,10 +434,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                                             </div>
                                                         </div>
                                                         <div className="flex gap-2">
-                                                            <button onClick={onSmartRepair} className="flex-1 py-2 bg-yellow-500 hover:bg-yellow-400 text-black rounded-lg text-xs font-bold transition-colors shadow-glow">{t('repair_now')}</button>
-                                                            <button onClick={onSmartScan} className="px-3 py-2 bg-white/5 hover:bg-white/10 rounded-lg text-xs font-medium transition-colors text-text-primary border border-white/5">{t('rescan')}</button>
+                                                            <button onClick={onSmartRepair} className="flex-1 py-2 bg-primary hover:bg-primary/85 text-primary-foreground rounded-lg text-xs font-bold transition-colors shadow-glow">{t('repair_now')}</button>
+                                                            <button onClick={onSmartScan} className="px-3 py-2 bg-muted/50 hover:bg-accent rounded-lg text-xs font-medium transition-colors text-text-primary border border-border">{t('rescan')}</button>
                                                             {onOpenScanReport && (
-                                                                <button onClick={onOpenScanReport} className="px-3 py-2 bg-white/5 hover:bg-white/10 rounded-lg text-xs font-medium transition-colors text-text-primary border border-white/5">
+                                                                <button onClick={onOpenScanReport} className="px-3 py-2 bg-muted/50 hover:bg-accent rounded-lg text-xs font-medium transition-colors text-text-primary border border-border">
                                                                     <Icons.List size={14} />
                                                                 </button>
                                                             )}
@@ -448,7 +451,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                     </div>
 
                                     <div className="mt-4">
-                                        <div className="glass-1 p-5 rounded-2xl border border-white/5 shadow-xl transition-all flex items-center justify-between gap-4 glass-hover">
+                                        <div className="glass-1 p-5 rounded-2xl border border-border shadow-xl transition-all flex items-center justify-between gap-4 glass-hover">
                                             <div className="flex items-center gap-4">
                                                 <div className="p-3 bg-purple-500/10 text-purple-400 rounded-xl border border-purple-500/20"><Icons.Image size={24} /></div>
                                                 <div>
@@ -456,13 +459,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                                     <p className="text-xs text-text-secondary">{t('generate_thumbs_desc')}</p>
                                                 </div>
                                             </div>
-                                            <button onClick={onStartThumbGen} className="px-8 py-2.5 bg-purple-600 hover:bg-purple-500 text-white rounded-xl font-medium text-sm transition-colors shadow-glow">
+                                            <button onClick={onStartThumbGen} className="px-8 py-2.5 bg-primary hover:bg-primary/85 text-primary-foreground rounded-xl font-medium text-sm transition-colors shadow-glow">
                                                 {t('generate')}
                                             </button>
                                         </div>
                                     </div>
 
-                                    <section className="mt-8 pt-6 border-t border-white/10">
+                                    <section className="mt-8 pt-6 border-t border-border">
                                         <div className="flex items-center gap-2 mb-4">
                                             <div className="w-1.5 h-6 bg-orange-500 rounded-full shadow-[0_0_10px_var(--orange-500)]" />
                                             <h4 className="text-lg font-bold text-text-primary">{t('performance_settings')}</h4>
@@ -473,7 +476,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                                     <h5 className="font-bold text-text-primary mb-1">{t('thumbnail_threads')}</h5>
                                                     <p className="text-xs text-text-secondary">{t('thumbnail_threads_desc')}</p>
                                                 </div>
-                                                <div className="flex items-center gap-4 bg-black/40 p-3 rounded-xl border border-white/5 shadow-inner">
+                                                <div className="flex items-center gap-4 bg-muted p-3 rounded-xl border border-border shadow-inner">
                                                     <input
                                                         type="range"
                                                         min="1"
@@ -497,11 +500,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                     <div className="space-y-8 animate-in fade-in slide-in-from-right-4 duration-300">
                         <section>
                             <h4 className="text-sm font-bold uppercase text-text-tertiary tracking-wider mb-4">{t('connection')}</h4>
-                            <div className="bg-black/20 p-1 rounded-xl inline-flex w-full md:w-auto border border-white/5">
-                                <button className={`flex-1 md:flex-none px-6 py-2 rounded-lg text-sm font-medium transition-all ${!isServerMode ? 'glass-2 text-text-primary shadow-glow' : 'text-text-tertiary hover:bg-white/5'}`} onClick={() => setIsServerMode(false)}>
+                            <div className="bg-muted/50 p-1 rounded-xl inline-flex w-full md:w-auto border border-border">
+                                <button className={`flex-1 md:flex-none px-6 py-2 rounded-lg text-sm font-medium transition-all ${!isServerMode ? 'glass-2 text-text-primary shadow-glow' : 'text-text-tertiary hover:bg-accent/60'}`} onClick={() => setIsServerMode(false)}>
                                     {t('client_mode')}
                                 </button>
-                                <button className={`flex-1 md:flex-none px-6 py-2 rounded-lg text-sm font-medium transition-all ${isServerMode ? 'glass-2 text-text-primary shadow-glow' : 'text-text-tertiary hover:bg-white/5'}`} onClick={() => setIsServerMode(true)}>
+                                <button className={`flex-1 md:flex-none px-6 py-2 rounded-lg text-sm font-medium transition-all ${isServerMode ? 'glass-2 text-text-primary shadow-glow' : 'text-text-tertiary hover:bg-accent/60'}`} onClick={() => setIsServerMode(true)}>
                                     {t('server_mode')}
                                 </button>
                             </div>
@@ -509,7 +512,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                         {isServerMode && systemStatus && (
                             <div className="space-y-6">
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                    <div className="glass-1 border border-white/10 rounded-2xl p-5 shadow-lg flex flex-col justify-between">
+                                    <div className="glass-1 border border-border rounded-2xl p-5 shadow-lg flex flex-col justify-between">
                                         <div>
                                             <h5 className="flex items-center gap-2 font-bold text-text-primary mb-4">
                                                 <Icons.Cpu size={18} className="text-accent-400" /> {t('backend_components')}
@@ -545,20 +548,20 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                                 <div className="flex justify-between items-center">
                                                     <span className="text-sm text-text-secondary">GPU Acceleration</span>
                                                     <div className="flex items-center gap-2">
-                                                        <span className={`text-xs font-bold ${systemStatus.hardwareAcceleration?.type && systemStatus.hardwareAcceleration.type !== 'none' ? 'text-green-400 bg-green-500/10 border border-green-500/20' : 'text-text-tertiary bg-white/5 border border-white/5'} px-2 py-0.5 rounded-sm uppercase`}>
+                                                        <span className={`text-xs font-bold ${systemStatus.hardwareAcceleration?.type && systemStatus.hardwareAcceleration.type !== 'none' ? 'text-green-400 bg-green-500/10 border border-green-500/20' : 'text-text-tertiary bg-muted/50 border border-border'} px-2 py-0.5 rounded-sm uppercase`}>
                                                             {systemStatus.hardwareAcceleration?.type === 'cuda' ? 'NVIDIA CUDA' : (systemStatus.hardwareAcceleration?.type === 'vaapi' ? 'Intel/AMD VAAPI' : 'Disabled')}
                                                         </span>
-                                                        <div className={`w-2 h-2 rounded-full ${systemStatus.hardwareAcceleration?.type && systemStatus.hardwareAcceleration.type !== 'none' ? 'bg-green-500 shadow-glow-sm' : 'bg-white/20'}`} />
+                                                        <div className={`w-2 h-2 rounded-full ${systemStatus.hardwareAcceleration?.type && systemStatus.hardwareAcceleration.type !== 'none' ? 'bg-green-500 shadow-glow-sm' : 'bg-muted-foreground/40'}`} />
                                                     </div>
                                                 </div>
                                             </div>
                                         </div>
-                                        <div className="flex justify-between items-center pt-3 mt-3 border-t border-white/10">
+                                        <div className="flex justify-between items-center pt-3 mt-3 border-t border-border">
                                             <span className="text-xs text-header-secondary">Platform</span>
-                                            <span className="text-xs font-mono text-text-secondary bg-black/20 px-2 py-0.5 rounded-sm border border-white/5">{systemStatus.platform}</span>
+                                            <span className="text-xs font-mono text-text-secondary bg-muted/50 px-2 py-0.5 rounded-sm border border-border">{systemStatus.platform}</span>
                                         </div>
                                     </div>
-                                    <div className="glass-1 border border-white/10 rounded-2xl p-5 shadow-lg">
+                                    <div className="glass-1 border border-border rounded-2xl p-5 shadow-lg">
                                         <h5 className="flex items-center gap-2 font-bold text-text-primary mb-4">
                                             <Icons.Database size={18} className="text-accent-400" /> {t('media_statistics')}
                                         </h5>
@@ -584,10 +587,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                 </div>
                             </div>
                         )}
-                        <section className="pt-4 border-t border-white/10">
+                        <section className="pt-4 border-t border-border">
                             <SystemUpdater />
                         </section>
-                        <section className="pt-4 border-t border-white/10">
+                        <section className="pt-4 border-t border-border">
                             <button onClick={onExportConfig} className="text-sm font-medium text-accent-400 hover:text-accent-300 hover:underline flex items-center gap-2 transition-colors">
                                 <Icons.Download size={16} /> {t('backup_config')}
                             </button>
@@ -608,7 +611,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                             </div>
                             <div className="glass-1 rounded-2xl overflow-hidden shadow-2xl border-none">
                                 {users.filter(u => currentUser?.isAdmin || u.username === currentUser?.username).map((u, idx, arr) => (
-                                    <div key={u.username} className={`p-4 flex items-center justify-between ${idx !== arr.length - 1 ? 'border-b border-white/5' : ''} hover:bg-white/5 transition-colors`}>
+                                    <div key={u.username} className={`p-4 flex items-center justify-between ${idx !== arr.length - 1 ? 'border-b border-border' : ''} hover:bg-accent/60 transition-colors`}>
                                         <div className="flex items-center gap-3">
                                             <div className="w-10 h-10 rounded-full bg-accent-500/10 text-accent-400 flex items-center justify-center font-bold shadow-glow overflow-hidden relative group/avatar">
                                                 <span className="relative z-10">{u.username[0].toUpperCase()}</span>
@@ -621,13 +624,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                         </div>
                                         <div className="flex gap-2">
                                             {u.username === currentUser?.username || currentUser?.isAdmin ? (
-                                                <button onClick={() => onResetPassword(u)} className="p-2 text-text-tertiary hover:text-accent-400 hover:bg-white/10 rounded-lg transition-colors"><Icons.Lock size={16} /></button>
+                                                <button onClick={() => onResetPassword(u)} className="p-2 text-text-tertiary hover:text-accent-400 hover:bg-accent rounded-lg transition-colors"><Icons.Lock size={16} /></button>
                                             ) : null}
                                             {currentUser?.isAdmin && (
                                                 <>
-                                                    <button onClick={() => onRenameUser(u)} className="p-2 text-text-tertiary hover:text-yellow-400 hover:bg-white/10 rounded-lg transition-colors"><Icons.Edit size={16} /></button>
+                                                    <button onClick={() => onRenameUser(u)} className="p-2 text-text-tertiary hover:text-yellow-400 hover:bg-accent rounded-lg transition-colors"><Icons.Edit size={16} /></button>
                                                     {u.username !== currentUser?.username && (
-                                                        <button onClick={() => onDeleteUser(u)} className="p-2 text-text-tertiary hover:text-red-400 hover:bg-white/10 rounded-lg transition-colors"><Icons.Trash size={16} /></button>
+                                                        <button onClick={() => onDeleteUser(u)} className="p-2 text-text-tertiary hover:text-red-400 hover:bg-accent rounded-lg transition-colors"><Icons.Trash size={16} /></button>
                                                     )}
                                                 </>
                                             )}
@@ -638,7 +641,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                         </section>
 
                         {isServerMode && currentUser && (
-                            <section className="mt-8 pt-6 border-t border-white/10">
+                            <section className="mt-8 pt-6 border-t border-border">
                                 <div className="flex items-center gap-2 mb-4">
                                     <div className="w-1.5 h-6 bg-accent-500 rounded-full shadow-[0_0_10px_var(--accent-500)]" />
                                     <h4 className="text-sm font-bold uppercase text-text-tertiary tracking-wider">{t('wallpaper_token')}</h4>
@@ -651,14 +654,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                     {!wallpaperToken ? (
                                         <button
                                             onClick={handleGenerateWallpaperToken}
-                                            className="px-6 py-2 bg-accent-600 hover:bg-accent-500 text-white font-medium rounded-lg transition-colors shadow-glow flex items-center gap-2"
+                                            className="px-6 py-2 bg-primary hover:bg-primary/85 text-primary-foreground font-medium rounded-lg transition-colors shadow-glow flex items-center gap-2"
                                         >
                                             <Icons.Zap size={18} />
                                             {t('generate_wallpaper_token')}
                                         </button>
                                     ) : (
                                         <div className="space-y-4 animate-in fade-in slide-in-from-top-2 duration-500">
-                                            <div className="p-3 bg-black/40 rounded-xl flex items-center justify-between gap-4 shadow-inner">
+                                            <div className="p-3 bg-muted rounded-xl flex items-center justify-between gap-4 shadow-inner">
                                                 <div className="flex-1 overflow-hidden">
                                                     <span className="text-[10px] text-text-tertiary font-bold uppercase block mb-1">{t('wallpaper_token')}</span>
                                                     <code className="text-xs text-text-primary font-mono truncate block opacity-90">
@@ -667,7 +670,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                                 </div>
                                                 <button
                                                     onClick={() => copyToClipboard(wallpaperToken)}
-                                                    className="p-2 hover:bg-white/10 rounded-lg text-accent-400 transition-colors shrink-0"
+                                                    className="p-2 hover:bg-accent rounded-lg text-accent-400 transition-colors shrink-0"
                                                     title="Copy Token"
                                                 >
                                                     {justCopied ? <Icons.Check size={18} /> : <Icons.Copy size={18} />}
@@ -684,7 +687,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                                 </button>
                                             </div>
 
-                                            <div className="mt-6 space-y-4 pt-4 border-t border-white/5">
+                                            <div className="mt-6 space-y-4 pt-4 border-t border-border">
                                                 <div className="flex items-center gap-2 mb-2">
                                                     <Icons.Settings size={14} className="text-text-tertiary" />
                                                     <span className="text-[10px] font-bold uppercase text-text-tertiary tracking-widest">{t('home_screen_conf')}</span>
@@ -712,14 +715,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                                             value={wallpaperConfig.path}
                                                             onChange={(e) => setWallpaperConfig(prev => ({ ...prev, path: e.target.value }))}
                                                             placeholder={t('enter_rel_path')}
-                                                            className="flex-1 bg-black/40 border border-white/5 rounded-xl px-3 py-2 text-xs text-text-primary focus:border-accent-500/30 outline-hidden"
+                                                            className="flex-1 bg-muted border border-border rounded-xl px-3 py-2 text-xs text-text-primary focus:border-accent-500/30 outline-hidden"
                                                         />
                                                         <button
                                                             onClick={() => {
                                                                 onSetDirPickerContext('wallpaper');
                                                                 onShowDirPicker(true);
                                                             }}
-                                                            className="p-2 bg-white/5 border border-white/5 rounded-xl text-text-tertiary hover:text-text-primary"
+                                                            className="p-2 bg-muted/50 border border-border rounded-xl text-text-tertiary hover:text-text-primary"
                                                         >
                                                             <Icons.Folder size={16} />
                                                         </button>
@@ -733,7 +736,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                                             type="number"
                                                             value={wallpaperConfig.interval}
                                                             onChange={(e) => setWallpaperConfig(prev => ({ ...prev, interval: parseInt(e.target.value) || 5 }))}
-                                                            className="w-16 bg-black/40 border border-white/5 rounded-lg px-2 py-1 text-xs text-center text-text-primary"
+                                                            className="w-16 bg-muted border border-border rounded-lg px-2 py-1 text-xs text-center text-text-primary"
                                                             min="5"
                                                         />
                                                         <span className="text-[10px] text-text-tertiary">Secs</span>
@@ -745,7 +748,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                                         <span className="text-[10px] font-bold text-text-tertiary uppercase">{t('show_media_info')}</span>
                                                         <button
                                                             onClick={() => setWallpaperConfig(prev => ({ ...prev, showInfo: !prev.showInfo }))}
-                                                            className={`w-10 h-5 rounded-full relative transition-all ${wallpaperConfig.showInfo ? 'bg-accent-500' : 'bg-white/10'}`}
+                                                            className={`w-10 h-5 rounded-full relative transition-all ${wallpaperConfig.showInfo ? 'bg-accent-500' : 'bg-muted'}`}
                                                         >
                                                             <div className={`absolute top-1 w-3 h-3 rounded-full bg-white transition-all ${wallpaperConfig.showInfo ? 'right-1' : 'left-1'}`} />
                                                         </button>
@@ -754,7 +757,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                                         <span className="text-[10px] font-bold text-text-tertiary uppercase">{t('show_videos_wallpaper')}</span>
                                                         <button
                                                             onClick={() => setWallpaperConfig(prev => ({ ...prev, showVideos: !prev.showVideos }))}
-                                                            className={`w-10 h-5 rounded-full relative transition-all ${wallpaperConfig.showVideos ? 'bg-accent-500' : 'bg-white/10'}`}
+                                                            className={`w-10 h-5 rounded-full relative transition-all ${wallpaperConfig.showVideos ? 'bg-accent-500' : 'bg-muted'}`}
                                                         >
                                                             <div className={`absolute top-1 w-3 h-3 rounded-full bg-white transition-all ${wallpaperConfig.showVideos ? 'right-1' : 'left-1'}`} />
                                                         </button>
@@ -775,7 +778,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                                         copyToClipboard(url);
                                                         handleSaveWallpaperConfig();
                                                     }}
-                                                    className="w-full py-3 bg-accent-600 hover:bg-accent-500 text-white rounded-xl text-xs font-bold transition-all shadow-glow flex items-center justify-center gap-2"
+                                                    className="w-full py-3 bg-primary hover:bg-primary/85 text-primary-foreground rounded-xl text-xs font-bold transition-all shadow-glow flex items-center justify-center gap-2"
                                                 >
                                                     <Icons.Link size={16} />
                                                     {t('copy_wallpaper_url')}
@@ -793,7 +796,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                             </section>
                         )}
 
-                        <div className="flex justify-end mt-8 border-t border-white/10 pt-6">
+                        <div className="flex justify-end mt-8 border-t border-border pt-6">
                             <button onClick={onLogout} className="px-4 py-2 bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 rounded-lg font-medium transition-colors flex items-center gap-2">
                                 <Icons.LogOut size={18} /> {t('sign_out')}
                             </button>
@@ -806,55 +809,47 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
     };
 
     return (
-        <AnimatePresence>
-            {isOpen && (
-                <motion.div
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                    className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4 md:p-12"
-                    onClick={onClose}
-                >
-                    <motion.div
-                        initial={{ scale: 0.95, y: 20 }}
-                        animate={{ scale: 1, y: 0 }}
-                        exit={{ scale: 0.95, y: 20 }}
-                        className="glass-3 w-full max-w-5xl h-[85vh] rounded-3xl shadow-2xl overflow-hidden flex flex-col md:flex-row border border-white/5"
-                        onClick={e => e.stopPropagation()}
-                    >
-                        <div className="w-full md:w-64 bg-black/40 border-r border-white/5 p-6 flex flex-col gap-1 shrink-0 backdrop-blur-md">
-                            <h3 className="text-xl font-bold mb-6 px-2 flex items-center gap-2 text-text-primary">
-                                <Icons.Settings size={24} className="text-accent-500" /> {t('settings')}
-                            </h3>
-                            <div className="space-y-1">
-                                {(['general', 'account', 'library', 'system'] as const).map(tab => {
-                                    if ((tab === 'library' || tab === 'system') && !currentUser?.isAdmin) return null;
-                                    const labels: Record<string, string> = { general: t('general'), account: t('users'), library: t('storage_database'), system: t('system') };
-                                    const icons: Record<string, any> = { general: Icons.Settings, account: Icons.User, library: Icons.Database, system: Icons.Cpu };
-                                    const Icon = icons[tab];
-                                    return (
-                                        <button
-                                            key={tab}
-                                            onClick={() => { setActiveTab(tab); onTabChange?.(tab); }}
-                                            className={`w-full text-left px-4 py-3 rounded-xl flex items-center gap-3 transition-all outline-hidden ${activeTab === tab ? 'glass-1 text-accent-500 shadow-glow font-semibold border border-white/10' : 'text-text-secondary hover:text-text-primary hover:bg-white/5 border border-transparent'}`}
-                                        >
-                                            <Icon size={18} /> {labels[tab]}
-                                        </button>
-                                    );
-                                })}
-                            </div>
-                        </div>
-                        <div className="flex-1 overflow-y-auto custom-scrollbar p-6 md:p-10 bg-transparent relative">
-                            <button onClick={onClose} className="absolute top-4 right-4 p-2 hover:bg-white/10 rounded-full text-text-tertiary hover:text-text-primary transition-colors z-50">
-                                <Icons.Close size={20} />
-                            </button>
-                            <div className="max-w-3xl mx-auto pt-6 text-text-primary">
-                                {renderContent()}
-                            </div>
-                        </div>
-                    </motion.div>
-                </motion.div>
-            )}
-        </AnimatePresence>
+        <Dialog
+            open={isOpen}
+            onOpenChange={open => { if (!open) onClose(); }}
+            disablePointerDismissal={props.disablePointerDismissal}
+        >
+            <DialogContent
+                showCloseButton
+                className="flex h-[min(85vh,760px)] w-[calc(100%-1.5rem)] max-w-5xl flex-col gap-0 overflow-hidden p-0 sm:max-w-5xl md:flex-row"
+            >
+                <nav aria-label={t('settings')} className="flex shrink-0 flex-col gap-1 border-b border-border bg-muted/40 p-4 md:w-60 md:border-r md:border-b-0 md:p-5">
+                    <DialogTitle className="mb-3 flex items-center gap-2 px-2 text-base font-semibold">
+                        <Icons.Settings size={18} className="text-primary" /> {t('settings')}
+                    </DialogTitle>
+                    <DialogDescription className="sr-only">{t('settings')}</DialogDescription>
+                    <div className="flex gap-1 overflow-x-auto no-scrollbar md:flex-col">
+                        {(['general', 'account', 'library', 'system'] as const).map(tab => {
+                            if ((tab === 'library' || tab === 'system') && !currentUser?.isAdmin) return null;
+                            const labels: Record<string, string> = { general: t('general'), account: t('users'), library: t('storage_database'), system: t('system') };
+                            const icons: Record<string, any> = { general: Icons.Settings, account: Icons.User, library: Icons.Database, system: Icons.Cpu };
+                            const Icon = icons[tab];
+                            const isActive = activeTab === tab;
+                            return (
+                                <button
+                                    key={tab}
+                                    type="button"
+                                    aria-current={isActive ? 'page' : undefined}
+                                    onClick={() => { setActiveTab(tab); onTabChange?.(tab); }}
+                                    className={`flex shrink-0 items-center gap-3 rounded-lg px-3 py-2 text-left text-sm transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50 md:w-full ${isActive ? 'bg-accent font-medium text-accent-foreground' : 'text-muted-foreground hover:bg-accent/60 hover:text-foreground'}`}
+                                >
+                                    <Icon size={16} /> {labels[tab]}
+                                </button>
+                            );
+                        })}
+                    </div>
+                </nav>
+                <div className="relative min-h-0 flex-1 overflow-y-auto custom-scrollbar p-5 md:p-10">
+                    <div className="mx-auto max-w-3xl text-foreground">
+                        {renderContent()}
+                    </div>
+                </div>
+            </DialogContent>
+        </Dialog>
     );
 };

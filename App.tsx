@@ -29,6 +29,11 @@ import { GalleryNavigationBar, type GalleryNavigationBarProps } from './componen
 import type { GalleryLocation, ViewportSnapshot } from './navigation/types';
 import { SingleFlightPoller } from './utils/singleFlightPolling';
 import { fetchWithTimeout } from './utils/fetchWithTimeout';
+import { ConfirmProvider, notify, useFeedback } from './components/feedback/feedback';
+import { Toaster } from './components/kit/sonner';
+import { Button } from './components/kit/button';
+import { Input } from './components/kit/input';
+import { Label } from './components/kit/label';
 
 type GalleryPageCache = {
     files: MediaItem[];
@@ -507,7 +512,7 @@ export const UnifiedGalleryToolbar: React.FC<UnifiedGalleryToolbarProps> = ({
     };
 
     return (
-        <div className="px-3 pb-3 md:absolute md:inset-x-0 md:top-0 md:px-8 md:pt-4 md:pb-0 md:pointer-events-none z-35" data-testid="unified-gallery-toolbar">
+        <div className="px-3 pb-3 md:absolute md:inset-x-0 md:top-0 md:px-8 md:pt-4 md:pb-0 md:pointer-events-none md:z-35" data-testid="unified-gallery-toolbar">
             <div className="lg:hidden md:pointer-events-auto" data-testid="gallery-toolbar-compact-slot">
                 <GalleryNavigationBar {...sharedProps} compact />
             </div>
@@ -671,6 +676,7 @@ const removeStorageItem = (key: string, legacyKey?: string) => {
 
 function GalleryApp() {
     const { t, language, setLanguage } = useLanguage();
+    const { confirm } = useFeedback();
     const queryClient = useQueryClient();
     const galleryNavigation = useGalleryNavigation();
     // patchItem：把收藏等外部状态变化实时回写播放器队列快照（播放器未打开时为无害 no-op）
@@ -685,12 +691,14 @@ function GalleryApp() {
     const [loginForm, setLoginForm] = useState({ username: '', password: '' });
     const [setupForm, setSetupForm] = useState({ username: '', password: '', confirmPassword: '' });
     const [authError, setAuthError] = useState('');
+    const [isAuthSubmitting, setIsAuthSubmitting] = useState(false);
 
     // --- User Management State ---
     const [isUserModalOpen, setIsUserModalOpen] = useState(false);
     const [userFormType, setUserFormType] = useState<'add' | 'reset' | 'rename'>('add');
     const [targetUser, setTargetUser] = useState<User | null>(null);
-    const [newUserForm, setNewUserForm] = useState({ username: '', password: '', isAdmin: false, allowedPaths: '' });
+    // 用户编辑弹窗打开目录选择器时登记的回填函数：选中路径直接写回弹窗自身的表单
+    const allowedPathPickRef = useRef<((path: string) => void) | null>(null);
 
     // --- Server Mode State ---
     const [isServerMode, setIsServerMode] = useState(false);
@@ -1791,12 +1799,12 @@ function GalleryApp() {
                 // Revert if failed (except 409 conflict which means already running)
                 setScanStatus('idle');
                 scanStatusRef.current = 'idle';
-                alert("Failed to start scan");
+                notify.error(t('scan_start_failed'));
             }
         } catch (e) {
             setScanStatus('idle');
             scanStatusRef.current = 'idle';
-            alert("Network error starting scan");
+            notify.error(t('scan_start_failed'), t('network_error'));
         }
     };
 
@@ -1815,23 +1823,24 @@ function GalleryApp() {
             if (!startRes.ok && startRes.status !== 409) {
                 setThumbStatus('idle');
                 thumbStatusRef.current = 'idle';
-                alert("Failed to start thumbnail generation");
+                notify.error(t('thumb_start_failed'));
             }
         } catch (e) {
             setThumbStatus('idle');
             thumbStatusRef.current = 'idle';
-            alert("Network error starting thumbnail generation");
+            notify.error(t('thumb_start_failed'), t('network_error'));
         }
     };
 
     const clearCache = async () => {
-        if (!isServerMode || !confirm('Are you sure you want to clear all cache? Thumbnails will need to be regenerated.')) return;
+        if (!isServerMode) return;
+        if (!await confirm({ title: t('clear_cache_title'), description: t('clear_cache_desc'), confirmText: t('clear_action'), destructive: true })) return;
         try {
             await apiFetch('/api/cache/clear', { method: 'POST' });
             setSmartScanResults(null); // Clear local scan results as they are now invalid
             fetchSystemStatus(true);
-            alert(t('cache_cleared'));
-        } catch (e) { alert('Network error'); }
+            notify.success(t('cache_cleared'));
+        } catch (e) { notify.error(t('network_error')); }
     };
 
     const pruneCache = async () => {
@@ -1840,16 +1849,16 @@ function GalleryApp() {
             const res = await apiFetch('/api/cache/prune', { method: 'POST' });
             if (res.ok) {
                 const data = await res.json();
-                alert(`${t('cache_pruned')}: ${data.count} items`);
+                notify.success(t('cache_pruned'), String(data.count));
                 fetchSystemStatus(true);
             }
-        } catch (e) { alert('Network error'); }
+        } catch (e) { notify.error(t('network_error')); }
     };
 
     const handleRegenerateFolder = async (folderPathArg?: string) => {
         const targetPath = folderPathArg || currentPath;
         if (!isServerMode || !targetPath || isRegenerating) return;
-        if (!confirm(t('confirm_regenerate_folder') || "Are you sure you want to regenerate thumbnails for this folder and its subfolders?")) return;
+        if (!await confirm({ title: t('regenerate_title'), description: t('confirm_regenerate_folder'), confirmText: t('regenerate_action') })) return;
 
         setIsRegenerating(true);
         // Optimistic UI update
@@ -1867,11 +1876,11 @@ function GalleryApp() {
                 // Success - background task started. Polling will pick up status.
                 // We don't need to alert.
             } else {
-                alert('Failed to start regeneration');
+                notify.error(t('regenerate_failed'));
                 setIsUnifiedModalOpen(false); // Close if failed to start
             }
         } catch (e) {
-            alert('Network error');
+            notify.error(t('network_error'));
             setIsUnifiedModalOpen(false);
         } finally {
             setIsRegenerating(false);
@@ -2076,14 +2085,14 @@ function GalleryApp() {
 
     // User Management Handlers
     const handleAddUser = () => {
-        setNewUserForm({ username: '', password: '', isAdmin: false, allowedPaths: '' });
+        setTargetUser(null);
         setUserFormType('add');
         setIsUserModalOpen(true);
     };
 
-    const handleDeleteUser = (user: User) => {
+    const handleDeleteUser = async (user: User) => {
         if (user.username === currentUser?.username) return; // Can't delete self
-        if (confirm(t('delete_user_confirm'))) {
+        if (await confirm({ title: t('delete_user_title'), description: user.username, confirmText: t('delete_action'), destructive: true })) {
             const updatedUsers = users.filter(u => u.username !== user.username);
             const updatedData = { ...allUserData };
             delete updatedData[user.username];
@@ -2093,25 +2102,12 @@ function GalleryApp() {
 
     const handleResetPassword = (user: User) => {
         setTargetUser(user);
-        setNewUserForm({
-            username: user.username,
-            password: '',
-            isAdmin: user.isAdmin || false,
-            allowedPaths: '' // Reset flow usually doesn't show paths, but type requires it. Could show if we want.
-        });
         setUserFormType('reset');
         setIsUserModalOpen(true);
     };
 
     const handleRenameUser = (user: User) => {
-        console.log('[DEBUG] Editing user:', user.username, 'AllowedPaths:', user.allowedPaths, 'IsAdmin:', user.isAdmin);
         setTargetUser(user);
-        setNewUserForm({
-            username: user.username,
-            password: '',
-            isAdmin: user.isAdmin || false,
-            allowedPaths: (user.allowedPaths || []).join('\n')
-        });
         setUserFormType('rename');
         setIsUserModalOpen(true);
     };
@@ -2163,7 +2159,7 @@ function GalleryApp() {
             setIsUserModalOpen(false); // Close modal on success
         } catch (error) {
             console.error(error);
-            alert('An error occurred');
+            notify.error(t('user_save_failed'), error instanceof Error ? error.message : undefined);
         }
     };
 
@@ -2237,7 +2233,7 @@ function GalleryApp() {
                 // Revert state (Variable logic same as above but swapped status)
                 // For brevity, just alerting user or logging. A full revert would repeat the logic above with !newStatus.
                 // Given reliability, we accept slight risk of desync on error, or force refresh.
-                alert("Failed to sync favorite status: " + e.message);
+                notify.error(t('favorite_sync_failed'), e?.message);
                 // Revert optimistic UI update on error
                 if (type === 'file') {
                     const updatedFiles = files.map(f => f.id === targetId ? { ...f, isFavorite: currentStatus } : f);
@@ -2296,16 +2292,16 @@ function GalleryApp() {
                 });
                 const data = await res.json();
                 if (data.success) {
-                    alert("Folder renamed. Please rescan library to update database.");
+                    notify.success(t('folder_renamed'), t('folder_renamed_desc'));
                     if (viewMode === 'favorites') {
                         fetchServerFolders(null, true);
                     } else if (viewMode === 'folders') {
                         fetchServerFolders(currentPath);
                     }
                 } else {
-                    alert("Error: " + data.error);
+                    notify.error(t('operation_failed'), data.error);
                 }
-            } catch (e) { alert("Network error"); }
+            } catch (e) { notify.error(t('network_error')); }
         } else {
             // Client mode rename
             const updatedFiles = files.map(f => {
@@ -2326,7 +2322,9 @@ function GalleryApp() {
     };
 
     const handleFolderDelete = async (pathStr: string) => {
-        if (!currentUser || !confirm(`Are you sure you want to delete folder "${pathStr}" and all its contents?`)) return;
+        if (!currentUser) return;
+        const folderName = pathStr.split('/').filter(Boolean).pop() || pathStr;
+        if (!await confirm({ title: t('delete_folder_title').replace('{name}', folderName), description: `${pathStr}\n${t('delete_folder_desc')}`, confirmText: t('delete_action'), destructive: true })) return;
 
         if (isServerMode) {
             try {
@@ -2345,9 +2343,9 @@ function GalleryApp() {
                         fetchServerFolders(currentPath);
                     }
                 } else {
-                    alert("Error: " + data.error);
+                    notify.error(t('operation_failed'), data.error);
                 }
-            } catch (e) { alert("Network error"); }
+            } catch (e) { notify.error(t('network_error')); }
         } else {
             // Client mode delete
             const updatedFiles = files.filter(f => !f.path.startsWith(pathStr + '/') && f.path !== pathStr);
@@ -2429,9 +2427,9 @@ function GalleryApp() {
         persistData(undefined, undefined, undefined, undefined, undefined, newConfig, undefined, true);
     };
 
-    const handleUpdateThreadCount = (newCount: number) => {
+    const handleUpdateThreadCount = async (newCount: number) => {
         if (newCount > 16 && newCount > threadCount && !concurrencyWarningShown.current) {
-            if (window.confirm(t('concurrency_warning').replace('{count}', newCount.toString()))) {
+            if (await confirm({ title: t('high_concurrency_title'), description: t('concurrency_warning').replace('{count}', newCount.toString()), confirmText: t('continue_action') })) {
                 concurrencyWarningShown.current = true;
                 persistData(undefined, undefined, undefined, undefined, undefined, undefined, newCount, true);
             }
@@ -2655,39 +2653,48 @@ function GalleryApp() {
     // Auth/Setup Screens
     if (authStep === 'loading') {
         return (
-            <div className="min-h-screen bg-surface-primary flex items-center justify-center">
-                <Icons.Loader className="animate-spin text-accent-500" size={32} />
+            <div className="min-h-screen bg-background flex items-center justify-center">
+                <Icons.Loader className="animate-spin text-primary" size={28} />
             </div>
         );
     }
 
     if (authStep === 'setup' || authStep === 'login') {
-        // Basic Auth UI
+        const isSetup = authStep === 'setup';
+        // 登录与初始化：暗房氛围（暖黑底 + 黄铜低对比光晕），表单使用 components/kit
         return (
-            <div className="min-h-screen bg-surface-primary flex flex-col items-center justify-center p-4">
-                <div className="w-full max-w-md bg-surface-secondary backdrop-blur-2xl rounded-3xl shadow-2xl p-8 border border-white/5 relative overflow-hidden">
-                    <div className="absolute inset-0 bg-linear-to-tr from-accent-500/5 via-transparent to-transparent pointer-events-none" />
-                    <div className="flex justify-center mb-6">
-                        <div className="w-16 h-16 bg-primary-600 rounded-2xl flex items-center justify-center shadow-lg shadow-primary-500/30">
-                            <div className="w-8 h-8 bg-white/30 rounded-full" />
+            <div className="relative min-h-screen overflow-hidden bg-background flex items-center justify-center p-4">
+                <div
+                    aria-hidden="true"
+                    className="pointer-events-none absolute inset-0"
+                    style={{ background: 'radial-gradient(60% 45% at 50% 0%, var(--ambient), transparent 70%), radial-gradient(40% 35% at 85% 100%, color-mix(in srgb, var(--ambient) 60%, transparent), transparent 70%)' }}
+                />
+                <div className="relative w-full max-w-sm">
+                    <div className="mb-8 flex flex-col items-center text-center">
+                        <div aria-hidden="true" className="mb-5 flex size-14 items-center justify-center rounded-full border border-primary/40 bg-card shadow-[0_0_40px_-8px_var(--ambient)]">
+                            <div className="size-6 rounded-full border-[5px] border-primary/80" />
                         </div>
+                        <h1 className="text-2xl font-semibold tracking-tight text-foreground">
+                            {isSetup ? t('welcome') : (appTitle || 'Luvia Gallery')}
+                        </h1>
+                        <p className="mt-2 text-sm text-muted-foreground">
+                            {isSetup ? t('setup_subtitle') : t('login_subtitle')}
+                        </p>
                     </div>
-                    <h1 className="text-2xl font-bold text-center text-gray-900 dark:text-white mb-2">
-                        {authStep === 'setup' ? t('welcome') : t('sign_in')}
-                    </h1>
-                    <p className="text-center text-gray-500 dark:text-gray-400 mb-8">
-                        {authStep === 'setup' ? t('setup_admin') : 'Access your Luvia Gallery'}
-                    </p>
 
+                    <div className="rounded-2xl border border-border bg-card/80 p-6 shadow-[0_24px_64px_-32px_rgba(0,0,0,0.6)] backdrop-blur-xl">
                     {authError && (
-                        <div className="mb-4 p-3 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 text-sm rounded-lg flex items-center gap-2">
-                            <Icons.Alert size={16} />
+                        <div role="alert" className="mb-4 flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                            <Icons.Alert size={16} className="shrink-0" />
                             {authError}
                         </div>
                     )}
 
                     <form onSubmit={async (e) => {
                         e.preventDefault();
+                        if (isAuthSubmitting) return;
+                        setIsAuthSubmitting(true);
+                        try {
                         if (authStep === 'setup') {
                             if (setupForm.password !== setupForm.confirmPassword) {
                                 setAuthError(t('passwords_not_match'));
@@ -2736,7 +2743,7 @@ function GalleryApp() {
                                         setAuthStep('login');
                                     }
                                 } catch (err: any) {
-                                    setAuthError("Setup failed: " + err.message);
+                                    setAuthError(`${t('setup_failed')}: ${err.message}`);
                                 }
                             } else {
                                 // Local mode
@@ -2752,7 +2759,7 @@ function GalleryApp() {
                             }
                         } else {
                             if (isServerMode) {
-                                fetch('/api/auth/login', {
+                                await fetch('/api/auth/login', {
                                     method: 'POST',
                                     headers: { 'Content-Type': 'application/json' },
                                     body: JSON.stringify(loginForm)
@@ -2774,7 +2781,7 @@ function GalleryApp() {
                                             setAuthError(t('invalid_credentials'));
                                         }
                                     })
-                                    .catch(() => setAuthError('Connection Failed'));
+                                    .catch(() => setAuthError(t('connection_failed')));
                             } else {
                                 const user = users.find(u => u.username === loginForm.username && u.password === loginForm.password);
                                 if (user) {
@@ -2786,48 +2793,56 @@ function GalleryApp() {
                                 }
                             }
                         }
-                    }} className="space-y-4">
-                        <div className="space-y-1">
-                            <label className="text-xs font-semibold uppercase text-gray-500 dark:text-gray-400">Username</label>
-                            <input
+                        } finally {
+                            setIsAuthSubmitting(false);
+                        }
+                    }} className="grid gap-4">
+                        <div className="grid gap-2">
+                            <Label htmlFor="auth-username">{t('username')}</Label>
+                            <Input
+                                id="auth-username"
                                 required
-                                type="text"
-                                className="w-full px-4 py-2 rounded-xl border border-white/10 bg-black/20 text-text-primary focus:border-accent-500/50 outline-hidden transition-all"
-                                value={authStep === 'setup' ? setupForm.username : loginForm.username}
-                                onChange={e => authStep === 'setup' ? setSetupForm({ ...setupForm, username: e.target.value }) : setLoginForm({ ...loginForm, username: e.target.value })}
+                                autoComplete="username"
+                                autoFocus
+                                value={isSetup ? setupForm.username : loginForm.username}
+                                onChange={e => isSetup ? setSetupForm({ ...setupForm, username: e.target.value }) : setLoginForm({ ...loginForm, username: e.target.value })}
                             />
                         </div>
-                        <div className="space-y-1">
-                            <label className="text-xs font-semibold uppercase text-gray-500 dark:text-gray-400">Password</label>
-                            <input
+                        <div className="grid gap-2">
+                            <Label htmlFor="auth-password">{t('password')}</Label>
+                            <Input
+                                id="auth-password"
                                 required
                                 type="password"
-                                className="w-full px-4 py-2 rounded-xl border border-white/10 bg-black/20 text-text-primary focus:border-accent-500/50 outline-hidden transition-all"
-                                value={authStep === 'setup' ? setupForm.password : loginForm.password}
-                                onChange={e => authStep === 'setup' ? setSetupForm({ ...setupForm, password: e.target.value }) : setLoginForm({ ...loginForm, password: e.target.value })}
+                                autoComplete={isSetup ? 'new-password' : 'current-password'}
+                                value={isSetup ? setupForm.password : loginForm.password}
+                                onChange={e => isSetup ? setSetupForm({ ...setupForm, password: e.target.value }) : setLoginForm({ ...loginForm, password: e.target.value })}
                             />
                         </div>
-                        {authStep === 'setup' && (
-                            <div className="space-y-1">
-                                <label className="text-xs font-semibold uppercase text-gray-500 dark:text-gray-400">Confirm Password</label>
-                                <input
+                        {isSetup && (
+                            <div className="grid gap-2">
+                                <Label htmlFor="auth-confirm-password">{t('confirm_password')}</Label>
+                                <Input
+                                    id="auth-confirm-password"
                                     required
                                     type="password"
-                                    className="w-full px-4 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-500 outline-hidden"
+                                    autoComplete="new-password"
                                     value={setupForm.confirmPassword}
                                     onChange={e => setSetupForm({ ...setupForm, confirmPassword: e.target.value })}
                                 />
                             </div>
                         )}
-                        <button type="submit" className="w-full py-3 bg-primary-600 hover:bg-primary-700 text-white font-bold rounded-lg transition-colors shadow-lg shadow-primary-600/20">
-                            {authStep === 'setup' ? t('create_admin') : t('sign_in')}
-                        </button>
+                        <Button type="submit" size="lg" className="mt-2 w-full" disabled={isAuthSubmitting}>
+                            {isAuthSubmitting && <Icons.Loader className="animate-spin" />}
+                            {isSetup ? t('create_admin') : t('sign_in')}
+                        </Button>
                     </form>
                     {authStep === 'login' && !isServerMode && users.length === 0 && (
                         <div className="mt-4 text-center">
-                            <button onClick={() => setAuthStep('setup')} className="text-sm text-primary-600 hover:underline">Need to set up?</button>
+                            <button type="button" onClick={() => setAuthStep('setup')} className="text-sm text-primary hover:underline">{t('need_setup')}</button>
                         </div>
                     )}
+                    </div>
                 </div>
             </div>
         );
@@ -3027,6 +3042,7 @@ function GalleryApp() {
             <SettingsModal
                 isOpen={isSettingsOpen}
                 onClose={() => setIsSettingsOpen(false)}
+                disablePointerDismissal={isUserModalOpen || showDirPicker}
                 appTitle={appTitle}
                 homeSubtitle={homeSubtitle}
                 homeConfig={homeConfig}
@@ -3108,13 +3124,12 @@ function GalleryApp() {
                 type={userFormType}
                 targetUser={targetUser}
                 isAdmin={currentUser?.isAdmin || false}
-                onBrowsePaths={() => { setDirPickerContext('userAllowedPaths'); setShowDirPicker(true); }}
-                onSubmit={async (formData) => {
-                    // Adapt the internal form submit to the App-level newUserForm state if needed,
-                    // or just call submitUserForm directly with adapted logic.
-                    // The easiest is to update submitUserForm to accept the form data.
-                    await handleUserFormSubmit(formData);
+                onBrowsePaths={(onPick) => {
+                    allowedPathPickRef.current = onPick;
+                    setDirPickerContext('userAllowedPaths');
+                    setShowDirPicker(true);
                 }}
+                onSubmit={handleUserFormSubmit}
             />
 
             <MediaPlayer onToggleFavorite={handleToggleFavorite} />
@@ -3181,13 +3196,8 @@ function GalleryApp() {
                         if (dirPickerContext === 'library' || dirPickerContext === 'wallpaper') {
                             setNewPathInput(path);
                         } else {
-                            // Append to allowed paths, ensuring newline separation
-                            // Use functional update to avoid closure staleness
-                            setNewUserForm(prev => {
-                                const current = prev.allowedPaths || '';
-                                const newValue = current ? (current.trim() + '\n' + path) : path;
-                                return { ...prev, allowedPaths: newValue };
-                            });
+                            allowedPathPickRef.current?.(path);
+                            allowedPathPickRef.current = null;
                         }
                         setShowDirPicker(false);
                     }}
@@ -3215,11 +3225,14 @@ function GalleryApp() {
     );
 }
 
-/** 应用默认导出：PlayerProvider 包裹整个应用，画廊主体与播放器共享同一上下文。 */
+/** 应用默认导出：PlayerProvider 包裹整个应用，画廊主体与播放器共享同一上下文；ConfirmProvider 提供确认/输入对话框，Toaster 承载提示条。 */
 export default function App() {
     return (
-        <PlayerProvider>
-            <GalleryApp />
-        </PlayerProvider>
+        <ConfirmProvider>
+            <PlayerProvider>
+                <GalleryApp />
+            </PlayerProvider>
+            <Toaster position="bottom-center" />
+        </ConfirmProvider>
     );
 }
