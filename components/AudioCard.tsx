@@ -39,7 +39,7 @@ export const getAudioCardClasses = (
     layout: 'grid' | 'masonry',
     mediaHoverZoomEnabled: boolean,
 ): string =>
-    `group relative bg-linear-to-br from-purple-500/10 to-blue-500/10 dark:from-purple-500/20 dark:to-blue-500/20 rounded-xl overflow-hidden cursor-pointer transition-all duration-200 ${mediaHoverZoomEnabled ? 'hover:scale-[1.02] ' : ''}hover:shadow-xl ${layout === 'grid' ? 'aspect-square' : 'aspect-4/3'} will-change-transform`;
+    `group relative bg-accent rounded-md overflow-hidden cursor-pointer outline-none transition-colors duration-200 hover:bg-accent/70 focus-visible:ring-2 focus-visible:ring-ring ${mediaHoverZoomEnabled ? 'hover:[&_svg.audio-glyph]:scale-[1.06] ' : ''}${layout === 'grid' ? 'aspect-square' : 'aspect-4/3'}`;
 
 export const AudioCard: React.FC<AudioCardProps> = React.memo(({
     item,
@@ -56,26 +56,36 @@ export const AudioCard: React.FC<AudioCardProps> = React.memo(({
 
     return (
         <div
+            role="button"
+            tabIndex={0}
+            aria-label={item.name}
             className={getAudioCardClasses(layout, mediaHoverZoomEnabled)}
             onClick={() => onClick(item)}
+            onKeyDown={(event) => {
+                if (event.target !== event.currentTarget) return;
+                if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    onClick(item);
+                }
+            }}
         >
             {/* Audio Icon Background */}
             <div className="absolute inset-0 flex items-center justify-center">
                 <Icons.Music
                     size={layout === 'grid' ? 64 : 80}
-                    className="text-purple-500/30 dark:text-purple-400/30"
+                    className="audio-glyph text-primary/35 transition-transform duration-300 ease-darkroom"
                 />
             </div>
 
             {/* Play Button Overlay */}
-            <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-200 bg-black/40 backdrop-blur-xs">
-                <div className="w-16 h-16 rounded-full bg-surface-secondary backdrop-blur-md flex items-center justify-center shadow-lg border border-white/5">
-                    <Icons.Play size={28} className="text-purple-600 dark:text-accent-500 ml-1" />
+            <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 transition-opacity duration-200 bg-black/30">
+                <div className="w-12 h-12 rounded-full bg-primary flex items-center justify-center shadow-md">
+                    <Icons.Play size={22} className="text-primary-foreground ml-0.5" fill="currentColor" />
                 </div>
             </div>
 
             {/* File Info */}
-            <div className="absolute bottom-0 left-0 right-0 p-3 bg-linear-to-t from-black/80 to-transparent">
+            <div className="absolute bottom-0 left-0 right-0 p-3 bg-linear-to-t from-black/70 to-transparent">
                 <p className="text-white text-sm font-medium truncate mb-1">
                     {item.name}
                 </p>
@@ -90,7 +100,7 @@ export const AudioCard: React.FC<AudioCardProps> = React.memo(({
                 <div className="absolute top-2 right-2 z-10">
                     <Icons.Heart
                         size={20}
-                        className="text-red-500 fill-current drop-shadow-lg"
+                        className="text-red-400 fill-current drop-shadow-[0_1px_2px_rgba(0,0,0,0.6)]"
                     />
                 </div>
             )}

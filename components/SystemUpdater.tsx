@@ -199,7 +199,7 @@ const SystemUpdater: React.FC = () => {
                         </div>
                     </div>
                     <div className="space-y-1.5">
-                        <label className="text-xs font-bold text-text-tertiary uppercase tracking-wider">Branch</label>
+                        <label className="text-xs font-bold text-text-tertiary uppercase tracking-wider">{t('branch_label')}</label>
                         <div className="flex gap-2">
                             <input
                                 value={config.branch}

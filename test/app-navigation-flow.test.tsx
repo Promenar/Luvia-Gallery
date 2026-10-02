@@ -761,7 +761,7 @@ describe('应用导航最小闭环', () => {
         sourceId: 'test',
       },
     };
-    const { rerender } = render(<FolderCard folder={folder} onClick={vi.fn()} animate={false} />);
+    const { rerender } = render(<FolderCard folder={folder} onClick={vi.fn()} animate={false} />, { wrapper: LanguageProvider });
 
     fireEvent.error(screen.getByRole('img', { name: '人物相册' }));
     expect(screen.queryByRole('img', { name: '人物相册' })).toBeNull();

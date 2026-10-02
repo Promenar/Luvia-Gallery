@@ -23,7 +23,18 @@ export const getGridEffectiveItemCount = (
   ? Math.max(itemCount, loadedItemCount + (Math.max(1, columnCount) * 2))
   : itemCount;
 
-export const GRID_SKELETON_CLASSES = 'bg-white/4.5 dark:bg-white/[0.035] rounded-2xl animate-pulse flex items-center justify-center';
+// 静态暖灰占位：与媒体卡片同色同圆角，不脉冲（暗房影院契约 1.3）
+export const GRID_SKELETON_CLASSES = 'bg-muted rounded-md flex items-center justify-center';
+
+/** 网格几何：手机宽度固定至少 3 列、4px 间距（相册式密排）；更宽时按 200px 目标列宽与 16px 间距。 */
+export const resolveGridMetrics = (width: number): { gutter: number; columnCount: number } => {
+  if (width < 640) {
+    const gutter = 4;
+    return { gutter, columnCount: Math.max(3, Math.floor((width + gutter) / (110 + gutter))) };
+  }
+  const gutter = 16;
+  return { gutter, columnCount: Math.max(1, Math.floor((width + gutter) / (200 + gutter))) };
+};
 
 // 网格顶部安全区：App.tsx 的统一工具栏浮岛在 md 及以上为 `md:absolute md:inset-x-0 md:top-0`
 // 悬浮遮挡内容，移动端为普通流布局无需避让。md 语义（64px 顶部内边距）与瀑布流的
@@ -123,10 +134,8 @@ const GridViewportInner = React.forwardRef<ViewportCaptureHandle, InnerProps>(({
   const restoreToken = restoreCommand?.token ?? -1;
 
   // 基础布局常量与动态计算
-  const GUTTER_SIZE = 16;
-  const COLUMN_WIDTH = 200;
+  const { gutter: GUTTER_SIZE, columnCount } = resolveGridMetrics(width);
 
-  const columnCount = Math.floor((width + GUTTER_SIZE) / (COLUMN_WIDTH + GUTTER_SIZE));
   const safeColumnCount = Math.max(1, columnCount);
   const cellWidth = (width - (safeColumnCount - 1) * GUTTER_SIZE) / safeColumnCount;
   const cellHeight = cellWidth;
