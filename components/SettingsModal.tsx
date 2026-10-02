@@ -425,11 +425,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                                     <div className="space-y-4">
                                                         <div className="flex gap-4">
                                                             <div className="flex-1">
-                                                                <span className="block text-xs text-text-secondary">Missing</span>
+                                                                <span className="block text-xs text-text-secondary">{t('missing_label')}</span>
                                                                 <span className="text-lg font-bold text-red-400 font-mono">{smartScanResults.missing.length.toLocaleString()}</span>
                                                             </div>
                                                             <div className="flex-1">
-                                                                <span className="block text-xs text-text-secondary">Broken</span>
+                                                                <span className="block text-xs text-text-secondary">{t('broken_label')}</span>
                                                                 <span className="text-lg font-bold text-orange-400 font-mono">{smartScanResults.error.length.toLocaleString()}</span>
                                                             </div>
                                                         </div>
@@ -444,7 +444,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                                         </div>
                                                     </div>
                                                 ) : (
-                                                    <button onClick={onSmartScan} className="w-full py-2 bg-yellow-500/10 hover:bg-yellow-500/20 text-yellow-400 border border-yellow-500/20 rounded-lg text-sm font-medium transition-colors">Start Analysis</button>
+                                                    <button onClick={onSmartScan} className="w-full py-2 bg-accent hover:bg-accent/70 text-accent-foreground border border-primary/25 rounded-lg text-sm font-medium transition-colors">{t('start_analysis')}</button>
                                                 )}
                                             </div>
                                         </div>
@@ -519,7 +519,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                             </h5>
                                             <div className="space-y-3">
                                                 <div className="flex justify-between items-center">
-                                                    <span className="text-sm text-text-secondary">FFmpeg (Video)</span>
+                                                    <span className="text-sm text-text-secondary">{t('ffmpeg_video')}</span>
                                                     <div className="flex items-center gap-2">
                                                         <span className={`text-xs font-bold ${systemStatus.ffmpeg ? 'text-green-400 bg-green-500/10 border border-green-500/20' : 'text-red-400 bg-red-500/10 border border-red-500/20'} px-2 py-0.5 rounded-sm`}>
                                                             {systemStatus.ffmpeg ? t('active') : t('missing')}
@@ -537,7 +537,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                                     </div>
                                                 </div>
                                                 <div className="flex justify-between items-center">
-                                                    <span className="text-sm text-text-secondary">Database</span>
+                                                    <span className="text-sm text-text-secondary">{t('database_label')}</span>
                                                     <div className="flex items-center gap-2">
                                                         <span className={`text-xs font-bold ${systemStatus.dbStatus === 'connected' ? 'text-green-400 bg-green-500/10 border border-green-500/20' : 'text-yellow-400 bg-yellow-500/10 border border-yellow-500/20'} px-2 py-0.5 rounded-sm`}>
                                                             {systemStatus.dbStatus === 'connected' ? 'Connected' : (systemStatus.dbStatus || 'Unknown')}
@@ -546,7 +546,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                                     </div>
                                                 </div>
                                                 <div className="flex justify-between items-center">
-                                                    <span className="text-sm text-text-secondary">GPU Acceleration</span>
+                                                    <span className="text-sm text-text-secondary">{t('gpu_acceleration')}</span>
                                                     <div className="flex items-center gap-2">
                                                         <span className={`text-xs font-bold ${systemStatus.hardwareAcceleration?.type && systemStatus.hardwareAcceleration.type !== 'none' ? 'text-green-400 bg-green-500/10 border border-green-500/20' : 'text-text-tertiary bg-muted/50 border border-border'} px-2 py-0.5 rounded-sm uppercase`}>
                                                             {systemStatus.hardwareAcceleration?.type === 'cuda' ? 'NVIDIA CUDA' : (systemStatus.hardwareAcceleration?.type === 'vaapi' ? 'Intel/AMD VAAPI' : 'Disabled')}
@@ -557,7 +557,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                             </div>
                                         </div>
                                         <div className="flex justify-between items-center pt-3 mt-3 border-t border-border">
-                                            <span className="text-xs text-header-secondary">Platform</span>
+                                            <span className="text-xs text-text-secondary">{t('platform_label')}</span>
                                             <span className="text-xs font-mono text-text-secondary bg-muted/50 px-2 py-0.5 rounded-sm border border-border">{systemStatus.platform}</span>
                                         </div>
                                     </div>
@@ -618,8 +618,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                                 <div className="absolute inset-0 bg-linear-to-tr from-accent-500/20 to-transparent opacity-0 group-hover/avatar:opacity-100 transition-opacity" />
                                             </div>
                                             <div>
-                                                <div className="font-bold flex items-center gap-2 text-text-primary">{u.username} {u.username === currentUser?.username && <span className="text-[10px] bg-green-500/20 text-green-400 px-1.5 py-0.5 rounded-sm font-bold uppercase">You</span>}</div>
-                                                <div className="text-xs text-text-secondary">{u.isAdmin ? 'Administrator' : 'User'}</div>
+                                                <div className="font-bold flex items-center gap-2 text-text-primary">{u.username} {u.username === currentUser?.username && <span className="text-[10px] bg-accent text-accent-foreground px-1.5 py-0.5 rounded-sm font-semibold">{t('you_badge')}</span>}</div>
+                                                <div className="text-xs text-text-secondary">{u.isAdmin ? t('administrator') : t('user_role')}</div>
                                             </div>
                                         </div>
                                         <div className="flex gap-2">
@@ -739,7 +739,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
                                                             className="w-16 bg-muted border border-border rounded-lg px-2 py-1 text-xs text-center text-text-primary"
                                                             min="5"
                                                         />
-                                                        <span className="text-[10px] text-text-tertiary">Secs</span>
+                                                        <span className="text-[10px] text-text-tertiary">{t('seconds_short')}</span>
                                                     </div>
                                                 </div>
 

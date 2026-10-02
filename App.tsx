@@ -550,16 +550,16 @@ export const SearchEmptyState: React.FC<SearchEmptyStateProps> = ({
             className="absolute inset-0 z-10 flex flex-col items-center justify-center px-6 text-center text-text-tertiary"
             data-testid="search-empty-state"
         >
-            <div className="w-24 h-24 bg-white/5 rounded-full flex items-center justify-center mb-4 border border-white/5">
+            <div className="w-20 h-20 bg-muted rounded-full flex items-center justify-center mb-4">
                 <Icons.Image size={40} className="opacity-30" />
             </div>
-            <h3 className="text-xl font-bold text-gray-600 dark:text-gray-300 mb-2">{title}</h3>
+            <h3 className="text-lg font-semibold text-foreground mb-2">{title}</h3>
             <p className="max-w-sm text-sm">
                 {isChinese ? '请尝试其他关键词，或清除当前搜索。' : 'Try another keyword or clear the current search.'}
             </p>
             <button
                 type="button"
-                className="mt-6 px-5 py-2 rounded-full bg-primary-600 hover:bg-primary-700 text-white font-medium transition-colors"
+                className="mt-6 px-5 py-2 rounded-full bg-primary hover:bg-primary/85 text-primary-foreground font-medium transition-colors"
                 onClick={() => onLocationChange({ search: '' }, 'push')}
             >
                 {isChinese ? '清除搜索' : 'Clear search'}
@@ -2905,10 +2905,10 @@ function GalleryApp() {
                         {/* Empty State */}
                         {!activeSearch.trim() && !isServerMode && files.length === 0 && (
                             <div className="absolute inset-0 flex flex-col items-center justify-center text-text-tertiary">
-                                <div className="w-24 h-24 bg-white/5 rounded-full flex items-center justify-center mb-4 border border-white/5">
+                                <div className="w-20 h-20 bg-muted rounded-full flex items-center justify-center mb-4">
                                     <Icons.Image size={40} className="opacity-30" />
                                 </div>
-                                <h3 className="text-xl font-bold text-gray-600 dark:text-gray-300 mb-2">{t('empty_library')}</h3>
+                                <h3 className="text-lg font-semibold text-foreground mb-2">{t('empty_library')}</h3>
                                 <p className="max-w-xs text-center text-sm">{t('import_local')}</p>
                             </div>
                         )}
@@ -2919,11 +2919,11 @@ function GalleryApp() {
                             libraryTotalCount,
                             isLoading: isFetchingMore || isInitialGalleryLoading,
                         }) && (
-                            <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-400">
-                                <Icons.Server size={48} className="mb-4 text-primary-500" />
-                                <h3 className="text-xl font-bold text-gray-600 dark:text-gray-300 mb-2">{t('connected_to_nas')}</h3>
+                            <div className="absolute inset-0 flex flex-col items-center justify-center text-muted-foreground">
+                                <Icons.Server size={40} className="mb-4 text-primary" />
+                                <h3 className="text-lg font-semibold text-foreground mb-2">{t('connected_to_nas')}</h3>
                                 <p className="max-w-md text-center text-sm">{t('configure_nas')}</p>
-                                <button onClick={() => { setIsSettingsOpen(true); setSettingsTab('library'); }} className="mt-6 px-6 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded-full font-medium transition-colors">
+                                <button onClick={() => { setIsSettingsOpen(true); setSettingsTab('library'); }} className="mt-6 px-6 py-2 bg-primary hover:bg-primary/85 text-primary-foreground rounded-full font-medium transition-colors">
                                     {t('configure_library')}
                                 </button>
                             </div>
@@ -2940,7 +2940,7 @@ function GalleryApp() {
                         ) : viewMode === 'folders' ? (
                             /* Unified View (Folders + Files) */
                             (viewMode === 'folders' || currentPath) && (
-                                <div className="flex-1 w-full h-full p-4 md:p-8 flex flex-col min-h-0">
+                                <div className="flex-1 w-full h-full p-2 md:p-8 flex flex-col min-h-0">
                                     <VirtualGallery
                                         ref={galleryViewportRef}
                                         items={folderGalleryItems}
@@ -2999,14 +2999,14 @@ function GalleryApp() {
                                 )}
 
                                 {/* Files Section */}
-                                <div className="flex-1 min-h-0 p-4 md:p-8">
+                                <div className="flex-1 min-h-0 p-2 md:p-8">
                                     {shouldShowFavoritesEmptyState(
                                         viewMode,
                                         processedFiles.length,
                                         serverFavoriteIds.folders.length,
                                         isInitialGalleryLoading,
                                     ) ? (
-                                        <div className="h-full flex flex-col items-center justify-center text-gray-400 dark:text-gray-500">
+                                        <div className="h-full flex flex-col items-center justify-center text-muted-foreground">
                                             <Icons.Heart size={64} className="mb-4 opacity-20" />
                                             <p className="text-lg font-medium">{t('no_favorites')}</p>
                                             <p className="text-sm mt-2">{t('click_heart_to_favorite')}</p>

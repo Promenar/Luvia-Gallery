@@ -1,5 +1,4 @@
 import React, { useRef, useState, useMemo, useEffect, useCallback } from 'react';
-import { motion } from 'framer-motion';
 import { MediaItem } from '../types';
 import { getAuthHeaders, getAuthUrl } from '../utils/fileUtils';
 import { Icons } from './ui/Icon';
@@ -72,20 +71,22 @@ export const getMediaImageLoadingProps = (imagePriority: boolean) => ({
   decoding: 'async' as const,
 });
 
-export const getMediaCardContainerClasses = (isGrid: boolean, isLoaded: boolean = true): string =>
-  `relative group cursor-pointer overflow-hidden rounded-2xl ${isLoaded ? 'glass-1 glass-hover ring-1 ring-white/10 dark:ring-white/5' : 'bg-white/4.5 dark:bg-white/[0.035]'} ${isGrid ? 'w-full h-full aspect-square' : 'w-full break-inside-avoid'}`;
+// 卡片即照片本身：小圆角、静态暖灰占位（不脉冲），不使用背景模糊与逐张入场动画（暗房影院契约 1.3/1.4）
+export const getMediaCardContainerClasses = (isGrid: boolean, _isLoaded: boolean = true): string =>
+  `relative group cursor-pointer overflow-hidden rounded-md bg-muted outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background ${isGrid ? 'w-full h-full aspect-square' : 'w-full break-inside-avoid'}`;
 
 export const getMediaCardHoverAnimation = (
   isVirtual: boolean,
   mediaHoverZoomEnabled: boolean,
 ): { scale?: number } => !isVirtual && mediaHoverZoomEnabled ? { scale: 1.02 } : {};
+// 保留以兼容既有导出；卡片本身已不再做整体缩放，悬停仅轻微放大缩略图（getMediaThumbnailClasses）
 
 export const getMediaThumbnailClasses = (
   isGrid: boolean,
   mediaHoverZoomEnabled: boolean,
   isLoaded: boolean = true,
 ): string =>
-  `absolute inset-0 w-full h-full object-cover transition-[opacity,transform] duration-500 ${isLoaded ? 'opacity-100' : 'opacity-0'} ${mediaHoverZoomEnabled ? 'group-hover:scale-105 ' : ''}${isGrid ? '' : 'block'}`;
+  `absolute inset-0 w-full h-full object-cover transition-[opacity,transform] duration-500 ease-darkroom motion-reduce:transition-opacity ${isLoaded ? 'opacity-100' : 'opacity-0'} ${mediaHoverZoomEnabled ? 'group-hover:scale-[1.03] motion-reduce:group-hover:scale-100 ' : ''}${isGrid ? '' : 'block'}`;
 
 export const areMediaCardPropsEqual = (prev: MediaCardProps, next: MediaCardProps): boolean =>
   areCardMediaItemsEqual(prev.item, next.item)
@@ -262,22 +263,27 @@ const VisualMediaCard: React.FC<MediaCardProps> = ({
   const containerClasses = getMediaCardContainerClasses(isGrid, isThumbnailLoaded);
 
   return (
-    <motion.div
-      layoutId={!isVirtual && layout !== 'masonry' ? `media-${item.id}` : undefined}
-      initial={!isVirtual && layout !== 'masonry' ? { opacity: 0, scale: 0.95 } : { opacity: 1, scale: 1 }}
-      animate={{ opacity: 1, scale: 1 }}
-      whileHover={getMediaCardHoverAnimation(isVirtual, mediaHoverZoomEnabled)}
-      transition={{ duration: 0.2 }}
+    <div
+      role="button"
+      tabIndex={0}
+      aria-label={item.name}
       className={containerClasses}
       style={isGrid ? undefined : { aspectRatio }}
       data-media-aspect-ratio={aspectRatio}
       data-thumbnail-state={imgError ? 'error' : isThumbnailLoaded ? 'loaded' : 'loading'}
       onClick={() => onClick(item)}
+      onKeyDown={(event) => {
+        if (event.target !== event.currentTarget) return;
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          onClick(item);
+        }
+      }}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
     >
       {item.mediaType === 'video' ? (
-        <div className="absolute inset-0 flex items-center justify-center bg-surface-deep">
+        <div className="absolute inset-0 flex items-center justify-center bg-muted">
           {isHovered && !imgError && (
             <video
               ref={videoRef}
@@ -295,9 +301,6 @@ const VisualMediaCard: React.FC<MediaCardProps> = ({
 
           {!imgError && thumbnailSrc ? (
             <>
-              {!isThumbnailLoaded && (
-                <div className="absolute inset-0 bg-white/4.5 dark:bg-white/[0.035] animate-pulse" aria-hidden="true" />
-              )}
               <img
               key={thumbnailSrc}
               ref={attachThumbnail}
@@ -310,25 +313,25 @@ const VisualMediaCard: React.FC<MediaCardProps> = ({
               />
             </>
           ) : (
-            <div className="w-full h-full bg-surface-tertiary relative overflow-hidden flex flex-col items-center justify-center text-text-tertiary">
+            <div className="w-full h-full bg-muted relative overflow-hidden flex flex-col items-center justify-center text-muted-foreground">
               {imgError ? (
                 <>
                   <Icons.Video size={32} />
-                  <span className="text-[10px] mt-2 font-mono uppercase font-bold bg-black/20 px-1 rounded-sm">{item.type.split('/')[1] || 'VIDEO'}</span>
+                  <span className="text-[10px] mt-2 font-mono uppercase font-semibold bg-foreground/10 px-1 rounded-sm">{item.type.split('/')[1] || 'VIDEO'}</span>
                 </>
               ) : (
-                <div className="absolute inset-0 bg-linear-to-tr from-gray-900 to-gray-700 opacity-100" />
+                <div className="absolute inset-0 bg-muted" />
               )}
             </div>
           )}
 
           <div className={`absolute inset-0 flex items-center justify-center transition-opacity duration-200 ${isPlaying ? 'opacity-0' : 'opacity-100'} z-20`}>
-            <div className="w-12 h-12 bg-white/20 backdrop-blur-md rounded-full flex items-center justify-center text-white group-hover:bg-white/40 transition-colors shadow-lg">
-              <Icons.Play size={24} fill="currentColor" className="ml-1" />
+            <div className="w-11 h-11 bg-black/45 ring-1 ring-white/25 rounded-full flex items-center justify-center text-white group-hover:bg-black/60 transition-colors">
+              <Icons.Play size={20} fill="currentColor" className="ml-0.5" />
             </div>
           </div>
 
-          <div className="absolute top-2 right-2 glass-1 bg-overlay-veil px-2 py-0.5 rounded-sm text-[10px] text-white font-medium flex items-center gap-1 z-20 border border-border-glow">
+          <div className="absolute top-2 right-2 bg-black/55 px-1.5 py-0.5 rounded-sm text-[10px] text-white font-medium flex items-center gap-1 z-20">
             <Icons.Video size={10} />
             <span>{t('video_badge')}</span>
           </div>
@@ -336,9 +339,6 @@ const VisualMediaCard: React.FC<MediaCardProps> = ({
       ) : (
         !imgError && !hasError ? (
           <>
-            {!isThumbnailLoaded && (
-              <div className="absolute inset-0 bg-white/4.5 dark:bg-white/[0.035] animate-pulse" aria-hidden="true" />
-            )}
             <img
               key={thumbnailSrc}
               ref={attachThumbnail}
@@ -368,16 +368,17 @@ const VisualMediaCard: React.FC<MediaCardProps> = ({
                 onClick={(e) => {
                   handleRepair(e);
                 }}
-                className={`absolute top-2 right-2 bg-yellow-500/90 hover:bg-yellow-400 text-white p-1 rounded-full shadow-lg z-30 transition-transform hover:scale-110 ${isRepairing ? 'animate-spin' : ''}`}
-                title="Repair Thumbnail"
+                aria-label={t('repair_thumbnail')}
+                className={`absolute top-2 right-2 bg-primary text-primary-foreground p-1 rounded-full shadow-md z-30 transition-colors hover:bg-primary/85 ${isRepairing ? 'animate-spin' : ''}`}
+                title={t('repair_thumbnail')}
               >
                 {isRepairing ? <Icons.Loader size={14} /> : <Icons.AlertTriangle size={14} />}
               </button>
             </div>
           ) : (
-            <div className="w-full h-full flex flex-col items-center justify-center bg-surface-tertiary text-text-tertiary">
+            <div className="w-full h-full flex flex-col items-center justify-center bg-muted text-muted-foreground">
               <Icons.Image size={32} />
-              <span className="text-[10px] mt-2 font-mono uppercase font-bold bg-black/10 dark:bg-white/10 px-1 rounded-sm">{item.type.split('/')[1] || 'IMG'}</span>
+              <span className="text-[10px] mt-2 font-mono uppercase font-semibold bg-foreground/10 px-1 rounded-sm">{item.type.split('/')[1] || 'IMG'}</span>
             </div>
           )
         )
@@ -385,22 +386,22 @@ const VisualMediaCard: React.FC<MediaCardProps> = ({
 
       {/* Heart Icon Overlay */}
       {item.isFavorite && (
-        <div className="absolute top-2 left-2 z-30 text-red-500 drop-shadow-md">
+        <div className="absolute top-2 left-2 z-30 text-red-400 drop-shadow-[0_1px_2px_rgba(0,0,0,0.6)]" aria-hidden="true">
           <Icons.Heart size={20} fill="currentColor" />
         </div>
       )}
 
       {/* Hover Info Overlay */}
-      <div className="absolute inset-0 bg-linear-to-t from-black/75 via-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-end p-4 z-30 pointer-events-none">
+      <div className="absolute inset-0 bg-linear-to-t from-black/70 via-black/15 to-transparent opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 transition-opacity duration-300 flex items-end p-3 z-30 pointer-events-none">
         <div className="w-full overflow-hidden">
           <p className="text-white text-sm font-medium truncate w-full">{item.name}</p>
           <div className="flex justify-between items-center mt-1">
             <p className="text-white/70 text-[10px] truncate">{(item.size / 1024 / 1024).toFixed(1)} MB</p>
-            <p className="text-white/70 text-[10px] uppercase tracking-wide bg-white/10 px-1.5 rounded-sm">{item.type.split('/')[1]}</p>
+            <p className="text-white/70 text-[10px] uppercase tracking-wide">{item.type.split('/')[1]}</p>
           </div>
         </div>
       </div>
-    </motion.div>
+    </div>
   );
 };
 

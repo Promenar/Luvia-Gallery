@@ -1,10 +1,10 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
 import { FolderNode, MediaItem } from '../types';
 import { getAuthUrl } from '../utils/fileUtils';
 import { Icons } from './ui/Icon';
-import { Card } from './ui/Card';
+import { useLanguage } from '../contexts/LanguageContext';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from './kit/dropdown-menu';
 
 interface FolderCardProps {
     folder: {
@@ -25,9 +25,9 @@ interface FolderCardProps {
 }
 
 export const FolderCard: React.FC<FolderCardProps> = React.memo(({ folder, onClick, isFavorite, onToggleFavorite, onRename, onDelete, onRegenerate, animate = true, layout = 'grid' }) => {
+    const { t } = useLanguage();
     const videoRef = useRef<HTMLVideoElement>(null);
     const [isPlaying, setIsPlaying] = useState(false);
-    const [showMenu, setShowMenu] = useState(false);
     const [isRenaming, setIsRenaming] = useState(false);
     const [renameValue, setRenameValue] = useState('');
     const [imgError, setImgError] = useState(false);
@@ -64,18 +64,9 @@ export const FolderCard: React.FC<FolderCardProps> = React.memo(({ folder, onCli
             videoRef.current.pause();
             setIsPlaying(false);
         }
-        setShowMenu(false);
     };
 
-    const handleMenuClick = (e: React.MouseEvent) => {
-        e.stopPropagation();
-        setShowMenu(!showMenu);
-    };
-
-    const handleAction = (action: 'fav' | 'rename' | 'delete', e: React.MouseEvent) => {
-        e.stopPropagation();
-        setShowMenu(false);
-
+    const handleAction = (action: 'fav' | 'rename' | 'delete') => {
         if (action === 'fav' && onToggleFavorite) {
             onToggleFavorite(folder.path);
         }
@@ -96,161 +87,137 @@ export const FolderCard: React.FC<FolderCardProps> = React.memo(({ folder, onCli
         setIsRenaming(false);
     };
 
+    const openFolder = () => { if (!isRenaming) onClick(folder.path); };
+    const hasActions = Boolean(onToggleFavorite || onRename || onRegenerate || onDelete);
+
+    // 相册式卡片：封面即主体（小圆角、无毛玻璃与入场动画），名称与数量置于封面下方
     return (
-        <motion.div
-            initial={animate ? { opacity: 0, scale: 0.95 } : { opacity: 1, scale: 1 }}
-            animate={{ opacity: 1, scale: 1 }}
-            whileHover={{ scale: 1.03, y: -2 }}
-            whileTap={{ scale: 0.98 }}
-            className={`relative group cursor-pointer ${layout === 'masonry' ? 'h-full' : ''} will-change-transform`}
-            onClick={() => !isRenaming && onClick(folder.path)}
+        <div
+            role="button"
+            tabIndex={0}
+            aria-label={folder.name}
+            className={`group relative flex cursor-pointer flex-col gap-2 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background ${layout === 'masonry' ? 'h-full' : ''}`}
+            onClick={openFolder}
+            onKeyDown={(event) => {
+                if (event.target !== event.currentTarget) return;
+                if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    openFolder();
+                }
+            }}
             onMouseEnter={handleMouseEnter}
             onMouseLeave={handleMouseLeave}
         >
-            {/* Stack Effect */}
-            <div className="absolute top-1 left-1 w-full h-full bg-surface-tertiary rounded-xl opacity-0 group-hover:opacity-100 transition-opacity duration-300 transform translate-y-1" />
-            <div className="absolute top-2 left-2 w-full h-full bg-surface-secondary rounded-xl opacity-0 group-hover:opacity-60 transition-opacity duration-300 transform translate-y-2" />
-
-            {/* Main Card */}
-            <Card
-                className={`relative flex flex-col z-10 ${layout === 'masonry' ? 'h-full' : ''}`}
-                hover={true}
-                interactive={true}
-            >
-                <div className={`${layout === 'masonry' ? 'flex-1 min-h-0' : 'aspect-4/3'} bg-surface-secondary relative overflow-hidden flex items-center justify-center w-full`}>
-                    {folder.coverMedia && !imgError ? (
-                        folder.coverMedia.mediaType === 'video' ? (
-                            <div className="w-full h-full bg-gray-900 flex items-center justify-center group-hover:scale-105 transition-transform duration-700 relative overflow-hidden">
-                                <div className="absolute inset-0 bg-linear-to-tr from-gray-900 to-gray-700 opacity-100" />
-                                {thumbUrl && (
-                                    <img
-                                        src={thumbUrl}
-                                        alt={folder.name}
-                                        className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-300 ${isPlaying ? 'opacity-0' : 'opacity-100'}`}
-                                        onError={() => setImgError(true)}
-                                    />
-                                )}
-                                {!folder.coverMedia.url.includes('/api/thumb/') && (
-                                    <video
-                                        ref={videoRef}
-                                        src={getAuthUrl(folder.coverMedia.url)}
-                                        muted
-                                        loop
-                                        playsInline
-                                        className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-300 ${isPlaying ? 'opacity-100' : 'opacity-0'}`}
-                                        onError={() => { }}
-                                        style={{ objectFit: 'cover' }}
-                                    />
-                                )}
-                                <div className={`absolute inset-0 flex items-center justify-center z-10 transition-opacity ${isPlaying ? 'opacity-0' : 'opacity-100'}`}>
-                                    <div className="w-12 h-12 rounded-full bg-white/10 backdrop-blur-xs flex items-center justify-center border border-white/20">
-                                        <Icons.Video className="text-white/90" size={24} />
-                                    </div>
+            <div className={`${layout === 'masonry' ? 'min-h-0 flex-1' : 'aspect-4/3'} relative flex w-full items-center justify-center overflow-hidden rounded-md bg-muted`}>
+                {folder.coverMedia && !imgError ? (
+                    folder.coverMedia.mediaType === 'video' ? (
+                        <div className="relative flex h-full w-full items-center justify-center overflow-hidden">
+                            {thumbUrl && (
+                                <img
+                                    src={thumbUrl}
+                                    alt={folder.name}
+                                    className={`absolute inset-0 h-full w-full object-cover transition-[opacity,transform] duration-500 ease-darkroom group-hover:scale-[1.03] motion-reduce:group-hover:scale-100 ${isPlaying ? 'opacity-0' : 'opacity-100'}`}
+                                    onError={() => setImgError(true)}
+                                />
+                            )}
+                            {!folder.coverMedia.url.includes('/api/thumb/') && (
+                                <video
+                                    ref={videoRef}
+                                    src={getAuthUrl(folder.coverMedia.url)}
+                                    muted
+                                    loop
+                                    playsInline
+                                    className={`absolute inset-0 h-full w-full object-cover transition-opacity duration-300 ${isPlaying ? 'opacity-100' : 'opacity-0'}`}
+                                    onError={() => { }}
+                                />
+                            )}
+                            <div className={`absolute inset-0 z-10 flex items-center justify-center transition-opacity ${isPlaying ? 'opacity-0' : 'opacity-100'}`}>
+                                <div className="flex size-10 items-center justify-center rounded-full bg-black/45 ring-1 ring-white/25">
+                                    <Icons.Video className="text-white" size={18} />
                                 </div>
                             </div>
-                        ) : folder.coverMedia.mediaType === 'audio' ? (
-                            <div className="w-full h-full bg-linear-to-br from-pink-500 to-orange-400 flex items-center justify-center">
-                                <Icons.Music className="text-white" size={48} />
-                            </div>
-                        ) : (
-                            <img
-                                src={getAuthUrl(thumbUrl || folder.coverMedia.url)}
-                                alt={folder.name}
-                                className="absolute inset-0 w-full h-full object-cover group-hover:scale-105 transition-transform duration-700"
-                                onError={() => setImgError(true)}
-                                style={{ objectFit: 'cover' }}
-                            />
-                        )
+                        </div>
+                    ) : folder.coverMedia.mediaType === 'audio' ? (
+                        <div className="flex h-full w-full items-center justify-center bg-accent">
+                            <Icons.Music className="text-primary" size={36} />
+                        </div>
                     ) : (
-                        <div className="w-full h-full flex flex-col items-center justify-center text-text-tertiary">
-                            <Icons.Folder size={48} strokeWidth={1.5} />
-                        </div>
-                    )}
+                        <img
+                            src={getAuthUrl(thumbUrl || folder.coverMedia.url)}
+                            alt={folder.name}
+                            className="absolute inset-0 h-full w-full object-cover transition-transform duration-500 ease-darkroom group-hover:scale-[1.03] motion-reduce:group-hover:scale-100"
+                            onError={() => setImgError(true)}
+                        />
+                    )
+                ) : (
+                    <Icons.Folder size={40} strokeWidth={1.25} className="text-muted-foreground" />
+                )}
 
-                    {/* Overlay Gradient */}
-                    <div className="absolute inset-0 bg-linear-to-t from-black/50 to-transparent opacity-60" />
-
-                    {/* Count Badge */}
-                    <div className="absolute bottom-2 right-2 glass-1 bg-overlay-veil text-white text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 border border-border-glow">
-                        <Icons.Image size={10} />
-                        {folder.mediaCount}
+                {isFavorite && (
+                    <div className="absolute top-2 right-2 text-red-400 drop-shadow-[0_1px_2px_rgba(0,0,0,0.6)]" aria-hidden="true">
+                        <Icons.Heart size={16} fill="currentColor" />
                     </div>
+                )}
 
-                    {/* Favorite Indicator */}
-                    {isFavorite && (
-                        <div className="absolute top-2 right-2 text-red-500 drop-shadow-md text-nowrap">
-                            <Icons.Heart size={18} fill="currentColor" />
-                        </div>
-                    )}
-
-                    {/* Menu Button */}
-                    <button
-                        onClick={handleMenuClick}
-                        className={`absolute top-2 left-2 p-1.5 rounded-full glass-1 bg-overlay-veil hover:border-border-glow text-white opacity-0 group-hover:opacity-100 transition-opacity ${showMenu ? 'opacity-100' : ''}`}
-                    >
-                        <Icons.More size={16} />
-                    </button>
-
-                    {/* Dropdown Menu */}
-                    <AnimatePresence>
-                        {showMenu && (
-                            <motion.div
-                                initial={{ opacity: 0, scale: 0.9, x: -10, y: -10 }}
-                                animate={{ opacity: 1, scale: 1, x: 0, y: 0 }}
-                                exit={{ opacity: 0, scale: 0.9 }}
-                                className="absolute top-10 left-2 glass-2 rounded-lg shadow-xl border border-border-default py-1 min-w-[120px] z-50 overflow-hidden"
-                                onClick={(e) => e.stopPropagation()}
+                {hasActions && (
+                    <div className="absolute top-2 left-2 opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100 has-[[data-popup-open]]:opacity-100 pointer-coarse:opacity-100" onClick={(e) => e.stopPropagation()}>
+                        <DropdownMenu>
+                            <DropdownMenuTrigger
+                                aria-label={t('folder_actions')}
+                                className="flex size-7 items-center justify-center rounded-full bg-black/45 text-white ring-1 ring-white/20 outline-none hover:bg-black/60 focus-visible:ring-2 focus-visible:ring-ring"
                             >
-                                <button onClick={(e) => handleAction('fav', e)} className="w-full text-left px-3 py-2 text-xs hover:bg-surface-secondary text-text-primary flex items-center gap-2">
-                                    <Icons.Heart size={12} className={isFavorite ? 'text-red-500' : ''} fill={isFavorite ? 'currentColor' : 'none'} /> {isFavorite ? 'Unfavorite' : 'Favorite'}
-                                </button>
+                                <Icons.More size={14} />
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="start" className="min-w-44">
+                                {onToggleFavorite && (
+                                    <DropdownMenuItem onClick={() => handleAction('fav')}>
+                                        <Icons.Heart className={isFavorite ? 'text-red-400' : ''} fill={isFavorite ? 'currentColor' : 'none'} />
+                                        {isFavorite ? t('unfavorite_action') : t('favorite_action')}
+                                    </DropdownMenuItem>
+                                )}
                                 {onRename && (
-                                    <button onClick={(e) => handleAction('rename', e)} className="w-full text-left px-3 py-2 text-xs hover:bg-surface-secondary text-text-primary flex items-center gap-2">
-                                        <Icons.Edit size={12} /> Rename
-                                    </button>
+                                    <DropdownMenuItem onClick={() => handleAction('rename')}>
+                                        <Icons.Edit /> {t('rename_action')}
+                                    </DropdownMenuItem>
                                 )}
                                 {onRegenerate && (
-                                    <button onClick={(e) => {
-                                        e.stopPropagation();
-                                        setShowMenu(false);
-                                        onRegenerate(folder.path);
-                                    }} className="w-full text-left px-3 py-2 text-xs hover:bg-surface-secondary text-text-primary flex items-center gap-2">
-                                        <Icons.Refresh size={12} /> Regenerate
-                                    </button>
+                                    <DropdownMenuItem onClick={() => onRegenerate(folder.path)}>
+                                        <Icons.Refresh /> {t('regenerate_thumbnails')}
+                                    </DropdownMenuItem>
                                 )}
                                 {onDelete && (
-                                    <button onClick={(e) => handleAction('delete', e)} className="w-full text-left px-3 py-2 text-xs hover:bg-red-50 dark:hover:bg-red-900/20 text-red-600 dark:text-red-400 flex items-center gap-2">
-                                        <Icons.Trash size={12} /> Delete
-                                    </button>
+                                    <>
+                                        <DropdownMenuSeparator />
+                                        <DropdownMenuItem variant="destructive" onClick={() => handleAction('delete')}>
+                                            <Icons.Trash /> {t('delete_action')}
+                                        </DropdownMenuItem>
+                                    </>
                                 )}
-                            </motion.div>
-                        )}
-                    </AnimatePresence>
-                </div>
+                            </DropdownMenuContent>
+                        </DropdownMenu>
+                    </div>
+                )}
+            </div>
 
-                <div className="p-3 flex items-start gap-3 bg-surface-primary transition-colors">
-                    <div className="bg-primary-50 dark:bg-primary-900/30 p-1.5 rounded-lg text-primary-600 dark:text-primary-400 mt-0.5 transition-colors">
-                        <Icons.Folder size={18} />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                        {isRenaming ? (
-                            <form onSubmit={submitRename} onClick={e => e.stopPropagation()}>
-                                <input
-                                    autoFocus
-                                    value={renameValue}
-                                    onChange={(e) => setRenameValue(e.target.value)}
-                                    onBlur={() => submitRename()}
-                                    className="w-full text-sm font-semibold text-text-primary bg-surface-secondary rounded-sm px-1 outline-hidden border border-primary-500"
-                                />
-                            </form>
-                        ) : (
-                            <h3 className="text-sm font-semibold text-text-primary truncate leading-tight" title={folder.name}>{folder.name}</h3>
-                        )}
-                        <p className="text-[10px] text-text-secondary mt-0.5">{folder.mediaCount} items</p>
-                    </div>
-                </div>
-            </Card>
-        </motion.div>
+            <div className="min-w-0 px-0.5">
+                {isRenaming ? (
+                    <form onSubmit={submitRename} onClick={e => e.stopPropagation()}>
+                        <input
+                            autoFocus
+                            aria-label={t('rename_action')}
+                            value={renameValue}
+                            onChange={(e) => setRenameValue(e.target.value)}
+                            onBlur={() => submitRename()}
+                            onKeyDown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); setIsRenaming(false); } }}
+                            className="w-full rounded-sm border border-ring bg-background px-1 text-sm font-medium outline-none"
+                        />
+                    </form>
+                ) : (
+                    <h3 className="truncate text-sm font-medium leading-tight text-foreground" title={folder.name}>{folder.name}</h3>
+                )}
+                <p className="mt-0.5 text-xs tabular-nums text-muted-foreground">{folder.mediaCount.toLocaleString()} {t('items_count')}</p>
+            </div>
+        </div>
     );
 }, (prev, next) => {
     return (

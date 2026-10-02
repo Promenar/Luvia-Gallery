@@ -627,7 +627,7 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
       )}
 
       <div
-        className={`flex-1 min-w-48 bg-muted/50 border border-border rounded-xl hover:bg-accent hover:border-input transition-all duration-200 h-10 px-2 xl:px-3 py-1 flex flex-nowrap items-center justify-between cursor-text focus-within:bg-white/10 focus-within:border-accent-500/50 ${
+        className={`flex-1 min-w-48 bg-muted/50 border border-border rounded-xl hover:bg-accent hover:border-input transition-all duration-200 h-10 px-2 xl:px-3 py-1 flex flex-nowrap items-center justify-between cursor-text focus-within:bg-accent focus-within:border-accent-500/50 ${
           isSearchMode ? 'shadow-lg' : ''
         }`}
         data-testid="gallery-omnibox"

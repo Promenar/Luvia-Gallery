@@ -73,16 +73,18 @@ describe('媒体卡片悬浮缩放配置', () => {
     expect(getMediaCardHoverAnimation(true, true)).toEqual({});
   });
 
-  it('PhotoCard 启用时保留图片缩放类，关闭时移除', () => {
-    expect(getMediaThumbnailClasses(true, true)).toContain('group-hover:scale-105');
-    expect(getMediaThumbnailClasses(true, false)).not.toContain('group-hover:scale-105');
+  it('PhotoCard 启用时保留轻微的图片缩放类（并尊重减少动态偏好），关闭时移除', () => {
+    expect(getMediaThumbnailClasses(true, true)).toContain('group-hover:scale-[1.03]');
+    expect(getMediaThumbnailClasses(true, true)).toContain('motion-reduce:group-hover:scale-100');
+    expect(getMediaThumbnailClasses(true, false)).not.toContain('group-hover:scale-');
     expect(getMediaThumbnailClasses(false, false)).toContain('block');
   });
 
-  it('AudioCard 关闭时只移除卡片缩放，保留阴影反馈', () => {
-    expect(getAudioCardClasses('grid', true)).toContain('hover:scale-[1.02]');
-    expect(getAudioCardClasses('grid', false)).not.toContain('hover:scale-[1.02]');
-    expect(getAudioCardClasses('grid', false)).toContain('hover:shadow-xl');
+  it('AudioCard 不做整卡缩放；关闭悬浮缩放时只移除图标放大，保留底色反馈', () => {
+    expect(getAudioCardClasses('grid', true)).not.toMatch(/(^|\s)hover:scale-/);
+    expect(getAudioCardClasses('grid', true)).toContain('scale-[1.06]');
+    expect(getAudioCardClasses('grid', false)).not.toContain('scale-[1.06]');
+    expect(getAudioCardClasses('grid', false)).toContain('hover:bg-accent/70');
   });
 
   it('AudioCard memo 覆盖展示字段、点击回调与虚拟化语义', () => {
