@@ -14,7 +14,8 @@ const SystemUpdater: React.FC = () => {
     const [saveStatus, setSaveStatus] = useState('');
 
     useEffect(() => {
-        checkUpdate();
+        // 打开设置时静默检查：缺少令牌只提示，不主动弹出输入框
+        checkUpdate(undefined, false);
     }, []);
 
     const getHeaders = (token?: string) => {
@@ -26,7 +27,7 @@ const SystemUpdater: React.FC = () => {
         return headers;
     };
 
-    const checkUpdate = async (token?: string) => {
+    const checkUpdate = async (token?: string, interactive = true) => {
         setChecking(true);
         setErrorMsg('');
         try {
@@ -35,6 +36,7 @@ const SystemUpdater: React.FC = () => {
             });
 
             if (res.status === 401) {
+                if (!interactive) throw new Error("Update Token required");
                 const userInput = window.prompt("Security Check: Please enter the Update Token to check status.");
                 if (userInput) {
                     setAuthToken(userInput);

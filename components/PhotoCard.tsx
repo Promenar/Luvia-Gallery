@@ -1,7 +1,7 @@
 import React, { useRef, useState, useMemo, useEffect, useCallback } from 'react';
 import { motion } from 'framer-motion';
 import { MediaItem } from '../types';
-import { getAuthUrl } from '../utils/fileUtils';
+import { getAuthHeaders, getAuthUrl } from '../utils/fileUtils';
 import { Icons } from './ui/Icon';
 import { useLanguage } from '../contexts/LanguageContext';
 import { AudioCard } from './AudioCard';
@@ -150,7 +150,7 @@ const VisualMediaCard: React.FC<MediaCardProps> = ({
     try {
       const res = await fetch('/api/thumb/regenerate', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ id: item.id })
       });
       if (res.ok) {

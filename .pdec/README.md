@@ -55,6 +55,8 @@ PDEC 已从无机器可读契约切换为已批准契约；后续开发、构建
 
 用户批准消息为：“Android端的目标PDEC平台可以设置至MAIN主机，其它批准”。该批准将 Android 执行主机设置为 `main`，并批准其余已登记候选操作；本次没有批准生产部署，因此 `deployment.enabled` 保持 `false`。本契约使用该真实消息作为 `approval.reference`，并绑定 `inspect` 生成的 `contract_digest`。
 
+2026-10-02 用户确认“同意重绑”：`package.json` 新增 `typecheck` 脚本、`README.md` 与 `docker-compose.yml` 更新 `UPDATE_TOKEN` 注释后，仅重算证据哈希并绑定新摘要 `977e5f32018c3b372f9b8d754d0d41e9cf61bfd4a9e6ee3c0582ad164f3dae7f`，执行字段与执行位置不变。
+
 批准后每次执行前必须运行 `pdec.py validate --root .`，确认退出码为 0 且 `execution_ready=true`；契约批准不等于生产部署批准。契约证据文件发生变化时必须重新评估漂移并重新绑定批准摘要。
 
 ## 回滚与验收边界

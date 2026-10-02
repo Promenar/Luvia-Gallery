@@ -1,5 +1,5 @@
 import React, { ButtonHTMLAttributes, forwardRef } from 'react';
-import { motion } from 'framer-motion';
+import { motion, HTMLMotionProps } from 'framer-motion';
 
 // 按钮变体类型
 export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'outline' | 'danger' | 'success';
@@ -36,7 +36,7 @@ const buttonSizes: Record<ButtonSize, string> = {
 const buttonAnimation = {
   whileHover: { scale: 1.02, y: -1 },
   whileTap: { scale: 0.98 },
-  transition: { type: 'spring', stiffness: 400, damping: 25 },
+  transition: { type: 'spring' as const, stiffness: 400, damping: 25 },
 };
 
 // 合并类名
@@ -82,7 +82,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
         whileHover={!isDisabled ? buttonAnimation.whileHover : {}}
         whileTap={!isDisabled ? buttonAnimation.whileTap : {}}
         transition={buttonAnimation.transition}
-        {...props}
+        {...(props as unknown as HTMLMotionProps<'button'>)}
       >
         {loading ? (
           <svg

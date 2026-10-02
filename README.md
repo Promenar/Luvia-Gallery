@@ -54,7 +54,7 @@ services:
       - NODE_ENV=production
       # 多媒体库路径（分号分隔）
       - MEDIA_ROOT=/media
-      # 热更新 API 安全令牌（可选）
+      # 热更新 API 安全令牌：未设置时热更新、迁移与更新状态接口一律拒绝（返回 403）
       # - UPDATE_TOKEN=your_secret_token
       # GPU 加速配置（NVIDIA）
       - NVIDIA_VISIBLE_DEVICES=all
@@ -135,7 +135,7 @@ services:
       - NODE_ENV=production
       # Multi-library paths (semicolon-separated)
       - MEDIA_ROOT=/media
-      # Hot update API token (optional)
+      # Hot update API token: update, migrate and status endpoints are disabled (403) unless set
       # - UPDATE_TOKEN=your_secret_token
       # GPU acceleration (NVIDIA)
       - NVIDIA_VISIBLE_DEVICES=all

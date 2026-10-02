@@ -45,7 +45,7 @@ const modalAnimation = {
   initial: { opacity: 0, scale: 0.95, y: 20 },
   animate: { opacity: 1, scale: 1, y: 0 },
   exit: { opacity: 0, scale: 0.95, y: 20 },
-  transition: { type: 'spring', stiffness: 300, damping: 30 },
+  transition: { type: 'spring' as const, stiffness: 300, damping: 30 },
 };
 
 export const Modal: React.FC<ModalProps> = ({

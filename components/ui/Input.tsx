@@ -1,5 +1,5 @@
 import React, { InputHTMLAttributes, forwardRef } from 'react';
-import { motion } from 'framer-motion';
+import { motion, HTMLMotionProps } from 'framer-motion';
 
 // 输入框变体类型
 export type InputVariant = 'default' | 'filled' | 'glass';
@@ -74,7 +74,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
           className={baseClasses}
           whileFocus={{ scale: 1.005 }}
           transition={{ type: 'spring', stiffness: 400, damping: 25 }}
-          {...props}
+          {...(props as unknown as HTMLMotionProps<'input'>)}
         />
         {rightIcon && (
           <div className="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted">
@@ -134,7 +134,7 @@ export const Textarea = forwardRef<HTMLTextAreaElement, TextareaProps>(
           className={baseClasses}
           whileFocus={{ scale: 1.002 }}
           transition={{ type: 'spring', stiffness: 400, damping: 25 }}
-          {...props}
+          {...(props as unknown as HTMLMotionProps<'textarea'>)}
         />
         {error && errorMessage && (
           <motion.p

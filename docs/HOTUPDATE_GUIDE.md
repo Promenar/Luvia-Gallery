@@ -4,6 +4,8 @@
 
 本文档说明如何通过 runner.js 热更新功能自动执行数据库迁移，无需手动操作或容器重建。
 
+> 安全前提：热更新、迁移与更新状态接口必须配置 `UPDATE_TOKEN` 环境变量（或 `data/update_secret.txt`）才会启用；未配置时一律返回 403。请求需携带 `Authorization: Bearer <UPDATE_TOKEN>`。
+
 ## 热更新流程
 
 ### 1. 自动更新流程
@@ -12,7 +14,8 @@
 
 ```bash
 # 触发热更新
-curl -X POST http://localhost:3001/api/admin/system/update
+curl -X POST http://localhost:3001/api/admin/system/update \
+  -H "Authorization: Bearer YOUR_TOKEN"
 ```
 
 **执行步骤**：
@@ -45,7 +48,7 @@ curl -X POST http://localhost:3001/api/admin/system/update
 #### 方法 1：通过 API
 
 ```bash
-# 触发迁移（需要 UPDATE_TOKEN，如果设置了）
+# 触发迁移（必须携带 UPDATE_TOKEN）
 curl -X POST http://localhost:3001/api/admin/system/migrate \
   -H "Authorization: Bearer YOUR_TOKEN"
 ```
@@ -213,7 +216,8 @@ UPDATE files SET folder_path = '/media' WHERE folder_path = './media';
 
 ```bash
 # 1. 检查更新状态
-curl http://localhost:3001/api/admin/system/update/status
+curl http://localhost:3001/api/admin/system/update/status \
+  -H "Authorization: Bearer YOUR_TOKEN"
 
 # 2. 触发热更新
 curl -X POST http://localhost:3001/api/admin/system/update \
@@ -256,6 +260,7 @@ find data -name "gallery.db.backup.*" -mtime +7 -delete
 
 ```http
 GET /api/admin/system/update/status
+Authorization: Bearer YOUR_TOKEN
 ```
 
 响应：

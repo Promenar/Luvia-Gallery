@@ -25,5 +25,16 @@
     },
     "allowImportingTsExtensions": true,
     "noEmit": true
-  }
+  },
+  "include": [
+    "App.tsx",
+    "index.tsx",
+    "types.ts",
+    "vite-env.d.ts",
+    "components",
+    "contexts",
+    "hooks",
+    "navigation",
+    "utils"
+  ]
 }
