@@ -2410,3 +2410,34 @@ PhotoCard 去 framer-motion/玻璃/脉冲占位，role=button+键盘打开，缩
 
 ### HLG
 本记录追加；continuity-key webui-visual-foundation 等待第 3 阶段。阶段内证据重绑规则已按用户授权写入 .pdec/README.md。
+
+## 2026-10-02T14:23:13+08:00 · WebUI 视觉第 3 阶段（大图查看）已推送并通过 FNOS 验证
+
+type: feature
+scope: ["Luvia-Gallery", "WebUI", "player"]
+status: done
+tags: ["webui", "player", "view-transitions", "ambient", "progressive-loading"]
+continuity: waiting
+continuity-key: webui-visual-foundation
+record-fingerprint: 7c92ff5c251f5959299420d8a0c8faa4dfb1510ffd00afddec53653d04c34b9c
+
+### Summary
+完成第 3 阶段大图查看并推送 b1cda46c654a99bc898ff66e96a5febb5a99f7ff；FNOS node:20 验证后端 68/68、前端 319/319、typecheck、build 通过。未部署。
+
+### Changed
+ImageViewPane 先铺缩略图（同 contain 几何）原图加载后淡入，新增单指轻扫切换（resolveSwipeDirection）与面板 data-testid；player-state 新增 selectNeighborImageUrls，MediaPlayer 预加载前后原图且切换不中止；新增 ambient-color.ts（加权取色、限亮、缓存）与 AmbientGlow（径向遮罩、700ms 颜色过渡）；新增 hero-transition.ts（View Transitions，源缩略图 data-media-thumb 与查看器图片共用 luvia-hero，播放器已打开或不支持/减少动态时直接打开），App.handleOpenMedia 接入；PlayerWindow/PlayerFullscreen 根节点加 dark 作用域并挂载光晕，PlayerWindow 监听 resize 并夹取宽度与位置。AudioPlayer、IconButton 令牌化，now_playing 入语言包。删除未引用的 utils/tokens 与 components/ui 的 Button/Input/Card/Badge/Modal/Skeleton，SystemTab 收敛为 formatMediaStatValue。评估后暂不接入 yet-another-react-lightbox（理由见视觉计划第 8 节）。
+
+### Validation
+本机 typecheck、前端 319/319（新增 player-visual 10 项与浮窗视口缩放回归 1 项）、后端契约 28/28、build 通过；FNOS 确切 SHA 全量通过（runs/b1cda46/verify.log）。模拟 API（原图延迟 1.2s）浏览器实测：startViewTransition 调用 1 次、先缩略图后原图、取色 160,84,56、浅色主题浮窗 dark 作用域、下一张原图已预加载。
+
+### Next
+第 4 阶段时间线：服务端年月分桶与游标分页、章节式日期标题（衬线仅日期）与时间拖动条，评估 TanStack Virtual。部署需用户单独授权（先设置 UPDATE_TOKEN、备份 lumina-config.json）。
+
+### Risks
+View Transitions 共享元素过渡与浮窗 framer 入场动画并行，仅在 Chromium 内核实测；Safari/Firefox 依赖降级路径。氛围取色依赖同源缩略图，跨域部署时回落默认色。旧 FolderCard animate 属性仍保留未用。
+
+### DIA
+已同步 release_notes.md 与视觉底座计划第 8 节。
+
+### HLG
+本记录追加；continuity-key webui-visual-foundation 等待第 4 阶段。
