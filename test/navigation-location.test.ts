@@ -107,10 +107,15 @@ describe('导航领域模型', () => {
     expect(location.folderPath.length).toBeGreaterThan(0);
   });
 
-  it('旧 timeline URL 与 History 位置统一规范化为 grid', () => {
-    expect(parseGalleryUrl('#layout=timeline').layout).toBe('grid');
+  it('时间线布局仅在全部照片与收藏夹保留，文件夹视图规范化为 grid', () => {
+    expect(parseGalleryUrl('#layout=timeline').layout).toBe('timeline');
+    expect(parseGalleryUrl('#view=favorites&layout=timeline').layout).toBe('timeline');
+    expect(parseGalleryUrl('#view=folders&layout=timeline').layout).toBe('grid');
     expect(createHistoryState({
       key: '', view: 'all', folderPath: '', search: '', sort: 'dateDesc', filter: 'all', layout: 'timeline',
+    }).location.layout).toBe('timeline');
+    expect(createHistoryState({
+      key: '', view: 'folders', folderPath: '', search: '', sort: 'dateDesc', filter: 'all', layout: 'timeline',
     }).location.layout).toBe('grid');
   });
 

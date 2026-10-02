@@ -621,3 +621,52 @@ test('用户改名迁移收藏，目标用户已有的同项收藏不重复', ()
     assert.deepEqual([...migrated.files].sort(), ['file-a', 'file-b']);
     assert.deepEqual(migrated.folders, ['/library/album']);
 });
+
+function localTs(year, month, day) {
+    return Math.floor(new Date(year, month - 1, day, 12).getTime() / 1000);
+}
+
+test('时间线分桶按本地年月倒序计数，并复用媒体类型、权限与收藏过滤', () => {
+    database.clearTimelineBucketCache();
+    addFile({ id: 'sep-a', path: '/library/a/1.jpg', name: '1.jpg', folderPath: '/library/a', lastModified: localTs(2026, 9, 10) });
+    addFile({ id: 'sep-b', path: '/library/a/2.mp4', name: '2.mp4', folderPath: '/library/a', mediaType: 'video', lastModified: localTs(2026, 9, 20) });
+    addFile({ id: 'aug-a', path: '/library/b/3.jpg', name: '3.jpg', folderPath: '/library/b', lastModified: localTs(2026, 8, 1) });
+    addFile({ id: 'old', path: '/other/4.jpg', name: '4.jpg', folderPath: '/other', lastModified: localTs(2025, 12, 31) });
+
+    const all = database.queryTimelineBuckets({});
+    assert.deepEqual(all.map(bucket => [bucket.key, bucket.count]), [['2026-09', 2], ['2026-08', 1], ['2025-12', 1]]);
+    const september = all[0];
+    assert.equal(september.start, Math.floor(new Date(2026, 8, 1).getTime() / 1000));
+    assert.equal(september.end, Math.floor(new Date(2026, 9, 1).getTime() / 1000));
+
+    assert.deepEqual(database.queryTimelineBuckets({ mediaType: 'video' }).map(bucket => bucket.key), ['2026-09']);
+    assert.deepEqual(
+        database.queryTimelineBuckets({ allowedPaths: ['/library'] }).map(bucket => [bucket.key, bucket.count]),
+        [['2026-09', 2], ['2026-08', 1]]
+    );
+
+    database.toggleFavorite('user-a', 'aug-a', 'file');
+    assert.deepEqual(database.queryTimelineBuckets({ favoritesOnly: true, userId: 'user-a' }).map(bucket => bucket.key), ['2026-08']);
+});
+
+test('时间线分桶缓存在新增媒体或收藏变化后失效', () => {
+    database.clearTimelineBucketCache();
+    addFile({ id: 'one', path: '/library/1.jpg', name: '1.jpg', folderPath: '/library', lastModified: localTs(2026, 5, 5) });
+    assert.equal(database.queryTimelineBuckets({}).length, 1);
+    addFile({ id: 'two', path: '/library/2.jpg', name: '2.jpg', folderPath: '/library', lastModified: localTs(2026, 4, 5) });
+    assert.deepEqual(database.queryTimelineBuckets({}).map(bucket => bucket.key), ['2026-05', '2026-04']);
+
+    assert.equal(database.queryTimelineBuckets({ favoritesOnly: true, userId: 'u' }).length, 0);
+    database.toggleFavorite('u', 'two', 'file');
+    assert.deepEqual(database.queryTimelineBuckets({ favoritesOnly: true, userId: 'u' }).map(bucket => bucket.key), ['2026-04']);
+});
+
+test('时间区间条件按左闭右开读取单月媒体并保持日期倒序', () => {
+    addFile({ id: 'm1', path: '/library/m1.jpg', name: 'm1.jpg', folderPath: '/library', lastModified: localTs(2026, 3, 2) });
+    addFile({ id: 'm2', path: '/library/m2.jpg', name: 'm2.jpg', folderPath: '/library', lastModified: localTs(2026, 3, 28) });
+    addFile({ id: 'next', path: '/library/n.jpg', name: 'n.jpg', folderPath: '/library', lastModified: Math.floor(new Date(2026, 3, 1).getTime() / 1000) });
+    const range = database.resolveMonthRange('2026-03');
+    const page = database.queryFiles({ timeRange: { from: range.start, to: range.end }, offset: 0, limit: 10 });
+    assert.deepEqual(page.map(file => file.id), ['m2', 'm1']);
+    assert.equal(database.resolveMonthRange('bad'), null);
+});

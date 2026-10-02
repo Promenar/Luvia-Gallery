@@ -522,7 +522,8 @@ function buildFileQueryParts(options = {}) {
         excludeMediaType = null,
         favoritesOnly = false,
         userId = null,
-        sourceId = null
+        sourceId = null,
+        timeRange = null
     } = options;
 
     const joins = [];
@@ -589,6 +590,12 @@ function buildFileQueryParts(options = {}) {
     if (sourceId !== null && sourceId !== undefined) {
         conditions.push('f.source_id = ?');
         params.push(sourceId);
+    }
+
+    // 时间区间（Unix 秒，左闭右开）：时间线按月读取时使用，可走 last_modified 降序索引
+    if (timeRange && Number.isSafeInteger(timeRange.from) && Number.isSafeInteger(timeRange.to)) {
+        conditions.push('f.last_modified >= ? AND f.last_modified < ?');
+        params.push(timeRange.from, timeRange.to);
     }
 
     if (allowedPaths !== null) {
@@ -1189,6 +1196,72 @@ function toggleFavorite(userId, itemId, itemType) {
     }
 }
 
+/** 计算服务器本地时区下某年月的起止 Unix 秒（左闭右开），与 SQLite 'localtime' 分组口径一致。 */
+function resolveMonthRange(key) {
+    const match = /^(\d{4})-(\d{2})$/.exec(String(key));
+    if (!match) return null;
+    const year = Number(match[1]);
+    const monthIndex = Number(match[2]) - 1;
+    return {
+        start: Math.floor(new Date(year, monthIndex, 1).getTime() / 1000),
+        end: Math.floor(new Date(year, monthIndex + 1, 1).getTime() / 1000)
+    };
+}
+
+const timelineBucketCache = new Map();
+const TIMELINE_CACHE_TTL_MS = 10 * 60 * 1000;
+const TIMELINE_CACHE_MAX_ENTRIES = 64;
+
+/** 媒体集合版本：文件增删、收藏变化都会改变该值，用于判定分桶缓存是否仍然有效。 */
+function getTimelineVersion(options) {
+    const stats = db.prepare('SELECT total_files FROM library_stats WHERE id = 1').get() || {};
+    const maxRow = db.prepare('SELECT MAX(rowid) AS max_rowid FROM files').get() || {};
+    let favorites = 0;
+    if (options.favoritesOnly && options.userId) {
+        favorites = (db.prepare("SELECT COUNT(*) AS count FROM favorites WHERE user_id = ? AND item_type = 'file'").get(options.userId) || {}).count || 0;
+    }
+    return `${stats.total_files || 0}:${maxRow.max_rowid || 0}:${favorites}`;
+}
+
+/**
+ * 时间线分桶：按服务器本地时区的年月对可见媒体计数，按时间倒序返回。
+ * 复用分页查询的全部过滤条件（权限路径、收藏、媒体类型、搜索）；结果按版本与 10 分钟有效期缓存。
+ */
+function queryTimelineBuckets(options = {}) {
+    const { timeRange: _ignored, ...filterOptions } = options;
+    const cacheKey = JSON.stringify(filterOptions);
+    const version = getTimelineVersion(filterOptions);
+    const cached = timelineBucketCache.get(cacheKey);
+    if (cached && cached.version === version && Date.now() - cached.at < TIMELINE_CACHE_TTL_MS) {
+        return cached.buckets;
+    }
+
+    const queryParts = buildFileQueryParts(filterOptions);
+    const rows = db.prepare(`
+        SELECT strftime('%Y-%m', f.last_modified, 'unixepoch', 'localtime') AS bucket_key, COUNT(*) AS count
+        FROM files f ${queryParts.joins} ${queryParts.where}
+        GROUP BY bucket_key
+        ORDER BY bucket_key DESC
+    `).all(...queryParts.params);
+
+    const buckets = rows
+        .map(row => {
+            const range = resolveMonthRange(row.bucket_key);
+            return range ? { key: row.bucket_key, count: row.count, start: range.start, end: range.end } : null;
+        })
+        .filter(Boolean);
+
+    if (timelineBucketCache.size >= TIMELINE_CACHE_MAX_ENTRIES) {
+        timelineBucketCache.delete(timelineBucketCache.keys().next().value);
+    }
+    timelineBucketCache.set(cacheKey, { version, at: Date.now(), buckets });
+    return buckets;
+}
+
+function clearTimelineBucketCache() {
+    timelineBucketCache.clear();
+}
+
 /** 用户改名时迁移收藏归属；目标用户名已有的同项收藏保留，不产生重复。 */
 function renameFavoritesUser(oldUserId, newUserId) {
     if (!oldUserId || !newUserId || oldUserId === newUserId) return 0;
@@ -1330,6 +1403,9 @@ module.exports = {
     toggleFavorite,
     getFavoriteIds,
     renameFavoritesUser,
+    queryTimelineBuckets,
+    clearTimelineBucketCache,
+    resolveMonthRange,
     queryFavoriteFiles,
     countFavoriteFiles,
     deleteFilesBatch,
