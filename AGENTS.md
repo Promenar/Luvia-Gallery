@@ -6,7 +6,7 @@
 Luvia-Gallery 是一个图库应用，包含 Web 前端、Node.js 后端、移动端以及 macOS 小组件。
 
 ## 技术栈
-- **前端**: React, TypeScript, Tailwind CSS, Vite
+- **前端**: React, TypeScript, Tailwind CSS v4, shadcn/ui（Base UI，组件位于 `components/kit/`）, Vite
 - **后端**: Node.js, SQLite/FTS5
 - **容器化**: Docker, Docker Compose
 - **平台**: Web, Mobile, macOS Widget
