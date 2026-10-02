@@ -18,32 +18,32 @@ export interface IconButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonEle
 // 图标按钮样式配置
 const iconButtonVariants: Record<IconButtonVariant, { base: string; active: string }> = {
   default: {
-    base: 'text-text-secondary hover:text-text-primary hover:bg-white/10',
-    active: 'text-accent-500 bg-accent-500/10 border-accent-500/30',
+    base: 'text-muted-foreground hover:text-foreground hover:bg-accent',
+    active: 'text-primary bg-accent border-primary/30',
   },
   primary: {
-    base: 'text-white bg-accent-500 hover:bg-accent-400',
-    active: 'text-white bg-accent-600',
+    base: 'text-primary-foreground bg-primary hover:bg-primary/85',
+    active: 'text-primary-foreground bg-primary/85',
   },
   secondary: {
-    base: 'glass-1 text-text-primary hover:bg-white/10',
-    active: 'glass-1 text-accent-500 bg-accent-500/10',
+    base: 'bg-secondary text-secondary-foreground hover:bg-accent',
+    active: 'bg-accent text-primary',
   },
   ghost: {
-    base: 'text-text-tertiary hover:text-text-primary hover:bg-white/5',
-    active: 'text-accent-500 bg-accent-500/10',
+    base: 'text-muted-foreground hover:text-foreground hover:bg-accent/60',
+    active: 'text-primary bg-accent',
   },
   outline: {
-    base: 'border border-border-default text-text-primary hover:border-border-glow hover:bg-white/5',
-    active: 'border-accent-500/50 text-accent-500 bg-accent-500/10',
+    base: 'border border-border text-foreground hover:border-input hover:bg-accent/60',
+    active: 'border-primary/50 text-primary bg-accent',
   },
   danger: {
-    base: 'text-text-tertiary hover:text-red-500 hover:bg-red-500/10',
-    active: 'text-red-500 bg-red-500/10',
+    base: 'text-muted-foreground hover:text-destructive hover:bg-destructive/10',
+    active: 'text-destructive bg-destructive/10',
   },
   glass: {
-    base: 'glass-1 text-text-primary hover:bg-white/10 border border-white/10',
-    active: 'glass-1 text-accent-500 bg-accent-500/10 border-accent-500/30',
+    base: 'bg-card/70 text-foreground hover:bg-accent border border-border',
+    active: 'bg-accent text-primary border-primary/30',
   },
 };
 

@@ -316,6 +316,7 @@ const translations = {
     branch_label: "Branch",
     seconds_short: "s",
     ffmpeg_video: "FFmpeg (video)",
+    now_playing: "Now playing",
     // 反馈与登录（第 1 阶段）
     confirm_action: "Confirm",
     continue_action: "Continue",
@@ -663,6 +664,7 @@ const translations = {
     branch_label: "分支",
     seconds_short: "秒",
     ffmpeg_video: "FFmpeg（视频）",
+    now_playing: "正在播放",
     // 反馈与登录（第 1 阶段）
     confirm_action: "确认",
     continue_action: "继续",

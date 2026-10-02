@@ -1,4 +1,4 @@
 /**
- * 设置组件统一导出（设置页正文位于 SettingsModal；此处仅保留被复用的系统统计工具）
+ * 设置相关工具统一导出（设置页正文位于 SettingsModal）
  */
-export { SystemTab, formatMediaStatValue } from './SystemTab';
+export { formatMediaStatValue } from './SystemTab';

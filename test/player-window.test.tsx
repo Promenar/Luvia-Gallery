@@ -708,8 +708,8 @@ describe('hotfix-3：等比高度显式公式（容器高 = 内容区高 + 头�
     const { root } = setup([item('a', 'image', { width: 900, height: 600 })]);
     openPlayer();
     const win = screen.getByTestId('player-window');
-    // 内容区（relative min-h-0 flex-1）内第一个 absolute inset-0 即 ImageViewPane 根
-    const paneRoot = win.querySelector('.min-h-0.flex-1 > .absolute.inset-0');
+    // 内容区内的 ImageViewPane 根（氛围光晕层同为 absolute inset-0，按测试标识定位面板）
+    const paneRoot = win.querySelector('.min-h-0.flex-1 > [data-testid="image-view-pane"]');
     expect(paneRoot).toBeTruthy();
     const content = paneRoot!.children[0] as HTMLElement;
     expect(content.className).not.toContain('p-4');
@@ -1044,5 +1044,26 @@ describe('maximized：浏览器视口内最大化（非系统全屏）', () => {
     openPlayer();
     expect(screen.getByTestId('player-window').getAttribute('data-mode')).toBe('window');
     root.unmount();
+  });
+});
+
+describe('视口缩小时浮窗重新收回可视区域', () => {
+  it('窗口缩放后位置与宽度夹取进新视口', async () => {
+    const originalWidth = window.innerWidth;
+    const { root } = setup([item('a', 'image', { width: 1600, height: 900 })]);
+    openPlayer();
+    try {
+      Object.defineProperty(window, 'innerWidth', { configurable: true, value: 480 });
+      act(() => { window.dispatchEvent(new Event('resize')); });
+      const win = screen.getByTestId('player-window');
+      const left = parseFloat(win.style.left);
+      const width = parseFloat(win.style.width);
+      expect(width).toBeLessThanOrEqual(480);
+      expect(left + width).toBeLessThanOrEqual(480);
+      expect(left).toBeGreaterThanOrEqual(0);
+    } finally {
+      Object.defineProperty(window, 'innerWidth', { configurable: true, value: originalWidth });
+      root.unmount();
+    }
   });
 });

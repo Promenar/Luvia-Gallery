@@ -56,3 +56,15 @@ export const playerReducer = (state: PlayerState, action: PlayerAction): PlayerS
 
 export const selectCurrentItem = (state: PlayerState): MediaItem | null =>
   state.isOpen ? state.items[state.index] ?? null : null;
+
+/**
+ * 预加载邻居：返回当前项前后各一张图片的原图地址（视频与越界项忽略），
+ * 供查看器在空闲时提前解码，翻页时原图可立即显示。
+ */
+export const selectNeighborImageUrls = (state: PlayerState): string[] => {
+  if (!state.isOpen) return [];
+  return [state.index + 1, state.index - 1]
+    .map((index) => state.items[index])
+    .filter((item): item is MediaItem => Boolean(item) && item.mediaType === 'image' && Boolean(item.url))
+    .map((item) => item.url);
+};
