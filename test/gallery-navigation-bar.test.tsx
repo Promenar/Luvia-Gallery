@@ -563,7 +563,7 @@ describe('GalleryNavigationBar 组件测试 (Unified Toolbar Phase 2)', () => {
     const onFilterChange = vi.fn();
     render(<GalleryNavigationBar {...defaultProps} filter="all" onFilterChange={onFilterChange} />);
     const filterButton = screen.getByLabelText('当前筛选：全部类型');
-    expect(filterButton.className).not.toContain('hidden');
+    expect(filterButton.className.split(/\s+/)).not.toContain('hidden');
     fireEvent.click(filterButton);
     fireEvent.click(screen.getByText('视频'));
     expect(onFilterChange).toHaveBeenCalledWith('video');
@@ -744,12 +744,12 @@ describe('GalleryNavigationBar 组件测试 (Unified Toolbar Phase 2)', () => {
     expect(toolbar.className).toContain('flex-nowrap');
     expect(toolbar.className).toContain('gallery-toolbar-glass');
     const omnibox = screen.getByTestId('gallery-omnibox');
-    expect(omnibox.className).toContain('min-w-[12rem]');
+    expect(omnibox.className).toContain('min-w-48');
     expect(screen.getByText('…')).toBeDefined();
     expect(screen.queryByText('二级')).toBeNull();
     const current = screen.getByText('当前目录').closest('[aria-current="page"]');
     expect(current).not.toBeNull();
-    expect(current?.className).toContain('min-w-[4rem]');
+    expect(current?.className).toContain('min-w-16');
     expect(current?.className).toContain('truncate');
     const folderRoot = screen.getByLabelText('文件夹');
     expect(folderRoot.querySelector('.xl\\:hidden')).not.toBeNull();
@@ -767,9 +767,9 @@ describe('GalleryNavigationBar 组件测试 (Unified Toolbar Phase 2)', () => {
     const sortLabel = sortButton.querySelector('span');
     expect(sortLabel?.className).toContain('hidden xl:inline');
     const current = screen.getByText('当前目录').closest('[aria-current="page"]');
-    expect(current?.className).toContain('min-w-[4rem]');
+    expect(current?.className).toContain('min-w-16');
     const searchChip = screen.getByLabelText('清除当前搜索');
-    expect(searchChip.className).toContain('max-w-[7rem]');
-    expect(searchChip.className).toContain('xl:max-w-[12rem]');
+    expect(searchChip.className).toContain('max-w-28');
+    expect(searchChip.className).toContain('xl:max-w-48');
   });
 });

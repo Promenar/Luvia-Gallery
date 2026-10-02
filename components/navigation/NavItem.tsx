@@ -26,7 +26,7 @@ export const NavItem: React.FC<NavItemProps> = React.memo(({
   const baseClasses = `
     w-full flex items-center gap-3 py-3 rounded-xl 
     transition-all duration-300 ease-out
-    focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/30
+    focus:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-500/30
     ${isExpanded ? 'px-4' : 'justify-center px-0'}
     ${active
       ? 'bg-accent-500/10 text-accent-500 ring-1 ring-inset ring-accent-500/20 font-semibold'
@@ -43,7 +43,7 @@ export const NavItem: React.FC<NavItemProps> = React.memo(({
       whileTap={{ scale: 0.98 }}
       title={!isExpanded ? label : undefined}
     >
-      <span className={`flex-shrink-0 transition-colors ${active ? 'text-accent-500' : 'text-text-tertiary group-hover:text-text-primary'}`}>
+      <span className={`shrink-0 transition-colors ${active ? 'text-accent-500' : 'text-text-tertiary group-hover:text-text-primary'}`}>
         {icon}
       </span>
       

@@ -39,7 +39,7 @@ export const getAudioCardClasses = (
     layout: 'grid' | 'masonry',
     mediaHoverZoomEnabled: boolean,
 ): string =>
-    `group relative bg-gradient-to-br from-purple-500/10 to-blue-500/10 dark:from-purple-500/20 dark:to-blue-500/20 rounded-xl overflow-hidden cursor-pointer transition-all duration-200 ${mediaHoverZoomEnabled ? 'hover:scale-[1.02] ' : ''}hover:shadow-xl ${layout === 'grid' ? 'aspect-square' : 'aspect-[4/3]'} will-change-transform`;
+    `group relative bg-linear-to-br from-purple-500/10 to-blue-500/10 dark:from-purple-500/20 dark:to-blue-500/20 rounded-xl overflow-hidden cursor-pointer transition-all duration-200 ${mediaHoverZoomEnabled ? 'hover:scale-[1.02] ' : ''}hover:shadow-xl ${layout === 'grid' ? 'aspect-square' : 'aspect-4/3'} will-change-transform`;
 
 export const AudioCard: React.FC<AudioCardProps> = React.memo(({
     item,
@@ -68,14 +68,14 @@ export const AudioCard: React.FC<AudioCardProps> = React.memo(({
             </div>
 
             {/* Play Button Overlay */}
-            <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-200 bg-black/40 backdrop-blur-sm">
+            <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-200 bg-black/40 backdrop-blur-xs">
                 <div className="w-16 h-16 rounded-full bg-surface-secondary backdrop-blur-md flex items-center justify-center shadow-lg border border-white/5">
                     <Icons.Play size={28} className="text-purple-600 dark:text-accent-500 ml-1" />
                 </div>
             </div>
 
             {/* File Info */}
-            <div className="absolute bottom-0 left-0 right-0 p-3 bg-gradient-to-t from-black/80 to-transparent">
+            <div className="absolute bottom-0 left-0 right-0 p-3 bg-linear-to-t from-black/80 to-transparent">
                 <p className="text-white text-sm font-medium truncate mb-1">
                     {item.name}
                 </p>

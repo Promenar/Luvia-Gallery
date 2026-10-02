@@ -370,13 +370,13 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
               onChange={(e) => setSearchDraft(e.target.value)}
               onKeyDown={handleKeyDown}
               placeholder={isZh ? '搜索...' : 'Search...'}
-              className="flex-1 bg-transparent border-none outline-none text-sm text-text-primary placeholder-text-muted focus:ring-0 min-w-0"
+              className="flex-1 bg-transparent border-none outline-hidden text-sm text-text-primary placeholder-text-muted focus:ring-0 min-w-0"
               aria-label={isZh ? '搜索输入框' : 'Search input'}
             />
             {searchDraft && (
               <button
                 onClick={handleClearSearch}
-                className="w-11 h-11 flex items-center justify-center text-text-tertiary hover:text-text-primary rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/40 shrink-0"
+                className="w-11 h-11 flex items-center justify-center text-text-tertiary hover:text-text-primary rounded-full focus:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-500/40 shrink-0"
                 aria-label={isZh ? '清空搜索' : 'Clear search'}
               >
                 <Icons.Close size={16} />
@@ -384,7 +384,7 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
             )}
             <button
               onClick={closeSearchMode}
-              className="text-sm text-accent-500 hover:text-accent-400 px-2 min-h-[44px] flex items-center justify-center shrink-0 font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/40 rounded-lg"
+              className="text-sm text-accent-500 hover:text-accent-400 px-2 min-h-[44px] flex items-center justify-center shrink-0 font-medium focus:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-500/40 rounded-lg"
               aria-label={isZh ? '取消搜索' : 'Cancel search'}
             >
               {isZh ? '取消' : 'Cancel'}
@@ -395,7 +395,7 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
             {onOpenMenu && (
               <button
                 onClick={onOpenMenu}
-                className="w-11 h-11 flex items-center justify-center rounded-full text-text-secondary hover:text-text-primary hover:bg-white/5 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/30 shrink-0"
+                className="w-11 h-11 flex items-center justify-center rounded-full text-text-secondary hover:text-text-primary hover:bg-white/5 transition-colors focus:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-500/30 shrink-0"
                 aria-label={isZh ? '打开菜单' : 'Open menu'}
               >
                 <Icons.Menu size={20} />
@@ -405,7 +405,7 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
             <button
               onClick={handleBackClick}
               disabled={!canGoBack}
-              className="w-11 h-11 flex items-center justify-center rounded-full text-text-secondary hover:text-text-primary disabled:opacity-50 disabled:cursor-not-allowed hover:bg-white/5 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/30 shrink-0"
+              className="w-11 h-11 flex items-center justify-center rounded-full text-text-secondary hover:text-text-primary disabled:opacity-50 disabled:cursor-not-allowed hover:bg-white/5 transition-colors focus:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-500/30 shrink-0"
               aria-label={backText}
               aria-disabled={!canGoBack}
             >
@@ -423,7 +423,7 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
               {activeSearch && (
                 <button
                   onClick={handleClearCommittedSearch}
-                  className="min-h-[44px] min-w-0 max-w-[48%] px-2 flex items-center gap-1 rounded-lg text-xs text-accent-400 hover:bg-white/5 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/30"
+                  className="min-h-[44px] min-w-0 max-w-[48%] px-2 flex items-center gap-1 rounded-lg text-xs text-accent-400 hover:bg-white/5 focus:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-500/30"
                   aria-label={isZh ? '清除当前搜索' : 'Clear current search'}
                   title={`${isZh ? '搜索' : 'Search'}：“${activeSearch}”`}
                 >
@@ -437,7 +437,7 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
             <div className="flex items-center gap-1 shrink-0">
               <button
                 onClick={openSearchMode}
-                className="w-11 h-11 flex items-center justify-center rounded-full text-text-secondary hover:text-text-primary hover:bg-white/5 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/30"
+                className="w-11 h-11 flex items-center justify-center rounded-full text-text-secondary hover:text-text-primary hover:bg-white/5 transition-colors focus:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-500/30"
                 aria-label={isZh ? '进入搜索' : 'Enter search'}
               >
                 <Icons.Search size={20} />
@@ -446,7 +446,7 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
                 <div className="relative">
                   <button
                     onClick={openMobileMoreMenu}
-                    className="w-11 h-11 flex items-center justify-center rounded-full text-text-secondary hover:text-text-primary hover:bg-white/5 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/30"
+                    className="w-11 h-11 flex items-center justify-center rounded-full text-text-secondary hover:text-text-primary hover:bg-white/5 transition-colors focus:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-500/30"
                     aria-label={isZh ? '更多选项' : 'More options'}
                     aria-haspopup="true"
                   aria-expanded={isMobileMoreOpen}
@@ -468,7 +468,7 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
                             onUp();
                             closeTransientPanels();
                           }}
-                          className="flex items-center gap-3 w-full text-left px-3 py-2.5 rounded-xl text-sm text-text-secondary hover:bg-white/5 hover:text-text-primary transition-colors min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-500/40"
+                          className="flex items-center gap-3 w-full text-left px-3 py-2.5 rounded-xl text-sm text-text-secondary hover:bg-white/5 hover:text-text-primary transition-colors min-h-[44px] focus:outline-hidden focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-500/40"
                           role="menuitem"
                         >
                           <Icons.Up size={18} />
@@ -482,7 +482,7 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
                             onScrollToTop();
                             closeTransientPanels();
                           }}
-                        className="flex items-center gap-3 w-full text-left px-3 py-2.5 rounded-xl text-sm text-text-secondary hover:bg-white/5 hover:text-text-primary transition-colors min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-500/40"
+                        className="flex items-center gap-3 w-full text-left px-3 py-2.5 rounded-xl text-sm text-text-secondary hover:bg-white/5 hover:text-text-primary transition-colors min-h-[44px] focus:outline-hidden focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-500/40"
                         role="menuitem"
                       >
                         <Icons.ChevronUp size={18} />
@@ -503,7 +503,7 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
                                 onFilterChange(value);
                                 closeTransientPanels();
                               }}
-                              className={`flex items-center gap-3 w-full text-left px-3 py-2.5 rounded-xl text-sm transition-colors min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-500/40 ${
+                              className={`flex items-center gap-3 w-full text-left px-3 py-2.5 rounded-xl text-sm transition-colors min-h-[44px] focus:outline-hidden focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-500/40 ${
                                 currentFilter === value ? 'bg-accent-500/10 text-accent-400 ring-1 ring-inset ring-accent-500/20 font-medium' : 'text-text-secondary hover:bg-white/5'
                               }`}
                               role="menuitemradio"
@@ -528,7 +528,7 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
                                 onSortChange?.(opt);
                                 closeTransientPanels();
                               }}
-                          className={`flex items-center justify-between w-full text-left px-3 py-2.5 rounded-xl text-sm transition-colors min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-500/40 ${
+                          className={`flex items-center justify-between w-full text-left px-3 py-2.5 rounded-xl text-sm transition-colors min-h-[44px] focus:outline-hidden focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-500/40 ${
                             currentSort === opt ? 'bg-accent-500/10 text-accent-400 ring-1 ring-inset ring-accent-500/20 font-medium' : 'text-text-secondary hover:bg-white/5'
                           }`}
                           role="menuitemradio"
@@ -552,7 +552,7 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
                                 onLayoutChange?.(mode);
                                 closeTransientPanels();
                               }}
-                          className={`flex items-center justify-between w-full text-left px-3 py-2.5 rounded-xl text-sm transition-colors min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-500/40 ${
+                          className={`flex items-center justify-between w-full text-left px-3 py-2.5 rounded-xl text-sm transition-colors min-h-[44px] focus:outline-hidden focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-500/40 ${
                             currentLayout === mode ? 'bg-accent-500/10 text-accent-400 ring-1 ring-inset ring-accent-500/20 font-medium' : 'text-text-secondary hover:bg-white/5'
                           }`}
                           role="menuitemradio"
@@ -627,7 +627,7 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
       )}
 
       <div
-        className={`flex-1 min-w-[12rem] bg-white/5 border border-white/10 rounded-xl hover:bg-white/10 hover:border-white/20 transition-all duration-200 h-10 px-2 xl:px-3 py-1 flex flex-nowrap items-center justify-between cursor-text focus-within:bg-white/10 focus-within:border-accent-500/50 ${
+        className={`flex-1 min-w-48 bg-white/5 border border-white/10 rounded-xl hover:bg-white/10 hover:border-white/20 transition-all duration-200 h-10 px-2 xl:px-3 py-1 flex flex-nowrap items-center justify-between cursor-text focus-within:bg-white/10 focus-within:border-accent-500/50 ${
           isSearchMode ? 'shadow-lg' : ''
         }`}
         data-testid="gallery-omnibox"
@@ -649,7 +649,7 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
               onChange={(e) => setSearchDraft(e.target.value)}
               onKeyDown={handleKeyDown}
               placeholder={isZh ? '搜索 (Ctrl+K)...' : 'Search (Ctrl+K)...'}
-              className="flex-1 bg-transparent border-none outline-none text-sm text-text-primary placeholder-text-muted focus:ring-0 min-w-0"
+              className="flex-1 bg-transparent border-none outline-hidden text-sm text-text-primary placeholder-text-muted focus:ring-0 min-w-0"
               aria-label={isZh ? '搜索输入框' : 'Search input'}
             />
             {searchDraft && (
@@ -676,7 +676,7 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
           </div>
         ) : (
           <>
-            <div className="flex-1 min-w-[4rem] overflow-hidden flex items-center">
+            <div className="flex-1 min-w-16 overflow-hidden flex items-center">
               <Breadcrumbs
                 view={activeView}
                 folderPath={activeFolderPath}
@@ -688,7 +688,7 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
             {activeSearch && (
               <button
                 onClick={handleClearCommittedSearch}
-                className="shrink min-w-0 max-w-[7rem] xl:max-w-[12rem] h-8 px-2 flex items-center gap-1 rounded-lg bg-accent-500/10 text-xs text-accent-400 hover:bg-accent-500/15 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/30"
+                className="shrink min-w-0 max-w-28 xl:max-w-48 h-8 px-2 flex items-center gap-1 rounded-lg bg-accent-500/10 text-xs text-accent-400 hover:bg-accent-500/15 focus:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-500/30"
                 aria-label={isZh ? '清除当前搜索' : 'Clear current search'}
                 title={`${isZh ? '搜索' : 'Search'}：“${activeSearch}”`}
               >
@@ -718,7 +718,7 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
           <div className="relative">
           <button
               onClick={openFilterMenu}
-              className="flex items-center justify-center h-10 w-10 hover:bg-white/10 rounded-xl text-text-secondary hover:text-text-primary transition-all duration-200 border border-white/5 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/30"
+              className="flex items-center justify-center h-10 w-10 hover:bg-white/10 rounded-xl text-text-secondary hover:text-text-primary transition-all duration-200 border border-white/5 focus:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-500/30"
               aria-label={isZh ? `当前筛选：${getFilterLabel(currentFilter)}` : `Current filter: ${getFilterLabel(currentFilter)}`}
               aria-haspopup="listbox"
               aria-expanded={isFilterMenuOpen}
@@ -736,7 +736,7 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
                       onFilterChange(value);
                       closeTransientPanels();
                     }}
-                      className={`flex items-center gap-2 w-full text-left px-3 py-2 rounded-lg text-sm transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-500/40 ${
+                      className={`flex items-center gap-2 w-full text-left px-3 py-2 rounded-lg text-sm transition-colors focus:outline-hidden focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-500/40 ${
                         currentFilter === value ? 'bg-accent-500/10 text-accent-400 ring-1 ring-inset ring-accent-500/20 font-medium' : 'text-text-secondary hover:bg-white/5'
                       }`}
                       role="option"
@@ -755,7 +755,7 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
         <div className="relative">
           <button
             onClick={openSortMenu}
-            className="flex items-center justify-center gap-1.5 h-10 w-10 xl:w-auto xl:px-3 hover:bg-white/10 rounded-xl text-text-secondary hover:text-text-primary transition-all duration-200 border border-white/5 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/30"
+            className="flex items-center justify-center gap-1.5 h-10 w-10 xl:w-auto xl:px-3 hover:bg-white/10 rounded-xl text-text-secondary hover:text-text-primary transition-all duration-200 border border-white/5 focus:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-500/30"
             aria-label={isZh ? `当前排序：${getSortLabel(currentSort)}` : `Sort by: ${getSortLabel(currentSort)}`}
             aria-haspopup="listbox"
             aria-expanded={isSortMenuOpen}
@@ -778,7 +778,7 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
                       onSortChange?.(opt);
                       closeTransientPanels();
                     }}
-                    className={`flex items-center justify-between w-full text-left px-3 py-2 rounded-lg text-sm transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-500/40 ${
+                    className={`flex items-center justify-between w-full text-left px-3 py-2 rounded-lg text-sm transition-colors focus:outline-hidden focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-500/40 ${
                       currentSort === opt ? 'bg-accent-500/10 text-accent-400 ring-1 ring-inset ring-accent-500/20 font-medium' : 'text-text-secondary hover:bg-white/5'
                     }`}
                     role="option"
@@ -797,7 +797,7 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
         <div className="relative">
           <button
             onClick={openLayoutMenu}
-            className="flex items-center justify-center h-10 w-10 hover:bg-white/10 rounded-xl text-text-secondary hover:text-text-primary transition-all duration-200 border border-white/5 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/30"
+            className="flex items-center justify-center h-10 w-10 hover:bg-white/10 rounded-xl text-text-secondary hover:text-text-primary transition-all duration-200 border border-white/5 focus:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-500/30"
             aria-label={isZh ? `切换布局（当前：${getLayoutLabel(currentLayout)}）` : `Change layout (current: ${getLayoutLabel(currentLayout)})`}
             aria-haspopup="listbox"
             aria-expanded={isLayoutMenuOpen}
@@ -819,7 +819,7 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
                       onLayoutChange?.(mode);
                       closeTransientPanels();
                     }}
-                    className={`flex items-center gap-2 w-full text-left px-3 py-2 rounded-lg text-sm transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-500/40 ${
+                    className={`flex items-center gap-2 w-full text-left px-3 py-2 rounded-lg text-sm transition-colors focus:outline-hidden focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-500/40 ${
                       currentLayout === mode ? 'bg-accent-500/10 text-accent-400 ring-1 ring-inset ring-accent-500/20 font-medium' : 'text-text-secondary hover:bg-white/5'
                     }`}
                     role="option"

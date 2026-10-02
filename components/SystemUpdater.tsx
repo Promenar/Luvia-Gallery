@@ -186,7 +186,7 @@ const SystemUpdater: React.FC = () => {
                                 value={config.repoUrl}
                                 onChange={e => setConfig(prev => ({ ...prev, repoUrl: e.target.value }))}
                                 placeholder="git@github.com:user/repo.git or https://github.com/user/repo.git"
-                                className="flex-1 px-3 py-2 bg-black/20 border border-white/5 rounded-xl text-sm font-mono text-text-secondary outline-none focus:border-accent-500/30"
+                                className="flex-1 px-3 py-2 bg-black/20 border border-white/5 rounded-xl text-sm font-mono text-text-secondary outline-hidden focus:border-accent-500/30"
                             />
                         </div>
                     </div>
@@ -197,7 +197,7 @@ const SystemUpdater: React.FC = () => {
                                 value={config.branch}
                                 onChange={e => setConfig(prev => ({ ...prev, branch: e.target.value }))}
                                 placeholder="main"
-                                className="flex-1 px-3 py-2 bg-black/20 border border-white/5 rounded-xl text-sm font-mono text-text-secondary outline-none focus:border-accent-500/30"
+                                className="flex-1 px-3 py-2 bg-black/20 border border-white/5 rounded-xl text-sm font-mono text-text-secondary outline-hidden focus:border-accent-500/30"
                             />
                             <button
                                 onClick={() => handleSaveConfig()}

@@ -4,7 +4,6 @@ import { MediaItem, ViewMode, GridLayout, User, UserData, SortOption, FilterOpti
 import { buildFolderTree, generateId, isVideo, isAudio, sortMedia, getImmediateSubfolders, seededShuffle } from './utils/fileUtils';
 import { Icons } from './components/ui/Icon';
 import { Navigation } from './components/Navigation';
-import { AmbientDotField } from './components/AmbientDotField';
 import { MediaCard, useStableMediaItemClick } from './components/PhotoCard';
 import { FolderCard } from './components/FolderCard';
 import { MediaPlayer } from './components/player/MediaPlayer';
@@ -508,7 +507,7 @@ export const UnifiedGalleryToolbar: React.FC<UnifiedGalleryToolbarProps> = ({
     };
 
     return (
-        <div className="px-3 pb-3 md:absolute md:inset-x-0 md:top-0 md:px-8 md:pt-4 md:pb-0 md:pointer-events-none z-[35]" data-testid="unified-gallery-toolbar">
+        <div className="px-3 pb-3 md:absolute md:inset-x-0 md:top-0 md:px-8 md:pt-4 md:pb-0 md:pointer-events-none z-35" data-testid="unified-gallery-toolbar">
             <div className="lg:hidden md:pointer-events-auto" data-testid="gallery-toolbar-compact-slot">
                 <GalleryNavigationBar {...sharedProps} compact />
             </div>
@@ -567,7 +566,7 @@ export const SearchEmptyState: React.FC<SearchEmptyStateProps> = ({
 export const GalleryLoadErrorBanner: React.FC<{ onRetry: () => void }> = ({ onRetry }) => (
     <div
         role="alert"
-        className="absolute left-1/2 top-4 z-40 flex -translate-x-1/2 items-center gap-3 rounded-xl border border-red-400/30 bg-red-950/90 px-4 py-3 text-sm text-red-100 shadow-xl backdrop-blur"
+        className="absolute left-1/2 top-4 z-40 flex -translate-x-1/2 items-center gap-3 rounded-xl border border-red-400/30 bg-red-950/90 px-4 py-3 text-sm text-red-100 shadow-xl backdrop-blur-sm"
     >
         <span>当前目录加载失败，已保留上一次内容。</span>
         <button
@@ -678,22 +677,6 @@ function GalleryApp() {
     const { open: openPlayer, close: closePlayer, patchItem } = useMediaPlayer();
     const { canApplyLayoutPreference, applyInitialLayoutPreference } = galleryNavigation;
     const galleryViewportRef = useRef<ViewportCaptureHandle>(null);
-
-    // --- Visual Polish ---
-    // Inject noise texture globally
-    useEffect(() => {
-        // Force reset the body styling in case of overrides
-        document.body.style.backgroundColor = '';
-
-        const noiseDiv = document.createElement('div');
-        noiseDiv.classList.add('bg-noise');
-        document.body.appendChild(noiseDiv);
-        return () => {
-            if (document.body.contains(noiseDiv)) {
-                document.body.removeChild(noiseDiv);
-            }
-        };
-    }, []);
 
     // --- Authentication State ---
     const [users, setUsers] = useState<User[]>([]);
@@ -944,8 +927,8 @@ function GalleryApp() {
                 metaThemeColor.setAttribute('name', 'theme-color');
                 document.head.appendChild(metaThemeColor);
             }
-            // Use specific brand colors: dark (#020617) or light (#ffffff)
-            metaThemeColor.setAttribute("content", effectiveTheme === 'dark' ? "#020617" : "#ffffff");
+            // 与设计令牌底色一致：暗房暖黑 / 画廊白墙
+            metaThemeColor.setAttribute("content", effectiveTheme === 'dark' ? "#0e0c0b" : "#f4f1ec");
         };
 
         applyTheme();
@@ -2683,7 +2666,7 @@ function GalleryApp() {
         return (
             <div className="min-h-screen bg-surface-primary flex flex-col items-center justify-center p-4">
                 <div className="w-full max-w-md bg-surface-secondary backdrop-blur-2xl rounded-3xl shadow-2xl p-8 border border-white/5 relative overflow-hidden">
-                    <div className="absolute inset-0 bg-gradient-to-tr from-accent-500/5 via-transparent to-transparent pointer-events-none" />
+                    <div className="absolute inset-0 bg-linear-to-tr from-accent-500/5 via-transparent to-transparent pointer-events-none" />
                     <div className="flex justify-center mb-6">
                         <div className="w-16 h-16 bg-primary-600 rounded-2xl flex items-center justify-center shadow-lg shadow-primary-500/30">
                             <div className="w-8 h-8 bg-white/30 rounded-full" />
@@ -2809,7 +2792,7 @@ function GalleryApp() {
                             <input
                                 required
                                 type="text"
-                                className="w-full px-4 py-2 rounded-xl border border-white/10 bg-black/20 text-text-primary focus:border-accent-500/50 outline-none transition-all"
+                                className="w-full px-4 py-2 rounded-xl border border-white/10 bg-black/20 text-text-primary focus:border-accent-500/50 outline-hidden transition-all"
                                 value={authStep === 'setup' ? setupForm.username : loginForm.username}
                                 onChange={e => authStep === 'setup' ? setSetupForm({ ...setupForm, username: e.target.value }) : setLoginForm({ ...loginForm, username: e.target.value })}
                             />
@@ -2819,7 +2802,7 @@ function GalleryApp() {
                             <input
                                 required
                                 type="password"
-                                className="w-full px-4 py-2 rounded-xl border border-white/10 bg-black/20 text-text-primary focus:border-accent-500/50 outline-none transition-all"
+                                className="w-full px-4 py-2 rounded-xl border border-white/10 bg-black/20 text-text-primary focus:border-accent-500/50 outline-hidden transition-all"
                                 value={authStep === 'setup' ? setupForm.password : loginForm.password}
                                 onChange={e => authStep === 'setup' ? setSetupForm({ ...setupForm, password: e.target.value }) : setLoginForm({ ...loginForm, password: e.target.value })}
                             />
@@ -2830,7 +2813,7 @@ function GalleryApp() {
                                 <input
                                     required
                                     type="password"
-                                    className="w-full px-4 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-500 outline-none"
+                                    className="w-full px-4 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-500 outline-hidden"
                                     value={setupForm.confirmPassword}
                                     onChange={e => setSetupForm({ ...setupForm, confirmPassword: e.target.value })}
                                 />
@@ -2856,8 +2839,6 @@ function GalleryApp() {
     // Main App Render
     return (
         <div className={`flex h-screen w-full bg-surface-primary overflow-hidden text-text-primary font-sans transition-colors duration-200 ${isServerMode ? 'server-mode' : ''}`}>
-            {/* WebGL 点阵光场背景：fixed z-0 铺底，根容器后续定位子元素（侧栏/主内容/浮岛）按 DOM 顺序自然绘制其上 */}
-            <AmbientDotField />
             <Navigation
                 appTitle={appTitle}
                 viewMode={viewMode}

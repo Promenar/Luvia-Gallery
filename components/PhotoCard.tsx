@@ -72,7 +72,7 @@ export const getMediaImageLoadingProps = (imagePriority: boolean) => ({
 });
 
 export const getMediaCardContainerClasses = (isGrid: boolean, isLoaded: boolean = true): string =>
-  `relative group cursor-pointer overflow-hidden rounded-2xl ${isLoaded ? 'glass-1 glass-hover ring-1 ring-white/10 dark:ring-white/5' : 'bg-white/[0.045] dark:bg-white/[0.035]'} ${isGrid ? 'w-full h-full aspect-square' : 'w-full break-inside-avoid'}`;
+  `relative group cursor-pointer overflow-hidden rounded-2xl ${isLoaded ? 'glass-1 glass-hover ring-1 ring-white/10 dark:ring-white/5' : 'bg-white/4.5 dark:bg-white/[0.035]'} ${isGrid ? 'w-full h-full aspect-square' : 'w-full break-inside-avoid'}`;
 
 export const getMediaCardHoverAnimation = (
   isVirtual: boolean,
@@ -295,7 +295,7 @@ const VisualMediaCard: React.FC<MediaCardProps> = ({
           {!imgError && thumbnailSrc ? (
             <>
               {!isThumbnailLoaded && (
-                <div className="absolute inset-0 bg-white/[0.045] dark:bg-white/[0.035] animate-pulse" aria-hidden="true" />
+                <div className="absolute inset-0 bg-white/4.5 dark:bg-white/[0.035] animate-pulse" aria-hidden="true" />
               )}
               <img
               key={thumbnailSrc}
@@ -313,10 +313,10 @@ const VisualMediaCard: React.FC<MediaCardProps> = ({
               {imgError ? (
                 <>
                   <Icons.Video size={32} />
-                  <span className="text-[10px] mt-2 font-mono uppercase font-bold bg-black/20 px-1 rounded">{item.type.split('/')[1] || 'VIDEO'}</span>
+                  <span className="text-[10px] mt-2 font-mono uppercase font-bold bg-black/20 px-1 rounded-sm">{item.type.split('/')[1] || 'VIDEO'}</span>
                 </>
               ) : (
-                <div className="absolute inset-0 bg-gradient-to-tr from-gray-900 to-gray-700 opacity-100" />
+                <div className="absolute inset-0 bg-linear-to-tr from-gray-900 to-gray-700 opacity-100" />
               )}
             </div>
           )}
@@ -327,7 +327,7 @@ const VisualMediaCard: React.FC<MediaCardProps> = ({
             </div>
           </div>
 
-          <div className="absolute top-2 right-2 glass-1 bg-overlay-veil px-2 py-0.5 rounded text-[10px] text-white font-medium flex items-center gap-1 z-20 border border-border-glow">
+          <div className="absolute top-2 right-2 glass-1 bg-overlay-veil px-2 py-0.5 rounded-sm text-[10px] text-white font-medium flex items-center gap-1 z-20 border border-border-glow">
             <Icons.Video size={10} />
             <span>{t('video_badge')}</span>
           </div>
@@ -336,7 +336,7 @@ const VisualMediaCard: React.FC<MediaCardProps> = ({
         !imgError && !hasError ? (
           <>
             {!isThumbnailLoaded && (
-              <div className="absolute inset-0 bg-white/[0.045] dark:bg-white/[0.035] animate-pulse" aria-hidden="true" />
+              <div className="absolute inset-0 bg-white/4.5 dark:bg-white/[0.035] animate-pulse" aria-hidden="true" />
             )}
             <img
               key={thumbnailSrc}
@@ -376,7 +376,7 @@ const VisualMediaCard: React.FC<MediaCardProps> = ({
           ) : (
             <div className="w-full h-full flex flex-col items-center justify-center bg-surface-tertiary text-text-tertiary">
               <Icons.Image size={32} />
-              <span className="text-[10px] mt-2 font-mono uppercase font-bold bg-black/10 dark:bg-white/10 px-1 rounded">{item.type.split('/')[1] || 'IMG'}</span>
+              <span className="text-[10px] mt-2 font-mono uppercase font-bold bg-black/10 dark:bg-white/10 px-1 rounded-sm">{item.type.split('/')[1] || 'IMG'}</span>
             </div>
           )
         )
@@ -390,12 +390,12 @@ const VisualMediaCard: React.FC<MediaCardProps> = ({
       )}
 
       {/* Hover Info Overlay */}
-      <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-end p-4 z-30 pointer-events-none">
+      <div className="absolute inset-0 bg-linear-to-t from-black/75 via-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-end p-4 z-30 pointer-events-none">
         <div className="w-full overflow-hidden">
           <p className="text-white text-sm font-medium truncate w-full">{item.name}</p>
           <div className="flex justify-between items-center mt-1">
             <p className="text-white/70 text-[10px] truncate">{(item.size / 1024 / 1024).toFixed(1)} MB</p>
-            <p className="text-white/70 text-[10px] uppercase tracking-wide bg-white/10 px-1.5 rounded">{item.type.split('/')[1]}</p>
+            <p className="text-white/70 text-[10px] uppercase tracking-wide bg-white/10 px-1.5 rounded-sm">{item.type.split('/')[1]}</p>
           </div>
         </div>
       </div>

@@ -84,7 +84,7 @@ export const DirectoryPicker: React.FC<DirectoryPickerProps> = ({
     return (
         <AnimatePresence>
             {isOpen && (
-                <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/80">
+                <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/80">
                     <motion.div
                         initial={{ opacity: 0, scale: 0.95, y: 20 }}
                         animate={{ opacity: 1, scale: 1, y: 0 }}
@@ -116,7 +116,7 @@ export const DirectoryPicker: React.FC<DirectoryPickerProps> = ({
                                 disabled={isRoot}
                                 className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-all duration-200 ${isRoot
                                     ? 'text-gray-400 dark:text-gray-600 cursor-not-allowed bg-white/5'
-                                    : 'text-text-primary hover:bg-white/10 shadow-sm border border-white/5'
+                                    : 'text-text-primary hover:bg-white/10 shadow-xs border border-white/5'
                                     }`}
                             >
                                 <Icons.ArrowUp size={16} />
@@ -150,7 +150,7 @@ export const DirectoryPicker: React.FC<DirectoryPickerProps> = ({
                                     <span className="text-sm font-medium">{error}</span>
                                     <button
                                         onClick={() => setCurrentPath('/')}
-                                        className="text-xs px-3 py-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-full shadow-sm hover:shadow-md transition-all"
+                                        className="text-xs px-3 py-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-full shadow-xs hover:shadow-md transition-all"
                                     >
                                         Return to Root
                                     </button>

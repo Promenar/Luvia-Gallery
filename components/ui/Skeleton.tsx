@@ -33,7 +33,7 @@ export const Skeleton: React.FC<SkeletonProps> = ({
   ...props
 }) => {
   const variantClasses = {
-    text: 'rounded h-4',
+    text: 'rounded-sm h-4',
     circular: 'rounded-full',
     rectangular: '',
     rounded: 'rounded-xl',
@@ -123,7 +123,7 @@ export const SkeletonImage: React.FC<{
   const aspectClasses = {
     square: 'aspect-square',
     video: 'aspect-video',
-    wide: 'aspect-[2/1]',
+    wide: 'aspect-2/1',
   };
 
   return (
