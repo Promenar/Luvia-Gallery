@@ -2379,3 +2379,34 @@ Base UI 多个兄弟对话框的外部点击行为依赖 Settings 的 disablePoi
 
 ### HLG
 本记录追加；continuity-key webui-visual-foundation 等待 PDEC 重绑与第 2 阶段。长期规则候选：仅依赖与文档变化导致的 PDEC 证据漂移，可在用户批准的阶段内统一重绑，需用户授权后写入 PDEC README。
+
+## 2026-10-02T10:14:48+08:00 · WebUI 视觉第 2 阶段（画廊卡片与浅色主题）已推送并通过 FNOS 验证
+
+type: feature
+scope: ["Luvia-Gallery", "WebUI"]
+status: done
+tags: ["webui", "design-system", "gallery", "cards", "mobile", "pdec"]
+continuity: waiting
+continuity-key: webui-visual-foundation
+record-fingerprint: 4eceac26506e5331d4ccb4faafc1a3159f8797ad9e578fd7851af5fcb4d0ac4d
+
+### Summary
+用户回复“同意 继续”：PDEC 重绑并登记阶段内证据重绑规则（fadec78，FNOS 验证后端 68/68、前端 307/307、typecheck、build 通过）；完成第 2 阶段并推送 815b53f4b25a391d026bb5c39eca0c43e7d6c74b，FNOS node:20 验证后端 68/68、前端 308/308、typecheck、build 通过。未部署。
+
+### Changed
+PhotoCard 去 framer-motion/玻璃/脉冲占位，role=button+键盘打开，缩略图悬停 scale-[1.03] 且 motion-reduce 关闭，角标与播放按钮改为照片上的纯色半透明黑（无模糊），修复按钮文案入语言包。FolderCard 改为相册式（封面+名称/数量），操作菜单改用新增 components/kit/dropdown-menu（菜单外层阻止冒泡避免误进入文件夹），需 LanguageProvider。AudioCard 改主题色板与键盘可达。GridViewport 新增 resolveGridMetrics（<640px 至少 3 列、4px 间距），GRID_SKELETON_CLASSES 改 bg-muted 静态；Masonry 占位静态、手机间距 gap-2。App 画廊外边距手机 p-2、空状态令牌化。设置页英文硬编码入语言包。删除未引用的 settings/GeneralTab、AccountTab、LibraryTab 与 ScanProgressModal。.pdec/README.md 登记阶段内依赖/文档漂移可直接重绑的规则。
+
+### Validation
+本机 typecheck、前端 308/308、后端契约 28/28、build 通过；FNOS 以确切 SHA 全量通过（runs/815b53f/verify.log）。模拟 API 浏览器实测：深色网格与文件夹相册卡、文件夹下拉菜单打开与收藏（不误跳转）、浅色手机 3 列密排。
+
+### Next
+第 3 阶段大图：缩略图到大图的共享元素过渡、先缩略图后原图、前后预加载、氛围光晕取色、沉浸模式评估 yet-another-react-lightbox；同时处理 AudioPlayer 与 components/ui/* 旧写法。第 4 阶段时间线。部署需用户单独授权（部署前须设置 UPDATE_TOKEN 并备份 lumina-config.json）。
+
+### Risks
+旧 FolderCard 的 animate 属性保留但不再生效；文件夹数量为直属媒体数（既有语义），含子目录的相册可能显示 0 项。手机端视频播放按钮在小格子上相对偏大。
+
+### DIA
+已同步 release_notes.md、视觉底座计划第 7 节、.pdec/README.md 与 contract.yaml（重绑记录）。
+
+### HLG
+本记录追加；continuity-key webui-visual-foundation 等待第 3 阶段。阶段内证据重绑规则已按用户授权写入 .pdec/README.md。
