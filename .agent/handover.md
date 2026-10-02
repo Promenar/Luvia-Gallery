@@ -2472,3 +2472,33 @@ database.js：buildFileQueryParts 新增 timeRange 条件；新增 queryTimeline
 
 ### HLG
 本记录追加；continuity-key webui-visual-foundation 等待部署决策。用户偏好：高密度网格界面不使用衬线字体（已写入视觉契约，未写入长期规则）。
+
+## 2026-10-02T14:50:29+08:00 · 部署 821acf5 至 FNOS 生产（安全加固 + 视觉 1-4 阶段）
+
+type: release
+scope: ["luvia-gallery", "fnos"]
+status: done
+tags: ["deploy", "fnos", "security", "webui", "timeline"]
+continuity: none
+record-fingerprint: ef732d21d172e4b842b824b140d466838d5449069ec4d6968fb25adbe1e38731
+
+### Summary
+用户授权“开始部署吧”后，将修订 821acf59746090e923f751bc85d7d8ca621ac3c8（镜像 sha256:53222c77…591c）切换到 FNOS 生产 luvia-gallery 服务，包含安全加固、WebUI 功能修复与暗房影院视觉第 1-4 阶段。
+
+### Changed
+生产镜像由 sha256:79b3bea7…1235（60ce8ca）切换为 821acf5；旧镜像打标 promenarleng/luvia-gallery:rollback-821acf5-pre；生产 lumina-config.json 口令启动迁移为 scrypt 哈希；release_notes 标记 2026-10-02 各条目已部署并新增部署状态段。候选容器 luvia-candidate-821acf5 与其数据副本已删除。
+
+### Validation
+候选容器旁路健康通过后执行 runs/821acf5/switch.py：生产首页 200、静态资源与候选一致、908152 项媒体、时间线 74 桶（首次 2508ms/缓存 6ms）、首月分页 9ms、匿名 scan/fs-list/update-status 均 401、匿名配置无用户、口令全部哈希、24 张 WebP 缩略图最慢 65ms；20 秒后复查 restarts=0、OOM=false；经 Tailscale 读取的 JS 包 sha256 bf4a8621…ce08 与镜像一致。
+
+### Next
+无必需后续；可观察时间线分桶首次计算 2.5 秒是否需要预热或持久化缓存。
+
+### Risks
+回滚到旧镜像必须同时恢复 .deploy/backups/821acf5/lumina-config.json，否则旧版本无法校验哈希口令；部署前数据库备份同在该目录。热更新沿用已有 data/update_secret.txt，未设置 UPDATE_TOKEN 环境变量。
+
+### DIA
+已同步 release_notes.md 部署状态。
+
+### HLG
+本记录。

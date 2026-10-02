@@ -1,6 +1,6 @@
 # Handover Index
 
-> generated_at: 2026-10-02T14:41:12+08:00
+> generated_at: 2026-10-02T14:50:29+08:00
 > generated: true; do not edit manually
 > recovery_window_days: 7
 
@@ -24,6 +24,7 @@
 
 | date | format | status | continuity | scope | tags | title | source |
 | :---: | :---: | :---: | :---: | :--- | :--- | :--- | :--- |
+| 2026-10-02T14:50:29+08:00 | iso | done | none | ["luvia-gallery", "fnos"] | ["deploy", "fnos", "security", "webui", "timeline"] | 部署 821acf5 至 FNOS 生产（安全加固 + 视觉 1-4 阶段） | `.agent/handover.md` · `2026-10-02T14:50:29+08:00` · `fp:ef732d21d1` |
 | 2026-10-02T14:41:11+08:00 | iso | done | waiting | ["Luvia-Gallery", "WebUI", "server", "sqlite"] | ["webui", "timeline", "buckets", "virtualization", "typography"] | WebUI 视觉第 4 阶段（时间线）已推送并通过 FNOS 验证，章节字体改为无衬线 | `.agent/handover.md` · `2026-10-02T14:41:11+08:00` · `fp:06991d3b29` |
 | 2026-10-02T14:23:13+08:00 | iso | done | waiting | ["Luvia-Gallery", "WebUI", "player"] | ["webui", "player", "view-transitions", "ambient", "progressive-loading"] | WebUI 视觉第 3 阶段（大图查看）已推送并通过 FNOS 验证 | `.agent/handover.md` · `2026-10-02T14:23:13+08:00` · `fp:7c92ff5c25` |
 | 2026-10-02T10:14:48+08:00 | iso | done | waiting | ["Luvia-Gallery", "WebUI"] | ["webui", "design-system", "gallery", "cards", "mobile", "pdec"] | WebUI 视觉第 2 阶段（画廊卡片与浅色主题）已推送并通过 FNOS 验证 | `.agent/handover.md` · `2026-10-02T10:14:48+08:00` · `fp:4eceac2650` |
