@@ -4,9 +4,9 @@ import { IconButton, ButtonGroup } from '../ui/IconButton';
 import { useLanguage } from '../../contexts/LanguageContext';
 import { Breadcrumbs } from './Breadcrumbs';
 import { GalleryLocation, GalleryViewMode, GallerySortOption, GalleryLayout, GalleryFilterOption } from '../../navigation/types';
+import { getAvailableLayouts, normalizeLayoutForView } from '../../navigation/location';
 
 const SORT_OPTIONS: readonly GallerySortOption[] = ['dateDesc', 'dateAsc', 'nameAsc', 'nameDesc', 'sizeDesc', 'random'];
-const VISIBLE_LAYOUTS: readonly Extract<GalleryLayout, 'grid' | 'masonry'>[] = ['grid', 'masonry'];
 
 export interface NavigationLabels {
   home?: string;
@@ -100,7 +100,9 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
     : (search !== undefined ? search : '');
 
   const currentSort = location?.sort || sortOption || sort || 'dateDesc';
-  const currentLayout = (location?.layout || layoutMode || layout) === 'masonry' ? 'masonry' : 'grid';
+  // 布局选项按视图提供：时间线仅在全部照片与收藏夹可用，文件夹视图遇到 timeline 显示为网格
+  const visibleLayouts = getAvailableLayouts(activeView);
+  const currentLayout = normalizeLayoutForView(location?.layout || layoutMode || layout, activeView);
   const currentFilter = location?.filter || filter || 'all';
 
   // Dropdown & Search state
@@ -545,7 +547,7 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
                       <div className="px-3 py-1 text-xs font-semibold text-text-muted select-none">
                         {isZh ? '布局' : 'Layout'}
                       </div>
-                      {VISIBLE_LAYOUTS.map((mode) => (
+                      {visibleLayouts.map((mode) => (
                             <button
                               key={mode}
                               onClick={() => {
@@ -812,7 +814,7 @@ export const GalleryNavigationBar: React.FC<GalleryNavigationBarProps> = ({
                 className="absolute right-0 top-full mt-2 w-40 bg-surface-secondary backdrop-blur-2xl rounded-xl shadow-2xl border border-border p-1 z-20 animate-in fade-in slide-in-from-top-2 duration-200"
                 role="listbox"
               >
-                {VISIBLE_LAYOUTS.map((mode) => (
+                {visibleLayouts.map((mode) => (
                   <button
                     key={mode}
                     onClick={() => {

@@ -1360,6 +1360,8 @@ async function runMediaScan() {
         // Final save
         database.saveDatabase();
         console.log('Database save complete');
+        // 扫描可能更新媒体修改时间，时间线分桶缓存需整体失效
+        database.clearTimelineBucketCache();
         scanState.status = 'idle';
         console.log(`[Scan] Completed in ${Date.now() - startedAt}ms`);
     } else {
@@ -1428,6 +1430,52 @@ app.post('/api/scan/control', adminOnly, (req, res) => {
     res.json({ success: true, status: scanState.status });
 });
 
+/**
+ * 解析时间线区间参数 from/to（Unix 秒，左闭右开）。
+ * 两者都缺省返回 null；任一非法或 from >= to 返回 false。
+ */
+function parseTimeRangeQuery(query) {
+    if (query.from === undefined && query.to === undefined) return null;
+    const from = Number(query.from);
+    const to = Number(query.to);
+    if (!Number.isSafeInteger(from) || !Number.isSafeInteger(to) || from >= to) return false;
+    return { from, to };
+}
+
+// 时间线分桶：与 /api/scan/results 相同的可见范围与过滤条件，按年月计数
+app.get('/api/timeline/buckets', (req, res) => {
+    if (!dbReady) {
+        return res.status(503).json({ error: 'Database not ready' });
+    }
+
+    const userId = req.user.username;
+    const isAdmin = req.user.role === 'admin';
+    const userLibraryPaths = getUserLibraryPaths(req.user);
+    if (!isAdmin && userLibraryPaths.length === 0) {
+        return res.json({ buckets: [], total: 0 });
+    }
+
+    const mediaType = req.query.mediaType;
+    if (mediaType !== undefined && !['image', 'video', 'audio'].includes(mediaType)) {
+        return res.status(400).json({ error: 'Invalid mediaType' });
+    }
+
+    try {
+        const buckets = database.queryTimelineBuckets({
+            favoritesOnly: req.query.favorites === 'true',
+            userId,
+            allowedPaths: isAdmin ? null : userLibraryPaths,
+            search: req.query.search,
+            mediaType,
+            excludeMediaType: req.query.excludeMediaType
+        });
+        res.json({ buckets, total: buckets.reduce((sum, bucket) => sum + bucket.count, 0) });
+    } catch (e) {
+        console.error('[Timeline] Bucket query failed:', e);
+        res.status(500).json({ error: 'Timeline query failed' });
+    }
+});
+
 app.get('/api/scan/results', (req, res) => {
     const pagination = parseScanPagination(req.query);
     if (!pagination) {
@@ -1448,6 +1496,10 @@ app.get('/api/scan/results', (req, res) => {
     const mediaType = req.query.mediaType;
     const excludeMediaType = req.query.excludeMediaType;
     const search = req.query.search;
+    const timeRange = parseTimeRangeQuery(req.query);
+    if (timeRange === false) {
+        return res.status(400).json({ error: 'Invalid from or to' });
+    }
     let folderPath = req.query.folder;
 
     // Handle root path mapping for folder filter
@@ -1483,7 +1535,8 @@ app.get('/api/scan/results', (req, res) => {
             excludeMediaType,
             sortOption,
             random,
-            randomSeed
+            randomSeed,
+            timeRange
         };
 
         const page = database.queryFilesPage({ ...filterOptions, offset, limit });

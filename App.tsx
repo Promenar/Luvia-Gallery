@@ -12,6 +12,7 @@ import { buildPlayerQueue } from './components/player/player-state';
 import { runHeroTransition } from './components/player/hero-transition';
 import { UnifiedProgressModal } from './components/UnifiedProgressModal';
 import { VirtualGallery } from './components/VirtualGallery';
+import { TimelineViewport } from './components/gallery/TimelineViewport';
 import type { ViewportCaptureHandle } from './components/gallery/viewport-types';
 import { DirectoryPicker } from './components/DirectoryPicker';
 import { Home } from './components/Home';
@@ -200,6 +201,18 @@ export const buildHomeFeaturedQuery = (config: HomeScreenConfig): string => {
         return `${base}&search=${encodeURIComponent(fileName)}`;
     }
     return `${base}&random=true`;
+};
+
+/** 时间线范围查询串：与画廊相同的收藏、媒体类型与搜索范围（时间线固定按日期倒序）。 */
+export const buildTimelineScopeQuery = (location: Pick<GalleryLocation, 'view' | 'filter' | 'search'>): string => {
+    let query = '';
+    if (location.view === 'favorites') query += '&favorites=true';
+    if (location.filter === 'image' || location.filter === 'video' || location.filter === 'audio') {
+        query += `&mediaType=${encodeURIComponent(location.filter)}`;
+    }
+    const search = (location.search || '').trim();
+    if (search) query += `&search=${encodeURIComponent(search)}`;
+    return query;
 };
 
 export const runWithGalleryPaginationLock = async (
@@ -2357,12 +2370,12 @@ function GalleryApp() {
     };
 
     // 打开媒体：捕获当前视口快照后交给播放器，不再写入导航历史（打开即无历史条目）。
-    const handleOpenMedia = (item: MediaItem) => {
+    const handleOpenMedia = (item: MediaItem, sourceItems: MediaItem[] = processedFiles) => {
         const snapshot = galleryViewportRef.current?.captureSnapshot();
         if (snapshot?.locationKey === galleryNavigation.location.key) {
             galleryNavigation.captureImmediateSnapshot({ ...snapshot, loadedOffset: serverOffset });
         }
-        const queue = buildPlayerQueue(processedFiles, item.id);
+        const queue = buildPlayerQueue(sourceItems, item.id);
         // 播放器未打开时以共享元素过渡从缩略图放大进入；已打开时直接切换，避免与现有查看器争用过渡名
         if (playerState.isOpen) openPlayer(queue);
         else runHeroTransition(item.id, () => openPlayer(queue));
@@ -2395,6 +2408,26 @@ function GalleryApp() {
             handleOpenMedia(item);
         }
     });
+
+    // 时间线：按月分桶的视口自行请求数据，打开媒体时以已加载的时间线条目为查看器队列
+    const timelineFetchJson = useStableEventHandler(async (url: string, signal?: AbortSignal) => {
+        const res = await apiFetch(url, { signal });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+    });
+    const handleTimelineOpenItem = useStableEventHandler((item: MediaItem, loadedItems: MediaItem[]) => {
+        if (item.mediaType === 'audio') {
+            const audioFiles = loadedItems.filter(media => media.mediaType === 'audio');
+            const clickedIndex = audioFiles.findIndex(media => media.id === item.id);
+            setAudioPlaylist(audioFiles);
+            setCurrentAudioIndex(clickedIndex >= 0 ? clickedIndex : 0);
+            setCurrentAudio(item);
+            setIsPlayerMinimized(false);
+            return;
+        }
+        handleOpenMedia(item, loadedItems);
+    });
+    const isTimelineLayout = isServerMode && layoutMode === 'timeline' && (viewMode === 'all' || viewMode === 'favorites');
 
     const handleScrollToTop = () => {
         galleryNavigation.requestRestore({
@@ -3015,6 +3048,19 @@ function GalleryApp() {
                                             <p className="text-lg font-medium">{t('no_favorites')}</p>
                                             <p className="text-sm mt-2">{t('click_heart_to_favorite')}</p>
                                         </div>
+                                    ) : isTimelineLayout ? (
+                                        <TimelineViewport
+                                            ref={galleryViewportRef}
+                                            viewKey={galleryNavigation.location.key}
+                                            scopeQuery={buildTimelineScopeQuery(galleryNavigation.location)}
+                                            fetchJson={timelineFetchJson}
+                                            onOpenItem={handleTimelineOpenItem}
+                                            mediaHoverZoomEnabled={mediaHoverZoomEnabled}
+                                            restoreSnapshot={galleryNavigation.restoreSnapshot}
+                                            restoreCommand={galleryNavigation.restoreCommand}
+                                            onSnapshotChange={stableOnViewportSnapshot}
+                                            onRestoreComplete={galleryNavigation.consumeRestoreSnapshot}
+                                        />
                                     ) : (
                                         <VirtualGallery
                                             ref={galleryViewportRef}

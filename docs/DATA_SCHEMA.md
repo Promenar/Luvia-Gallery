@@ -34,6 +34,17 @@
 | `hasMore` | Boolean | 服务端通过多取一条记录判断是否存在续页 |
 | `sources[].countExact` | Boolean | 与当前响应 `totalExact` 相同的数据源计数精确度 |
 
+### TimelineBuckets (时间线分桶)
+`GET /api/timeline/buckets` 返回 `{ buckets, total }`，范围参数与 `/api/scan/results` 一致（`favorites`、`mediaType`、`excludeMediaType`、`search`，非管理员按允许路径过滤）。
+
+| 字段 | 类型 | 说明 |
+| :--- | :--- | :--- |
+| `key` | String | 年月键 `YYYY-MM`，按服务器本地时区对 `last_modified` 分组，倒序 |
+| `count` | Number | 该月可见媒体数 |
+| `start` / `end` | Number | 该月起止 Unix 秒（左闭右开），可直接作为 `/api/scan/results` 的 `from` / `to` |
+
+分桶结果在内存中按“过滤条件 + 媒体集合版本（总数、最大 rowid、收藏数）”缓存 10 分钟，扫描完成时整体失效。`/api/scan/results` 的 `from`、`to` 必须同时提供且 `from < to`，否则返回 400。
+
 ### SystemStatus.mediaStats (系统媒体统计)
 
 | 字段 | 类型 | 说明 |
