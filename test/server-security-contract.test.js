@@ -70,3 +70,19 @@ test('更新守护进程未配置令牌时拒绝更新接口', () => {
     const statusHandler = runnerSource.slice(runnerSource.indexOf("'/api/admin/system/update/status'"));
     assert.match(statusHandler.slice(0, 200), /checkAuth\(req, res\)/);
 });
+
+test('时间线分桶接口沿用权限路径过滤，区间参数严格校验', () => {
+    const route = getRoute('get', '/api/timeline/buckets');
+    assert.match(route, /allowedPaths: isAdmin \? null : userLibraryPaths/);
+    assert.match(route, /if \(!isAdmin && userLibraryPaths\.length === 0\)/);
+    assert.doesNotMatch(serverSource.slice(serverSource.indexOf('const whitelist = ['), serverSource.indexOf('];', serverSource.indexOf('const whitelist = ['))), /timeline/);
+
+    const helperStart = serverSource.indexOf('function parseTimeRangeQuery(');
+    const helperSource = serverSource.slice(helperStart, serverSource.indexOf('\n}', helperStart) + 2);
+    const parseTimeRangeQuery = new Function(`return (${helperSource})`)();
+    assert.equal(parseTimeRangeQuery({}), null);
+    assert.deepEqual(parseTimeRangeQuery({ from: '10', to: '20' }), { from: 10, to: 20 });
+    assert.equal(parseTimeRangeQuery({ from: '20', to: '10' }), false);
+    assert.equal(parseTimeRangeQuery({ from: 'x', to: '10' }), false);
+    assert.equal(parseTimeRangeQuery({ from: '10' }), false);
+});

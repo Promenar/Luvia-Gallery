@@ -124,27 +124,6 @@ export const sortMedia = (items: MediaItem[], sortOption: SortOption): MediaItem
   }
 };
 
-export const groupMediaByDate = (items: MediaItem[]): Record<string, MediaItem[]> => {
-  const groups: Record<string, MediaItem[]> = {};
-
-  // Filter out items without lastModified to prevent crashes
-  const validItems = items.filter(item => item && item.lastModified);
-
-  // Sort by date descending first to ensure groups are in order if iterated
-  const sorted = [...validItems].sort((a, b) => b.lastModified - a.lastModified);
-
-  sorted.forEach(item => {
-    const date = new Date(item.lastModified);
-    const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
-    if (!groups[key]) {
-      groups[key] = [];
-    }
-    groups[key].push(item);
-  });
-
-  return groups;
-};
-
 export const cleanTokenFromUrl = (url: string): string => {
   const [base, fragment] = url.split('#');
   const queryIndex = base.indexOf('?');

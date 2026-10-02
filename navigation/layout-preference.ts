@@ -1,4 +1,5 @@
 import type { GalleryLayout, GalleryViewMode } from './types';
+import { getAvailableLayouts } from './location';
 
 export interface LayoutPreferenceStorage {
   getItem(key: string): string | null;
@@ -18,8 +19,13 @@ export const LEGACY_LAYOUT_PREFERENCE_KEY = 'luvia_layout_mode';
 export const getLayoutPreferenceView = (view: GalleryViewMode): 'all' | 'favorites' | 'folders' | undefined =>
   view === 'all' || view === 'favorites' || view === 'folders' ? view : undefined;
 
+/** 旧全局偏好只迁移网格与瀑布流（当年的时间线入口不具备百万级能力，不再沿用）。 */
 export const normalizeAvailableLayout = (layout: string | null | undefined): Extract<GalleryLayout, 'grid' | 'masonry'> | undefined =>
   layout === 'grid' || layout === 'masonry' ? layout : undefined;
+
+/** 按视图规范化作用域偏好：时间线只在全部照片与收藏夹可用。 */
+export const normalizeScopedLayout = (layout: string | null | undefined, view: GalleryViewMode): GalleryLayout | undefined =>
+  getAvailableLayouts(view).includes(layout as GalleryLayout) ? layout as GalleryLayout : undefined;
 
 export const createGalleryLayoutPreferenceKey = (scope: GalleryLayoutPreferenceScope): string | undefined => {
   const view = getLayoutPreferenceView(scope.view);
@@ -27,17 +33,17 @@ export const createGalleryLayoutPreferenceKey = (scope: GalleryLayoutPreferenceS
   return `${LAYOUT_PREFERENCE_PREFIX}:${encodeURIComponent(scope.serverId)}:${encodeURIComponent(scope.userId)}:${view}`;
 };
 
-export const readGalleryLayoutPreference = (storage: LayoutPreferenceStorage | undefined, scope: GalleryLayoutPreferenceScope): Extract<GalleryLayout, 'grid' | 'masonry'> | undefined => {
+export const readGalleryLayoutPreference = (storage: LayoutPreferenceStorage | undefined, scope: GalleryLayoutPreferenceScope): GalleryLayout | undefined => {
   const key = createGalleryLayoutPreferenceKey(scope);
   if (!storage || !key) return undefined;
   try {
-    return normalizeAvailableLayout(storage.getItem(key));
+    return normalizeScopedLayout(storage.getItem(key), scope.view);
   } catch {
     return undefined;
   }
 };
 
-export const resolveGalleryLayoutPreference = (storage: LayoutPreferenceStorage | undefined, scope: GalleryLayoutPreferenceScope): Extract<GalleryLayout, 'grid' | 'masonry'> | undefined => {
+export const resolveGalleryLayoutPreference = (storage: LayoutPreferenceStorage | undefined, scope: GalleryLayoutPreferenceScope): GalleryLayout | undefined => {
   const key = createGalleryLayoutPreferenceKey(scope);
   if (!storage || !key) return undefined;
   const scopedPreference = readGalleryLayoutPreference(storage, scope);
@@ -56,7 +62,7 @@ export const resolveGalleryLayoutPreference = (storage: LayoutPreferenceStorage 
 
 export const writeGalleryLayoutPreference = (storage: LayoutPreferenceStorage | undefined, scope: GalleryLayoutPreferenceScope, layout: GalleryLayout): void => {
   const key = createGalleryLayoutPreferenceKey(scope);
-  const normalizedLayout = normalizeAvailableLayout(layout);
+  const normalizedLayout = normalizeScopedLayout(layout, scope.view);
   if (!storage || !key || !normalizedLayout) return;
   try {
     storage.setItem(key, normalizedLayout);

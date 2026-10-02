@@ -42,7 +42,15 @@ const isGalleryFilterOption = (value: string | null): value is GalleryFilterOpti
   value === 'all' || value === 'image' || value === 'video' || value === 'audio';
 
 const isGalleryLayout = (value: string | null): value is GalleryLayout =>
-  value === 'grid' || value === 'masonry';
+  value === 'grid' || value === 'masonry' || value === 'timeline';
+
+/** 各视图可用的布局：时间线依赖按月分桶，只在“全部照片”和“收藏夹”提供；文件夹视图为网格与瀑布流。 */
+export const getAvailableLayouts = (view: GalleryViewMode): readonly GalleryLayout[] =>
+  view === 'folders' ? ['grid', 'masonry'] : ['grid', 'masonry', 'timeline'];
+
+/** 把布局规范为该视图可用的值，不可用时回落网格。 */
+export const normalizeLayoutForView = (layout: string | null | undefined, view: GalleryViewMode): GalleryLayout =>
+  getAvailableLayouts(view).includes(layout as GalleryLayout) ? layout as GalleryLayout : 'grid';
 
 const normalizeFolderPath = (raw: string): string => {
   if (!raw) return '';
@@ -88,7 +96,7 @@ const normalizeGalleryLocationFields = (location: GalleryLocation): GalleryLocat
   return {
     ...location,
     folderPath: normalizedFolderPath,
-    layout: location.layout === 'masonry' ? 'masonry' : 'grid',
+    layout: normalizeLayoutForView(location.layout, location.view),
   };
 };
 
