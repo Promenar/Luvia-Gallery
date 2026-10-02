@@ -1,5 +1,5 @@
 import React, { HTMLAttributes } from 'react';
-import { motion } from 'framer-motion';
+import { motion, HTMLMotionProps } from 'framer-motion';
 
 // 徽章变体类型
 export type BadgeVariant = 'default' | 'primary' | 'secondary' | 'success' | 'warning' | 'error' | 'info' | 'outline';
@@ -61,7 +61,7 @@ export const Badge: React.FC<BadgeProps> = ({
       animate={{ scale: 1, opacity: 1 }}
       exit={{ scale: 0.9, opacity: 0 }}
       transition={{ type: 'spring', stiffness: 400, damping: 25 }}
-      {...props}
+      {...(props as unknown as HTMLMotionProps<'span'>)}
     >
       {dot && (
         <span

@@ -2,68 +2,103 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { HomeScreenConfig, MediaItem } from '../types';
-import { getAuthUrl } from '../utils/fileUtils';
+import { getAuthUrl, seededShuffle } from '../utils/fileUtils';
 import { Icons } from './ui/Icon';
 import { useLanguage } from '../contexts/LanguageContext';
 
 interface HomeProps {
     title: string;
     items: MediaItem[];
+    /** 媒体库总数；为 0 时不显示计数 */
+    totalCount?: number;
     onEnterLibrary: () => void;
     onJumpToFolder: (item: MediaItem) => void;
     subtitle: string;
     config?: HomeScreenConfig;
 }
 
-export const Home: React.FC<HomeProps> = React.memo(({ title, items, onEnterLibrary, onJumpToFolder, subtitle, config }) => {
+const FEATURED_LIMIT = 10;
+
+/** 按首页配置从候选中挑选轮播素材；随机部分按会话种子确定性洗牌。 */
+export const selectHomeFeaturedItems = (
+    items: MediaItem[],
+    config: HomeScreenConfig | undefined,
+    seed: number,
+): MediaItem[] => {
+    const visualItems = items.filter(item => item.mediaType === 'image' || item.mediaType === 'video');
+    if (visualItems.length === 0) return [];
+
+    if (config?.mode === 'single' && config.path) {
+        const exact = visualItems.find(item => item.path === config.path)
+            || visualItems.find(item => item.path.endsWith(config.path!))
+            || visualItems.find(item => item.name === config.path);
+        return exact ? [exact] : seededShuffle(visualItems, seed).slice(0, FEATURED_LIMIT);
+    }
+
+    let candidates = visualItems;
+    if (config?.mode === 'folder' && config.path) {
+        const folder = config.path.replace(/\/+$/, '');
+        candidates = visualItems.filter(item => item.folderPath === folder || item.folderPath.startsWith(`${folder}/`));
+    } else if (config?.mode === 'favorites') {
+        candidates = visualItems.filter(item => item.isFavorite);
+        // 收藏模式没有收藏时保持空结果，不回退到全库
+        if (candidates.length === 0) return [];
+    }
+
+    return seededShuffle(candidates.length > 0 ? candidates : visualItems, seed).slice(0, FEATURED_LIMIT);
+};
+
+/** 先显示已缓存的小缩略图，原图解码完成后再淡入，避免全屏背景长时间空白。 */
+const HomeBackdrop: React.FC<{ item: MediaItem }> = ({ item }) => {
+    const thumbnailSrc = item.thumbnailUrl ? getAuthUrl(item.thumbnailUrl) : '';
+    const fullSrc = item.mediaType === 'image' ? getAuthUrl(item.url) : '';
+    const [isFullLoaded, setIsFullLoaded] = useState(false);
+
+    useEffect(() => {
+        setIsFullLoaded(false);
+        if (!fullSrc) return;
+        const image = new Image();
+        image.decoding = 'async';
+        image.onload = () => setIsFullLoaded(true);
+        image.src = fullSrc;
+        return () => { image.onload = null; };
+    }, [fullSrc]);
+
+    return (
+        <>
+            {thumbnailSrc && (
+                <img src={thumbnailSrc} alt="" aria-hidden="true" className="absolute inset-0 w-full h-full object-cover blur-xl scale-110" />
+            )}
+            {item.mediaType === 'video' && !thumbnailSrc && (
+                // 本地导入模式没有服务端缩略图，视频直接以静音循环作为背景
+                <video src={getAuthUrl(item.url)} muted loop autoPlay playsInline className="absolute inset-0 w-full h-full object-cover" />
+            )}
+            {fullSrc && (
+                <img
+                    src={fullSrc}
+                    alt=""
+                    aria-hidden="true"
+                    className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-700 ${isFullLoaded ? 'opacity-100' : 'opacity-0'}`}
+                />
+            )}
+        </>
+    );
+};
+
+export const Home: React.FC<HomeProps> = React.memo(({ title, items, totalCount = 0, onEnterLibrary, onJumpToFolder, subtitle, config }) => {
     const { t } = useLanguage();
     const [currentIndex, setCurrentIndex] = useState(0);
+    // 每次进入首页生成一次会话种子：同一会话内顺序稳定，下次进入换一组
+    const [sessionSeed] = useState(() => Math.floor(Math.random() * 2_147_483_647));
 
-    const featured = useMemo(() => {
-        if (items.length === 0) return [];
+    const featured = useMemo(
+        () => selectHomeFeaturedItems(items, config, sessionSeed),
+        [items, config?.mode, config?.path, sessionSeed],
+    );
 
-        let filteredItems = items;
-
-        if (config?.mode === 'single' && config.path) {
-            // Find specific file. Note: config.path is likely "Folder/file.jpg", item.path is same.
-            filteredItems = items.filter(i => i.path === config.path || i.path.endsWith(config.path!));
-            // Fallback if not found exactly, try name search
-            if (filteredItems.length === 0) {
-                filteredItems = items.filter(i => i.name === config.path);
-            }
-        } else if (config?.mode === 'folder' && config.path) {
-            // Include subfolders by prefix to support recursive picks
-            filteredItems = items.filter(i => i.folderPath === config.path || i.folderPath.startsWith(config.path));
-        } else if (config?.mode === 'favorites') {
-            filteredItems = items.filter(i => i.isFavorite);
-        }
-
-        const applySeededShuffle = (list: MediaItem[]) => {
-            const seed = list.reduce((acc, item) => acc + item.id.charCodeAt(0), 0);
-            const shuffled = [...list];
-            for (let i = shuffled.length - 1; i > 0; i--) {
-                const j = Math.floor((seed * (i + 1)) % (i + 1));
-                [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-            }
-            return shuffled.slice(0, 10);
-        };
-
-        if (filteredItems.length > 0) {
-            // If single mode, don't shuffle, just take one.
-            if (config?.mode === 'single') {
-                return [filteredItems[0]];
-            } else {
-                return applySeededShuffle(filteredItems);
-            }
-        } else {
-            // In favorites mode, if没有收藏则保持空结果，不回退到全库
-            if (config?.mode === 'favorites') {
-                return [];
-            } else {
-                return applySeededShuffle(items);
-            }
-        }
-    }, [items, config]); // Re-run if items or config changes
+    useEffect(() => {
+        setCurrentIndex(0);
+    }, [featured]);
 
     useEffect(() => {
         if (featured.length <= 1) return;
@@ -73,7 +108,7 @@ export const Home: React.FC<HomeProps> = React.memo(({ title, items, onEnterLibr
         return () => clearInterval(interval);
     }, [featured]);
 
-    const currentItem = featured[currentIndex];
+    const currentItem = featured[currentIndex % Math.max(1, featured.length)];
 
     return (
         <div className="relative w-full h-full bg-black overflow-hidden flex items-center justify-center">
@@ -88,11 +123,7 @@ export const Home: React.FC<HomeProps> = React.memo(({ title, items, onEnterLibr
                         transition={{ duration: 1.5 }}
                         className="absolute inset-0 z-0"
                     >
-                        {currentItem.mediaType === 'video' ? (
-                            <video src={getAuthUrl(currentItem.url)} muted loop autoPlay className="w-full h-full object-cover" />
-                        ) : (
-                            <img src={getAuthUrl(currentItem.url)} alt="Background" className="w-full h-full object-cover" />
-                        )}
+                        <HomeBackdrop item={currentItem} />
                         <div className="absolute inset-0 bg-gradient-to-t from-black via-black/40 to-black/20" />
                     </motion.div>
                 ) : (
@@ -139,21 +170,13 @@ export const Home: React.FC<HomeProps> = React.memo(({ title, items, onEnterLibr
                         </div>
                     </button>
 
-                    {items.length > 0 && (
+                    {totalCount > 0 && (
                         <p className="mt-8 text-white/40 text-sm tracking-widest uppercase">
-                            {items.length.toLocaleString()} {t('items_count')}
+                            {totalCount.toLocaleString()} {t('items_count')}
                         </p>
                     )}
                 </motion.div>
             </div>
         </div>
-    );
-}, (prev, next) => {
-    return (
-        prev.items.length === next.items.length &&
-        prev.title === next.title &&
-        prev.subtitle === next.subtitle &&
-        prev.config?.mode === next.config?.mode &&
-        prev.config?.path === next.config?.path
     );
 });

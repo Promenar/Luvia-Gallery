@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { MediaItem, ViewMode, GridLayout, User, UserData, SortOption, FilterOption, AppConfig, FolderNode, SystemStatus, HomeScreenConfig, ExtendedSystemStatus, SettingsTab, ScanStatus } from './types';
-import { buildFolderTree, generateId, isVideo, isAudio, sortMedia, getImmediateSubfolders } from './utils/fileUtils';
+import { buildFolderTree, generateId, isVideo, isAudio, sortMedia, getImmediateSubfolders, seededShuffle } from './utils/fileUtils';
 import { Icons } from './components/ui/Icon';
 import { Navigation } from './components/Navigation';
 import { AmbientDotField } from './components/AmbientDotField';
@@ -159,6 +159,42 @@ export const sortGalleryCombinedItems = (items: MediaItem[], sort: SortOption): 
         else order = (right.lastModified || 0) - (left.lastModified || 0);
         return order || stableMediaIdentity(left).localeCompare(stableMediaIdentity(right));
     });
+};
+
+/** 把位置中的随机种子规范为非负整数；缺失或非法时回退为 0（仍是确定性顺序）。 */
+export const resolveGalleryRandomSeed = (seed: string | undefined): number => {
+    const value = Number(seed);
+    return Number.isSafeInteger(value) && value >= 0 ? value : 0;
+};
+
+export const createGalleryRandomSeed = (): string => String(Math.floor(Math.random() * 2_147_483_647));
+
+export const seededShuffleGalleryItems = seededShuffle;
+
+/**
+ * 目录视图的组合顺序：文件夹恒定置顶（按当前排序键排序，随机排序时按名称），
+ * 媒体保持数据源顺序追加在后。分页追加媒体时文件夹位置不再跳动。
+ */
+export const composeGalleryFolderItems = (
+    folders: MediaItem[],
+    files: MediaItem[],
+    sort: SortOption,
+): MediaItem[] => [
+    ...sortGalleryCombinedItems(folders, sort === 'random' ? 'nameAsc' : sort),
+    ...files,
+];
+
+/** 首页轮播取样查询：只取图片与视频，按首页模式限定范围；单图模式按文件名检索后由首页精确匹配。 */
+export const buildHomeFeaturedQuery = (config: HomeScreenConfig): string => {
+    const base = '/api/scan/results?offset=0&limit=24&excludeMediaType=audio';
+    const path = config.path?.trim();
+    if (config.mode === 'favorites') return `${base}&favorites=true&random=true`;
+    if (config.mode === 'folder' && path) return `${base}&folder=${encodeURIComponent(path)}&recursive=true&random=true`;
+    if (config.mode === 'single' && path) {
+        const fileName = path.split('/').filter(Boolean).pop() || path;
+        return `${base}&search=${encodeURIComponent(fileName)}`;
+    }
+    return `${base}&random=true`;
 };
 
 export const runWithGalleryPaginationLock = async (
@@ -422,7 +458,16 @@ export const resolveScopedGalleryLayout = (
     return resolveGalleryLayoutPreference(storage, { serverId, userId, view }) ?? 'grid';
 };
 
-type UnifiedToolbarLocationUpdate = Partial<Pick<GalleryLocation, 'search' | 'sort' | 'filter' | 'layout'>>;
+type UnifiedToolbarLocationUpdate = Partial<Pick<GalleryLocation, 'search' | 'sort' | 'filter' | 'layout' | 'randomSeed'>>;
+
+/** 切到随机排序时生成新种子，离开随机排序时清除种子，保证 URL 与分页顺序一致。 */
+export const withGalleryRandomSeed = (
+    update: UnifiedToolbarLocationUpdate,
+    createSeed: () => string = createGalleryRandomSeed,
+): UnifiedToolbarLocationUpdate => {
+    if (update.sort === undefined) return update;
+    return { ...update, randomSeed: update.sort === 'random' ? createSeed() : undefined };
+};
 type UnifiedGalleryToolbarProps = Omit<
     GalleryNavigationBarProps,
     'compact' | 'className' | 'enableSearchShortcut' | 'location' | 'view' | 'folderPath' | 'currentPath'
@@ -756,6 +801,11 @@ function GalleryApp() {
     const [activeSearch, setActiveSearch] = useState(() => galleryNavigation.location.search);
     const [galleryLoadError, setGalleryLoadError] = useState(false);
     const [galleryReloadNonce, setGalleryReloadNonce] = useState(0);
+    // 丢弃位置缓存并触发数据集 effect 重新加载当前位置（扫描结束、批量删除等数据变更后使用）
+    const reloadCurrentGallery = useCallback(() => {
+        queryClient.removeQueries({ queryKey: ['galleryFiles'] });
+        setGalleryReloadNonce(value => value + 1);
+    }, [queryClient]);
     const lastSearchLocationKeyRef = useRef<string | null>(null);
     const [isSidebarOpen, setIsSidebarOpen] = useState(false);
     const [isDesktopSidebarOpen, setIsDesktopSidebarOpen] = useState(() => {
@@ -769,15 +819,9 @@ function GalleryApp() {
 
     // --- REFS for Polling (Fixes Stale Closure) ---
     // These refs ensure the polling loop always accesses the latest state without closure issues
-    const viewModeRef = useRef<ViewMode>('home');
-    const currentPathRef = useRef<string>('');
     const currentUserRef = useRef<User | null>(null);
 
-    // Sync refs with state
-    useEffect(() => { viewModeRef.current = viewMode; }, [viewMode]);
-
     useEffect(() => {
-        currentPathRef.current = currentPath;
         if (currentPath) setStorageItem(CURRENT_PATH_KEY, currentPath, LEGACY_KEYS.currentPath);
         else if (viewMode === 'home' || viewMode === 'all') removeStorageItem(CURRENT_PATH_KEY, LEGACY_KEYS.currentPath);
     }, [currentPath, viewMode]);
@@ -847,6 +891,8 @@ function GalleryApp() {
 
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
     const [settingsTab, setSettingsTab] = useState<SettingsTab>('general');
+    const settingsTabRef = useRef<SettingsTab>('general');
+    useEffect(() => { settingsTabRef.current = settingsTab; }, [settingsTab]);
 
     // Reset settings tab and fetch stats when closing
     useEffect(() => {
@@ -856,9 +902,6 @@ function GalleryApp() {
     }, [isSettingsOpen]);
 
 
-
-    // --- Random Sort Stability ---
-    const [randomizedFiles, setRandomizedFiles] = useState<MediaItem[]>([]);
 
     // --- Batch Operations State ---
     const [isRegenerating, setIsRegenerating] = useState(false);
@@ -1328,7 +1371,8 @@ function GalleryApp() {
             };
 
             if (effectiveSort === 'random') {
-                url += `&random=true`;
+                // 携带位置中的随机种子，服务端据此生成跨页稳定的随机顺序
+                url += `&random=true&seed=${resolveGalleryRandomSeed(galleryNavigation.location.randomSeed)}`;
             } else {
                 const sortParam = mapSort(effectiveSort);
                 if (sortParam) url += `&sort=${sortParam}`;
@@ -1586,13 +1630,24 @@ function GalleryApp() {
         });
     };
 
-    // Home favorites mode: fetch recursive favorites (parity with mobile carousel)
+    // 首页轮播素材独立于画廊数据集：按首页配置向服务端单独取一小批随机样本，不污染当前画廊列表。
+    const [homeFeaturedItems, setHomeFeaturedItems] = useState<MediaItem[]>([]);
     useEffect(() => {
-        if (!isServerMode || !currentUser) return;
-        if (viewMode !== 'home') return;
-        if (homeConfig.mode !== 'favorites') return;
-        fetchServerFiles(currentUser.username, allUserData, 0, true, null, true, serverFavoriteIds, true);
-    }, [isServerMode, currentUser, viewMode, homeConfig.mode, sortOption, serverFavoriteIds]);
+        if (!isServerMode || !currentUser || viewMode !== 'home') return;
+        const abortController = new AbortController();
+        const loadFeatured = async () => {
+            try {
+                const res = await apiFetch(buildHomeFeaturedQuery(homeConfig), { signal: abortController.signal });
+                if (!res.ok) return;
+                const data = await res.json();
+                if (!abortController.signal.aborted && Array.isArray(data?.files)) setHomeFeaturedItems(data.files);
+            } catch (e) {
+                if (!abortController.signal.aborted) console.error('[Home] Failed to load featured media', e);
+            }
+        };
+        void loadFeatured();
+        return () => abortController.abort();
+    }, [isServerMode, currentUser, viewMode, homeConfig.mode, homeConfig.path]);
 
     // Re-fetch from server when sort changes to get globally ordered pages
     // 排序、筛选和搜索均由 GalleryLocation 变更触发加载，避免与 History 形成第二入口。
@@ -1695,18 +1750,11 @@ function GalleryApp() {
                 return true;
             } else {
                 fetchSystemStatus();
-                if (settingsTab === 'system') {
+                if (settingsTabRef.current === 'system' && currentUserRef.current?.isAdmin) {
                     handleFetchSmartResults();
                 }
-                const user = currentUserRef.current;
-                if (user) {
-                    const mode = viewModeRef.current;
-                    const path = currentPathRef.current;
-                    fetchServerFiles(user.username, allUserData, 0, true, path, mode === 'favorites');
-                    if (mode === 'folders' || mode === 'favorites') {
-                        fetchServerFolders(path, mode === 'favorites');
-                    }
-                }
+                // 任务结束后统一走数据集 effect 重新加载当前位置，保证目录/收藏/搜索/排序语义一致
+                if (currentUserRef.current) reloadCurrentGallery();
                 return false;
             }
         });
@@ -1909,8 +1957,7 @@ function GalleryApp() {
                 // Let's filter them out locally for immediate feedback if possible, 
                 // but a re-fetch is safer.
                 if (isServerMode && currentUser) {
-                    // trigger background refresh
-                    loadMoreServerFiles();
+                    reloadCurrentGallery();
                 }
             }
         } catch (e) {
@@ -1993,7 +2040,8 @@ function GalleryApp() {
         key: galleryNavigation.location.key,
     });
 
-    const handleGalleryLocationChange = (update: UnifiedToolbarLocationUpdate, mode: 'push' | 'replace') => {
+    const handleGalleryLocationChange = (rawUpdate: UnifiedToolbarLocationUpdate, mode: 'push' | 'replace') => {
+        const update = withGalleryRandomSeed(rawUpdate);
         advanceGalleryDatasetNavigation(resolveNextGalleryLocation(update));
         if (typeof update.search === 'string') setActiveSearch(update.search);
         if (update.layout) {
@@ -2103,7 +2151,7 @@ function GalleryApp() {
                 });
                 if (!res.ok) throw new Error(await res.text());
             } else if (userFormType === 'rename' && targetUser) {
-                const res = await apiFetch(`/api/users/${targetUser.username}`, {
+                const res = await apiFetch(`/api/users/${encodeURIComponent(targetUser.username)}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -2114,7 +2162,7 @@ function GalleryApp() {
                 });
                 if (!res.ok) throw new Error(await res.text());
             } else if (userFormType === 'reset' && targetUser) {
-                const res = await apiFetch(`/api/users/${targetUser.username}`, {
+                const res = await apiFetch(`/api/users/${encodeURIComponent(targetUser.username)}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -2307,7 +2355,7 @@ function GalleryApp() {
                 const data = await res.json();
                 if (data.success) {
                     // If current view was inside this folder, go up
-                    if (currentPath.startsWith(pathStr)) {
+                    if (currentPath === pathStr || currentPath.startsWith(`${pathStr}/`)) {
                         const parent = pathStr.split('/').slice(0, -1).join('/');
                         handleFolderClick(parent);
                     } else {
@@ -2443,6 +2491,7 @@ function GalleryApp() {
         downloadAnchorNode.setAttribute("href", dataStr);
         downloadAnchorNode.setAttribute("download", CONFIG_FILE_NAME);
         document.body.appendChild(downloadAnchorNode);
+        downloadAnchorNode.click();
         downloadAnchorNode.remove();
     };
 
@@ -2533,25 +2582,15 @@ function GalleryApp() {
             result = result.filter(f => f.mediaType === filterOption);
         }
 
-        // 4. Sorting
+        // 4. Sorting：服务端模式下分页已按服务端全局顺序返回，客户端不再二次排序，
+        // 避免排序规则差异（如大小写、区域设置）导致续页插入后顺序跳变。
+        if (isServerMode) return result;
         if (sortOption === 'random') {
-            // Stable random sort
-            if (randomizedFiles.length > 0 && result.length === randomizedFiles.length && result[0]?.id === randomizedFiles[0]?.id) {
-                return randomizedFiles;
-            }
-            const shuffled = sortMedia(result, 'random');
-            setRandomizedFiles(shuffled);
-            return shuffled;
-        } else {
-            result = sortMedia(result, sortOption);
+            return seededShuffleGalleryItems(result, resolveGalleryRandomSeed(galleryNavigation.location.randomSeed));
         }
+        return sortMedia(result, sortOption);
+    }, [files, viewMode, currentPath, filterOption, sortOption, isServerMode, galleryNavigation.location.randomSeed]);
 
-        return result;
-    }, [files, viewMode, currentPath, filterOption, sortOption, isServerMode, serverFavoriteIds]);
-
-    const sortCombinedItems = useCallback((items: MediaItem[]) => {
-        return sortGalleryCombinedItems(items, sortOption);
-    }, [sortOption]);
 
     const nameAscLabel = useMemo(() => {
         const val = t('sort_by_name_asc');
@@ -2602,8 +2641,8 @@ function GalleryApp() {
                 : (allUserData[currentUser?.username || '']?.favoriteFolderPaths || []).includes(f.path)
         }));
 
-        return sortCombinedItems([...folderItems, ...processedFiles]);
-    }, [visibleFolders, processedFiles, isServerMode, serverFavoriteIds, allUserData, currentUser, sortCombinedItems]);
+        return composeGalleryFolderItems(folderItems, processedFiles, sortOption);
+    }, [visibleFolders, processedFiles, isServerMode, serverFavoriteIds, allUserData, currentUser, sortOption]);
 
     // 视口 items 引用稳定化：filter(Boolean) 会在每次渲染生成新数组并击穿 memo，
     // 这里收敛为仅在数据源或骨架覆盖态变化时重建引用，内容语义与原内联表达式一致。
@@ -2743,8 +2782,10 @@ function GalleryApp() {
                                                 setCurrentUser(data.user);
                                                 setAuthStep('app');
                                                 setStorageItem(AUTH_USER_KEY, data.user.username, LEGACY_KEYS.authUser);
-
-                                                // 登录后的首载统一由数据集 effect 聚合媒体与目录请求。
+                                                setAuthError('');
+                                                // 匿名配置不再返回用户列表，登录后用令牌重新拉取完整配置（含管理员可见的用户列表）；
+                                                // 媒体与目录首载仍由数据集 effect 聚合。
+                                                void initApp();
                                             }
                                         } else {
                                             setAuthError(t('invalid_credentials'));
@@ -2799,7 +2840,7 @@ function GalleryApp() {
                             {authStep === 'setup' ? t('create_admin') : t('sign_in')}
                         </button>
                     </form>
-                    {authStep === 'login' && users.length === 0 && (
+                    {authStep === 'login' && !isServerMode && users.length === 0 && (
                         <div className="mt-4 text-center">
                             <button onClick={() => setAuthStep('setup')} className="text-sm text-primary-600 hover:underline">Need to set up?</button>
                         </div>
@@ -2853,7 +2894,8 @@ function GalleryApp() {
                 {viewMode === 'home' ? (
                     <Home
                         title={appTitle}
-                        items={files}
+                        items={isServerMode ? homeFeaturedItems : files}
+                        totalCount={isServerMode ? (libraryTotalCount || systemStatus?.mediaStats?.totalFiles || 0) : files.length}
                         onEnterLibrary={() => handleSetViewMode('all')}
                         onJumpToFolder={handleJumpToFolder}
                         subtitle={homeSubtitle}

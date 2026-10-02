@@ -31,8 +31,8 @@ services:
       # [MULTI-ROOT SUPPORT] Separate paths with ';' (semicolon)
       # Example: MEDIA_ROOT=/media;/mnt/ext
       - MEDIA_ROOT=/media
-      # [SECURITY] Set this to enable password protection for the Update API.
-      # If provided, the web UI will prompt for this token when you click Update.
+      # [SECURITY] Required to enable the in-app Update API (update / migrate / status).
+      # When unset these endpoints are rejected with 403. The web UI prompts for this token when you click Update.
       # - UPDATE_TOKEN=change_this_to_a_secret_string
       # GPU Support: Set these if using NVIDIA GPU
       - NVIDIA_VISIBLE_DEVICES=all

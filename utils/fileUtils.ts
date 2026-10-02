@@ -84,6 +84,26 @@ const shuffleArray = (array: MediaItem[]): MediaItem[] => {
   return arr;
 };
 
+/** 按种子做确定性洗牌：同一种子与同一输入总得到同一顺序，可安全用于渲染期计算。 */
+export const seededShuffle = <Item extends { id?: string; path?: string; name?: string }>(
+  items: Item[],
+  seed: number,
+): Item[] => {
+  const rank = (item: Item) => {
+    const text = `${seed}:${item.id || item.path || item.name || ''}`;
+    let hash = 2166136261;
+    for (let index = 0; index < text.length; index += 1) {
+      hash ^= text.charCodeAt(index);
+      hash = Math.imul(hash, 16777619);
+    }
+    return hash >>> 0;
+  };
+  return items
+    .map(item => ({ item, key: rank(item) }))
+    .sort((left, right) => left.key - right.key)
+    .map(entry => entry.item);
+};
+
 export const sortMedia = (items: MediaItem[], sortOption: SortOption): MediaItem[] => {
   const sorted = [...items];
   switch (sortOption) {
@@ -126,10 +146,31 @@ export const groupMediaByDate = (items: MediaItem[]): Record<string, MediaItem[]
 };
 
 export const cleanTokenFromUrl = (url: string): string => {
-  return url
-    .replace(/[?&]token=[^&]*/g, '')
-    .replace(/[?&]$/, '')
-    .replace(/\?$/, '');
+  const [base, fragment] = url.split('#');
+  const queryIndex = base.indexOf('?');
+  if (queryIndex === -1) return url;
+  const path = base.slice(0, queryIndex);
+  const query = base
+    .slice(queryIndex + 1)
+    .split('&')
+    .filter(part => part && !part.startsWith('token='))
+    .join('&');
+  return `${path}${query ? `?${query}` : ''}${fragment === undefined ? '' : `#${fragment}`}`;
+};
+
+/** 读取当前登录令牌（兼容旧存储键）；存储不可用时返回 null。 */
+export const getStoredAuthToken = (): string | null => {
+  try {
+    return localStorage.getItem('luvia_token') || localStorage.getItem('lumina_token');
+  } catch {
+    return null;
+  }
+};
+
+/** 生成带 Bearer 令牌的请求头，供未经 apiFetch 的组件级请求使用。 */
+export const getAuthHeaders = (headers: Record<string, string> = {}): Record<string, string> => {
+  const token = getStoredAuthToken();
+  return token ? { ...headers, Authorization: `Bearer ${token}` } : headers;
 };
 
 export const getAuthUrl = (url: string): string => {
@@ -139,7 +180,7 @@ export const getAuthUrl = (url: string): string => {
   // 移除已存在的 token 参数（防止双重追加）
   const cleanUrl = cleanTokenFromUrl(url);
 
-  const token = localStorage.getItem('luvia_token') || localStorage.getItem('lumina_token');
+  const token = getStoredAuthToken();
   if (!token) return cleanUrl;
 
   const separator = cleanUrl.includes('?') ? '&' : '?';

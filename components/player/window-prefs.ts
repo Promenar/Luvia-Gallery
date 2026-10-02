@@ -40,7 +40,7 @@ export const loadWindowPrefs = (): WindowPrefs | null => {
         : undefined;
     // fullscreen 依赖真实全屏 API（宿主 effect）、maximized 为视口内临时形态：两者重载页面后
     // 均不应恢复（fullscreen 无 gesture 无法 requestFullscreen，maximized 属临时视图状态），回落到 window。
-    return { x, y, width, mode: mode === 'fullscreen' || mode === 'maximized' ? 'window' : mode, heightOverride: resolvedHeightOverride };
+    return { x: x as number, y: y as number, width: width as number, mode: mode === 'fullscreen' || mode === 'maximized' ? 'window' : mode, heightOverride: resolvedHeightOverride };
   } catch {
     return null;
   }

@@ -128,4 +128,3 @@ export const glassPresets = {
 
 export type DesignTokens = typeof designTokens;
 export type GlassPresets = typeof glassPresets;
-export type InteractionPresets = typeof interactionPresets;
