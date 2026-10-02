@@ -59,6 +59,10 @@ PDEC 已从无机器可读契约切换为已批准契约；后续开发、构建
 
 2026-10-02 用户再次确认“同意重绑，AGENTS.md 也更新”：Tailwind v4 + shadcn/Base UI 升级改动 `package.json`、`package-lock.json`、`README.md` 与 `AGENTS.md` 后重算证据哈希，绑定摘要 `fe19ae8f7a4cca6edde76a9d778b8f4404bf2477945621fd48e78febe494c73a`，执行字段与执行位置不变。
 
+2026-10-02 用户确认“同意 继续”：新增 `sonner` 依赖后重算 `package.json`、`package-lock.json` 证据哈希，绑定摘要 `a599a0f9fdc876ace265ebeb12b54535e0e5c6d927060e92899228d58d9a7bfb`。
+
+**阶段内证据重绑规则**（用户 2026-10-02 授权）：在用户已批准实施的开发阶段内，若仅因依赖声明、锁文件或文档文本变化导致 evidence 漂移，且 `operations`、`targets`、`deployment` 等执行字段未变，可直接重算证据哈希并重绑摘要，在 `approval.reference` 与交接记录中披露变化文件；执行字段、执行位置、部署或权限任一变化仍须单独取得用户批准。
+
 批准后每次执行前必须运行 `pdec.py validate --root .`，确认退出码为 0 且 `execution_ready=true`；契约批准不等于生产部署批准。契约证据文件发生变化时必须重新评估漂移并重新绑定批准摘要。
 
 ## 回滚与验收边界
