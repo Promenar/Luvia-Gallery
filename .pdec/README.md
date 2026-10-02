@@ -57,6 +57,8 @@ PDEC 已从无机器可读契约切换为已批准契约；后续开发、构建
 
 2026-10-02 用户确认“同意重绑”：`package.json` 新增 `typecheck` 脚本、`README.md` 与 `docker-compose.yml` 更新 `UPDATE_TOKEN` 注释后，仅重算证据哈希并绑定新摘要 `977e5f32018c3b372f9b8d754d0d41e9cf61bfd4a9e6ee3c0582ad164f3dae7f`，执行字段与执行位置不变。
 
+2026-10-02 用户再次确认“同意重绑，AGENTS.md 也更新”：Tailwind v4 + shadcn/Base UI 升级改动 `package.json`、`package-lock.json`、`README.md` 与 `AGENTS.md` 后重算证据哈希，绑定摘要 `fe19ae8f7a4cca6edde76a9d778b8f4404bf2477945621fd48e78febe494c73a`，执行字段与执行位置不变。
+
 批准后每次执行前必须运行 `pdec.py validate --root .`，确认退出码为 0 且 `execution_ready=true`；契约批准不等于生产部署批准。契约证据文件发生变化时必须重新评估漂移并重新绑定批准摘要。
 
 ## 回滚与验收边界

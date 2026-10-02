@@ -6,8 +6,8 @@
   },
   "status": "approved",
   "approval": {
-    "reference": "用户消息（2026-09-07）：Android端的目标PDEC平台可以设置至MAIN主机，其它批准；用户消息（2026-10-02）：同意重绑（package.json 新增 typecheck 脚本及 README/docker-compose 注释变更后的证据摘要重绑，执行字段未变）",
-    "contract_digest": "977e5f32018c3b372f9b8d754d0d41e9cf61bfd4a9e6ee3c0582ad164f3dae7f"
+    "reference": "用户消息（2026-09-07）：Android端的目标PDEC平台可以设置至MAIN主机，其它批准；用户消息（2026-10-02）：同意重绑（typecheck 脚本与 UPDATE_TOKEN 注释）；用户消息（2026-10-02）：同意重绑，AGENTS.md 也更新（Tailwind v4 + shadcn/Base UI 依赖与文档变更后的证据摘要重绑，执行字段未变）",
+    "contract_digest": "fe19ae8f7a4cca6edde76a9d778b8f4404bf2477945621fd48e78febe494c73a"
   },
   "targets": {
     "local-mac": {
@@ -108,10 +108,10 @@
     "rollback": ""
   },
   "evidence": {
-    "AGENTS.md": "9243f1dd68f0ebf08273e8b6529a0568415e5fdb04af55f00cd7ea3763626825",
-    "README.md": "d51fff008c886da79230d8b46a513dfa14caa092ecef1a4187d954c65082cb7e",
-    "package.json": "3ce134a9a172478ff28901b1decd1fa554cecc0a80d8981e5219eda6074dec19",
-    "package-lock.json": "634210f16f0c5748b775a65664f86674b9eecd84bbf93b6995d3349d68efeb32",
+    "AGENTS.md": "e817051f96b9f55f8aed4985fb6ce1048501df18aae65ce4a73a54a9ec0b08b0",
+    "README.md": "7c77b2e5d33b0e3f026eda80903f40f5f37e216fecb724cc4e83df98e6ac1400",
+    "package.json": "b3c992a87b828854891e8e792c33c06b58671f7204a7d30f2ab6cce6323da3ec",
+    "package-lock.json": "cbc4cbede86647c40a3b4c86a3beda3e636b59865da73e60f18ed28796fa881b",
     "Dockerfile": "39b892aa6638f266ab70f091c52df3812712b11ea77d679b425d93b52fcfe137",
     "docker-compose.yml": "8e3d32b36466b451ae7d86b8f330cc9414db16d059274e0b3f34f23575f07fd9",
     "macos-widget/README.md": "9249565d62af7c11bebf83e165be7fd1bfacfc0bb175f5fa3cd251eccd4fb1ed",
