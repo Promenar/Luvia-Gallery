@@ -15,8 +15,6 @@
   --font-sans: 'Inter Variable', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans SC', 'Microsoft YaHei', system-ui, sans-serif;
   --font-heading: var(--font-sans);
   --font-display: var(--font-sans);
-  /* 衬线仅用于时间线日期章节（暗房影院契约 1.2） */
-  --font-serif: 'Songti SC', 'STSong', 'Noto Serif SC', 'Source Han Serif SC', Georgia, serif;
 
   /* shadcn 语义令牌 */
   --color-background: var(--background);

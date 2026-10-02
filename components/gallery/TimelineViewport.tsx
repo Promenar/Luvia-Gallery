@@ -1,5 +1,5 @@
 // 时间线视口：依据服务端按月分桶的计数推导整条时间线布局，按“月 + 页”懒加载媒体。
-// 百万级媒体下无需加载全部条目即可滚动与跳转；章节标题使用暖色衬线日期（暗房影院契约 1.2）。
+// 百万级媒体下无需加载全部条目即可滚动与跳转；章节标题以无衬线字重区分层级（暗房影院契约 1.2）。
 import React, { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import * as ReactWindow from 'react-window';
 import AutoSizer from 'react-virtualized-auto-sizer';
@@ -219,7 +219,7 @@ const TimelineViewportInner = React.forwardRef<ViewportCaptureHandle, InnerProps
     if (row.kind === 'header') {
       return (
         <div style={{ ...style, paddingRight: SCRUBBER_GUTTER }} className="flex items-end justify-between gap-3 pb-3">
-          <h2 className="font-serif text-xl font-semibold tracking-tight text-foreground md:text-2xl">
+          <h2 className="text-lg font-semibold tracking-tight tabular-nums text-foreground md:text-xl">
             {formatBucketLabel(bucket.key, language)}
           </h2>
           <span className="pb-1 text-xs tabular-nums text-muted-foreground">{bucket.count.toLocaleString()}</span>
@@ -274,7 +274,7 @@ const TimelineViewportInner = React.forwardRef<ViewportCaptureHandle, InnerProps
         <div
           aria-hidden="true"
           data-testid="timeline-current-month"
-          className="pointer-events-none absolute top-2 left-2 rounded-full border border-border bg-popover/90 px-3 py-1 font-serif text-sm text-popover-foreground shadow-sm backdrop-blur-sm"
+          className="pointer-events-none absolute top-2 left-2 rounded-full border border-border bg-popover/90 px-3 py-1 text-xs font-medium tabular-nums text-popover-foreground shadow-sm backdrop-blur-sm"
         >
           {formatBucketLabel(currentBucket.key, language)}
         </div>
