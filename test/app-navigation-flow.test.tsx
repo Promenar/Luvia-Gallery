@@ -784,7 +784,8 @@ describe('应用导航最小闭环', () => {
     expect(source).not.toContain('mediaId');
     // 队列构建收敛到纯函数 buildPlayerQueue（先过滤图片/视频，再在过滤后的队列内定位起点）；
     // 旧内联表达式 openPlayer({ items: ... }) 在未过滤列表上定位起点，存在索引错位，必须保持移除。
-    expect(source).toContain('openPlayer(buildPlayerQueue(');
+    expect(source).toContain('const queue = buildPlayerQueue(processedFiles, item.id);');
+    expect(source).toContain('runHeroTransition(item.id, () => openPlayer(queue))');
     expect(source).not.toContain('openPlayer({ items:');
     expect(source).toContain('<MediaPlayer onToggleFavorite={handleToggleFavorite} />');
   });

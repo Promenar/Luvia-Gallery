@@ -18,6 +18,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { useMediaPlayer } from './PlayerProvider';
 import { ImageViewPane } from './ImageViewPane';
 import { VideoPane } from './VideoPane';
+import { AmbientGlow } from './AmbientGlow';
 import { Icons } from '../ui/Icon';
 import type { MediaItem } from '../../types';
 
@@ -102,7 +103,7 @@ export const PlayerFullscreen: React.FC<PlayerFullscreenProps> = ({ onToggleFavo
                     animate={{ opacity: 1 }}
                     exit={{ opacity: 0 }}
                     transition={{ duration: 0.2, ease: 'easeOut' }}
-                    className="fixed inset-0 z-50 bg-black/95 flex items-center justify-center overflow-hidden"
+                    className="dark fixed inset-0 z-50 bg-black/95 flex items-center justify-center overflow-hidden"
                 >
                     {/* 顶部控制栏：自旧 MediaPlayer 全屏布局迁移（收藏/信息/全屏退出/关闭） */}
                     <div className="absolute top-0 left-0 right-0 p-4 flex justify-between items-center text-white/80 z-50 pointer-events-none bg-linear-to-b from-black/70 to-transparent">
@@ -145,11 +146,14 @@ export const PlayerFullscreen: React.FC<PlayerFullscreenProps> = ({ onToggleFavo
                         </div>
                     </div>
 
+                    {/* 暗房氛围光晕：全屏时更强，取当前媒体主色 */}
+                    <AmbientGlow item={currentItem} intensity={0.5} />
+
                     {/* 面板调度：图片/视频各自面板；音频不渲染面板（仍由 AudioPlayer 承接） */}
                     {currentItem.mediaType === 'video' ? (
                         <VideoPane item={currentItem} />
                     ) : currentItem.mediaType === 'image' ? (
-                        <ImageViewPane item={currentItem} onSlideNext={next} />
+                        <ImageViewPane item={currentItem} onSlideNext={next} onSwipeNext={next} onSwipePrev={prev} />
                     ) : null}
 
                     {/* 信息面板节点：MediaPlayer 壳层构建，absolute 定位相对本全屏容器 */}

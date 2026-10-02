@@ -41,6 +41,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { useMediaPlayer } from './PlayerProvider';
 import { ImageViewPane } from './ImageViewPane';
 import { VideoPane } from './VideoPane';
+import { AmbientGlow } from './AmbientGlow';
 import { Icons } from '../ui/Icon';
 import { getAuthUrl } from '../../utils/fileUtils';
 import { loadWindowPrefs, saveWindowPrefs } from './window-prefs';
@@ -153,6 +154,14 @@ export const PlayerWindow: React.FC<PlayerWindowProps> = ({ onToggleFavorite, sh
     // 交互会话（拖动/缩放）期间 CSS transition 置 none，位置/尺寸由直写样式全权接管，结束后恢复过渡。
     const [isInteracting, setIsInteracting] = useState(false);
 
+    // 视口尺寸变化（窗口缩放、旋转屏幕）时重新渲染，使位置与宽度重新夹取进可视区域
+    const [, setViewportTick] = useState(0);
+    useEffect(() => {
+        const handleResize = () => setViewportTick(tick => tick + 1);
+        window.addEventListener('resize', handleResize, { passive: true });
+        return () => window.removeEventListener('resize', handleResize);
+    }, []);
+
     const viewportW = window.innerWidth;
     const viewportH = window.innerHeight;
 
@@ -178,7 +187,8 @@ export const PlayerWindow: React.FC<PlayerWindowProps> = ({ onToggleFavorite, sh
         }
         : null;
     const maxWidth = viewportW - WINDOW_MARGIN * 2;
-    let shellWidth = isMini ? MINI_WIDTH : width;
+    // 记忆宽度可能来自更大的视口：渲染时夹取到当前视口可容纳的宽度
+    let shellWidth = isMini ? MINI_WIDTH : clamp(width, MIN_WIDTH, maxWidth);
     let contentHeight = aspect ? shellWidth / aspect.ratio : 0;
     if (aspect && !isMini && contentHeight > viewportH * MAX_HEIGHT_RATIO) {
         // 超高媒体：以高度定宽（竖图收窄）
@@ -494,7 +504,7 @@ export const PlayerWindow: React.FC<PlayerWindowProps> = ({ onToggleFavorite, sh
                     animate={{ opacity: 1, scale: 1 }}
                     exit={{ opacity: 0, scale: 0.85 }}
                     transition={{ duration: 0.25, ease: 'easeOut' }}
-                    className="fixed z-40 pointer-events-auto flex flex-col overflow-hidden text-white glass-1 gallery-toolbar-glass rounded-2xl border border-white/5 shadow-2xl"
+                    className="dark fixed z-40 pointer-events-auto flex flex-col overflow-hidden text-white glass-1 gallery-toolbar-glass rounded-2xl border border-white/5 shadow-2xl"
                     style={{
                         left: stylePos.x,
                         top: stylePos.y,
@@ -533,10 +543,12 @@ export const PlayerWindow: React.FC<PlayerWindowProps> = ({ onToggleFavorite, sh
                         视频面板 w-full h-full 铺满；两者内部 transform/gesture 逻辑不变。
                         信息面板仅在 window 形态渲染（mini 只保留媒体，fab 无内容区）。 */}
                     <div className="relative min-h-0 flex-1 bg-black/50">
+                        {/* 暗房氛围光晕：取当前媒体主色铺在媒体背后，不覆盖画面 */}
+                        <AmbientGlow item={currentItem} intensity={0.35} />
                         {currentItem.mediaType === 'video' ? (
                             <VideoPane item={currentItem} onMediaRatio={setLoadedRatio} />
                         ) : currentItem.mediaType === 'image' ? (
-                            <ImageViewPane item={currentItem} onSlideNext={next} onMediaRatio={setLoadedRatio} />
+                            <ImageViewPane item={currentItem} onSlideNext={next} onSwipeNext={next} onSwipePrev={prev} onMediaRatio={setLoadedRatio} />
                         ) : null}
                         {/* 信息面板在 window 与 maximized 形态渲染（mini 只保留媒体，fab 无内容区） */}
                         {(isWindow || isMaximized) && infoPanel}

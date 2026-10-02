@@ -17,7 +17,8 @@ import { PlayerWindow } from './PlayerWindow';
 import { PlayerFullscreen } from './PlayerFullscreen';
 import { usePaneLanguage } from './ImageViewPane';
 import { Icons } from '../ui/Icon';
-import { getAuthHeaders } from '../../utils/fileUtils';
+import { getAuthHeaders, getAuthUrl } from '../../utils/fileUtils';
+import { selectNeighborImageUrls } from './player-state';
 import { formatDate as utilsFormatDate, formatSize as utilsFormatSize } from '../../utils/formatters';
 import type { MediaItem, ExifData } from '../../types';
 
@@ -36,6 +37,18 @@ export const MediaPlayer: React.FC<MediaPlayerProps> = ({ onToggleFavorite }) =>
     const [isExifLoading, setIsExifLoading] = useState(false);
 
     // showInfo 不跨开关周期残留：关闭时立即收起信息面板，避免重开播放器时先渲染一帧带面板的状态再收起（闪烁）。
+    // 预加载前后各一张原图：翻页时原图可直接显示，缩略图过渡只出现在首次打开
+    const neighborKey = selectNeighborImageUrls(state).join('|');
+    useEffect(() => {
+        if (!neighborKey) return;
+        // 不在切换时中止：快速翻页时将成为当前项的预加载请求应继续完成并进入缓存
+        neighborKey.split('|').forEach((url) => {
+            const image = new Image();
+            image.decoding = 'async';
+            image.src = getAuthUrl(url);
+        });
+    }, [neighborKey]);
+
     useEffect(() => {
         if (!state.isOpen) setShowInfo(false);
     }, [state.isOpen]);
