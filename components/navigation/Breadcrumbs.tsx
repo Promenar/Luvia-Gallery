@@ -144,7 +144,7 @@ export const Breadcrumbs: React.FC<BreadcrumbsProps> = ({
               <span className="shrink-0 px-1 text-text-muted" aria-hidden="true">…</span>
             ) : isLast ? (
               <span
-                className="font-semibold text-text-primary truncate min-w-[4rem] max-w-[150px] sm:max-w-[240px] px-1 py-0.5 flex flex-1 items-center gap-1"
+                className="font-semibold text-text-primary truncate min-w-16 max-w-[150px] sm:max-w-[240px] px-1 py-0.5 flex flex-1 items-center gap-1"
                 aria-current="page"
                 title={node.label}
               >
@@ -157,7 +157,7 @@ export const Breadcrumbs: React.FC<BreadcrumbsProps> = ({
                   e.stopPropagation();
                   node.onClick();
                 }}
-                className="shrink-0 flex items-center gap-1 hover:text-accent-500 hover:bg-white/5 rounded px-1 py-0.5 transition-colors duration-200 focus:outline-none focus-visible:text-accent-500 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-500/40 truncate max-w-[120px] sm:max-w-[180px]"
+                className="shrink-0 flex items-center gap-1 hover:text-accent-500 hover:bg-white/5 rounded-sm px-1 py-0.5 transition-colors duration-200 focus:outline-hidden focus-visible:text-accent-500 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-500/40 truncate max-w-[120px] sm:max-w-[180px]"
                 title={node.label}
                 aria-label={node.label}
               >

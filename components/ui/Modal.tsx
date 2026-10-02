@@ -93,7 +93,7 @@ export const Modal: React.FC<ModalProps> = ({
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           {/* 遮罩层 */}
           <motion.div
-            className="absolute inset-0 bg-black/70 backdrop-blur-sm"
+            className="absolute inset-0 bg-black/70 backdrop-blur-xs"
             onClick={closeOnOverlayClick ? onClose : undefined}
             {...overlayAnimation}
           />

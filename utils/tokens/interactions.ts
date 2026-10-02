@@ -86,7 +86,7 @@ export const interactionClasses = {
     transition-all
     duration-200
     ease-out
-    focus:outline-none
+    focus:outline-hidden
     disabled:cursor-not-allowed
     disabled:opacity-50
   `,

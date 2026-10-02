@@ -354,7 +354,7 @@ const TimelineViewportInner = React.forwardRef<ViewportCaptureHandle, InnerProps
 
             return (
               <div style={rowStyle} className="flex items-end pb-2 pt-4 px-1 z-10 pointer-events-none">
-                <div className="font-medium text-sm text-text-secondary bg-surface-primary/90 backdrop-blur-sm px-3 py-1 rounded-full shadow-sm border border-border-default">
+                <div className="font-medium text-sm text-text-secondary bg-surface-primary/90 backdrop-blur-xs px-3 py-1 rounded-full shadow-xs border border-border-default">
                   <span className="text-text-primary font-bold mr-1">{monthName}</span>
                   <span>{year}</span>
                 </div>

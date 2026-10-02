@@ -128,7 +128,7 @@ export const LibraryTab: React.FC<LibraryTabProps> = ({
             <div className="space-y-1 max-h-64 overflow-y-auto">
               {libraryPaths.length === 0 ? (
                 <div className="p-4 text-center text-sm text-text-tertiary italic">
-                  {t('scanning_default')} <code className="font-mono bg-white/10 px-1 rounded">/media</code>
+                  {t('scanning_default')} <code className="font-mono bg-white/10 px-1 rounded-sm">/media</code>
                 </div>
               ) : (
                 libraryPaths.map((path) => (

@@ -167,7 +167,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
                     {/* Controls */}
                     <div className="p-3">
                         <div className="flex items-center gap-3 mb-2">
-                            <div className="w-12 h-12 bg-gradient-to-br from-purple-500/20 to-blue-500/20 dark:from-purple-500/30 dark:to-blue-500/30 rounded-xl flex items-center justify-center flex-shrink-0">
+                            <div className="w-12 h-12 bg-linear-to-br from-purple-500/20 to-blue-500/20 dark:from-purple-500/30 dark:to-blue-500/30 rounded-xl flex items-center justify-center shrink-0">
                                 <Icons.Music size={24} className="text-purple-600 dark:text-purple-400" />
                             </div>
                             <div className="flex-1 min-w-0">
@@ -180,7 +180,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
                             </div>
                             <button
                                 onClick={onClose}
-                                className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors flex-shrink-0"
+                                className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors shrink-0"
                                 title="Close"
                             >
                                 <Icons.X size={18} className="text-text-tertiary" />
@@ -245,7 +245,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
                     exit={{ opacity: 0 }}
-                    className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+                    className="fixed inset-0 bg-black/50 backdrop-blur-xs z-50 flex items-center justify-center p-4"
                     onClick={onMinimize}
                 >
                     <motion.div
@@ -278,7 +278,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
 
                         {/* Album Art / Icon */}
                         <div className="mb-8 flex justify-center">
-                            <div className="w-48 h-48 bg-gradient-to-br from-purple-500/20 to-blue-500/20 dark:from-purple-500/30 dark:to-blue-500/30 rounded-2xl flex items-center justify-center shadow-lg">
+                            <div className="w-48 h-48 bg-linear-to-br from-purple-500/20 to-blue-500/20 dark:from-purple-500/30 dark:to-blue-500/30 rounded-2xl flex items-center justify-center shadow-lg">
                                 <Icons.Music size={80} className="text-purple-600 dark:text-purple-400" />
                             </div>
                         </div>

@@ -255,7 +255,7 @@ export const ImageViewPane: React.FC<ImageViewPaneProps> = ({ item, onSlideNext,
                     ref={imgRef}
                     src={getAuthUrl(item.url)}
                     alt={item.name}
-                    className="max-w-full max-h-full object-contain shadow-2xl rounded-sm"
+                    className="max-w-full max-h-full object-contain shadow-2xl rounded-xs"
                     style={{ cursor: transform.scale > 1 ? 'grab' : 'zoom-in' }}
                     onClick={(e) => e.stopPropagation()}
                     onDoubleClick={toggleZoom}

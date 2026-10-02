@@ -86,7 +86,7 @@ export const ScanReportModal: React.FC<ScanReportModalProps> = ({
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                className="fixed inset-0 z-[60] bg-black/80 flex items-center justify-center p-4"
+                className="fixed inset-0 z-60 bg-black/80 flex items-center justify-center p-4"
                 onClick={onClose}
             >
                 <motion.div
@@ -124,13 +124,13 @@ export const ScanReportModal: React.FC<ScanReportModalProps> = ({
                     </div>
 
                     {/* Toolbar */}
-                    <div className="p-4 flex items-center justify-between bg-white/[0.02]">
+                    <div className="p-4 flex items-center justify-between bg-white/2">
                         <div className="flex items-center gap-2">
                             <input
                                 type="checkbox"
                                 checked={isAllSelected}
                                 onChange={(e) => handleSelectAll(e.target.checked)}
-                                className="w-4 h-4 rounded border-gray-600 bg-black/40 text-accent-500 focus:ring-accent-500 focus:ring-offset-0"
+                                className="w-4 h-4 rounded-sm border-gray-600 bg-black/40 text-accent-500 focus:ring-accent-500 focus:ring-offset-0"
                             />
                             <span className="text-sm text-text-secondary">{selectedIds.size} selected</span>
                         </div>
@@ -170,7 +170,7 @@ export const ScanReportModal: React.FC<ScanReportModalProps> = ({
                                                 type="checkbox"
                                                 checked={selectedIds.has(item.id)}
                                                 onChange={(e) => handleToggleSelect(item.id, e.target.checked)}
-                                                className="w-4 h-4 rounded border-gray-600 bg-black/40 text-accent-500 focus:ring-accent-500 focus:ring-offset-0"
+                                                className="w-4 h-4 rounded-sm border-gray-600 bg-black/40 text-accent-500 focus:ring-accent-500 focus:ring-offset-0"
                                             />
                                         </td>
                                         <td className="p-4 py-3">

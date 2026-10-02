@@ -1,6 +1,7 @@
 import path from 'path';
 import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
+import tailwindcss from '@tailwindcss/vite';
 
 import { VitePWA } from 'vite-plugin-pwa';
 
@@ -13,6 +14,7 @@ export default defineConfig(({ mode }) => {
     },
     plugins: [
       react(),
+      tailwindcss(),
       VitePWA({
         registerType: 'autoUpdate',
         includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'masked-icon.svg', 'pwa-192x192.png', 'pwa-512x512.png'],
@@ -20,8 +22,8 @@ export default defineConfig(({ mode }) => {
           name: 'Luvia Gallery',
           short_name: 'Luvia',
           description: 'A modern, self-hosted media gallery.',
-          theme_color: '#ffffff',
-          background_color: '#ffffff',
+          theme_color: '#0e0c0b',
+          background_color: '#0e0c0b',
           display: 'standalone',
           start_url: '/',
           orientation: 'portrait',

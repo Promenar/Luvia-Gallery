@@ -36,7 +36,7 @@ export const MobileHeader: React.FC<MobileHeaderProps> = React.memo(({
       className={`md:hidden h-16 flex items-center px-4 justify-between transition-colors fixed top-0 left-0 right-0 z-40 ${headerClass}`}
     >
       {isHome && (
-        <div className="absolute inset-0 bg-gradient-to-b from-black/40 via-transparent to-transparent z-[-1]" />
+        <div className="absolute inset-0 bg-linear-to-b from-black/40 via-transparent to-transparent z-[-1]" />
       )}
 
       <div className="flex items-center gap-3">

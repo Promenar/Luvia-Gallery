@@ -124,7 +124,7 @@ export const Home: React.FC<HomeProps> = React.memo(({ title, items, totalCount 
                         className="absolute inset-0 z-0"
                     >
                         <HomeBackdrop item={currentItem} />
-                        <div className="absolute inset-0 bg-gradient-to-t from-black via-black/40 to-black/20" />
+                        <div className="absolute inset-0 bg-linear-to-t from-black via-black/40 to-black/20" />
                     </motion.div>
                 ) : (
                     <div className="absolute inset-0 bg-surface-primary z-0 flex items-center justify-center">

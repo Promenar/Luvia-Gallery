@@ -27,7 +27,7 @@ export const VideoPane: React.FC<{ item: MediaItem; onMediaRatio?: (ratio: numbe
         <Icons.AlertTriangle size={48} className="text-yellow-500 mb-4" />
         <h3 className="text-xl font-bold text-white mb-2">Playback Failed</h3>
         <p className="text-gray-400 text-sm mb-6">
-          The video format <span className="font-mono bg-black/30 px-1 rounded">{item.type}</span> might not be supported by your browser.
+          The video format <span className="font-mono bg-black/30 px-1 rounded-sm">{item.type}</span> might not be supported by your browser.
         </p>
         <a href={getAuthUrl(item.url)} download className="bg-white text-gray-900 hover:bg-gray-200 px-6 py-2 rounded-full font-bold transition-colors flex items-center gap-1">
           <Icons.Download size={18} /> Download Video
@@ -50,7 +50,7 @@ export const VideoPane: React.FC<{ item: MediaItem; onMediaRatio?: (ratio: numbe
             onMediaRatio(v.videoWidth / v.videoHeight);
           }
         }}
-        className="max-w-full max-h-full shadow-2xl rounded-sm focus:outline-none"
+        className="max-w-full max-h-full shadow-2xl rounded-xs focus:outline-hidden"
       />
     </div>
   );
