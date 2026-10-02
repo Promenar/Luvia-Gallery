@@ -2286,3 +2286,34 @@ record-fingerprint: fad853d71457c4d5d6fefa57d40c21d5b2cc48cc6b5dcf8a58d713505b89
 
 ### HLG
 使用append先dry-run再apply追加发布记录并重建handover-index；以相同continuity_key和none关闭本次缩略图修复发布工作流。
+
+## 2026-10-02T08:43:47+08:00 · 安全加固与 WebUI 功能修复候选 13797cb 已推送（未部署）
+
+type: maintenance
+scope: ["Luvia-Gallery", "WebUI", "server", "runner"]
+status: done
+tags: ["security", "audit", "webui", "typecheck", "pdec", "fnos"]
+continuity: waiting
+continuity-key: webui-security-hardening
+record-fingerprint: 469e36c2c73e4f3894451aea88f3e06eedc00c3526e9b676c032b6521ef276a8
+
+### Summary
+完成前后端审计后按顺序实施第一、二、三阶段：后端安全加固、前端功能缺陷修复、类型检查与测试环境修复。提交 13797cbb10d7506e830102c09033f681d56f72de 已推送 origin/main 并回读远端一致；未构建镜像、未部署生产。审计中更正一项结论：系统更新接口由 runner.js 提供，并非缺失；但 runner.js 在未配置 UPDATE_TOKEN 时对更新/配置/迁移接口完全开放，构成未登录远程代码执行风险，已改为默认拒绝。
+
+### Changed
+server.js：EXIF 与缩略图 ffmpeg 改 execFile 参数数组；文件/文件夹删除重命名、/api/fs/list、缩略图批量任务与智能扫描结果改 adminOnly 并用 lib/security.js 的 resolveManagedPath/isSafeEntryName 限定媒体库内；匿名 /api/config 不再返回用户列表；口令 scrypt 哈希并在启动及首次登录时迁移明文；用户改名迁移收藏；scan/results 支持 seed 稳定随机。database.js：seeded_rank SQL 函数、deleteFilesByFolder LIKE 转义、renameFavoritesUser。runner.js：checkAuth 无令牌拒绝、timingSafeEqual、状态接口鉴权。App.tsx：任务结束与批量删除改 reloadCurrentGallery、导出 click、随机种子写入位置、服务端模式不二次排序、文件夹置顶、首页独立取样、登录后重新拉取配置。Home.tsx 渐进加载与洗牌修复；PhotoCard/MediaPlayer/DirectoryPicker 携带 Bearer；排序新增 sizeDesc；SystemUpdater 打开时不自动弹令牌。新增 npm run typecheck、tsconfig include，清零类型错误，删除未引用的 utils/animation.ts 与 components/PathAutocomplete.tsx；vitest 补 Web Storage setup。PDEC 经用户同意重绑证据摘要 977e5f32...，执行字段不变。
+
+### Validation
+本机 Node 26：前端 304/304、typecheck 0 错误、Vite build 通过、安全辅助与路由契约测试通过。FNOS node:20-bookworm（v20.20.2）以确切 SHA 归档验证：后端 68/68、前端 304/304、typecheck、build 均通过，日志在 FNOS DevFleet/luvia-gallery/runs/13797cb/verify.log。同容器隔离实例接口冒烟 25/25（匿名不可枚举用户与浏览目录、普通用户越权删除/浏览/缩略图任务被拒、库外与根目录删除被拒、路径分隔符改名被拒、恶意文件名不触发命令注入、明文口令登录后升级为哈希、用户改名成功），日志 smoke.log。生产环境只读确认审计前 /api/fs/list 匿名 200 与用户名泄露。
+
+### Next
+1. 生产部署需用户单独授权；部署前必须在 FNOS 生产 Compose 设置 UPDATE_TOKEN，否则应用内更新会返回 403。2. 第四阶段视觉改造（设计令牌、浅色主题、字体本地化、去除重装饰层、时间线与大图过渡）开始前需先评估组件库与设计底座并与用户确认。3. 剩余审计项：JWT 通过 query token 进入媒体 URL、壁纸 token 10 年且不可吊销、29 处 alert/confirm 待统一为 Toast/对话框。
+
+### Risks
+本机 Node 26 无法编译 better-sqlite3 12.6.2，后端测试需 Node 20（FNOS 容器）。冒烟镜像不含 ffmpeg，命令注入验证依赖 shell 不再参与的事实，未做旧版本负对照。首次部署后配置中的明文口令会被自动改写为哈希，回滚到旧镜像将无法用原口令登录（旧代码按明文比较），回滚前需备份 lumina-config.json。非管理员移动端删除文件将被拒绝（预期变化）。
+
+### DIA
+已同步 release_notes.md、README.md、docker-compose.yml、docs/HOTUPDATE_GUIDE.md、.env.example（UPDATE_TOKEN 必需与鉴权示例）、.pdec/README.md 与 .pdec/contract.yaml（重绑记录）。
+
+### HLG
+本记录追加；continuity-key webui-security-hardening 等待部署授权与视觉改造评估。长期规则候选：口令哈希迁移导致回滚不兼容应在部署清单中固定为备份前置项，未经授权未写入项目规则。
