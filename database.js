@@ -1223,6 +1223,60 @@ function getTimelineVersion(options) {
     return `${stats.total_files || 0}:${maxRow.max_rowid || 0}:${favorites}`;
 }
 
+const TIMELINE_MAX_MONTHS = 2400;
+
+function formatMonthKey(year, monthIndex) {
+    return `${year}-${String(monthIndex + 1).padStart(2, '0')}`;
+}
+
+/** 搜索、收藏结果集较小，直接按本地年月分组一次扫描即可。 */
+function groupTimelineByStrftime(filterOptions) {
+    const queryParts = buildFileQueryParts(filterOptions);
+    return db.prepare(`
+        SELECT strftime('%Y-%m', f.last_modified, 'unixepoch', 'localtime') AS bucket_key, COUNT(*) AS count
+        FROM files f ${queryParts.joins} ${queryParts.where}
+        GROUP BY bucket_key
+        ORDER BY bucket_key DESC
+    `).all(...queryParts.params)
+        .map(row => {
+            const range = resolveMonthRange(row.bucket_key);
+            return range ? { key: row.bucket_key, count: row.count, start: range.start, end: range.end } : null;
+        })
+        .filter(Boolean);
+}
+
+/**
+ * 全库或按类型、权限路径过滤时，逐月做 last_modified 区间计数：每月一次索引范围查找，
+ * 避免对百万行逐行调用 strftime(localtime)。月份越界（异常时间戳跨度过大）时回退分组查询。
+ */
+function countTimelineByMonthRanges(filterOptions) {
+    const bounds = buildFileQueryParts(filterOptions);
+    const span = db.prepare(`
+        SELECT MIN(f.last_modified) AS min_time, MAX(f.last_modified) AS max_time
+        FROM files f ${bounds.joins} ${bounds.where}
+    `).get(...bounds.params) || {};
+    if (!Number.isFinite(span.min_time) || !Number.isFinite(span.max_time)) return [];
+
+    const first = new Date(span.min_time * 1000);
+    const last = new Date(span.max_time * 1000);
+    const monthCount = (last.getFullYear() - first.getFullYear()) * 12 + (last.getMonth() - first.getMonth()) + 1;
+    if (monthCount > TIMELINE_MAX_MONTHS) return null;
+
+    const buckets = [];
+    let year = last.getFullYear();
+    let monthIndex = last.getMonth();
+    for (let i = 0; i < monthCount; i += 1) {
+        const key = formatMonthKey(year, monthIndex);
+        const range = resolveMonthRange(key);
+        const parts = buildFileQueryParts({ ...filterOptions, timeRange: { from: range.start, to: range.end } });
+        const row = db.prepare(`SELECT COUNT(*) AS count FROM files f ${parts.joins} ${parts.where}`).get(...parts.params);
+        if (row && row.count > 0) buckets.push({ key, count: row.count, start: range.start, end: range.end });
+        monthIndex -= 1;
+        if (monthIndex < 0) { monthIndex = 11; year -= 1; }
+    }
+    return buckets;
+}
+
 /**
  * 时间线分桶：按服务器本地时区的年月对可见媒体计数，按时间倒序返回。
  * 复用分页查询的全部过滤条件（权限路径、收藏、媒体类型、搜索）；结果按版本与 10 分钟有效期缓存。
@@ -1236,20 +1290,8 @@ function queryTimelineBuckets(options = {}) {
         return cached.buckets;
     }
 
-    const queryParts = buildFileQueryParts(filterOptions);
-    const rows = db.prepare(`
-        SELECT strftime('%Y-%m', f.last_modified, 'unixepoch', 'localtime') AS bucket_key, COUNT(*) AS count
-        FROM files f ${queryParts.joins} ${queryParts.where}
-        GROUP BY bucket_key
-        ORDER BY bucket_key DESC
-    `).all(...queryParts.params);
-
-    const buckets = rows
-        .map(row => {
-            const range = resolveMonthRange(row.bucket_key);
-            return range ? { key: row.bucket_key, count: row.count, start: range.start, end: range.end } : null;
-        })
-        .filter(Boolean);
+    const useGrouping = Boolean(buildFtsQuery(filterOptions.search)) || Boolean(filterOptions.favoritesOnly);
+    const buckets = (useGrouping ? null : countTimelineByMonthRanges(filterOptions)) || groupTimelineByStrftime(filterOptions);
 
     if (timelineBucketCache.size >= TIMELINE_CACHE_MAX_ENTRIES) {
         timelineBucketCache.delete(timelineBucketCache.keys().next().value);

@@ -20,6 +20,8 @@ interface SidebarProps {
   onToggleSidebar: () => void;
   onToggleDesktopSidebar: () => void;
   onUpload: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  backgroundTaskActive?: boolean;
+  onOpenBackgroundTasks?: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = React.memo(({
@@ -36,6 +38,8 @@ export const Sidebar: React.FC<SidebarProps> = React.memo(({
   onToggleSidebar,
   onToggleDesktopSidebar,
   onUpload,
+  backgroundTaskActive = false,
+  onOpenBackgroundTasks,
 }) => {
   const { t } = useLanguage();
 
@@ -152,6 +156,14 @@ export const Sidebar: React.FC<SidebarProps> = React.memo(({
           </NavSection>
 
           <NavSection title={t('system')} isExpanded={isDesktopSidebarOpen}>
+            {backgroundTaskActive && onOpenBackgroundTasks && (
+              <NavItem
+                icon={<Icons.Loader size={20} className="animate-spin motion-reduce:animate-none" />}
+                label={t('background_sync_active')}
+                onClick={onOpenBackgroundTasks}
+                isExpanded={isDesktopSidebarOpen}
+              />
+            )}
             <NavItem
               icon={
                 theme === 'system' ? <Icons.Monitor size={20} /> :

@@ -242,7 +242,7 @@ Luvia Gallery 是一款**私人图库应用**，用户连接自托管后端服�
 
 | 方法 | 端点 | 说明 |
 |------|------|------|
-| GET | `/api/scan/status` | 获取扫描状态 + 系统统计 |
+| GET | `/api/scan/status` | 获取扫描状态 + 系统统计；`trigger` 为 `manual`（界面启动）或 `periodic`（定时扫描） |
 | POST | `/api/scan/start` | 启动媒体库扫描 |
 | POST | `/api/scan/control` | 控制扫描任务。Body: `{ action: "pause"/"resume"/"stop" }` |
 | GET | `/api/thumb-gen/status` | 获取缩略图生成状态 |

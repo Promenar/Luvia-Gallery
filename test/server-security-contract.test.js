@@ -86,3 +86,16 @@ test('时间线分桶接口沿用权限路径过滤，区间参数严格校验',
     assert.equal(parseTimeRangeQuery({ from: 'x', to: '10' }), false);
     assert.equal(parseTimeRangeQuery({ from: '10' }), false);
 });
+
+test('媒体文件接口不记录含登录令牌的请求地址', () => {
+    const route = getRoute('get', '/api/file/*');
+    assert.doesNotMatch(route, /console\.log\([^)]*req\.(url|originalUrl)/);
+    assert.doesNotMatch(route, /Range Requested|Media Hit/);
+});
+
+test('扫描状态区分手动与定时触发，无变化的扫描不清空时间线缓存', () => {
+    assert.match(serverSource, /processScan\('periodic'\)/);
+    assert.match(getRoute('post', '/api/scan/start'), /processScan\('manual'\)/);
+    assert.match(getRoute('get', '/api/scan/status'), /trigger: scanState\.trigger/);
+    assert.match(serverSource, /if \(changedCount > 0\) database\.clearTimelineBucketCache\(\);/);
+});

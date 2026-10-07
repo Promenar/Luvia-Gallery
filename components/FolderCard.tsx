@@ -1,7 +1,8 @@
 
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { FolderNode, MediaItem } from '../types';
 import { getAuthUrl } from '../utils/fileUtils';
+import { releaseMediaElement } from '../utils/media-element';
 import { Icons } from './ui/Icon';
 import { useLanguage } from '../contexts/LanguageContext';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from './kit/dropdown-menu';
@@ -26,7 +27,6 @@ interface FolderCardProps {
 
 export const FolderCard: React.FC<FolderCardProps> = React.memo(({ folder, onClick, isFavorite, onToggleFavorite, onRename, onDelete, onRegenerate, animate = true, layout = 'grid' }) => {
     const { t } = useLanguage();
-    const videoRef = useRef<HTMLVideoElement>(null);
     const [isPlaying, setIsPlaying] = useState(false);
     const [isRenaming, setIsRenaming] = useState(false);
     const [renameValue, setRenameValue] = useState('');
@@ -52,19 +52,21 @@ export const FolderCard: React.FC<FolderCardProps> = React.memo(({ folder, onCli
         return null;
     }, [folder.coverMedia]);
 
+    // 封面为原视频（无缩略图）时仅在悬停期间挂载播放器，避免整页文件夹同时占用视频连接
+    const hasVideoPreview = folder.coverMedia?.mediaType === 'video' && !folder.coverMedia.url.includes('/api/thumb/');
+
     const handleMouseEnter = () => {
-        if (folder.coverMedia?.mediaType === 'video' && videoRef.current && !imgError) {
-            videoRef.current.play().catch(() => { });
-            setIsPlaying(true);
-        }
+        if (hasVideoPreview && !imgError) setIsPlaying(true);
     };
 
     const handleMouseLeave = () => {
-        if (folder.coverMedia?.mediaType === 'video' && videoRef.current) {
-            videoRef.current.pause();
-            setIsPlaying(false);
-        }
+        setIsPlaying(false);
     };
+
+    const attachPreviewVideo = useCallback((video: HTMLVideoElement | null) => {
+        if (!video) return;
+        return () => releaseMediaElement(video);
+    }, []);
 
     const handleAction = (action: 'fav' | 'rename' | 'delete') => {
         if (action === 'fav' && onToggleFavorite) {
@@ -120,11 +122,12 @@ export const FolderCard: React.FC<FolderCardProps> = React.memo(({ folder, onCli
                                     onError={() => setImgError(true)}
                                 />
                             )}
-                            {!folder.coverMedia.url.includes('/api/thumb/') && (
+                            {hasVideoPreview && isPlaying && (
                                 <video
-                                    ref={videoRef}
+                                    ref={attachPreviewVideo}
                                     src={getAuthUrl(folder.coverMedia.url)}
                                     muted
+                                    autoPlay
                                     loop
                                     playsInline
                                     className={`absolute inset-0 h-full w-full object-cover transition-opacity duration-300 ${isPlaying ? 'opacity-100' : 'opacity-0'}`}

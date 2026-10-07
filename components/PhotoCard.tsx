@@ -1,6 +1,7 @@
 import React, { useRef, useState, useMemo, useEffect, useCallback } from 'react';
 import { MediaItem } from '../types';
 import { getAuthHeaders, getAuthUrl } from '../utils/fileUtils';
+import { releaseMediaElement } from '../utils/media-element';
 import { Icons } from './ui/Icon';
 import { useLanguage } from '../contexts/LanguageContext';
 import { notify } from './feedback/feedback';
@@ -35,6 +36,9 @@ const areCardMediaItemsEqual = (prev: MediaItem, next: MediaItem): boolean =>
   && prev.mediaCount === next.mediaCount
   && prev.coverMedia === next.coverMedia
   && prev.children === next.children;
+
+/** 视频卡片悬停预览的停留阈值：短于此时间的划过不请求原视频 */
+export const HOVER_PREVIEW_DELAY_MS = 350;
 
 const MIN_MEDIA_ASPECT_RATIO = 0.5;
 const MAX_MEDIA_ASPECT_RATIO = 2.4;
@@ -115,10 +119,10 @@ const VisualMediaCard: React.FC<MediaCardProps> = ({
 }) => {
   const { t } = useLanguage();
 
-  const videoRef = useRef<HTMLVideoElement>(null);
   const hoverTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [isHovered, setIsHovered] = useState(false);
+  // 悬停停留超过阈值才挂载视频预览，快速划过网格不发起原视频请求
+  const [isPreviewing, setIsPreviewing] = useState(false);
   const [isVideoLoaded, setIsVideoLoaded] = useState(false);
   const [imgError, setImgError] = useState(false);
   const [hasError, setHasError] = useState(false);
@@ -223,30 +227,29 @@ const VisualMediaCard: React.FC<MediaCardProps> = ({
   };
 
   const handleMouseEnter = () => {
-    setIsHovered(true);
-    if (item.mediaType === 'video') {
-      hoverTimeoutRef.current = setTimeout(() => {
-        if (videoRef.current) {
-          videoRef.current.play().catch(() => { });
-          setIsPlaying(true);
-        }
-      }, 50);
-    }
+    if (item.mediaType !== 'video' || hoverTimeoutRef.current) return;
+    hoverTimeoutRef.current = setTimeout(() => {
+      hoverTimeoutRef.current = null;
+      setIsPreviewing(true);
+    }, HOVER_PREVIEW_DELAY_MS);
   };
 
   const handleMouseLeave = () => {
-    setIsHovered(false);
-    setIsVideoLoaded(false);
     if (hoverTimeoutRef.current) {
       clearTimeout(hoverTimeoutRef.current);
       hoverTimeoutRef.current = null;
     }
-    if (item.mediaType === 'video' && videoRef.current) {
-      videoRef.current.pause();
-      videoRef.current.currentTime = 0;
-      setIsPlaying(false);
-    }
+    // 预览元素随状态卸载，卸载时由 ref 清理函数释放连接
+    setIsPreviewing(false);
+    setIsVideoLoaded(false);
+    setIsPlaying(false);
   };
+
+  // React 19 ref 清理：元素卸载（移出悬停、虚拟列表回收、卡片销毁）时立即中止视频下载
+  const attachPreviewVideo = useCallback((video: HTMLVideoElement | null) => {
+    if (!video) return;
+    return () => releaseMediaElement(video);
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -284,17 +287,18 @@ const VisualMediaCard: React.FC<MediaCardProps> = ({
     >
       {item.mediaType === 'video' ? (
         <div className="absolute inset-0 flex items-center justify-center bg-muted">
-          {isHovered && !imgError && (
+          {isPreviewing && !imgError && (
             <video
-              ref={videoRef}
+              ref={attachPreviewVideo}
               src={getAuthUrl(item.url)}
               poster={thumbnailSrc}
               className={`w-full h-full object-cover absolute inset-0 z-10 transition-opacity duration-500 ${isVideoLoaded ? 'opacity-100' : 'opacity-0'}`}
               muted
-              preload="metadata"
+              autoPlay
               playsInline
               loop
               onCanPlay={() => setIsVideoLoaded(true)}
+              onPlaying={() => setIsPlaying(true)}
               onError={() => { setIsVideoLoaded(false); }}
             />
           )}

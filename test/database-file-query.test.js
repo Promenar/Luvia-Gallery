@@ -649,6 +649,25 @@ test('时间线分桶按本地年月倒序计数，并复用媒体类型、权�
     assert.deepEqual(database.queryTimelineBuckets({ favoritesOnly: true, userId: 'user-a' }).map(bucket => bucket.key), ['2026-08']);
 });
 
+test('时间线逐月区间计数与按年月分组结果一致，跨年、空月与月界均正确', () => {
+    database.clearTimelineBucketCache();
+    addFile({ id: 'jan', path: '/library/jan.jpg', name: 'jan.jpg', folderPath: '/library', lastModified: Math.floor(new Date(2026, 0, 1).getTime() / 1000) });
+    addFile({ id: 'dec', path: '/library/dec.jpg', name: 'dec.jpg', folderPath: '/library', lastModified: Math.floor(new Date(2026, 0, 1).getTime() / 1000) - 1 });
+    addFile({ id: 'oct', path: '/library/oct.mp4', name: 'oct.mp4', folderPath: '/library', lastModified: localTs(2025, 10, 15), mediaType: 'video' });
+    assert.deepEqual(
+        database.queryTimelineBuckets({}).map(bucket => [bucket.key, bucket.count]),
+        [['2026-01', 1], ['2025-12', 1], ['2025-10', 1]]
+    );
+    assert.deepEqual(database.queryTimelineBuckets({ excludeMediaType: 'video' }).map(bucket => bucket.key), ['2026-01', '2025-12']);
+});
+
+test('时间跨度异常过大时时间线回退为分组查询', () => {
+    database.clearTimelineBucketCache();
+    addFile({ id: 'ancient', path: '/library/a.jpg', name: 'a.jpg', folderPath: '/library', lastModified: Math.floor(new Date(1800, 5, 15).getTime() / 1000) });
+    addFile({ id: 'recent', path: '/library/r.jpg', name: 'r.jpg', folderPath: '/library', lastModified: localTs(2026, 9, 1) });
+    assert.deepEqual(database.queryTimelineBuckets({}).map(bucket => bucket.key), ['2026-09', '1800-06']);
+});
+
 test('时间线分桶缓存在新增媒体或收藏变化后失效', () => {
     database.clearTimelineBucketCache();
     addFile({ id: 'one', path: '/library/1.jpg', name: '1.jpg', folderPath: '/library', lastModified: localTs(2026, 5, 5) });
