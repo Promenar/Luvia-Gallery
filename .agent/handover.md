@@ -2562,3 +2562,33 @@ record-fingerprint: 23a51afe9b2b65d2a3b344b0572d1f0a0e78e06736223d8545f126440e64
 
 ### HLG
 本记录。
+
+## 2026-10-07T19:39:23+08:00 · 清理 FNOS 旧备份、候选目录与回滚镜像
+
+type: maintenance
+scope: ["luvia-gallery", "fnos"]
+status: done
+tags: ["fnos", "cleanup", "backup", "docker"]
+continuity: none
+record-fingerprint: b3e4efd1380573f255dd78fe3e03fb9c0ceb77f5f8892ac6df91d8e09de720ed
+
+### Summary
+经用户确认按建议范围清理 FNOS：保留运行中镜像 dfae579（latest）、回滚镜像 rollback-dfae579-pre（=821acf5-amd64）及 .deploy/backups/dfae579、.deploy/backups/821acf5 两份备份，其余删除。
+
+### Changed
+删除 24 个旧镜像标签（14 个镜像 ID，60ce8ca 及更早各版本与 rollback-*-pre）；删除 .deploy/backups 下 13 份旧备份（191b4a6、2c352a6、2f8388e、308fe12、5b26b5f、60ce8ca、6cc0643、925dbaa、967bd8f、e15dff1、ea9a71e、f894676、fc90482）；删除 candidate-2c352a6/60ce8ca/6cc0643/e15dff1、migration-benchmark-e15dff1、9d72099-restore-20260803 及 10 个修订号小目录。DevFleet runs 目录未动。
+
+### Validation
+删除前断言生产容器镜像为 527eac71、回滚标签指向 53222c77；删除后 .deploy 仅剩 backups/821acf5 与 backups/dfae579，镜像仅剩 dfae579-amd64、latest、821acf5-amd64、rollback-dfae579-pre，生产容器 running、restarts=0。
+
+### Next
+下次候选验证不再有 candidate-60ce8ca 缓存与抽样清单，需从生产 cache 复制并重新抽样 24 个缩略图 ID。
+
+### Risks
+已无法回滚到 821acf5 之前的版本。Docker 位于 /vol1，删除前未记录可用空间，释放量未精确统计；/vol2 可用空间读数未见明显变化，可能受文件系统压缩或快照影响。/vol1 仍有 23 个悬空镜像，可能属于其它项目，未处理。
+
+### DIA
+无文档影响。
+
+### HLG
+本记录。

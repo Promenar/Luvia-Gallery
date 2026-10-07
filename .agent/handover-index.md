@@ -1,6 +1,6 @@
 # Handover Index
 
-> generated_at: 2026-10-07T18:21:28+08:00
+> generated_at: 2026-10-07T19:39:23+08:00
 > generated: true; do not edit manually
 > recovery_window_days: 7
 
@@ -24,6 +24,7 @@
 
 | date | format | status | continuity | scope | tags | title | source |
 | :---: | :---: | :---: | :---: | :--- | :--- | :--- | :--- |
+| 2026-10-07T19:39:23+08:00 | iso | done | none | ["luvia-gallery", "fnos"] | ["fnos", "cleanup", "backup", "docker"] | 清理 FNOS 旧备份、候选目录与回滚镜像 | `.agent/handover.md` · `2026-10-07T19:39:23+08:00` · `fp:b3e4efd138` |
 | 2026-10-07T18:21:28+08:00 | iso | done | none | ["luvia-gallery", "webui"] | ["video", "connections", "acceptance"] | 用户实测确认 dfae579 视频目录不再卡死 | `.agent/handover.md` · `2026-10-07T18:21:28+08:00` · `fp:23a51afe9b` |
 | 2026-10-07T12:58:02+08:00 | iso | done | none | ["luvia-gallery", "webui", "server", "fnos"] | ["deploy", "fnos", "video", "connections", "timeline", "scan", "security"] | 修复视频目录加载卡死、定时扫描弹窗与时间线阻塞并部署 dfae579 至 FNOS | `.agent/handover.md` · `2026-10-07T12:58:02+08:00` · `fp:977f01b94b` |
 | 2026-10-02T14:50:29+08:00 | iso | done | none | ["luvia-gallery", "fnos"] | ["deploy", "fnos", "security", "webui", "timeline"] | 部署 821acf5 至 FNOS 生产（安全加固 + 视觉 1-4 阶段） | `.agent/handover.md` · `2026-10-02T14:50:29+08:00` · `fp:ef732d21d1` |
