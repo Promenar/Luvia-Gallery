@@ -2502,3 +2502,33 @@ record-fingerprint: ef732d21d172e4b842b824b140d466838d5449069ec4d6968fb25adbe1e3
 
 ### HLG
 本记录。
+
+## 2026-10-07T12:58:02+08:00 · 修复视频目录加载卡死、定时扫描弹窗与时间线阻塞并部署 dfae579 至 FNOS
+
+type: release
+scope: ["luvia-gallery", "webui", "server", "fnos"]
+status: done
+tags: ["deploy", "fnos", "video", "connections", "timeline", "scan", "security"]
+continuity: none
+record-fingerprint: 977f01b94b031f335ae80a75381c035ba87e16d97ebf338c3b0b6c64684904db
+
+### Summary
+用户反馈视频多的目录不定时加载不出、刷新无效，多次刷新会弹出扫描控件。诊断：视频卡片悬停预览卸载时未移除 src，浏览器持续下载原视频，占满 HTTP/1.1 同主机 6 个连接（日志中每分钟 6-7 个 20-175 秒的 /api/file 流，客户端关闭）；时间线 strftime(localtime) 分组同步查询约 2.1-2.5 秒阻塞事件循环且每次扫描后被清缓存；服务端每 30 分钟定时扫描约 40 秒，前端恢复时对任何进行中的扫描都弹窗；缓存统计每 10 分钟遍历 90 万缩略图约 37 秒。另发现 /api/file 调试日志打印含 token 的 URL。修复后 dfae579643da6ccf0ef5d1ef93b3dae9ae73a50c 部署至生产。
+
+### Changed
+新增 utils/media-element.ts（releaseMediaElement：pause、移除 src、load 中止下载）与 utils/background-tasks.ts（shouldAutoOpenTaskProgress）。PhotoCard 悬停 350ms 后才挂载预览，React 19 ref 清理释放；FolderCard 原视频封面仅悬停挂载；VideoPane 卸载释放。App 合并两处任务恢复为 restoreBackgroundTasks，定时扫描不弹窗、不在结束时重载当前列表；Sidebar 系统分组在后台任务进行且窗口关闭时显示“媒体库后台同步中”入口。server：scanState.trigger（manual/periodic）并在 /api/scan/status 返回；扫描统计 changedCount，无变化不清时间线缓存；缓存统计间隔改 6 小时；移除 /api/file 的 Media Hit/Resolved Path/Range/Served 调试日志。database：时间线改逐月 last_modified 区间计数（搜索、收藏或跨度超 2400 月回退分组）。文档：release_notes、DATA_SCHEMA、STITCH-DESIGN-GUIDE。
+
+### Validation
+生产只读基准：逐月计数 93ms 对比分组 1943ms，结果一致。FNOS node:20 按确切 SHA：后端 76/76、前端 337/337（新增 media-preview-release 7 项、数据库 2 项、契约 2 项）、typecheck、build 通过。候选容器：健康检查通过，时间线首算 318ms，分桶摘要与生产旧实现一致，手动扫描 trigger=manual，无变化扫描后分桶 5ms 且结果不变，日志无 token。生产切换 17 秒，时间线首算 136ms，restarts=0、OOM=false，网络侧 JS 哈希 1c6cdd01…862f 与镜像一致。候选容器与数据已清理。
+
+### Next
+可请用户在视频密集目录实际浏览确认不再卡死；如仍偶发，可考虑为视频预览改用服务端低码率预览片段或经 HTTP/2 反向代理提供服务。
+
+### Risks
+悬停预览连接释放依赖浏览器遵守移除 src 后 load() 中止获取的规范行为，仅在 jsdom 单测与代码层面验证，未在真实浏览器登录生产复现（登录需用户凭据）。用于量化磁盘争用的延迟探针被容器重建终止，未取得数据。回滚：rollback-dfae579-pre（821acf5）可直接切回，无需恢复配置。
+
+### DIA
+已同步 release_notes.md、docs/DATA_SCHEMA.md、docs/STITCH-DESIGN-GUIDE.md。
+
+### HLG
+本记录。
