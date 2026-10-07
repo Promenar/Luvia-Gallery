@@ -36,6 +36,7 @@ import { Toaster } from './components/kit/sonner';
 import { Button } from './components/kit/button';
 import { Input } from './components/kit/input';
 import { Label } from './components/kit/label';
+import { isBackgroundTaskActive, shouldAutoOpenTaskProgress } from './utils/background-tasks';
 
 type GalleryPageCache = {
     files: MediaItem[];
@@ -1229,43 +1230,7 @@ function GalleryApp() {
 
                 if (serverMode) {
                     // Restore background task state
-                    setTimeout(async () => {
-                        try {
-                            const [scanRes, thumbRes] = await Promise.all([
-                                apiFetch('/api/scan/status'),
-                                apiFetch('/api/thumb-gen/status')
-                            ]);
-
-                            let foundActive = false;
-
-                            if (scanRes.ok) {
-                                const scanData = await scanRes.json();
-                                if (scanData.status === 'scanning' || scanData.status === 'paused') {
-                                    setScanStatus(scanData.status);
-                                    setScanProgress({ count: scanData.count, currentPath: scanData.currentPath || '', currentEngine: '' });
-                                    scanStatusRef.current = scanData.status;
-                                    foundActive = true;
-                                }
-                            }
-
-                            if (thumbRes.ok) {
-                                const thumbData = await thumbRes.json();
-                                if (thumbData.status === 'scanning' || thumbData.status === 'paused') {
-                                    setThumbStatus(thumbData.status);
-                                    setThumbProgress({ count: thumbData.count, total: thumbData.total, currentPath: thumbData.currentPath });
-                                    thumbStatusRef.current = thumbData.status;
-                                    foundActive = true;
-                                }
-                            }
-
-                            if (foundActive) {
-                                setIsUnifiedModalOpen(true);
-                                startUnifiedPolling();
-                            }
-                        } catch (e) {
-                            console.error('[Restore] Failed to check background tasks', e);
-                        }
-                    }, 100);
+                    setTimeout(() => { void restoreBackgroundTasks(); }, 100);
                 }
                 return;
             }
@@ -1717,7 +1682,11 @@ function GalleryApp() {
         } catch (e) { }
     };
 
-    const startUnifiedPolling = () => {
+    // 任务全部结束后是否重新加载当前位置：手动任务需要刷新结果，定时扫描不打断浏览
+    const reloadWhenTasksIdleRef = useRef(false);
+
+    const startUnifiedPolling = ({ reloadWhenIdle = true }: { reloadWhenIdle?: boolean } = {}) => {
+        if (reloadWhenIdle) reloadWhenTasksIdleRef.current = true;
         unifiedPollerRef.current?.start(async (signal) => {
             try {
                 const [scanRes, thumbRes] = await Promise.all([
@@ -1759,10 +1728,44 @@ function GalleryApp() {
                     handleFetchSmartResults();
                 }
                 // 任务结束后统一走数据集 effect 重新加载当前位置，保证目录/收藏/搜索/排序语义一致
-                if (currentUserRef.current) reloadCurrentGallery();
+                if (currentUserRef.current && reloadWhenTasksIdleRef.current) reloadCurrentGallery();
+                reloadWhenTasksIdleRef.current = false;
                 return false;
             }
         });
+    };
+
+    /** 页面加载时恢复后台任务状态；仅手动扫描与缩略图任务自动弹出进度窗口。 */
+    const restoreBackgroundTasks = async (isActive: () => boolean = () => true) => {
+        try {
+            const [scanRes, thumbRes] = await Promise.all([
+                apiFetch('/api/scan/status'),
+                apiFetch('/api/thumb-gen/status')
+            ]);
+            const scanData = scanRes.ok ? await scanRes.json() : null;
+            const thumbData = thumbRes.ok ? await thumbRes.json() : null;
+            if (!isActive()) return;
+
+            const scanActive = isBackgroundTaskActive(scanData?.status);
+            const thumbActive = isBackgroundTaskActive(thumbData?.status);
+            if (scanActive) {
+                setScanStatus(scanData.status);
+                setScanProgress({ count: scanData.count, currentPath: scanData.currentPath || '', currentEngine: '' });
+                scanStatusRef.current = scanData.status;
+            }
+            if (thumbActive) {
+                setThumbStatus(thumbData.status);
+                setThumbProgress({ count: thumbData.count, total: thumbData.total, currentPath: thumbData.currentPath });
+                thumbStatusRef.current = thumbData.status;
+            }
+            if (!scanActive && !thumbActive) return;
+
+            const userInitiated = shouldAutoOpenTaskProgress(scanData, thumbData);
+            if (userInitiated) setIsUnifiedModalOpen(true);
+            startUnifiedPolling({ reloadWhenIdle: userInitiated });
+        } catch (e) {
+            console.error('[Restore] Failed to check background tasks', e);
+        }
     };
 
     const handleSmartScan = async () => {
@@ -1908,34 +1911,7 @@ function GalleryApp() {
             fetchSystemStatus(true);
             fetchServerFavorites();
 
-            // Check both
-            Promise.all([
-                apiFetch('/api/scan/status').then(r => r.json()),
-                apiFetch('/api/thumb-gen/status').then(r => r.json())
-            ]).then(([scanData, thumbData]) => {
-                if (!isMounted) return;
-
-                let foundActive = false;
-
-                if (scanData && (scanData.status === 'scanning' || scanData.status === 'paused')) {
-                    setScanStatus(scanData.status);
-                    setScanProgress({ count: scanData.count, currentPath: scanData.currentPath || '', currentEngine: '' });
-                    scanStatusRef.current = scanData.status;
-                    foundActive = true;
-                }
-
-                if (thumbData && (thumbData.status === 'scanning' || thumbData.status === 'paused')) {
-                    setThumbStatus(thumbData.status);
-                    setThumbProgress({ count: thumbData.count, total: thumbData.total, currentPath: thumbData.currentPath });
-                    thumbStatusRef.current = thumbData.status;
-                    foundActive = true;
-                }
-
-                if (foundActive) {
-                    setIsUnifiedModalOpen(true);
-                    startUnifiedPolling();
-                }
-            }).catch(() => { });
+            void restoreBackgroundTasks(() => isMounted);
         }
         return () => {
             isMounted = false;
@@ -2905,6 +2881,8 @@ function GalleryApp() {
                 toggleTheme={toggleTheme}
                 isServerMode={isServerMode}
                 onOpenSettings={() => setIsSettingsOpen(true)}
+                backgroundTaskActive={!isUnifiedModalOpen && (isBackgroundTaskActive(scanStatus) || isBackgroundTaskActive(thumbStatus))}
+                onOpenBackgroundTasks={() => setIsUnifiedModalOpen(true)}
             />
 
             <main className={`flex-1 flex flex-col min-w-0 relative h-full ${viewMode === 'home' ? 'pt-16 md:pt-0' : 'pt-3 md:pt-0'}`}>

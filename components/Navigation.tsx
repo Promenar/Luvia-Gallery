@@ -18,6 +18,9 @@ interface NavigationProps {
   toggleTheme: () => void;
   isServerMode: boolean;
   onOpenSettings: () => void;
+  /** 有后台任务运行且进度窗口未打开时，侧边栏显示同步状态入口 */
+  backgroundTaskActive?: boolean;
+  onOpenBackgroundTasks?: () => void;
 }
 
 export const Navigation: React.FC<NavigationProps> = React.memo(({
@@ -34,6 +37,8 @@ export const Navigation: React.FC<NavigationProps> = React.memo(({
   toggleTheme,
   isServerMode,
   onOpenSettings,
+  backgroundTaskActive = false,
+  onOpenBackgroundTasks,
 }) => {
   const { t } = useLanguage();
   const isHome = viewMode === 'home';
@@ -80,6 +85,8 @@ export const Navigation: React.FC<NavigationProps> = React.memo(({
         onNavClick={handleNavClick}
         onToggleTheme={toggleTheme}
         onOpenSettings={handleSettingsClick}
+        backgroundTaskActive={backgroundTaskActive}
+        onOpenBackgroundTasks={onOpenBackgroundTasks}
         onToggleSidebar={toggleSidebar}
         onToggleDesktopSidebar={toggleDesktopSidebar || (() => {})}
         onUpload={onUpload}
@@ -93,6 +100,7 @@ export const Navigation: React.FC<NavigationProps> = React.memo(({
     prev.isDesktopSidebarOpen === next.isDesktopSidebarOpen &&
     prev.theme === next.theme &&
     prev.totalPhotos === next.totalPhotos &&
+    prev.backgroundTaskActive === next.backgroundTaskActive &&
     prev.appTitle === next.appTitle
   );
 });

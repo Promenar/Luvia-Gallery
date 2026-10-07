@@ -1,8 +1,9 @@
 // components/player/VideoPane.tsx（自 旧图片查看器源 600-631 行迁移，结构不变）
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Icons } from '../ui/Icon';
 import { getAuthUrl } from '../../utils/fileUtils';
 import { resolveVideoSource } from './video-source';
+import { releaseMediaElement } from '../../utils/media-element';
 import type { MediaItem } from '../../types';
 
 export const VideoPane: React.FC<{ item: MediaItem; onMediaRatio?: (ratio: number) => void }> = ({ item, onMediaRatio }) => {
@@ -10,6 +11,16 @@ export const VideoPane: React.FC<{ item: MediaItem; onMediaRatio?: (ratio: numbe
   const videoRef = useRef<HTMLVideoElement>(null);
   const source = resolveVideoSource(item);
   useEffect(() => setVideoError(false), [item.id]);
+
+  // 关闭播放器或切换到非视频时元素卸载，立即中止原视频下载，释放浏览器连接
+  const attachVideo = useCallback((video: HTMLVideoElement | null) => {
+    videoRef.current = video;
+    if (!video) return;
+    return () => {
+      if (videoRef.current === video) videoRef.current = null;
+      releaseMediaElement(video);
+    };
+  }, []);
 
   // hotfix-6：缓存命中兜底——视频元数据已就绪（readyState ≥ 1 且已解码）但 onLoadedMetadata
   // 错过时（如命中缓存），挂载后与每次渲染后补检一次，等价上报真实比例（同值重复上报无害）。
@@ -38,7 +49,7 @@ export const VideoPane: React.FC<{ item: MediaItem; onMediaRatio?: (ratio: numbe
   return (
     <div data-testid="video-pane" className="w-full h-full flex flex-col items-center justify-center relative group" onClick={(e) => e.stopPropagation()}>
       <video
-        ref={videoRef}
+        ref={attachVideo}
         src={source.url}
         controls autoPlay
         onError={() => setVideoError(true)}
