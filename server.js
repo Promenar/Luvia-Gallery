@@ -219,7 +219,8 @@ function updateGlobalCacheStats() {
 
 // Schedule updates
 setTimeout(updateGlobalCacheStats, 2000); // 2s after start
-setInterval(updateGlobalCacheStats, 10 * 60 * 1000); // map every 10 mins
+// 缓存统计需遍历全部缩略图文件（百万级时约 40 秒磁盘遍历），只做低频校准；清空缓存等操作会即时触发
+setInterval(updateGlobalCacheStats, 6 * 60 * 60 * 1000);
 
 const eventLoopDelay = monitorEventLoopDelay({ resolution: 20 });
 eventLoopDelay.enable();
@@ -486,7 +487,9 @@ let scanState = {
     count: 0,
     currentPath: '',
     shouldStop: false,
-    shouldPause: false
+    shouldPause: false,
+    // manual：用户在界面启动；periodic：后台定时扫描。前端只对手动扫描自动弹出进度窗口。
+    trigger: 'manual'
 };
 // Watcher state variables removed.
 // let isWatcherActive = false;
@@ -684,7 +687,7 @@ function startPeriodicScanner(paths, intervalMinutes) {
     periodicIntervalId = setInterval(() => {
         if (scanState.status === 'idle') {
             console.log('[Periodic] Starting scheduled scan...');
-            processScan();
+            processScan('periodic');
         } else {
             console.log('[Periodic] Skipping scan, system busy.');
         }
@@ -1164,8 +1167,9 @@ app.post('/api/folder/rename', adminOnly, (req, res) => {
 
 // --- Scanning Logic ---
 
-function processScan() {
+function processScan(trigger = 'manual') {
     const result = tryStartScan(backgroundTaskCoordinator, scanState, async () => {
+        scanState.trigger = trigger;
         try {
             await runMediaScan();
         } catch (error) {
@@ -1210,6 +1214,8 @@ async function runMediaScan() {
     const CLEANUP_BATCH_SIZE = 256;
     const SAVE_INTERVAL = 10000; // Save database every 10k files for safety
     let totalProcessed = 0;
+    // 本轮新增或修改、删除的媒体数；为 0 时数据未变，保留时间线分桶缓存
+    let changedCount = 0;
     let scanIncomplete = false;
     const allScannedPaths = new Set();
 
@@ -1299,6 +1305,7 @@ async function runMediaScan() {
                 };
 
                 batchBuffer.push(fileData);
+                changedCount++;
                 totalProcessed++;
                 scanState.count = totalProcessed;
 
@@ -1354,14 +1361,17 @@ async function runMediaScan() {
             } else {
                 console.log(`[Scan] Bounded cleanup complete; deleted ${cleanupResult.deletedCount} missing files.`);
             }
+            if (cleanupResult.deletedCount > 0) {
+                changedCount += cleanupResult.deletedCount;
+            }
         }
 
 
         // Final save
         database.saveDatabase();
         console.log('Database save complete');
-        // 扫描可能更新媒体修改时间，时间线分桶缓存需整体失效
-        database.clearTimelineBucketCache();
+        // 媒体有新增、修改或删除时时间线分桶缓存整体失效；无变化的定时扫描保留缓存
+        if (changedCount > 0) database.clearTimelineBucketCache();
         scanState.status = 'idle';
         console.log(`[Scan] Completed in ${Date.now() - startedAt}ms`);
     } else {
@@ -1392,6 +1402,7 @@ app.get('/api/scan/status', (req, res) => {
         const stats = database.getCachedStats();
         res.json({
             status: scanState.status,
+            trigger: scanState.trigger,
             count: scanState.count,
             currentPath: scanState.currentPath,
             total: stats.totalFiles,
@@ -1412,7 +1423,7 @@ app.get('/api/scan/status', (req, res) => {
 });
 
 app.post('/api/scan/start', adminOnly, (req, res) => {
-    const result = processScan();
+    const result = processScan('manual');
     const response = getScanStartResponse(result.started);
     res.status(response.statusCode).json(response.body);
 });
@@ -2598,11 +2609,9 @@ app.get('/api/file/:id/exif', async (req, res) => {
 
 // Serve Media Files
 app.get('/api/file/*', (req, res) => {
-    console.log(`\x1b[33m[DEBUG] Media Hit: ${req.url}\x1b[0m`);
     try {
         const fullId = decodeURIComponent(req.params[0] || '');
         const filePath = Buffer.from(fullId, 'base64').toString('utf8');
-        console.log(`\x1b[36m[DEBUG] Resolved Path: ${filePath}\x1b[0m`);
 
         if (!fs.existsSync(filePath)) {
             console.error(`[API] File 404: ${filePath}`);
@@ -2638,10 +2647,6 @@ app.get('/api/file/*', (req, res) => {
             console.log(`[API] Serving ${filePath} as ${contentType}`);
         }
 
-        if (req.headers.range) {
-            console.log(`\x1b[32m[DEBUG] Range Requested: ${req.headers.range}\x1b[0m`);
-        }
-
         res.sendFile(filePath, {
             acceptRanges: true,
             cacheControl: true,
@@ -2658,8 +2663,6 @@ app.get('/api/file/*', (req, res) => {
                     console.error('\x1b[31m[API] SendFile error:\x1b[0m', err.message);
                     res.status(500).send('Error');
                 }
-            } else {
-                console.log(`\x1b[32m[DEBUG] Served: ${path.basename(filePath)} (${contentType})\x1b[0m`);
             }
         });
     } catch (error) {

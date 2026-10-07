@@ -43,7 +43,7 @@
 | `count` | Number | 该月可见媒体数 |
 | `start` / `end` | Number | 该月起止 Unix 秒（左闭右开），可直接作为 `/api/scan/results` 的 `from` / `to` |
 
-分桶结果在内存中按“过滤条件 + 媒体集合版本（总数、最大 rowid、收藏数）”缓存 10 分钟，扫描完成时整体失效。`/api/scan/results` 的 `from`、`to` 必须同时提供且 `from < to`，否则返回 400。
+分桶结果按逐月 `last_modified` 区间计数（搜索与收藏范围按年月分组）生成，在内存中按“过滤条件 + 媒体集合版本（总数、最大 rowid、收藏数）”缓存 10 分钟；扫描发现新增、修改或删除时整体失效，无变化的定时扫描保留缓存。`/api/scan/results` 的 `from`、`to` 必须同时提供且 `from < to`，否则返回 400。
 
 ### SystemStatus.mediaStats (系统媒体统计)
 
