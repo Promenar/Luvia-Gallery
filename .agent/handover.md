@@ -2532,3 +2532,33 @@ record-fingerprint: 977f01b94b031f335ae80a75381c035ba87e16d97ebf338c3b0b6c646849
 
 ### HLG
 本记录。
+
+## 2026-10-07T18:21:28+08:00 · 用户实测确认 dfae579 视频目录不再卡死
+
+type: verification
+scope: ["luvia-gallery", "webui"]
+status: done
+tags: ["video", "connections", "acceptance"]
+continuity: none
+record-fingerprint: 23a51afe9b2b65d2a3b344b0572d1f0a0e78e06736223d8545f126440e644d8d
+
+### Summary
+用户在生产 dfae579 上于视频密集目录连续浏览约一小时，未再遇到页面加载卡死，补足此前仅单测验证的真实浏览器行为。
+
+### Changed
+无代码或配置变更。
+
+### Validation
+用户真实浏览器约一小时实测，未复现卡死。
+
+### Next
+无；如再出现，优先查看容器日志中 /api/file 慢请求与 Event loop delay 告警。
+
+### Risks
+偶发问题的验证窗口有限，长期稳定性仍以后续使用为准。
+
+### DIA
+无文档影响。
+
+### HLG
+本记录。
