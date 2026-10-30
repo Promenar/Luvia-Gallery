@@ -16,3 +16,4 @@ Luvia-Gallery 是一个图库应用，包含 Web 前端、Node.js 后端、移�
 - 遵循 §4 DIA 文档治理体系。
 - 变更必须同步更新 `.agent/registry.md` 中注册的相关文档。
 - 跨会话交接必须更新 `.agent/handover.md`。
+- `.agent/` 与 `.pdec/` 为本地治理目录，不随公开仓库分发（已加入 `.gitignore`）。
