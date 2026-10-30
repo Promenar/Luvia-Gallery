@@ -43,3 +43,14 @@ macos-widget/.build/
 
 # Codex 隔离工作树
 .worktrees/
+
+# 内部治理与部署契约（本地保留，不随公开仓库分发）
+.agent/
+.agents/
+.pdec/
+
+# SSH 私钥挂载目录（docker-compose 热更新引导使用，防止误提交）
+ssh/
+
+# ZCode video-agent 插件产物
+.video_agent/

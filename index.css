@@ -6,7 +6,7 @@
 @custom-variant dark (&:is(.dark *));
 
 /*
-  视觉契约：“暗房影院”（.agent/plans/2026-10-02-visual-foundation.md）
+  视觉契约：“暗房影院”
   - 深色：暖黑底；浅色：画廊白墙；唯一强调色为黄铜。
   - 媒体卡片不使用 backdrop-filter；毛玻璃仅用于工具栏、侧栏与浮层。
 */
