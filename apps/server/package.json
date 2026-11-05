@@ -11,6 +11,7 @@
     "start:api": "node src/api/main.ts",
     "start:worker": "node src/worker/main.ts",
     "bench": "node scripts/seed-bench.ts",
+    "fixtures": "node scripts/fixtures.ts",
     "test": "node --test test/*.test.ts",
     "typecheck": "tsc -p tsconfig.json"
   },
