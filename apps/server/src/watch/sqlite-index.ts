@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
+import { lstat } from 'node:fs/promises';
 import { lookup } from 'mime-types';
 import type { LibraryChangedEvent } from '@luvia/contracts';
 import { mediaId, virtualPath } from '../core/paths.ts';
@@ -8,6 +9,7 @@ import { appendLibraryChange } from '../core/library-changes.ts';
 import { moveDirectoryPaths } from '../core/directory-move.ts';
 import type { IndexedRecord, LibraryIndexPort, WatchLibraryChange } from './coordinator.ts';
 import type { MoveCandidate } from './move-matcher.ts';
+import { statFields } from './file-info.ts';
 
 type Options = {
   libraryId: string;
@@ -137,10 +139,26 @@ export class SqliteLibraryIndex implements LibraryIndexPort {
   }
   async writeAdded(entry: MoveCandidate): Promise<string | null> {
     const virtual = virtualPath(this.libraryId, entry.path); const parent = virtualPath(this.libraryId, parentOf(entry.path));
+    const missingParents: { relative: string; dev: string; ino: string; mtimeMs: number }[] = [];
+    if (!entry.isDir) {
+      const root = (this.db.prepare('SELECT root FROM libraries WHERE id=?').get(this.libraryId) as { root: string }).root;
+      let relative = parentOf(entry.path);
+      while (relative && !this.db.prepare('SELECT 1 FROM folders WHERE path=?').get(virtualPath(this.libraryId, relative))) {
+        const info = await lstat(path.join(root, relative), { bigint: true });
+        if (!info.isDirectory() || info.isSymbolicLink()) throw new Error('媒体父目录不可用');
+        const fields = statFields(info); missingParents.push({ relative, dev: fields.dev, ino: fields.ino, mtimeMs: fields.mtimeMs });
+        relative = parentOf(relative);
+      }
+    }
     const preferred = entry.isDir ? null : mediaId(this.libraryId, entry.path);
     let id = preferred;
     const pending: Pending = { kinds: ['added'], oldPath: null, path: entry.path, isDir: entry.isDir, mediaId: id };
     this.begin(pending, () => {
+      for (const directory of missingParents.reverse()) {
+        this.db.prepare('INSERT OR IGNORE INTO folders(path,library_id,parent,name,dev,ino,mtime_ms) VALUES (?,?,?,?,?,?,?)')
+          .run(virtualPath(this.libraryId, directory.relative), this.libraryId, virtualPath(this.libraryId, parentOf(directory.relative)),
+            path.posix.basename(directory.relative), directory.dev, directory.ino, directory.mtimeMs);
+      }
       while (id && this.db.prepare('SELECT 1 FROM files WHERE id=?').get(id)) id = randomUUID();
       pending.mediaId = id;
       if (entry.isDir) {
@@ -181,11 +199,13 @@ export class SqliteLibraryIndex implements LibraryIndexPort {
     const fromParent = virtualPath(this.libraryId, parentOf(old.path)); const toParent = virtualPath(this.libraryId, parentOf(entry.path));
     if (old.isDir) {
       if (old.path !== entry.path) {
+        this.mergeProvisionalDirectory(old.path, entry.path);
         moveDirectoryPaths(this.db, this.libraryId, old.path, entry.path, toParent);
       }
       if (!this.db.prepare('UPDATE folders SET name=?,parent=?,missing_at_ms=NULL,dev=?,ino=?,mtime_ms=? WHERE path=? AND library_id=?')
         .run(path.posix.basename(entry.path), toParent, identity(entry.dev), identity(entry.ino), entry.mtimeMs, target, this.libraryId).changes) throw new Error('目录索引已变化');
-      this.refresh([target, fromParent, toParent]);
+      const descendants = this.db.prepare('SELECT path FROM folders WHERE library_id=? AND path>=? AND path<?').all(this.libraryId, `${target}/`, `${target}0`) as { path: string }[];
+      this.refresh([target, fromParent, toParent, ...descendants.map((folder) => folder.path)]);
     } else {
       if (!old.mediaId) throw new Error('媒体缺少 ID');
       const changed = this.db.prepare(`UPDATE files SET relative_path=?,folder=?,name=?,mime=?,media_type=?,missing_at_ms=NULL,dev=?,ino=?,mtime_ms=?,head_hash=?,size=?,modified_at=?
@@ -198,6 +218,29 @@ export class SqliteLibraryIndex implements LibraryIndexPort {
         make=NULL,model=NULL,lens=NULL,f_number=NULL,exposure_time=NULL,iso=NULL,focal_length=NULL,focal_length35=NULL,software=NULL,
         latitude=NULL,longitude=NULL,altitude=NULL,playability=NULL WHERE id=?`).run(Math.floor(entry.mtimeMs / 1000), old.mediaId);
       this.refresh([fromParent, toParent]);
+    }
+  }
+  private mergeProvisionalDirectory(from: string, to: string): void {
+    const source = virtualPath(this.libraryId, from); const target = virtualPath(this.libraryId, to);
+    const files = this.db.prepare(`SELECT id,relative_path,dev,ino FROM files WHERE library_id=? AND (folder=? OR (folder>=? AND folder<?))`)
+      .all(this.libraryId, source, `${source}/`, `${source}0`) as { id: string; relative_path: string; dev: string | null; ino: string | null }[];
+    for (const file of files) {
+      const relative = to + file.relative_path.slice(from.length);
+      const provisional = this.db.prepare('SELECT id,dev,ino FROM files WHERE library_id=? AND relative_path=?').get(this.libraryId, relative) as { id: string; dev: string | null; ino: string | null } | undefined;
+      if (!provisional) continue;
+      if (!file.dev || !file.ino || file.dev !== provisional.dev || file.ino !== provisional.ino) throw new Error('目录移动的目标媒体身份冲突');
+      this.db.prepare("INSERT OR IGNORE INTO favorites(user_id,item_id,item_type,created_at) SELECT user_id,?,'file',created_at FROM favorites WHERE item_type='file' AND item_id=?").run(file.id, provisional.id);
+      this.db.prepare('INSERT OR IGNORE INTO album_items(album_id,file_id,created_at) SELECT album_id,?,created_at FROM album_items WHERE file_id=?').run(file.id, provisional.id);
+      this.db.prepare('UPDATE albums SET cover_id=? WHERE cover_id=?').run(file.id, provisional.id);
+      this.removeFile(provisional.id);
+    }
+    const folders = this.db.prepare('SELECT path,dev,ino FROM folders WHERE library_id=? AND (path=? OR (path>=? AND path<?)) ORDER BY length(path) DESC')
+      .all(this.libraryId, source, `${source}/`, `${source}0`) as { path: string; dev: string | null; ino: string | null }[];
+    for (const folder of folders) {
+      const destination = target + folder.path.slice(source.length);
+      const provisional = this.db.prepare('SELECT dev,ino FROM folders WHERE library_id=? AND path=?').get(this.libraryId, destination) as { dev: string | null; ino: string | null } | undefined;
+      if (provisional && (!folder.dev || !folder.ino || folder.dev !== provisional.dev || folder.ino !== provisional.ino)) throw new Error('目录移动的目标目录身份冲突');
+      this.db.prepare('DELETE FROM folders WHERE library_id=? AND path=?').run(this.libraryId, destination);
     }
   }
   async writeMoved(old: IndexedRecord, entry: MoveCandidate): Promise<void> {
