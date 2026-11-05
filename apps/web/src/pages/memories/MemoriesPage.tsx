@@ -4,7 +4,7 @@ import { mediaUrls, type MediaItem, type Memories } from '@luvia/contracts';
 import { q } from '@/lib/query';
 import { aspectOf, justifyRows } from '@/components/media/justify';
 import { GRID_GAP, useElementWidth, useRowHeight } from '@/components/media/MediaGrid';
-import { Thumb, thumbhashUrl } from '@/components/media/Thumb';
+import { canThumb, Thumb, thumbhashUrl } from '@/components/media/Thumb';
 import { openViewer } from '@/stores/viewer';
 import { setDynamicFrom } from '@/theme/ThemeProvider';
 import { Hero } from './Hero';
@@ -43,7 +43,7 @@ function OnThisDay({ data }: { data: Memories['onThisDay'] }) {
             className="group/mc relative aspect-[3/4] cursor-pointer overflow-hidden rounded-[var(--r3)] bg-sunken bg-cover text-left after:absolute after:inset-0 after:bg-[linear-gradient(transparent_40%,rgba(0,0,0,.7))]"
             style={{ backgroundImage: ph ? `url(${ph})` : undefined }}
           >
-            {cover.thumbVersion > 0 && (
+            {canThumb(cover) && (
               <img
                 src={mediaUrls.thumb(cover.id, 'm', cover.thumbVersion)}
                 alt=""

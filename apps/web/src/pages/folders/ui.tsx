@@ -3,7 +3,7 @@ import { Link } from '@tanstack/react-router';
 import { Folder as FolderIcon, Heart, Play } from 'lucide-react';
 import { mediaUrls, type Folder, type MediaItem } from '@luvia/contracts';
 import { cn } from '@/lib/cn';
-import { pickThumbSize, thumbhashUrl } from '@/components/media/Thumb';
+import { canThumb, pickThumbSize, thumbhashUrl } from '@/components/media/Thumb';
 import { setDynamicFrom } from '@/theme/ThemeProvider';
 import { useFolderFavorite } from './favorite';
 
@@ -33,7 +33,7 @@ export function CoverImage({ item, displayPx, className, blur }: { item: MediaIt
   const ph = thumbhashUrl(item);
   return (
     <div className={cn('size-full bg-sunken bg-cover', className)} style={{ backgroundImage: ph ? `url(${ph})` : undefined }}>
-      {!blur && item.thumbVersion > 0 && (
+      {!blur && canThumb(item) && (
         <img
           src={mediaUrls.thumb(item.id, pickThumbSize(displayPx), item.thumbVersion)}
           alt=""
