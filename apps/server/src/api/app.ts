@@ -4,11 +4,13 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import type Database from 'better-sqlite3';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { ZodError } from 'zod';
-import { CSRF_HEADER, endpoints, Preferences, WallpaperConfig, defaultPreferences } from '@luvia/contracts';
+import { CSRF_HEADER, endpoints, JobAction, Preferences, WallpaperConfig, defaultPreferences } from '@luvia/contracts';
 import type { User } from '@luvia/contracts';
 import { hashPassword, verifyPassword } from '../core/password.ts';
 import { MediaReader } from '../core/media-query.ts';
 import { pathAllowed } from '../core/paths.ts';
+import { jobView, publishJob } from '../core/job-view.ts';
+import type { JobRecord } from '../core/job-view.ts';
 
 type UserRow = {
   id: string; username: string; password_hash: string; role: 'admin' | 'user';
@@ -244,6 +246,87 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     const query = endpoints.randomMedia.query.parse(req.query);
     if (query.exclude && query.exclude.length > 500) fail(400, 'VALIDATION', '排除的媒体不能超过 500 个');
     return media.random(query, mediaContext(req));
+  });
+  register('listJobs', async (req) => {
+    const query = endpoints.listJobs.query.parse(req.query);
+    const rows = db.prepare(`SELECT * FROM jobs WHERE (? IS NULL OR status=?)
+      ORDER BY CASE WHEN status IN ('running','queued') THEN 0 ELSE 1 END, created_at DESC, id DESC LIMIT ?`)
+      .all(query.status ?? null, query.status ?? null, query.limit) as JobRecord[];
+    return { jobs: rows.map(jobView) };
+  });
+  register('createJob', async (_req, _reply, body) => {
+    if (body.libraryId && !db.prepare('SELECT 1 FROM libraries WHERE id=?').get(body.libraryId)) fail(404, 'NOT_FOUND', '媒体库不存在');
+    const labels: Record<string, string> = { scan: '扫描媒体库', metadata: '提取元数据', thumbnails: '生成缩略图', previews: '生成预览', health_check: '健康检查', cache_prune: '清理缓存', import_legacy: '导入旧版数据' };
+    const id = randomUUID();
+    return db.transaction(() => {
+      db.prepare("INSERT INTO jobs(id,type,label,status,trigger,payload,created_at) VALUES (?,?,?,'queued','manual',?,?)")
+        .run(id, body.type, labels[body.type], JSON.stringify({ libraryId: body.libraryId ?? null }), now());
+      publishJob(db, id);
+      return jobView(db.prepare('SELECT * FROM jobs WHERE id=?').get(id) as JobRecord);
+    }).immediate();
+  });
+  register('jobAction', async (req) => {
+    const { id, action: rawAction } = req.params as { id: string; action: string };
+    const action = JobAction.parse(rawAction);
+    return db.transaction(() => {
+      const row = (db.prepare('SELECT * FROM jobs WHERE id=?').get(id) as JobRecord | undefined) ?? fail(404, 'NOT_FOUND', '作业不存在');
+      const transitions: Record<string, Record<string, string>> = {
+        pause: { queued: 'paused', running: 'paused' }, resume: { paused: 'queued' },
+        cancel: { queued: 'cancelled', running: 'cancelled', paused: 'cancelled' }, retry: { failed: 'queued', cancelled: 'queued' },
+      };
+      const next = transitions[action]?.[row.status];
+      if (!next) fail(409, 'CONFLICT', '当前状态不支持该操作');
+      db.prepare('UPDATE jobs SET status=?,owner=NULL,heartbeat_at=NULL,lease_expires_at=NULL,finished_at=? WHERE id=?')
+        .run(next, next === 'cancelled' ? now() : null, id);
+      publishJob(db, id);
+      return jobView(db.prepare('SELECT * FROM jobs WHERE id=?').get(id) as JobRecord);
+    }).immediate();
+  });
+  app.get('/api/v2/events', async (req, reply) => {
+    const identity = requireUser(req);
+    if (identity.scope === 'wallpaper') fail(403, 'FORBIDDEN', '令牌权限不足');
+    const last = req.headers['last-event-id'];
+    let cursor = typeof last === 'string' && /^\d{1,15}$/.test(last) ? Number(last) :
+      (db.prepare('SELECT COALESCE(max(id),0) AS n FROM job_events').get() as { n: number }).n;
+    reply.hijack();
+    reply.raw.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
+    reply.raw.write(': connected\n\n');
+    let lastPing = Date.now();
+    let waitingDrain = false;
+    const send = (value: string) => {
+      if (!reply.raw.write(value)) {
+        waitingDrain = true;
+        reply.raw.once('drain', () => { waitingDrain = false; });
+      }
+    };
+    const timer = setInterval(() => {
+      try {
+        const current = authenticate(req);
+        if (!current) {
+          reply.raw.write('event: session\ndata: {"reason":"revoked"}\n\n');
+          clearInterval(timer); reply.raw.end(); return;
+        }
+        if (waitingDrain) return;
+        const records = db.prepare('SELECT id,event_type,payload FROM job_events WHERE id>? ORDER BY id LIMIT 256').all(cursor) as { id: number; event_type: string; payload: string }[];
+        for (const record of records) {
+          cursor = record.id;
+          if (record.event_type === 'job' && (current.kind !== 'session' || current.user.role !== 'admin')) continue;
+          if (record.event_type === 'library') {
+            const event = JSON.parse(record.payload) as { folders: string[]; added: number; removed: number; updated: number };
+            const allowed = userOut(current.user).allowedPaths;
+            if (allowed !== null && event.folders.length) {
+              event.folders = event.folders.filter((folder) => pathAllowed(folder, allowed));
+              if (!event.folders.length) continue;
+            }
+            send(`id: ${record.id}\nevent: library\ndata: ${JSON.stringify(event)}\n\n`);
+          } else if (record.event_type === 'job') send(`id: ${record.id}\nevent: job\ndata: ${record.payload}\n\n`);
+          if (waitingDrain) break;
+        }
+        if (!waitingDrain && Date.now() - lastPing >= 25_000) { send(': ping\n\n'); lastPing = Date.now(); }
+      } catch { clearInterval(timer); reply.raw.end(); }
+    }, 250);
+    timer.unref();
+    reply.raw.on('close', () => clearInterval(timer));
   });
   return app;
 }
