@@ -200,3 +200,19 @@ test('实时目录移动和同名新建清理过期日志去重状态', async ()
     assert.equal((db.prepare('SELECT count(*) AS n FROM scan_expiry_logged').get() as { n: number }).n, 0);
   } finally { db.close(); }
 });
+
+test('临时新增记录变化后移动合并拒绝覆盖并保持事务回滚', async () => {
+  const db = openDatabase(':memory:');
+  try {
+    db.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib','照片','/fixture')").run();
+    db.prepare("INSERT INTO folders(path,library_id,parent,name) VALUES ('lib','lib',NULL,'照片')").run();
+    db.prepare(`INSERT INTO files(id,library_id,relative_path,folder,name,mime,media_type,size,modified_at,taken_at,taken_at_source,dev,ino,mtime_ms,head_hash)
+      VALUES ('old','lib','old.jpg','lib','old.jpg','image/jpeg','image',1,1,1,'mtime','1','2',1000,'hash'),
+             ('temp','lib','new.jpg','lib','new.jpg','image/jpeg','image',2,1,1,'mtime','1','2',1000,'changed')`).run();
+    const { SqliteLibraryIndex } = await import('../src/watch/sqlite-index.ts');
+    const port = new SqliteLibraryIndex(db, { libraryId: 'lib', requestFullReconcile: async () => {}, publishEvent: async () => {} });
+    const old = (await port.readDirectory('')).find((entry) => entry.path === 'old.jpg')!;
+    await assert.rejects(port.writeMoved(old, { ...old, path: 'new.jpg', mediaId: 'temp' }), /临时媒体索引已变化/);
+    assert.equal((db.prepare('SELECT count(*) n FROM files').get() as {n:number}).n, 2); assert.equal(db.inTransaction, false);
+  } finally { db.close(); }
+});

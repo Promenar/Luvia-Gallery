@@ -1,7 +1,7 @@
 import { test as nodeTest } from 'node:test';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rename, rm, stat, writeFile, link } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { LibraryChangedEvent } from '@luvia/contracts';
@@ -36,9 +36,9 @@ class MemoryIndex implements LibraryIndexPort {
   async findMissingCandidates(_candidate: MoveCandidate) { return [...this.records.values()].filter((v) => v.missingAt !== null).map((v) => ({ ...v })); }
   async writeAdded(entry: MoveCandidate) { const id = entry.isDir ? null : `media-${++this.nextId}`; this.records.set(entry.path, { ...entry, mediaId: id, missingAt: null }); return id; }
   async writeUpdated(old: IndexedRecord, entry: MoveCandidate) { this.records.set(entry.path, { ...entry, mediaId: old.mediaId, missingAt: null }); }
-  async writeMoved(old: IndexedRecord, entry: MoveCandidate) { this.relocate(old, entry); }
+  async writeMoved(old: IndexedRecord, entry: MoveCandidate) { if (entry.mediaId) this.records.delete(entry.path); this.relocate(old, entry); }
   async writeMissing(old: IndexedRecord, at: number) { for (const value of this.records.values()) if (value.path === old.path || (old.isDir && value.path.startsWith(`${old.path}/`))) value.missingAt = at; }
-  async writeRestored(old: IndexedRecord, entry: MoveCandidate) { this.relocate(old, entry); }
+  async writeRestored(old: IndexedRecord, entry: MoveCandidate) { if (entry.mediaId) this.records.delete(entry.path); this.relocate(old, entry); }
   async writeRemoved(old: IndexedRecord) { for (const p of this.records.keys()) if (p === old.path || (old.isDir && p.startsWith(`${old.path}/`))) this.records.delete(p); }
   async appendChange(change: WatchLibraryChange) { this.changes.push(change); }
   async requestFullReconcile(reason: string) { this.requests.push(reason); }
@@ -248,5 +248,48 @@ test('新增候选等待期间出现持久化缺失记录时，释放前仍能�
     await s.advance(10000);
     assert.equal(s.port.records.get('new.jpg')?.mediaId, 'prior-id'); assert.equal(s.port.records.has('old.jpg'), false);
     assert.ok(s.port.changes.some((change) => change.kind === 'restored' && change.path === 'new.jpg'));
+  } finally { await s.coordinator.stop(); s.port.close(); await rm(s.root, { recursive: true, force: true }); }
+});
+
+
+test('新增文件七秒内通知，随后出现的消失项合并为移动并保留原 ID', async () => {
+  const s = await setup();
+  try {
+    await writeFile(path.join(s.root, 'old.jpg'), 'photo');
+    s.watcher.emit({ eventType: 'rename', path: 'old.jpg' }); await s.coordinator.idle();
+    await s.advance(4999); assert.equal(s.port.events.length, 0);
+    await s.advance(1);
+    const original = s.port.records.get('old.jpg')?.mediaId; assert.ok(original);
+    assert.equal(s.port.events.at(-1)?.added, 1);
+    if ('testDb' in s.port) {
+      s.port.testDb.prepare("INSERT INTO users(id,username,password_hash,role,preferences,created_at) VALUES ('u','u','x','user','{}',0)").run();
+      s.port.testDb.prepare("INSERT INTO favorites(user_id,item_id,item_type) VALUES ('u',?,'file')").run(original);
+    }
+    await s.advance(10000);
+    await link(path.join(s.root, 'old.jpg'), path.join(s.root, 'new.jpg'));
+    s.watcher.emit({ eventType: 'rename', path: 'new.jpg' }); await s.coordinator.idle();
+    await s.advance(7000);
+    const temporary = s.port.records.get('new.jpg')?.mediaId; assert.ok(temporary); assert.notEqual(temporary, original);
+    await rm(path.join(s.root, 'old.jpg'));
+    s.watcher.emit({ eventType: 'rename', path: 'old.jpg' }); await s.coordinator.idle();
+    await s.advance(2000); await s.advance(2000);
+    assert.equal(s.port.records.get('new.jpg')?.mediaId, original); assert.equal(s.port.records.has('old.jpg'), false);
+    const moved = s.port.events.at(-1); assert.equal(moved?.moved, 1); assert.equal(moved?.added, -1);
+    if ('testDb' in s.port) {
+      assert.equal((s.port.testDb.prepare("SELECT count(*) n FROM favorites WHERE item_id=?").get(original) as { n: number }).n, 1);
+      assert.equal((s.port.testDb.prepare("SELECT count(*) n FROM files WHERE id=?").get(temporary) as { n: number }).n, 0);
+    }
+  } finally { await s.coordinator.stop(); s.port.close(); await rm(s.root, { recursive: true, force: true }); }
+});
+
+test('移动候选存在歧义时稳定的新文件仍即时可见', async () => {
+  const s = await setup();
+  try {
+    await writeFile(path.join(s.root, 'a.jpg'), 'same'); await link(path.join(s.root, 'a.jpg'), path.join(s.root, 'b.jpg'));
+    s.watcher.emit({ eventType: 'rename', path: 'a.jpg' }); await s.coordinator.idle(); await s.advance(16000);
+    assert.ok(s.port.records.get('a.jpg')); assert.ok(s.port.records.get('b.jpg'));
+    await link(path.join(s.root, 'a.jpg'), path.join(s.root, 'c.jpg')); await rm(path.join(s.root, 'a.jpg')); await rm(path.join(s.root, 'b.jpg'));
+    s.watcher.emit({ eventType: 'rename', path: 'a.jpg' }); s.watcher.emit({ eventType: 'rename', path: 'b.jpg' }); await s.coordinator.idle();
+    await s.advance(5000); assert.ok(s.port.records.get('c.jpg')); assert.ok(s.port.changes.some((change) => change.kind === 'added' && change.path === 'c.jpg'));
   } finally { await s.coordinator.stop(); s.port.close(); await rm(s.root, { recursive: true, force: true }); }
 });
