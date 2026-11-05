@@ -3,6 +3,7 @@ import { randomInt } from 'node:crypto';
 import type { z } from 'zod';
 import { MediaFilter, MediaListQuery, RandomQuery, MediaItem } from '@luvia/contracts';
 import { QueryExecutor } from './query-executor.ts';
+import { rowIdRange } from './rowid-range.ts';
 
 type Query = z.output<typeof MediaListQuery>;
 type RandomFilter = z.output<typeof RandomQuery>;
@@ -216,7 +217,7 @@ export class MediaReader {
 
   random(filter: RandomFilter, context: Context) {
     const condition = where(filter, context, this.db);
-    const range = this.db.prepare('SELECT min(rowid) AS min, max(rowid) AS max FROM files').get() as { min: number | null; max: number | null };
+    const range = rowIdRange(this.db);
     if (range.min === null || range.max === null) return { items: [] };
     const start = range.max <= 2 ** 48 ? randomInt(range.min, range.max + 1) : range.min;
     const get = (op: '>=' | '<', limit: number) => this.db.prepare(`${selection} WHERE ${condition.sql} AND f.rowid ${op} ? ORDER BY f.rowid LIMIT ?`)
