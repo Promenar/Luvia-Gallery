@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3';
 import { realpath, unlink } from 'node:fs/promises';
 import path from 'node:path';
+import { replaceEvictedThumbnailCovers } from '../core/folder-covers.ts';
 
 type Entry = { cache_key: string; relative_path: string; bytes: number; last_access_at: number; media_id: string | null; variant: string | null };
 function within(root: string, target: string): boolean {
@@ -38,7 +39,12 @@ export async function pruneCache(db: Database.Database, cacheDir: string, limitB
       const changed = db.transaction(() => {
         const result = db.prepare('DELETE FROM cache_entries WHERE cache_key=? AND last_access_at=?').run(entry.cache_key, entry.last_access_at).changes;
         if (result && entry.media_id && entry.variant === 'preview') db.prepare(`UPDATE files SET has_preview=0 WHERE id=?
-          AND NOT EXISTS(SELECT 1 FROM cache_entries WHERE media_id=? AND variant='preview')`).run(entry.media_id, entry.media_id);
+          AND NOT EXISTS(SELECT 1 FROM cache_entries c WHERE c.media_id=files.id AND c.variant='preview' AND c.source_size=files.size AND c.source_modified=files.modified_at)`).run(entry.media_id);
+        if (result && entry.media_id && entry.variant === 'thumb') {
+          const changed = db.prepare(`UPDATE files SET thumb_ready=0 WHERE id=? AND thumb_ready=1
+            AND NOT EXISTS(SELECT 1 FROM cache_entries c WHERE c.media_id=files.id AND c.variant='thumb' AND c.source_size=files.size AND c.source_modified=files.modified_at)`).run(entry.media_id);
+          if (changed.changes) replaceEvictedThumbnailCovers(db, entry.media_id);
+        }
         return result;
       }).immediate();
       if (changed) {

@@ -12,7 +12,7 @@ type FileRow = {
   rowid: number; id: string; folder: string; name: string; media_type: 'image' | 'video' | 'audio';
   mime: string; size: number; width: number | null; height: number | null; duration_sec: number | null;
   taken_at: number; taken_at_source: 'metadata' | 'filename' | 'mtime'; modified_at: number; favorite: number;
-  thumbhash: string | null; thumb_version: number; latitude: number | null; longitude: number | null;
+  thumbhash: string | null; thumb_version: number; thumb_ready: number; latitude: number | null; longitude: number | null;
   playability: 'direct' | 'transcode' | 'unsupported' | null; has_preview: number;
 };
 type Cursor = { sort: Query['sort']; value: number | string; id: string };
@@ -84,7 +84,7 @@ function item(row: FileRow): z.output<typeof MediaItem> {
     id: row.id, name: row.name, folder: row.folder, mediaType: row.media_type, mime: row.mime, size: row.size,
     width: row.width, height: row.height, durationSec: row.duration_sec,
     takenAt: new Date(row.taken_at * 1000).toISOString(), takenAtSource: row.taken_at_source,
-    modifiedAt: row.modified_at, favorite: !!row.favorite, thumbhash: row.thumbhash, thumbVersion: row.thumb_version,
+    modifiedAt: row.modified_at, favorite: !!row.favorite, thumbhash: row.thumbhash, thumbVersion: row.thumb_ready ? row.thumb_version : 0,
     hasLocation: row.latitude !== null && row.longitude !== null, playability: row.playability, hasPreview: !!row.has_preview,
   };
 }

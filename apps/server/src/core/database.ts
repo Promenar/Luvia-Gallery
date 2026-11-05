@@ -217,6 +217,12 @@ const schemaV12 = `
   CREATE INDEX cache_entries_media_variant ON cache_entries(media_id,variant);
 `;
 const schemaV13 = `CREATE INDEX files_created_id ON files(created_at DESC,id ASC);`;
+const schemaV14 = `
+  ALTER TABLE files ADD COLUMN thumb_ready INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE cache_entries ADD COLUMN source_size INTEGER;
+  ALTER TABLE cache_entries ADD COLUMN source_modified INTEGER;
+  CREATE INDEX folders_cover ON folders(cover_file_id);
+`;
 
 export function openDatabase(filename: string, options: { readonly?: boolean; bootstrapLegacy?: boolean } = {}): Database.Database {
   const readonly = options.readonly ?? false;
@@ -231,7 +237,7 @@ export function openDatabase(filename: string, options: { readonly?: boolean; bo
       db.pragma('synchronous = NORMAL');
       db.transaction(() => {
         const version = db.pragma('user_version', { simple: true });
-        if (typeof version !== 'number' || version < 0 || version > 13) throw new Error(`不支持的数据库版本: ${version}`);
+        if (typeof version !== 'number' || version < 0 || version > 14) throw new Error(`不支持的数据库版本: ${version}`);
         if (version === 0) {
           db.exec(schemaV1);
           db.pragma('user_version = 1');
@@ -284,6 +290,10 @@ export function openDatabase(filename: string, options: { readonly?: boolean; bo
           db.exec(schemaV13);
           db.pragma('user_version = 13');
         }
+        if (version <= 13) {
+          db.exec(schemaV14);
+          db.pragma('user_version = 14');
+        }
         const timezone = process.env.TZ ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
         const previous = db.prepare("SELECT value FROM settings WHERE key='timeline.timezone'").get() as { value: string } | undefined;
         if (previous && previous.value !== timezone) {
@@ -296,7 +306,7 @@ export function openDatabase(filename: string, options: { readonly?: boolean; bo
           db.prepare("INSERT INTO jobs(id,type,label,status,trigger,created_at) VALUES (?,'import_legacy','导入旧版数据','queued','system',unixepoch())").run(randomUUID());
         }
       }).immediate();
-    } else if (db.pragma('user_version', { simple: true }) !== 13) {
+    } else if (db.pragma('user_version', { simple: true }) !== 14) {
       throw new Error('数据库尚未就绪或版本不受支持');
     }
     return db;
