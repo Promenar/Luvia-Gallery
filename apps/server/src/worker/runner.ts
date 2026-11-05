@@ -11,7 +11,7 @@ import { readSettings } from '../core/settings.ts';
 import { processMetadataBatch } from './metadata.ts';
 import { enqueueMediaTask } from '../core/media-cache.ts';
 
-type Options = { owner: string; allowedRoots: string[]; legacyDir: string; systemRoots: string[]; cacheDir?: string; signal?: AbortSignal };
+type Options = { owner: string; allowedRoots: string[]; legacyDir: string; systemRoots: string[]; cacheDir?: string; signal?: AbortSignal; log?: (level: 'info' | 'warn', message: string, ctx: Record<string, string>) => void };
 type Payload = { libraryId?: string | null; legacyImportId?: string; mediaId?: string };
 const now = () => Math.floor(Date.now() / 1000);
 const childId = (parent: string, library: string) => `scan_${createHash('sha256').update(parent).update('\0').update(library).digest('base64url').slice(0, 24)}`;
@@ -146,7 +146,11 @@ export async function runNextJob(db: Database.Database, options: Options): Promi
     const message = error instanceof Error && error.message === '作业类型尚未实现' ? error.message : '作业执行失败，请检查媒体库及工作进程';
     if (options.signal?.aborted) queue.release(job.id);
     else queue.fail(job.id, message);
-  } finally { clearInterval(timer); options.signal?.removeEventListener('abort', stop); }
+  } finally {
+    clearInterval(timer); options.signal?.removeEventListener('abort', stop);
+    const final = db.prepare('SELECT status FROM jobs WHERE id=?').get(job.id) as { status: string } | undefined;
+    if (final?.status === 'succeeded' || final?.status === 'failed') options.log?.(final.status === 'failed' ? 'warn' : 'info', '作业结束', { type: job.type, status: final.status });
+  }
   return true;
 }
 

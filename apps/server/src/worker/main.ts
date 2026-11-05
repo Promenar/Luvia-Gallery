@@ -12,9 +12,12 @@ import { readSettings } from '../core/settings.ts';
 import { publishJob } from '../core/job-view.ts';
 import { withFfmpegSlot } from './ffmpeg-slots.ts';
 import { scheduleScans } from './schedule.ts';
+import { createWorkerLogger } from '../core/observability.ts';
 
 installFatalHandlers('worker');
 const runtime = await openRuntime();
+const logger = createWorkerLogger(runtime.db);
+logger.info('工作进程已启动');
 const owner = newWorkerOwner();
 const stopController = new AbortController();
 process.on('SIGINT', () => stopController.abort());
@@ -45,19 +48,20 @@ const schedulePrune = () => {
 };
 const pruneTimer = setInterval(schedulePrune, 60_000);
 pruneTimer.unref();
-const scanTimer = setInterval(() => { try { scheduleScans(runtime.db); } catch { process.stderr.write('扫描调度失败\n'); } }, 30_000);
+const scanTimer = setInterval(() => { try { scheduleScans(runtime.db); } catch { logger.warn('扫描调度失败'); } }, 30_000);
 scanTimer.unref();
 let sampling: Promise<void> = Promise.resolve();
 try {
   schedulePrune();
   await discoverNewMounts(runtime.db, mounts, [runtime.dataDir, runtime.cacheDir]);
   scheduleScans(runtime.db);
-  sampling = sampleMounts(runtime.db, mounts, stopController.signal).catch(() => { process.stderr.write('挂载抽样失败\n'); });
+  sampling = sampleMounts(runtime.db, mounts, stopController.signal).catch(() => { logger.warn('挂载抽样失败'); });
   const ffmpeg = await withFfmpegSlot(runtime.db, owner, (signal) => probeFfmpeg('ffmpeg', signal), { signal: stopController.signal });
   runtime.db.prepare("INSERT INTO settings(key,value) VALUES('worker.ffmpeg',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(JSON.stringify(ffmpeg));
-  process.stdout.write(`worker 编码器: ${ffmpeg.encoder}\n`);
+  logger.info({ ctx: { type: ffmpeg.encoder } }, '视频编码器已选择');
   while (!stopController.signal.aborted) {
-    const worked = await runNextJob(runtime.db, { owner, allowedRoots, legacyDir: runtime.legacyDir, systemRoots: [runtime.dataDir, runtime.cacheDir], cacheDir: runtime.cacheDir, signal: stopController.signal });
+    const worked = await runNextJob(runtime.db, { owner, allowedRoots, legacyDir: runtime.legacyDir, systemRoots: [runtime.dataDir, runtime.cacheDir], cacheDir: runtime.cacheDir, signal: stopController.signal,
+      log: (level, message, ctx) => logger[level]({ ctx }, message) });
     if (!worked) {
       try { await delay(500, undefined, { signal: stopController.signal }); } catch { if (!stopController.signal.aborted) throw new Error('worker 等待失败'); }
     }

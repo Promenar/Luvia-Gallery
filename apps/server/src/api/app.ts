@@ -19,6 +19,7 @@ import type { MediaItem, User } from '@luvia/contracts';
 import { hashPassword, verifyPassword } from '../core/password.ts';
 import { MediaReader } from '../core/media-query.ts';
 import { QueryExecutor } from '../core/query-executor.ts';
+import { Observability } from '../core/observability.ts';
 import { FolderReader } from '../core/folder-reader.ts';
 import { mediaId, pathAllowed, secureMediaPath, virtualPath } from '../core/paths.ts';
 import { sendFile } from './binary.ts';
@@ -64,7 +65,13 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
   const identities = new WeakMap<FastifyRequest, Identity>();
   const queries = new QueryExecutor(db);
   const media = new MediaReader(db, queries);
+  const observability = new Observability(db);
   app.addHook('onClose', async () => { await queries.close(); });
+  app.addHook('onClose', async () => { observability.close(); });
+  app.addHook('onResponse', async (req, reply) => {
+    observability.record(reply.elapsedTime);
+    if (reply.statusCode >= 500) observability.logger.error({ ctx: { method: req.method, route: req.routeOptions.url ?? 'unknown', status: reply.statusCode } }, '请求处理失败');
+  });
   const folders = new FolderReader(db);
   const attempts = new Map<string, number[]>();
   const secure = options.secureCookies ?? process.env.NODE_ENV === 'production';
@@ -1042,6 +1049,35 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
       publishJob(db, id);
       return jobView(db.prepare('SELECT * FROM jobs WHERE id=?').get(id) as JobRecord);
     }).immediate();
+  });
+  register('adminOverview', async () => {
+    const result = await queries.run([
+      { sql: `SELECT count(*) AS total,COALESCE(sum(f.media_type='image'),0) AS images,COALESCE(sum(f.media_type='video'),0) AS videos,
+        COALESCE(sum(f.media_type='audio'),0) AS audio,COALESCE(sum(f.thumb_version>0),0) AS thumbs,
+        COALESCE(sum(f.metadata_status='done'),0) AS indexed,COALESCE(sum(f.media_type='video' AND f.has_preview=1),0) AS previews
+        FROM files f JOIN libraries l ON l.id=f.library_id AND l.enabled=1`, params: [] },
+      { sql: 'SELECT COALESCE(sum(bytes),0) AS bytes FROM cache_entries', params: [] },
+      { sql: "SELECT COALESCE(sum(status='running'),0) AS active,COALESCE(sum(status='queued'),0) AS queued FROM jobs", params: [] },
+      { sql: 'SELECT max(last_scan_at) AS last FROM libraries WHERE enabled=1', params: [] },
+    ]);
+    const counts = result[0]![0] as { total: number; images: number; videos: number; audio: number; thumbs: number; indexed: number; previews: number };
+    const cache = result[1]![0] as { bytes: number }; const jobs = result[2]![0] as { active: number; queued: number };
+    const last = result[3]![0] as { last: number | null };
+    let databaseBytes = 0;
+    if (db.name !== ':memory:') {
+      for (const filename of [db.name, `${db.name}-wal`]) { try { databaseBytes += (await stat(filename)).size; } catch { /* 可选 WAL 不存在时计零。 */ } }
+    }
+    return { version: '2.0.0-alpha.0', uptimeSec: Math.floor(process.uptime()),
+      media: { total: counts.total, images: counts.images, videos: counts.videos, audio: counts.audio },
+      thumbnails: { coverage: counts.total ? counts.thumbs / counts.total : 0, missing: counts.total - counts.thumbs },
+      metadata: { indexed: counts.indexed, total: counts.total }, previews: { ready: counts.previews, total: counts.videos },
+      cache: { bytes: cache.bytes, limitBytes: readSettings(db).cache.limitGB * 1024 ** 3 }, database: { bytes: databaseBytes },
+      health: observability.health(jobs.queued), lastScanAt: iso(last.last), activeJobs: jobs.active };
+  });
+  register('logs', async (req) => {
+    const query = endpoints.logs.query.parse(req.query);
+    if (query.level && !['debug', 'info', 'warn', 'error'].includes(query.level)) fail(400, 'VALIDATION', '日志级别无效');
+    return { logs: observability.logs(query.level, query.limit) };
   });
   register('system', async () => {
     const row = db.prepare("SELECT value FROM settings WHERE key='worker.ffmpeg'").get() as { value: string } | undefined;
