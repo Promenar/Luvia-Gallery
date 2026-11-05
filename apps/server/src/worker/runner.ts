@@ -61,10 +61,18 @@ export async function runNextJob(db: Database.Database, options: Options): Promi
         const library = db.prepare('SELECT id,root FROM libraries WHERE id=? AND enabled=1').get(payload.libraryId) as { id: string; root: string } | undefined;
         if (!library) throw new Error('媒体库不可用');
         const result = await scanLibrary(db, library, { allowedRoots: options.allowedRoots, owner: options.owner, jobId: job.id, signal: controller.signal });
-        if (result.errors) throw new Error('媒体库存在读取错误');
+        if (result.errors) {
+          db.transaction(() => {
+            assertLease();
+            db.prepare("UPDATE libraries SET status='unavailable' WHERE id=? AND NOT EXISTS(SELECT 1 FROM scan_locks WHERE library_id=? AND lease_expires_at>?)")
+              .run(library.id, library.id, now());
+          }).immediate();
+          throw new Error('媒体库存在读取错误');
+        }
         const reconciled = reconcileLegacyFavorites(db, { finalize: false, assertLease });
         db.transaction(() => {
           assertLease();
+          db.prepare("UPDATE libraries SET status='ok',last_scan_at=? WHERE id=?").run(now(), library.id);
           if (!queue.finish(job.id, result)) throw new Error('作业租约已失效');
           enqueueMetadata(db, library.id);
           db.prepare("INSERT INTO job_events(event_type,payload) VALUES ('library',?)")
