@@ -8,6 +8,7 @@ import Database from 'better-sqlite3';
 import { openDatabase } from '../src/core/database.ts';
 import * as legacyImport from '../src/worker/import-legacy.ts';
 import { scanLibrary } from '../src/worker/scan.ts';
+import { runNextJob } from '../src/worker/runner.ts';
 import { verifyPassword } from '../src/core/password.ts';
 
 const sha = (text: string | Buffer) => createHash('sha256').update(text).digest('hex');
@@ -95,4 +96,28 @@ test('没有旧库路径和 MEDIA_ROOT 时，候选挂载不会自动启用', as
     await importLegacy(empty, { legacyDir: legacy, mediaRoots: [mount], fallbackRoots: [mount] });
     assert.equal((empty.prepare('SELECT count(*) AS n FROM libraries').get() as { n: number }).n, 0);
   } finally { db.close(); fallback.close(); empty.close(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('后续扫描发现原先未匹配媒体时恢复旧收藏', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'luvia-old-unmatched-')); const media = path.join(dir, 'media'); const legacy = path.join(dir, 'legacy');
+  await mkdir(media); await mkdir(legacy);
+  const old = new Database(path.join(legacy, 'lumina.db'));
+  old.exec('CREATE TABLE files(id TEXT PRIMARY KEY,path TEXT UNIQUE); CREATE TABLE favorites(user_id TEXT,item_id TEXT,item_type TEXT,created_at INTEGER)');
+  old.prepare("INSERT INTO favorites VALUES ('alice',?,'file',1)").run(Buffer.from(path.join(media, 'later.jpg')).toString('base64')); old.close();
+  await writeFile(path.join(legacy, 'lumina-config.json'), JSON.stringify({ libraryPaths: [media], users: [{ username: 'alice', password: 'synthetic password', isAdmin: true }] }));
+  const db = openDatabase(':memory:');
+  try {
+    await importLegacy(db, { legacyDir: legacy, mediaRoots: [media] });
+    const library = db.prepare('SELECT id,root FROM libraries').get() as { id: string; root: string };
+    await scanLibrary(db, library, { allowedRoots: [media] });
+    assert.deepEqual(legacyImport.reconcileLegacyFavorites(db, { finalize: true }), { imported: 0, pending: 0, unmatched: 1 });
+    db.prepare("INSERT INTO jobs(id,type,label,status,trigger,created_at,result) VALUES ('old-import','import_legacy','旧数据','succeeded','system',1,?)")
+      .run(JSON.stringify({ imported: 0, pending: 0, unmatched: 1, unmappedRoots: 0 }));
+    await writeFile(path.join(media, 'later.jpg'), 'synthetic image');
+    db.prepare("INSERT INTO jobs(id,type,label,status,trigger,created_at,payload) VALUES ('later-scan','scan','扫描','queued','manual',2,?)").run(JSON.stringify({ libraryId: library.id }));
+    await runNextJob(db, { owner: 'worker', allowedRoots: [media], legacyDir: legacy, systemRoots: [] });
+    const updated = db.prepare("SELECT result FROM jobs WHERE id='old-import'").get() as { result: string };
+    assert.deepEqual(JSON.parse(updated.result), { imported: 1, pending: 0, unmatched: 0, unmappedRoots: 0 });
+    assert.equal((db.prepare('SELECT count(*) AS n FROM favorites').get() as { n: number }).n, 1);
+  } finally { db.close(); await rm(dir, { recursive: true, force: true }); }
 });
