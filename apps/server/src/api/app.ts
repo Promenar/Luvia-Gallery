@@ -65,7 +65,14 @@ const tokenOut = (t: TokenRow) => ({
 
 export async function createApp(options: Options): Promise<FastifyInstance> {
   const { db } = options;
-  const app = Fastify({ logger: false, routerOptions: { maxParamLength: 8192 } });
+  const proxyValue = (process.env.TRUST_PROXY ?? '').trim().toLowerCase();
+  if (proxyValue && proxyValue !== 'true' && proxyValue !== 'false' && (!/^\d+$/.test(proxyValue) || !Number.isSafeInteger(Number(proxyValue)))) {
+    throw new Error('TRUST_PROXY 必须为 true、false 或非负整数');
+  }
+  const proxyHops = Number(proxyValue);
+  const trustProxy = proxyValue === 'true' ? true : proxyValue === '' || proxyValue === 'false' || proxyHops === 0
+    ? false : (_address: string, hop: number) => hop < proxyHops;
+  const app = Fastify({ logger: false, trustProxy, routerOptions: { maxParamLength: 8192 } });
   await app.register(cookie);
   const identities = new WeakMap<FastifyRequest, Identity>();
   const queries = new QueryExecutor(db);
@@ -175,12 +182,16 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
       httpOnly: true, sameSite: 'lax', secure, path: '/', ...(remember ? { maxAge: 30 * 86400 } : {}),
     });
   }
-  function limitLogin(ip: string): void {
+  function limitLogin(ip: string, kind: 'login' | 'share', subject: string): void {
     const cutoff = Date.now() - 60_000;
-    const previous = (attempts.get(ip) ?? []).filter((v) => v > cutoff);
-    if (previous.length >= 10) fail(429, 'RATE_LIMITED', '请求过于频繁，请稍后重试');
-    previous.push(Date.now());
-    attempts.set(ip, previous);
+    const overallKey = JSON.stringify(['ip', ip]);
+    const subjectKey = JSON.stringify([kind, ip, subject]);
+    const overall = (attempts.get(overallKey) ?? []).filter((v) => v > cutoff);
+    const previous = (attempts.get(subjectKey) ?? []).filter((v) => v > cutoff);
+    if (overall.length >= 100 || previous.length >= 10) fail(429, 'RATE_LIMITED', '请求过于频繁，请稍后重试');
+    const time = Date.now();
+    overall.push(time); previous.push(time);
+    attempts.set(overallKey, overall); attempts.set(subjectKey, previous);
     if (attempts.size > 10000) {
       for (const [key, values] of attempts) if (!values.some((v) => v > cutoff)) attempts.delete(key);
       if (attempts.size > 10000) attempts.delete(attempts.keys().next().value!);
@@ -233,7 +244,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
   register('setup', async (req, reply, body) => {
     if (pending()) fail(503, 'MIGRATION_PENDING', '旧数据导入尚未完成');
     if ((countUsers.get() as { n: number }).n > 0) fail(409, 'CONFLICT', '系统已经初始化');
-    limitLogin(req.ip);
+    limitLogin(req.ip, 'login', body.username);
     const passwordHash = await hashPassword(body.password);
     const u: UserRow = { id: randomUUID(), username: body.username, password_hash: passwordHash, role: 'admin', allowed_paths: null, preferences: JSON.stringify(defaultPreferences()), created_at: now(), last_login_at: now() };
     db.transaction(() => {
@@ -246,7 +257,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     return { user: userOut(u) };
   });
   register('login', async (req, reply, body) => {
-    limitLogin(req.ip);
+    limitLogin(req.ip, 'login', body.username);
     const u = (findUser.get(body.username) as UserRow | undefined) ?? fail(401, 'UNAUTHORIZED', '用户名或密码错误');
     const verification = await verifyPassword(body.password, u.password_hash);
     if (!verification.valid) fail(401, 'UNAUTHORIZED', '用户名或密码错误');
@@ -843,7 +854,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
   register('unlockShare', async (req, reply, body) => {
     const { token } = req.params as { token: string }; const row = shareByToken(token);
     if (!row.password_hash) return;
-    limitLogin(req.ip);
+    limitLogin(req.ip, 'share', token);
     if (!(await verifyPassword(body.password, row.password_hash)).valid) return fail(401, 'UNAUTHORIZED', '分享密码错误');
     const value = secret(); const expires = Math.min(row.expires_at ?? now() + 7 * 86400, now() + 7 * 86400);
     db.transaction(() => {
@@ -1030,7 +1041,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
   }
   app.post('/api/auth/login', async (req) => {
     const body = endpoints.login.body.parse(req.body);
-    limitLogin(req.ip);
+    limitLogin(req.ip, 'login', body.username);
     const user = (findUser.get(body.username) as UserRow | undefined) ?? fail(401, 'UNAUTHORIZED', '用户名或密码错误');
     const verified = await verifyPassword(body.password, user.password_hash);
     if (!verified.valid) return fail(401, 'UNAUTHORIZED', '用户名或密码错误');
