@@ -470,6 +470,26 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     if (query.exclude && query.exclude.length > 500) fail(400, 'VALIDATION', '排除的媒体不能超过 500 个');
     return media.random(query, mediaContext(req));
   });
+  register('mediaDetail', async (req) => {
+    const context = mediaContext(req); const { id } = req.params as { id: string };
+    const item = media.one(id, context) ?? fail(404, 'NOT_FOUND', '媒体不存在或不可访问');
+    const row = db.prepare(`SELECT f.*,l.name AS library_name FROM files f JOIN libraries l ON l.id=f.library_id
+      WHERE f.id=? AND l.enabled=1`).get(id) as Record<string, any> | undefined;
+    if (!row) return fail(404, 'NOT_FOUND', '媒体不存在或不可访问');
+    const exif = { make: row.make, model: row.model, lens: row.lens, fNumber: row.f_number, exposureTime: row.exposure_time,
+      iso: row.iso, focalLength: row.focal_length, focalLength35: row.focal_length35, software: row.software };
+    const video = { codec: row.codec, audioCodec: row.audio_codec, container: row.container, fps: row.fps, bitrate: row.bitrate };
+    const parts = item.folder.split('/');
+    return { ...item,
+      exif: item.mediaType === 'image' && Object.values(exif).some((value) => value !== null) ? exif : null,
+      location: row.latitude !== null && row.longitude !== null ? { lat: row.latitude, lon: row.longitude, altitude: row.altitude } : null,
+      video: item.mediaType === 'video' && Object.values(video).some((value) => value !== null) ? video : null,
+      libraryName: row.library_name,
+      breadcrumbs: parts.map((part, index) => ({ name: index === 0 ? row.library_name : part, path: parts.slice(0, index + 1).join('/') })),
+      albumIds: (db.prepare(`SELECT ai.album_id FROM album_items ai JOIN albums a ON a.id=ai.album_id
+        WHERE ai.file_id=? AND a.user_id=? AND a.kind='manual' ORDER BY ai.album_id`).all(id, context.id) as { album_id: string }[]).map((album) => album.album_id),
+    };
+  });
   type BinaryRow = { id: string; name: string; relative_path: string; folder: string; mime: string; media_type: string; root: string; size: number; modified_at: number; width: number | null; height: number | null };
   async function binaryMedia(req: FastifyRequest, id: string): Promise<{ row: BinaryRow; filename: string }> {
     const identity = requireUser(req);
