@@ -268,6 +268,20 @@ const schemaV21 = `
     cache_key TEXT PRIMARY KEY,owner TEXT NOT NULL,lease_token TEXT NOT NULL,lease_expires_at INTEGER NOT NULL
   );
 `;
+const schemaV22 = `
+  ALTER TABLE api_tokens ADD COLUMN legacy_jwt INTEGER NOT NULL DEFAULT 0;
+  UPDATE api_tokens SET legacy_jwt=1 WHERE id GLOB 'tok_*';
+  CREATE TABLE legacy_import_users (username TEXT PRIMARY KEY,user_id TEXT NOT NULL);
+  CREATE TABLE legacy_import_tokens (token_hash TEXT PRIMARY KEY);
+  INSERT OR IGNORE INTO legacy_import_users(username,user_id)
+    SELECT u.username,u.id FROM users u WHERE EXISTS(SELECT 1 FROM legacy_jwt_users j WHERE j.user_id=u.id)
+      OR EXISTS(SELECT 1 FROM api_tokens t WHERE t.user_id=u.id AND t.legacy_jwt=1);
+  INSERT OR IGNORE INTO legacy_import_users(username,user_id) SELECT username,'' FROM legacy_jwt_revoked_users;
+  INSERT OR IGNORE INTO legacy_import_tokens(token_hash) SELECT token_hash FROM api_tokens WHERE legacy_jwt=1;
+  INSERT OR IGNORE INTO settings(key,value)
+    SELECT 'legacy.identity_upgrade_locked','true' WHERE EXISTS(SELECT 1 FROM legacy_import_users)
+      OR EXISTS(SELECT 1 FROM jobs WHERE type='import_legacy' AND started_at IS NOT NULL);
+`;
 
 export function openDatabase(filename: string, options: { readonly?: boolean; bootstrapLegacy?: boolean } = {}): Database.Database {
   const readonly = options.readonly ?? false;
@@ -282,7 +296,7 @@ export function openDatabase(filename: string, options: { readonly?: boolean; bo
       db.pragma('synchronous = NORMAL');
       db.transaction(() => {
         const version = db.pragma('user_version', { simple: true });
-        if (typeof version !== 'number' || version < 0 || version > 21) throw new Error(`不支持的数据库版本: ${version}`);
+        if (typeof version !== 'number' || version < 0 || version > 22) throw new Error(`不支持的数据库版本: ${version}`);
         if (version === 0) {
           db.exec(schemaV1);
           db.pragma('user_version = 1');
@@ -367,6 +381,10 @@ export function openDatabase(filename: string, options: { readonly?: boolean; bo
           db.exec(schemaV21);
           db.pragma('user_version = 21');
         }
+        if (version <= 21) {
+          db.exec(schemaV22);
+          db.pragma('user_version = 22');
+        }
         const timezone = process.env.TZ ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
         const previous = db.prepare("SELECT value FROM settings WHERE key='timeline.timezone'").get() as { value: string } | undefined;
         if (previous && previous.value !== timezone) {
@@ -379,7 +397,7 @@ export function openDatabase(filename: string, options: { readonly?: boolean; bo
           db.prepare("INSERT INTO jobs(id,type,label,status,trigger,created_at) VALUES (?,'import_legacy','导入旧版数据','queued','system',unixepoch())").run(randomUUID());
         }
       }).immediate();
-    } else if (db.pragma('user_version', { simple: true }) !== 21) {
+    } else if (db.pragma('user_version', { simple: true }) !== 22) {
       throw new Error('数据库尚未就绪或版本不受支持');
     }
     return db;

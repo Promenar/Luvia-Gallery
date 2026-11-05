@@ -3,6 +3,7 @@ import type DatabaseType from 'better-sqlite3';
 import { readFile, access, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
+import jwt from 'jsonwebtoken';
 import { defaultPreferences, WallpaperConfig } from '@luvia/contracts';
 import { mediaId, virtualPath } from '../core/paths.ts';
 import { hashPassword } from '../core/password.ts';
@@ -108,17 +109,31 @@ export async function importLegacy(db: DatabaseType.Database, options: { legacyD
         if (match) return [virtualPath(match.root.id, match.relative)];
         return roots.filter((r) => isWithin(absolute, r.root)).map((r) => r.id);
       });
-      const inserted = db.prepare(`INSERT OR IGNORE INTO users (id,username,password_hash,role,allowed_paths,preferences,created_at)
-        VALUES (?,?,?,?,?,?,?)`).run(randomUUID(), user.username, user.password, user.isAdmin ? 'admin' : 'user', user.isAdmin ? null : JSON.stringify(mapped), JSON.stringify(defaultPreferences()), now);
-      const actual = db.prepare('SELECT id FROM users WHERE username=?').get(user.username) as { id: string };
-      if (inserted.changes) db.prepare(`INSERT OR IGNORE INTO legacy_jwt_users(user_id) SELECT ? WHERE NOT EXISTS
-        (SELECT 1 FROM legacy_jwt_revoked_users WHERE username=?)`).run(actual.id, user.username);
+      let origin = db.prepare('SELECT user_id FROM legacy_import_users WHERE username=?').get(user.username) as { user_id: string } | undefined;
+      const locked = !!db.prepare("SELECT 1 FROM settings WHERE key='legacy.identity_upgrade_locked'").get();
+      if (!origin) {
+        const occupied = db.prepare('SELECT 1 FROM users WHERE username=?').get(user.username);
+        const revoked = db.prepare('SELECT 1 FROM legacy_jwt_revoked_users WHERE username=?').get(user.username);
+        const id = !occupied && !revoked && !locked ? randomUUID() : '';
+        if (id) {
+          db.prepare(`INSERT INTO users (id,username,password_hash,role,allowed_paths,preferences,created_at)
+            VALUES (?,?,?,?,?,?,?)`).run(id, user.username, user.password, user.isAdmin ? 'admin' : 'user', user.isAdmin ? null : JSON.stringify(mapped), JSON.stringify(defaultPreferences()), now);
+          db.prepare('INSERT INTO legacy_jwt_users(user_id) VALUES (?)').run(id);
+        }
+        db.prepare('INSERT INTO legacy_import_users(username,user_id) VALUES (?,?)').run(user.username, id);
+        origin = { user_id: id };
+      }
+      const actual = db.prepare('SELECT id FROM users WHERE id=? AND username=?').get(origin.user_id, user.username) as { id: string } | undefined;
       if (user.wallpaperToken) {
+        const hash = digest(user.wallpaperToken);
+        const first = db.prepare('INSERT OR IGNORE INTO legacy_import_tokens(token_hash) VALUES (?)').run(hash).changes;
+        const decoded = jwt.decode(user.wallpaperToken);
+        if (!first || !actual || locked || !decoded || typeof decoded === 'string' || decoded.isWallpaper !== true || decoded.username !== user.username || !Number.isSafeInteger(decoded.exp)) continue;
         const interval = user.wallpaperConfig?.interval;
         const intervalSec = typeof interval === 'number' && Number.isInteger(interval) && interval >= 5 && interval <= 3600 ? interval : 30;
         const wallpaper = WallpaperConfig.parse({ source: 'library', intervalSec, landscapeOnly: false, includeVideos: user.wallpaperConfig?.showVideos !== false });
-        db.prepare(`INSERT OR IGNORE INTO api_tokens (id,user_id,token_hash,name,scope,prefix,created_at,wallpaper)
-          VALUES (?,?,?,?,?,?,?,?)`).run(idFor('tok', user.wallpaperToken), actual.id, digest(user.wallpaperToken), '旧版壁纸令牌', 'wallpaper', user.wallpaperToken.slice(0, 8), now, JSON.stringify(wallpaper));
+        db.prepare(`INSERT OR IGNORE INTO api_tokens (id,user_id,token_hash,name,scope,prefix,created_at,wallpaper,expires_at,legacy_jwt)
+          VALUES (?,?,?,?,?,?,?,?,?,1)`).run(idFor('tok', user.wallpaperToken), actual.id, hash, '旧版壁纸令牌', 'wallpaper', user.wallpaperToken.slice(0, 8), now, JSON.stringify(wallpaper), decoded.exp);
       }
     }
   }).immediate();
@@ -139,7 +154,7 @@ export async function importLegacy(db: DatabaseType.Database, options: { legacyD
       db.transaction(() => {
         options.assertLease?.();
         for (const favorite of batch) {
-          const user = db.prepare('SELECT id FROM users WHERE username=?').get(favorite.user_id) as { id: string } | undefined;
+          const user = db.prepare('SELECT u.id FROM users u JOIN legacy_import_users i ON i.user_id=u.id AND i.username=u.username WHERE u.username=?').get(favorite.user_id) as { id: string } | undefined;
           const byId = findId?.get(favorite.item_id) as { path: string } | undefined;
           const byPath = byId ? undefined : findPath?.get(favorite.item_id) as { path: string } | undefined;
           const candidate = byId?.path ?? byPath?.path ?? (favorite.item_type === 'folder' && path.isAbsolute(favorite.item_id) ? favorite.item_id : decodedAbsolute(favorite.item_id));

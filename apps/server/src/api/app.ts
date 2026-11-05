@@ -118,9 +118,18 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
 
   function tokenIdentity(value: string, legacy: boolean): Identity | undefined {
     if (!value || value.length > 4096) return undefined;
-    const row = db.prepare(`SELECT u.*, t.scope AS token_scope, t.wallpaper AS token_wallpaper FROM api_tokens t JOIN users u ON u.id=t.user_id
-      WHERE t.token_hash=? AND (t.expires_at IS NULL OR t.expires_at>?)`).get(digest(value), now()) as (UserRow & { token_scope: string; token_wallpaper: string | null }) | undefined;
-    if (row) return { user: row, kind: 'token', scope: row.token_scope, tokenHash: digest(value), wallpaper: row.token_wallpaper };
+    const row = db.prepare(`SELECT u.*, t.scope AS token_scope, t.wallpaper AS token_wallpaper,t.legacy_jwt AS token_legacy_jwt FROM api_tokens t JOIN users u ON u.id=t.user_id
+      WHERE t.token_hash=? AND (t.expires_at IS NULL OR t.expires_at>?)`).get(digest(value), now()) as (UserRow & { token_scope: string; token_wallpaper: string | null; token_legacy_jwt: number }) | undefined;
+    if (row) {
+      if (row.token_legacy_jwt) {
+        if (!options.legacyJwtSecret) return undefined;
+        try {
+          const decoded = jwt.verify(value, options.legacyJwtSecret, { algorithms: ['HS256'] });
+          if (typeof decoded !== 'object' || decoded.isWallpaper !== true || decoded.username !== row.username || !Number.isSafeInteger(decoded.exp)) return undefined;
+        } catch { return undefined; }
+      }
+      return { user: row, kind: 'token', scope: row.token_scope, tokenHash: digest(value), wallpaper: row.token_wallpaper };
+    }
     if (legacy && options.legacyJwtSecret) {
       try {
         const decoded = jwt.verify(value, options.legacyJwtSecret, { algorithms: ['HS256'] });
