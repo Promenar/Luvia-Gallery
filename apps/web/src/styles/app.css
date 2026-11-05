@@ -1,0 +1,135 @@
+@import "tailwindcss";
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/big-shoulders-display";
+
+/*
+ * 设计令牌。实际取值由主题引擎（src/theme/engine.ts）在运行时写入 :root，
+ * 这里的值只是首帧（偏好加载前）的深色默认，与引擎 graphite + 深色输出一致。
+ * 字体：界面与密集网格只用无衬线 Geist；年份、月份等大数字用窄体 Big Shoulders Display 承担视觉记忆点。
+ */
+@property --accent { syntax: '<color>'; inherits: true; initial-value: #bfbfbf; }
+@property --accent-soft { syntax: '<color>'; inherits: true; initial-value: #bfbfbf22; }
+@property --bg { syntax: '<color>'; inherits: true; initial-value: #121213; }
+@property --surface { syntax: '<color>'; inherits: true; initial-value: #19191b; }
+@property --raised { syntax: '<color>'; inherits: true; initial-value: #212124; }
+
+:root {
+  --bg: #121213; --surface: #19191b; --raised: #212124; --sunken: #0c0c0d;
+  --fg: #f1f1ef; --fg-2: #c4c4c1; --muted: #8d8d8a;
+  --line: rgb(255 255 255 / 0.08); --line-2: rgb(255 255 255 / 0.15);
+  --accent: #bfbfbf; --accent-fg: #111; --accent-soft: rgb(191 191 191 / 0.16);
+  --glass: rgb(24 24 26 / 0.62); --scrim: rgb(0 0 0 / 0.5);
+  --ok: #62c08f; --warn: #e0a948; --bad: #ec6a5e;
+  --r1: 6px; --r2: 10px; --r3: 16px;
+  --row: 180px;
+  color-scheme: dark;
+  transition: --accent 0.45s ease, --accent-soft 0.45s ease, --bg 0.45s ease, --surface 0.45s ease, --raised 0.45s ease;
+
+  /* shadcn 组件（components/kit）使用的语义名映射到同一套令牌 */
+  --background: var(--bg);
+  --foreground: var(--fg);
+  --card: var(--surface);
+  --card-foreground: var(--fg);
+  --popover: var(--raised);
+  --popover-foreground: var(--fg);
+  --primary: var(--accent);
+  --primary-foreground: var(--accent-fg);
+  --secondary: var(--raised);
+  --secondary-foreground: var(--fg);
+  --muted-foreground: var(--muted);
+  --destructive: var(--bad);
+  --border: var(--line-2);
+  --input: var(--line-2);
+  --ring: var(--accent);
+  --radius: var(--r2);
+}
+:root[data-density="1"] { --row: 120px; }
+:root[data-density="2"] { --row: 150px; }
+:root[data-density="3"] { --row: 180px; }
+:root[data-density="4"] { --row: 220px; }
+:root[data-density="5"] { --row: 270px; }
+@media (max-width: 759px) {
+  :root[data-density="1"] { --row: 78px; }
+  :root[data-density="2"] { --row: 94px; }
+  :root[data-density="3"] { --row: 112px; }
+  :root[data-density="4"] { --row: 136px; }
+  :root[data-density="5"] { --row: 168px; }
+}
+
+@theme inline {
+  --font-sans: "Geist Variable", "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", "Microsoft YaHei", system-ui, sans-serif;
+  --font-display: "Big Shoulders Display Variable", "Geist Variable", "PingFang SC", sans-serif;
+
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-raised: var(--raised);
+  --color-sunken: var(--sunken);
+  --color-fg: var(--fg);
+  --color-fg-2: var(--fg-2);
+  --color-muted: var(--muted);
+  --color-line: var(--line);
+  --color-line-2: var(--line-2);
+  --color-accent: var(--accent);
+  --color-accent-fg: var(--accent-fg);
+  --color-accent-soft: var(--accent-soft);
+  --color-glass: var(--glass);
+  --color-scrim: var(--scrim);
+  --color-ok: var(--ok);
+  --color-warn: var(--warn);
+  --color-bad: var(--bad);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --radius-sm: var(--r1);
+  --radius-md: var(--r2);
+  --radius-lg: var(--r2);
+  --radius-xl: var(--r3);
+}
+
+@layer base {
+  *, ::before, ::after { box-sizing: border-box; }
+  html, body, #root { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    font-variant-numeric: tabular-nums;
+  }
+  button { font: inherit; color: inherit; cursor: pointer; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+  ::selection { background: var(--accent-soft); }
+}
+
+@layer utilities {
+  .glass {
+    background: var(--glass);
+    backdrop-filter: blur(20px) saturate(1.4);
+    -webkit-backdrop-filter: blur(20px) saturate(1.4);
+    border: 1px solid var(--line-2);
+  }
+  .scrollbar-none { scrollbar-width: none; }
+  .scrollbar-none::-webkit-scrollbar { display: none; }
+}
+
+:root[data-reduce-motion="on"] *, :root[data-reduce-motion="on"] *::before, :root[data-reduce-motion="on"] *::after {
+  animation-duration: 0.01ms !important;
+  transition-duration: 0.01ms !important;
+}

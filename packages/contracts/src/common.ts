@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+export const CSRF_HEADER = 'X-Luvia-Request';
+
 /** 统一错误响应：所有非 2xx 响应体均为该结构。 */
 export const ApiError = z.object({
   error: z.object({
