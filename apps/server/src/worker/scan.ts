@@ -509,7 +509,10 @@ async function materializeFolders(db: Database.Database, libraryId: string, asse
     if (!parent) continue;
     parent.total += folder.total;
     if (folder.latest !== null && (parent.latest === null || folder.latest > parent.latest)) parent.latest = folder.latest;
-    if (folder.coverAt !== null && (parent.coverAt === null || folder.coverAt > parent.coverAt)) { parent.cover = folder.cover; parent.coverAt = folder.coverAt; }
+    if (folder.coverAt !== null && (parent.coverAt === null || folder.coverAt > parent.coverAt ||
+      (folder.coverAt === parent.coverAt && folder.cover !== null && (parent.cover === null || folder.cover < parent.cover)))) {
+      parent.cover = folder.cover; parent.coverAt = folder.coverAt;
+    }
   }
   const update = db.prepare('UPDATE folders SET direct_media_count=?,media_count=?,child_count=?,cover_file_id=?,latest_at=? WHERE path=?');
   for (let offset = 0; offset < folders.length; offset += 256) {

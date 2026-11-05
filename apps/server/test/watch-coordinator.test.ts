@@ -137,6 +137,71 @@ test('新建多层目录立即扫描，目录改名只记录目录级移动并�
   } finally { await s.coordinator.stop(); s.port.close(); await rm(s.root, { recursive: true, force: true }); }
 });
 
+nodeTest('新目录中文件稳定后目录统计与完整扫描一致', async () => {
+  const { WatchCoordinator } = await import('../src/watch/coordinator.ts');
+  const { scanLibrary } = await import('../src/worker/scan.ts');
+  const root = await mkdtemp(path.join(tmpdir(), 'luvia-watch-new-folder-')); const clock = new TestClock();
+  const port = sqliteHarness(root, clock); const watcher = new FakeWatcher();
+  const coordinator = new WatchCoordinator({ libraryId: 'lib', root, exclude: [], watcher, port, clock, missingGraceDays: 7 });
+  try {
+    await coordinator.start(); await mkdir(path.join(root, 'trip')); await writeFile(path.join(root, 'trip/a.jpg'), 'photo');
+    watcher.emit({ eventType: 'rename', path: 'trip' }); await coordinator.idle();
+    await clock.advance(2000, () => coordinator.idle()); await clock.advance(3000, () => coordinator.idle());
+    assert.ok(port.records.get('trip/a.jpg'));
+    port.testDb.prepare("UPDATE files SET thumb_ready=1 WHERE relative_path='trip/a.jpg'").run();
+    const file = port.records.get('trip/a.jpg')!;
+    await port.writeUpdated(file, file);
+    await port.appendChange({ ts: new Date(clock.now()).toISOString(), kind: 'updated', path: file.path, fromPath: null, isDir: false, mediaId: file.mediaId, source: 'watch' });
+    const query = () => port.testDb.prepare('SELECT path,parent,direct_media_count,media_count,child_count,cover_file_id,latest_at FROM folders ORDER BY path').all();
+    const realtime = query();
+    assert.equal((realtime[1] as { cover_file_id: string }).cover_file_id, file.mediaId);
+    await scanLibrary(port.testDb, { id: 'lib', root }, { allowedRoots: [root] });
+    assert.deepEqual(realtime, query());
+  } finally { await coordinator.stop(); port.close(); await rm(root, { recursive: true, force: true }); }
+});
+
+nodeTest('目标目录先写入子媒体后配对目录移动，保留原媒体 ID', async () => {
+  const { WatchCoordinator } = await import('../src/watch/coordinator.ts');
+  const root = await mkdtemp(path.join(tmpdir(), 'luvia-watch-dir-move-')); const clock = new TestClock();
+  const port = sqliteHarness(root, clock); const watcher = new FakeWatcher();
+  const coordinator = new WatchCoordinator({ libraryId: 'lib', root, exclude: [], watcher, port, clock, missingGraceDays: 7 });
+  const advance = (ms: number) => clock.advance(ms, () => coordinator.idle());
+  try {
+    await mkdir(path.join(root, 'a')); await mkdir(path.join(root, 'b')); await mkdir(path.join(root, 'a/trip'));
+    await writeFile(path.join(root, 'a/trip/pic.jpg'), 'photo');
+    await coordinator.start(); await coordinator.reconcileDirectory('', 'watch'); await advance(13_000);
+    const id = port.records.get('a/trip/pic.jpg')?.mediaId; assert.ok(id);
+    await rename(path.join(root, 'a/trip'), path.join(root, 'b/trip'));
+    watcher.emit({ eventType: 'rename', path: 'b/trip' }); await coordinator.idle(); await advance(5000);
+    assert.ok(port.records.get('b/trip/pic.jpg'));
+    watcher.emit({ eventType: 'rename', path: 'a/trip' }); await coordinator.idle(); await advance(2000);
+    assert.equal(port.records.get('b/trip/pic.jpg')?.mediaId, id);
+    assert.equal(port.records.has('a/trip/pic.jpg'), false);
+  } finally { await coordinator.stop(); port.close(); await rm(root, { recursive: true, force: true }); }
+});
+
+nodeTest('相同拍摄时间的目录封面在实时刷新与全量扫描间一致', async () => {
+  const { WatchCoordinator } = await import('../src/watch/coordinator.ts');
+  const { scanLibrary } = await import('../src/worker/scan.ts');
+  const root = await mkdtemp(path.join(tmpdir(), 'luvia-watch-cover-')); const clock = new TestClock();
+  const port = sqliteHarness(root, clock); const coordinator = new WatchCoordinator({ libraryId: 'lib', root, exclude: [], port, clock, missingGraceDays: 7, watcher: new FakeWatcher() });
+  try {
+    await mkdir(path.join(root, 'a')); await mkdir(path.join(root, 'b'));
+    await writeFile(path.join(root, 'a/a.jpg'), 'a'); await writeFile(path.join(root, 'b/b.jpg'), 'b');
+    await coordinator.start(); await coordinator.reconcileDirectory(''); await clock.advance(3000, () => coordinator.idle());
+    port.testDb.prepare("UPDATE files SET id='z',taken_at=100,thumb_ready=1 WHERE relative_path='a/a.jpg'").run();
+    port.testDb.prepare("UPDATE files SET id='a',taken_at=100,thumb_ready=1 WHERE relative_path='b/b.jpg'").run();
+    for (const name of ['a/a.jpg', 'b/b.jpg']) {
+      const file = port.records.get(name)!; await port.writeUpdated(file, file);
+      await port.appendChange({ ts: new Date(clock.now()).toISOString(), kind: 'updated', path: name, fromPath: null, isDir: false, mediaId: file.mediaId, source: 'watch' });
+    }
+    const query = () => port.testDb.prepare('SELECT path,cover_file_id,latest_at FROM folders ORDER BY path').all();
+    const realtime = query(); assert.equal((realtime[0] as {cover_file_id:string}).cover_file_id, 'a');
+    await scanLibrary(port.testDb, { id: 'lib', root }, { allowedRoots: [root] });
+    assert.deepEqual(query(), realtime);
+  } finally { await coordinator.stop(); port.close(); await rm(root, { recursive: true, force: true }); }
+});
+
 test('目录消失进入宽限期后以新路径恢复，保留全部子孙的 ID', async () => {
   const s = await setup(); const parked = `${s.root}-parked`;
   try {

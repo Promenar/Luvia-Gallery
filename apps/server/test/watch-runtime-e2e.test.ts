@@ -42,6 +42,24 @@ test('空挂载点启动后恢复，通过 worker 扫描保留全部媒体身份
   } finally { await loop.stop(); db.close(); await rm(dir, { recursive: true, force: true }); }
 });
 
+test('worker 主循环中新建含文件的子目录立即更新目录统计', { timeout: 15000 }, async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'luvia-watch-folder-e2e-')); const root = path.join(dir, 'media'); await mkdir(root);
+  const db = openDatabase(path.join(dir, 'db.sqlite')); const watcher = new FakeWatcher();
+  db.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib','照片',?)").run(root);
+  const runtime = new WatchRuntime(db, { owner: 'watch', allowedRoots: [root], watcher: () => watcher });
+  const loop = startWatchLoop(runtime, { intervalMs: 100 });
+  try {
+    await loop.ready;
+    await runNextJob(db, { owner: 'scanner', allowedRoots: [root], legacyDir: root, systemRoots: [] });
+    await mkdir(path.join(root, 'trip')); await writeFile(path.join(root, 'trip/a.jpg'), 'photo');
+    watcher.emit({ eventType: 'rename', path: 'trip' });
+    await until(() => !!db.prepare("SELECT 1 FROM files WHERE relative_path='trip/a.jpg'").get(), 9000);
+    assert.deepEqual(db.prepare("SELECT direct_media_count,media_count,child_count FROM folders WHERE path='lib/trip'").get(),
+      { direct_media_count: 1, media_count: 1, child_count: 0 });
+    assert.equal((db.prepare("SELECT media_count FROM folders WHERE path='lib'").get() as {media_count:number}).media_count, 1);
+  } finally { await loop.stop(); db.close(); await rm(dir, { recursive: true, force: true }); }
+});
+
 test('worker 主循环对临时媒体库处理新增修改移动删除并发布事件', { timeout: 70000 }, async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'luvia-watch-e2e-')); const root = path.join(dir, 'media'); await mkdir(root);
   const db = openDatabase(path.join(dir, 'db.sqlite')); const watcher = new FakeWatcher();
