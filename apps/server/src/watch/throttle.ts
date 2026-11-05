@@ -4,9 +4,7 @@ import type { Clock } from './clock.ts';
 
 type Delta = { source: LibraryChangedEvent['source']; folders: string[]; added?: number; removed?: number; updated?: number; moved?: number };
 export function compressFolders(folders: string[]): string[] {
-  const sorted = [...new Set(folders)].sort(); const result: string[] = [];
-  for (const folder of sorted) if (!result.some((parent) => folder === parent || folder.startsWith(`${parent}/`))) result.push(folder);
-  return result;
+  return [...new Set(folders)].sort();
 }
 export class ChangeThrottle {
   private pending: LibraryChangedEvent | null = null;

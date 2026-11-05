@@ -10,6 +10,8 @@ import { openDatabase } from '../src/core/database.ts';
 import { runNextJob } from '../src/worker/runner.ts';
 import { scanLibrary } from '../src/worker/scan.ts';
 import { flushMetadataFolders } from '../src/worker/metadata.ts';
+import { LibraryChangedEvent } from '@luvia/contracts';
+import { flushLibraryEvents } from '../src/worker/watch-events.ts';
 
 const fixtureScript = fileURLToPath(new URL('../scripts/fixtures.ts', import.meta.url));
 test('扫描后后台提取 EXIF、文件名日期和音视频元数据，损坏文件不阻断其他文件', async () => {
@@ -28,6 +30,7 @@ test('扫描后后台提取 EXIF、文件名日期和音视频元数据，损坏
     const originalCover = db.prepare("SELECT id FROM files WHERE name='exif-gps.jpg'").get() as { id: string };
     db.prepare("UPDATE folders SET cover_file_id=? WHERE path IN ('lib','lib/photos','lib/photos/nested')").run(originalCover.id);
     await runNextJob(db, options);
+    flushLibraryEvents(db, Date.now() + 2000);
     const row = (name: string) => db.prepare('SELECT * FROM files WHERE name=?').get(name) as Record<string, any>;
     const photo = row('exif-gps.jpg');
     assert.equal(photo.metadata_status, 'done'); assert.equal(photo.taken_at_source, 'metadata');
@@ -96,8 +99,20 @@ test('目录统计更新可恢复，并等待有效扫描租约结束', () => {
     const rows = db.prepare('SELECT path,latest_at,cover_file_id FROM folders ORDER BY path').all();
     assert.deepEqual(rows, [{ path: 'lib', latest_at: 123, cover_file_id: 'photo' }, { path: 'lib/child', latest_at: 123, cover_file_id: 'photo' }]);
     const events = db.prepare("SELECT payload FROM job_events WHERE event_type='library'").all() as { payload: string }[];
-    assert.deepEqual(JSON.parse(events[0]!.payload), { folders: ['lib/child'], added: 0, removed: 0, updated: 1 });
+    assert.deepEqual(JSON.parse(events[0]!.payload), { libraryId: 'lib', source: 'scan', folders: ['lib/child'], added: 0, removed: 0, updated: 1, moved: 0 });
     assert.equal(flushMetadataFolders(db), false);
     assert.equal((db.prepare("SELECT count(*) AS n FROM job_events WHERE event_type='library'").get() as { n: number }).n, 1);
+  } finally { db.close(); }
+});
+
+test('元数据目录刷新发布符合契约的持久节流事件', () => {
+  const db = openDatabase(':memory:');
+  try {
+    db.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib','照片','/synthetic')").run();
+    db.prepare("INSERT INTO folders(path,library_id,parent,name) VALUES ('lib','lib',NULL,'根')").run();
+    db.prepare("INSERT INTO metadata_dirty_folders(path,updated) VALUES ('lib',2)").run();
+    flushMetadataFolders(db);
+    const row = db.prepare("SELECT payload FROM job_events WHERE event_type='library'").get() as { payload: string };
+    assert.deepEqual(LibraryChangedEvent.parse(JSON.parse(row.payload)), { libraryId: 'lib', source: 'scan', folders: ['lib'], added: 0, removed: 0, updated: 2, moved: 0 });
   } finally { db.close(); }
 });

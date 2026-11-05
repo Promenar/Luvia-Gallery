@@ -4,6 +4,7 @@ import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { promisify } from 'node:util';
 import type Database from 'better-sqlite3';
+import { publishLibraryEvent } from './watch-events.ts';
 import exifr from 'exifr';
 import sharp from 'sharp';
 import { secureMediaPath } from '../core/paths.ts';
@@ -136,8 +137,14 @@ function refreshDirtyFolders(db: Database.Database): boolean {
   }
   const clear = db.prepare('DELETE FROM metadata_dirty_folders WHERE path=?');
   for (const entry of dirty) clear.run(entry.path);
-  if (dirty.length) db.prepare("INSERT INTO job_events(event_type,payload) VALUES ('library',?)")
-    .run(JSON.stringify({ folders: dirty.map((entry) => entry.path), added: 0, removed: 0, updated: dirty.reduce((sum, entry) => sum + entry.updated, 0) }));
+  const grouped = new Map<string, { folders: string[]; updated: number }>();
+  for (const entry of dirty) {
+    const row = db.prepare('SELECT library_id FROM folders WHERE path=?').get(entry.path) as { library_id: string } | undefined;
+    if (!row) continue;
+    const value = grouped.get(row.library_id) ?? { folders: [], updated: 0 };
+    value.folders.push(entry.path); value.updated += entry.updated; grouped.set(row.library_id, value);
+  }
+  for (const [libraryId, value] of grouped) publishLibraryEvent(db, { libraryId, source: 'scan', folders: value.folders, added: 0, removed: 0, updated: value.updated, moved: 0 });
   return !!db.prepare('SELECT 1 FROM metadata_dirty_folders LIMIT 1').get();
 }
 

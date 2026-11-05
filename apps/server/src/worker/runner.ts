@@ -103,9 +103,11 @@ export async function runNextJob(db: Database.Database, options: WorkerOptions):
           enqueueMetadata(db, library.id);
           const summary = (db.prepare('SELECT added,removed,updated,moved FROM scan_event_counts WHERE job_id=?').get(job.id) as { added: number; removed: number; updated: number; moved: number } | undefined)
             ?? { added: 0, removed: 0, updated: 0, moved: 0 };
-          publishLibraryEvent(db, { libraryId: library.id, source: 'scan', folders: [library.id], ...summary });
+          const folders = (db.prepare('SELECT path FROM scan_event_folders WHERE job_id=? ORDER BY path').all(job.id) as { path: string }[]).map((row) => row.path);
+          publishLibraryEvent(db, { libraryId: library.id, source: 'scan', folders, ...summary });
           db.prepare('DELETE FROM scan_event_restored WHERE job_id=?').run(job.id);
           db.prepare('DELETE FROM scan_event_counts WHERE job_id=?').run(job.id);
+          db.prepare('DELETE FROM scan_event_folders WHERE job_id=?').run(job.id);
           if (payload.legacyImportId) {
             const other = db.prepare("SELECT count(*) AS n FROM jobs WHERE type='scan' AND json_extract(payload,'$.legacyImportId')=? AND status<>'succeeded'")
               .get(payload.legacyImportId) as { n: number };
