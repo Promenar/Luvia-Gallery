@@ -532,12 +532,25 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
   }
   app.get('/api/v2/media/:id/:resource', async (req, reply) => {
     const { id, resource } = req.params as { id: string; resource: string };
-    if (!['original', 'display', 'thumb', 'tiles.dzi'].includes(resource)) return fail(404, 'NOT_FOUND', '媒体资源不存在');
+    if (!['original', 'display', 'thumb', 'preview', 'tiles.dzi'].includes(resource)) return fail(404, 'NOT_FOUND', '媒体资源不存在');
     const { row, filename } = await binaryMedia(req, id);
     if (resource === 'thumb') {
       const parsed = (req.query as { size?: string }).size ?? 'm';
       if (parsed !== 's' && parsed !== 'm' && parsed !== 'l') return fail(400, 'VALIDATION', '缩略图尺寸无效');
       return cachedMedia(req, reply, row, { kind: 'thumb', size: parsed }, true);
+    }
+    if (resource === 'preview') {
+      if (row.media_type !== 'video') return fail(404, 'NOT_FOUND', '视频预览不存在');
+      const variant: Variant = { kind: 'preview' };
+      const preview = cachePath(cacheDir, row, variant);
+      if (!await exists(preview)) {
+        db.prepare('UPDATE files SET has_preview=0 WHERE id=? AND size=? AND modified_at=?').run(row.id, row.size, row.modified_at);
+        return fail(404, 'NOT_FOUND', '视频预览不存在');
+      }
+      const touched = Date.now();
+      db.prepare('UPDATE cache_entries SET last_access_at=? WHERE cache_key=? AND last_access_at<?')
+        .run(touched, cacheKey(row, variant), touched - 60_000);
+      return sendFile(req, reply, preview, { mime: 'video/mp4', name: row.name, etagKey: cacheKey(row, variant) });
     }
     if (resource === 'tiles.dzi') {
       if (row.media_type !== 'image') return fail(404, 'NOT_FOUND', '媒体不支持深度缩放');

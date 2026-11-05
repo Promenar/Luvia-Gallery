@@ -8,11 +8,13 @@ import { z } from 'zod';
 import { cacheKey, cachePath } from '../core/media-cache.ts';
 import { secureMediaPath } from '../core/paths.ts';
 import { runFfmpeg } from './ffmpeg-slots.ts';
+import { readSettings } from '../core/settings.ts';
 
 const Variant = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('thumb'), size: z.enum(['s', 'm', 'l']) }),
   z.object({ kind: z.literal('display') }),
   z.object({ kind: z.literal('dimensions') }),
+  z.object({ kind: z.literal('preview') }),
   z.object({ kind: z.literal('tile'), level: z.number().int().nonnegative(), col: z.number().int().nonnegative(), row: z.number().int().nonnegative() }),
 ]);
 const Task = z.object({ mediaId: z.string().min(1), sourceSize: z.number().int().nonnegative(), sourceModified: z.number().int(), variant: Variant });
@@ -25,7 +27,7 @@ export async function generateMediaCache(db: Database.Database, payload: unknown
   const row = db.prepare(`SELECT f.id,f.size,f.modified_at,f.relative_path,f.media_type,f.width,f.height,l.root FROM files f
     JOIN libraries l ON l.id=f.library_id WHERE f.id=? AND l.enabled=1`).get(task.mediaId) as
     { id: string; size: number; modified_at: number; relative_path: string; media_type: string; width: number | null; height: number | null; root: string } | undefined;
-  if (!row || !(row.media_type === 'image' || row.media_type === 'video' && task.variant.kind === 'thumb') || row.size !== task.sourceSize || row.modified_at !== task.sourceModified) throw new Error('媒体已变化或不支持');
+  if (!row || !(row.media_type === 'image' && task.variant.kind !== 'preview' || row.media_type === 'video' && (task.variant.kind === 'thumb' || task.variant.kind === 'preview')) || row.size !== task.sourceSize || row.modified_at !== task.sourceModified) throw new Error('媒体已变化或不支持');
   const realRoot = await realpath(row.root);
   const allowed = await Promise.all(options.allowedRoots.map((root) => realpath(root)));
   if (!allowed.some((root) => within(root, realRoot))) throw new Error('媒体库不在挂载内');
@@ -62,6 +64,20 @@ export async function generateMediaCache(db: Database.Database, payload: unknown
       await sharp(input).rotate().resize({ width: dimension, height: dimension, fit: 'inside', withoutEnlargement: true }).webp({ quality: 82 }).toFile(temp);
       const placeholder = await sharp(input).rotate().resize({ width: 100, height: 100, fit: 'inside', withoutEnlargement: true }).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
       hash = Buffer.from(rgbaToThumbHash(placeholder.info.width, placeholder.info.height, placeholder.data)).toString('base64');
+    } else if (task.variant.kind === 'preview') {
+      if (!readSettings(db).previews.enabled) throw new Error('视频预览已关闭');
+      const setting = readSettings(db).transcode.hwaccel;
+      const probe = db.prepare("SELECT value FROM settings WHERE key='worker.ffmpeg'").get() as { value: string } | undefined;
+      let nvenc = false;
+      try { nvenc = (setting === 'auto' || setting === 'nvenc') && !!probe && JSON.parse(probe.value).encoder === 'nvenc'; } catch { nvenc = false; }
+      const common = ['-n', '-i', filename, '-map', '0:v:0', '-t', '5', '-an', '-vf', 'scale=640:-2', '-pix_fmt', 'yuv420p'];
+      const encode = (hardware: boolean) => runFfmpeg(db, options.owner, [...common,
+        ...(hardware ? ['-c:v', 'h264_nvenc', '-preset', 'p4', '-cq', '30'] : ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '30']),
+        '-movflags', '+faststart', '-f', 'mp4', temp], options);
+      if (nvenc) {
+        try { await encode(true); }
+        catch { options.signal?.throwIfAborted(); options.assertLease(); await unlink(temp).catch(() => {}); await encode(false); }
+      } else await encode(false);
     } else if (task.variant.kind === 'display') {
       await sharp(filename).rotate().webp({ quality: 90 }).toFile(temp);
     } else {
@@ -75,17 +91,20 @@ export async function generateMediaCache(db: Database.Database, payload: unknown
       await sharp(filename).rotate().resize(width, height, { fit: 'fill' }).extract({ left, top, width: Math.min(256, width - left), height: Math.min(256, height - top) }).webp({ quality: 82 }).toFile(temp);
     }
     options.signal?.throwIfAborted(); options.assertLease();
+    const sourceAfter = await stat(filename);
+    if (sourceAfter.size !== row.size || Math.floor(sourceAfter.mtimeMs / 1000) !== row.modified_at) throw new Error('媒体已变化');
     const current = db.prepare('SELECT size,modified_at FROM files WHERE id=?').get(row.id) as { size: number; modified_at: number } | undefined;
     if (!current || current.size !== row.size || current.modified_at !== row.modified_at) throw new Error('媒体已变化');
     await rename(temp, destination);
     const output = await stat(destination);
     db.transaction(() => {
       options.assertLease();
-      db.prepare(`INSERT INTO cache_entries(cache_key,relative_path,bytes,last_access_at) VALUES (?,?,?,?)
-        ON CONFLICT(cache_key) DO UPDATE SET bytes=excluded.bytes,last_access_at=excluded.last_access_at`)
-        .run(cacheKey(row, task.variant), path.relative(cacheRoot, destination), output.size, Date.now());
+      db.prepare(`INSERT INTO cache_entries(cache_key,relative_path,bytes,last_access_at,media_id,variant) VALUES (?,?,?,?,?,?)
+        ON CONFLICT(cache_key) DO UPDATE SET bytes=excluded.bytes,last_access_at=excluded.last_access_at,media_id=excluded.media_id,variant=excluded.variant`)
+        .run(cacheKey(row, task.variant), path.relative(cacheRoot, destination), output.size, Date.now(), row.id, task.variant.kind);
       if (hash) db.prepare('UPDATE files SET thumbhash=?,thumb_version=CASE WHEN thumb_version=0 THEN 1 ELSE thumb_version END WHERE id=? AND size=? AND modified_at=?')
         .run(hash, row.id, row.size, row.modified_at);
+      if (task.variant.kind === 'preview') db.prepare('UPDATE files SET has_preview=1 WHERE id=? AND size=? AND modified_at=?').run(row.id, row.size, row.modified_at);
     }).immediate();
   } finally { await unlink(temp).catch(() => {}); await unlink(frame).catch(() => {}); }
 }

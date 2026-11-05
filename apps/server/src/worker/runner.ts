@@ -9,9 +9,10 @@ import path from 'node:path';
 import { pruneCache } from './cache-prune.ts';
 import { readSettings } from '../core/settings.ts';
 import { processMetadataBatch } from './metadata.ts';
+import { enqueueMediaTask } from '../core/media-cache.ts';
 
 type Options = { owner: string; allowedRoots: string[]; legacyDir: string; systemRoots: string[]; cacheDir?: string; signal?: AbortSignal };
-type Payload = { libraryId?: string | null; legacyImportId?: string };
+type Payload = { libraryId?: string | null; legacyImportId?: string; mediaId?: string };
 const now = () => Math.floor(Date.now() / 1000);
 const childId = (parent: string, library: string) => `scan_${createHash('sha256').update(parent).update('\0').update(library).digest('base64url').slice(0, 24)}`;
 function enqueueScan(db: Database.Database, id: string, libraryId: string, legacyImportId?: string) {
@@ -22,6 +23,13 @@ function enqueueMetadata(db: Database.Database, libraryId: string) {
   const id = randomUUID();
   const result = db.prepare("INSERT OR IGNORE INTO jobs(id,type,label,status,trigger,payload,created_at,dedupe_key) VALUES (?,'metadata','提取元数据','queued','system',?,?,?)")
     .run(id, JSON.stringify({ libraryId }), now(), `metadata:${libraryId}`);
+  if (result.changes) publishJob(db, id);
+}
+function enqueuePreviews(db: Database.Database, libraryId?: string | null) {
+  if (!readSettings(db).previews.enabled) return;
+  const id = randomUUID();
+  const result = db.prepare("INSERT OR IGNORE INTO jobs(id,type,label,status,trigger,payload,created_at,dedupe_key) VALUES (?,'previews','生成视频预览','queued','system',?,?,?)")
+    .run(id, JSON.stringify({ libraryId: libraryId ?? null }), now(), `previews:${libraryId ?? 'all'}`);
   if (result.changes) publishJob(db, id);
 }
 
@@ -86,9 +94,36 @@ export async function runNextJob(db: Database.Database, options: Options): Promi
     } else if (job.type === 'metadata') {
       const result = await processMetadataBatch(db, job, { owner: options.owner, allowedRoots: options.allowedRoots, libraryId: payload.libraryId, assertLease, signal: controller.signal });
       if (result.complete) {
-        if (!queue.finish(job.id, result.counts)) throw new Error('作业租约已失效');
+        db.transaction(() => {
+          if (!queue.finish(job.id, result.counts)) throw new Error('作业租约已失效');
+          enqueuePreviews(db, payload.libraryId);
+        }).immediate();
       } else if (!queue.release(job.id)) throw new Error('作业租约已失效');
+    } else if (job.type === 'previews' && !payload.mediaId) {
+      if (!readSettings(db).previews.enabled) {
+        if (!queue.finish(job.id, { queued: 0 })) throw new Error('作业租约已失效');
+      } else {
+        const checkpoint = job.checkpoint ? JSON.parse(job.checkpoint) as { lastId?: string; queued?: number } : {};
+        let lastId = checkpoint.lastId ?? ''; let queued = checkpoint.queued ?? 0;
+        const rows = db.prepare(`SELECT id,size,modified_at FROM files WHERE media_type='video' AND has_preview=0 AND id>?
+          ${payload.libraryId ? 'AND library_id=?' : ''} ORDER BY id LIMIT 32`).all(...(payload.libraryId ? [lastId, payload.libraryId] : [lastId])) as { id: string; size: number; modified_at: number }[];
+        for (const row of rows) {
+          controller.signal.throwIfAborted();
+          db.transaction(() => {
+            assertLease();
+            enqueueMediaTask(db, row, { kind: 'preview' });
+            lastId = row.id; queued++;
+            db.prepare('UPDATE jobs SET checkpoint=?,progress_done=? WHERE id=?').run(JSON.stringify({ lastId, queued }), queued, job.id);
+          }).immediate();
+        }
+        if (rows.length < 32) {
+          if (!queue.finish(job.id, { queued })) throw new Error('作业租约已失效');
+        } else if (!queue.release(job.id)) throw new Error('作业租约已失效');
+      }
     } else if (job.type === 'thumbnails') {
+      await generateMediaCache(db, payload, { owner: options.owner, cacheDir: options.cacheDir ?? path.resolve(process.env.CACHE_DIR ?? 'cache'), allowedRoots: options.allowedRoots, assertLease, signal: controller.signal });
+      if (!queue.finish(job.id, { generated: 1 })) throw new Error('作业租约已失效');
+    } else if (job.type === 'previews') {
       await generateMediaCache(db, payload, { owner: options.owner, cacheDir: options.cacheDir ?? path.resolve(process.env.CACHE_DIR ?? 'cache'), allowedRoots: options.allowedRoots, assertLease, signal: controller.signal });
       if (!queue.finish(job.id, { generated: 1 })) throw new Error('作业租约已失效');
     } else if (job.type === 'cache_prune') {
