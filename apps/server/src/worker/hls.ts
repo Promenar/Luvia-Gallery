@@ -40,7 +40,7 @@ export async function generateHls(db: Database.Database, sessionId: string, jobI
   const session = db.prepare('SELECT * FROM hls_sessions WHERE id=? AND job_id=?').get(sessionId, jobId) as HlsSession | undefined;
   if (!session) throw new Error('HLS 会话不存在');
   const source = db.prepare(`SELECT f.id,f.relative_path,f.size,f.modified_at,f.playability,l.root FROM files f JOIN libraries l ON l.id=f.library_id
-    WHERE f.id=? AND f.media_type='video' AND l.enabled=1`).get(session.media_id) as { id: string; relative_path: string; size: number; modified_at: number; playability: string | null; root: string } | undefined;
+    WHERE f.id=? AND f.media_type='video' AND f.missing_at_ms IS NULL AND l.enabled=1`).get(session.media_id) as { id: string; relative_path: string; size: number; modified_at: number; playability: string | null; root: string } | undefined;
   if (!source || source.playability !== 'transcode' || source.size !== session.source_size || source.modified_at !== session.source_modified || !readSettings(db).transcode.enabled) throw new Error('视频不可转码');
   const root = await realpath(source.root);
   const allowed = await Promise.all(options.allowedRoots.map((candidate) => realpath(candidate).catch(() => '')));

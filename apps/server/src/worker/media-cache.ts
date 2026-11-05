@@ -26,7 +26,7 @@ const within = (root: string, target: string) => {
 export async function generateMediaCache(db: Database.Database, payload: unknown, options: { owner: string; cacheDir: string; allowedRoots: string[]; assertLease: () => void; signal?: AbortSignal }): Promise<void> {
   const task = Task.parse(payload);
   const row = db.prepare(`SELECT f.id,f.size,f.modified_at,f.relative_path,f.media_type,f.width,f.height,l.root FROM files f
-    JOIN libraries l ON l.id=f.library_id WHERE f.id=? AND l.enabled=1`).get(task.mediaId) as
+    JOIN libraries l ON l.id=f.library_id WHERE f.id=? AND l.enabled=1 AND f.missing_at_ms IS NULL`).get(task.mediaId) as
     { id: string; size: number; modified_at: number; relative_path: string; media_type: string; width: number | null; height: number | null; root: string } | undefined;
   if (!row || !(row.media_type === 'image' && task.variant.kind !== 'preview' || row.media_type === 'video' && (task.variant.kind === 'thumb' || task.variant.kind === 'preview')) || row.size !== task.sourceSize || row.modified_at !== task.sourceModified) throw new Error('媒体已变化或不支持');
   const realRoot = await realpath(row.root);
@@ -99,7 +99,7 @@ export async function generateMediaCache(db: Database.Database, payload: unknown
     options.signal?.throwIfAborted(); options.assertLease();
     const sourceAfter = await stat(filename);
     if (sourceAfter.size !== row.size || Math.floor(sourceAfter.mtimeMs / 1000) !== row.modified_at) throw new Error('媒体已变化');
-    const current = db.prepare('SELECT size,modified_at FROM files WHERE id=?').get(row.id) as { size: number; modified_at: number } | undefined;
+    const current = db.prepare('SELECT size,modified_at FROM files WHERE id=? AND missing_at_ms IS NULL').get(row.id) as { size: number; modified_at: number } | undefined;
     if (!current || current.size !== row.size || current.modified_at !== row.modified_at) throw new Error('媒体已变化');
     await rename(temp, destination);
     const output = await stat(destination);

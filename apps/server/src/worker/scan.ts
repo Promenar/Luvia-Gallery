@@ -110,7 +110,10 @@ async function scanWithLock(db: Database.Database, library: { id: string; root: 
   let pending: Promise<void>[] = [];
   const existing = db.prepare('SELECT id FROM files WHERE id=?');
   const existingPath = db.prepare('SELECT id,dev,ino,missing_at_ms FROM files WHERE library_id=? AND relative_path=?');
-  const identity = db.prepare('SELECT f.id,f.relative_path FROM file_watch_index w JOIN files f ON f.id=w.file_id WHERE w.library_id=? AND w.dev=? AND w.ino=? LIMIT 2');
+  const sidecar = !!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='file_watch_index'").get();
+  const identity = db.prepare(sidecar
+    ? 'SELECT f.id,f.relative_path FROM file_watch_index w JOIN files f ON f.id=w.file_id WHERE w.library_id=? AND w.dev=? AND w.ino=? LIMIT 2'
+    : 'SELECT id,relative_path FROM files WHERE library_id=? AND dev=? AND ino=? LIMIT 2');
   const grace = readSettings(db).libraries.missingGraceDays * 86_400_000;
   const scanNow = () => options.clock ? options.clock() * 1000 : Date.now();
   const removeFile = (id: string) => {

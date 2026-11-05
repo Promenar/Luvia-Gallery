@@ -11,7 +11,7 @@ export class FolderReader {
   private media: MediaReader;
   constructor(db: Database.Database) { this.db = db; this.media = new MediaReader(db); }
   private select = `SELECT f.*,l.host_root, EXISTS(SELECT 1 FROM favorites x WHERE x.user_id=? AND x.item_type='folder' AND x.item_id=f.path) AS favorite
-    FROM folders f JOIN libraries l ON l.id=f.library_id WHERE l.enabled=1`;
+    FROM folders f JOIN libraries l ON l.id=f.library_id WHERE l.enabled=1 AND f.missing_at_ms IS NULL`;
   private visible(folder: string, context: Context): boolean {
     return pathAllowed(folder, context.allowedPaths) || !!context.allowedPaths?.some((allowed) => pathAllowed(allowed, [folder]));
   }

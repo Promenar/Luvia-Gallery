@@ -14,7 +14,7 @@ type Options = { userId: string; allowedPaths: string[] | null; folder: string |
 
 export async function legacyPage(db: Database.Database, executor: QueryExecutor, options: Options): Promise<{ rows: LegacyRow[]; hasMore: boolean }> {
   const parameters: Value[] = [];
-  const clauses = ['l.enabled=1'];
+  const clauses = ['l.enabled=1', 'f.missing_at_ms IS NULL'];
   const prefix = (column: string, value: string) => {
     parameters.push(value, `${value}/`, `${value}0`);
     return `(${column}=? OR (${column}>=? AND ${column}<?))`;

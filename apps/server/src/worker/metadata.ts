@@ -120,11 +120,11 @@ function refreshDirtyFolders(db: Database.Database): boolean {
       current = (parent.get(current) as { parent: string | null } | undefined)?.parent ?? null;
     }
   }
-  const latestDirect = db.prepare('SELECT taken_at FROM files WHERE folder=? ORDER BY taken_at DESC,id ASC LIMIT 1');
-  const latestChild = db.prepare('SELECT max(latest_at) AS latest FROM folders WHERE parent=?');
-  const directCover = db.prepare('SELECT id,taken_at FROM files WHERE folder=? AND thumb_ready=1 ORDER BY taken_at DESC,id ASC LIMIT 1');
+  const latestDirect = db.prepare('SELECT taken_at FROM files WHERE folder=? AND missing_at_ms IS NULL ORDER BY taken_at DESC,id ASC LIMIT 1');
+  const latestChild = db.prepare('SELECT max(latest_at) AS latest FROM folders WHERE parent=? AND missing_at_ms IS NULL');
+  const directCover = db.prepare('SELECT id,taken_at FROM files WHERE folder=? AND missing_at_ms IS NULL AND thumb_ready=1 ORDER BY taken_at DESC,id ASC LIMIT 1');
   const childCover = db.prepare(`SELECT f.id,f.taken_at FROM folders child JOIN files f ON f.id=child.cover_file_id
-    WHERE child.parent=? AND f.thumb_ready=1 ORDER BY f.taken_at DESC,f.id ASC LIMIT 1`);
+    WHERE child.parent=? AND child.missing_at_ms IS NULL AND f.missing_at_ms IS NULL AND f.thumb_ready=1 ORDER BY f.taken_at DESC,f.id ASC LIMIT 1`);
   const update = db.prepare('UPDATE folders SET latest_at=?,cover_file_id=? WHERE path=?');
   for (const folder of [...ancestors].sort((a, b) => b.length - a.length)) {
     const own = (latestDirect.get(folder) as { taken_at: number } | undefined)?.taken_at ?? null;
@@ -158,7 +158,7 @@ export async function processMetadataBatch(db: Database.Database, job: JobRow, o
       db.prepare('DELETE FROM metadata_claims WHERE lease_expires_at<=?').run(now());
       const row = db.prepare(`SELECT f.id,f.relative_path,f.folder,f.name,f.media_type,f.size,f.modified_at,l.root FROM files f
         JOIN libraries l ON l.id=f.library_id AND l.enabled=1 LEFT JOIN metadata_claims c ON c.file_id=f.id
-        WHERE f.metadata_status='pending' AND c.file_id IS NULL${libraryClause} ORDER BY f.id LIMIT 1`).get(...libraryArgs) as Source | undefined;
+        WHERE f.metadata_status='pending' AND f.missing_at_ms IS NULL AND c.file_id IS NULL${libraryClause} ORDER BY f.id LIMIT 1`).get(...libraryArgs) as Source | undefined;
       if (row) db.prepare('INSERT INTO metadata_claims(file_id,job_id,owner,lease_expires_at) VALUES (?,?,?,?)').run(row.id, job.id, options.owner, now() + 30);
       return row;
     }).immediate();
@@ -188,7 +188,7 @@ export async function processMetadataBatch(db: Database.Database, job: JobRow, o
     db.transaction(() => {
       options.assertLease();
       if (!db.prepare('SELECT 1 FROM metadata_claims WHERE file_id=? AND job_id=? AND owner=? AND lease_expires_at>?').get(source.id, job.id, options.owner, now())) throw new Error('元数据租约已失效');
-      const current = db.prepare("SELECT 1 FROM files WHERE id=? AND size=? AND modified_at=? AND metadata_status='pending'").get(source.id, source.size, source.modified_at);
+      const current = db.prepare("SELECT 1 FROM files WHERE id=? AND size=? AND modified_at=? AND metadata_status='pending' AND missing_at_ms IS NULL").get(source.id, source.size, source.modified_at);
       if (current) {
         if (metadata) {
           db.prepare(`UPDATE files SET taken_at=?,taken_at_source=?,width=?,height=?,orientation=?,duration_sec=?,codec=?,audio_codec=?,container=?,fps=?,bitrate=?,
@@ -209,7 +209,7 @@ export async function processMetadataBatch(db: Database.Database, job: JobRow, o
     await delay(10, undefined, { signal });
   }
   const dirtyRemaining = flushMetadataFolders(db, options.assertLease);
-  const pending = db.prepare(`SELECT 1 FROM files f JOIN libraries l ON l.id=f.library_id AND l.enabled=1 WHERE f.metadata_status='pending'${libraryClause} LIMIT 1`).get(...libraryArgs);
+  const pending = db.prepare(`SELECT 1 FROM files f JOIN libraries l ON l.id=f.library_id AND l.enabled=1 WHERE f.metadata_status='pending' AND f.missing_at_ms IS NULL${libraryClause} LIMIT 1`).get(...libraryArgs);
   if (pending || dirtyRemaining) await delay(50, undefined, { signal: options.signal });
   return { complete: !pending && !dirtyRemaining, counts };
 }
