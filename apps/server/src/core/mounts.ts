@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { readFile } from 'node:fs/promises';
 
-type Mount = { containerPath: string; hostPath: string | null; kind: 'candidate' | 'system' | 'other'; libraryId: null; readOnly: boolean; mediaEstimate: null };
+export type Mount = { containerPath: string; hostPath: string | null; kind: 'candidate' | 'system' | 'other'; libraryId: null; readOnly: boolean; mediaEstimate: null };
 type Options = { mediaRoots: string[]; systemRoots: string[]; hostPaths?: string };
 const unescapeMount = (value: string) => value.replace(/\\([0-7]{3})/g, (_match, octal: string) => String.fromCharCode(parseInt(octal, 8)));
 function within(root: string, child: string): boolean {

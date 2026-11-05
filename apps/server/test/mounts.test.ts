@@ -1,5 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 
 test('mountinfo 解码路径并使用显式宿主机映射，系统挂载不能成为候选', async () => {
   const module = await import('../src/core/mounts.ts').catch(() => null);
@@ -21,4 +24,19 @@ test('mountinfo 解码路径并使用显式宿主机映射，系统挂载不能�
   assert.equal(phone?.kind, 'candidate');
   assert.equal(mounts.find((item) => item.containerPath === '/data')?.kind, 'system');
   assert.equal(mounts.find((item) => item.containerPath === '/proc')?.kind, 'other');
+});
+
+test('挂载媒体估计只读取前两层并在超时后返回空值', async () => {
+  const module = await import('../src/worker/mount-estimate.ts').catch(() => null);
+  assert.ok(module, '挂载抽样模块尚未实现');
+  const root = await mkdtemp(path.join(tmpdir(), 'luvia-mount-sample-'));
+  try {
+    await mkdir(path.join(root, 'first', 'deep'), { recursive: true });
+    await writeFile(path.join(root, 'a.jpg'), 'a');
+    await writeFile(path.join(root, 'first', 'b.mp4'), 'b');
+    await writeFile(path.join(root, 'first', 'deep', 'c.png'), 'c');
+    assert.equal(await module.estimateMount(root), 2);
+    const slow = async () => new Promise<never>(() => {});
+    assert.equal(await module.estimateMount(root, { timeoutMs: 25, openDir: slow }), null);
+  } finally { await rm(root, { recursive: true, force: true }); }
 });

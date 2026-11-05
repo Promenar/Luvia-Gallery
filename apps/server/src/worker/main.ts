@@ -4,6 +4,9 @@ import { detectMounts } from '../core/mounts.ts';
 import { installFatalHandlers, openRuntime } from '../core/runtime.ts';
 import { probeFfmpeg } from './ffmpeg.ts';
 import { newWorkerOwner, runNextJob } from './runner.ts';
+import { discoverNewMounts } from './discover.ts';
+import type { Mount } from '../core/mounts.ts';
+import { sampleMounts } from './mount-estimate.ts';
 
 installFatalHandlers('worker');
 const runtime = await openRuntime();
@@ -11,8 +14,10 @@ const owner = newWorkerOwner();
 const stopController = new AbortController();
 process.on('SIGINT', () => stopController.abort());
 process.on('SIGTERM', () => stopController.abort());
-const mounts = await detectMounts({ mediaRoots: runtime.mediaRoots, systemRoots: [runtime.dataDir, runtime.cacheDir], hostPaths: process.env.LUVIA_HOST_PATHS });
-const allowedRoots = process.platform === 'darwin' ? runtime.mediaRoots : mounts.filter((entry) => entry.kind === 'candidate').map((entry) => entry.containerPath);
+const mounts = process.platform === 'darwin'
+  ? runtime.mediaRoots.map((containerPath): Mount => ({ containerPath, hostPath: null, kind: 'candidate', libraryId: null, readOnly: true, mediaEstimate: null }))
+  : await detectMounts({ mediaRoots: runtime.mediaRoots, systemRoots: [runtime.dataDir, runtime.cacheDir], hostPaths: process.env.LUVIA_HOST_PATHS });
+const allowedRoots = mounts.filter((entry) => entry.kind === 'candidate').map((entry) => entry.containerPath);
 const loop = monitorEventLoopDelay({ resolution: 20 });
 loop.enable();
 const heartbeat = () => {
@@ -24,7 +29,10 @@ const heartbeat = () => {
 heartbeat();
 const heartbeatTimer = setInterval(heartbeat, 5000);
 heartbeatTimer.unref();
+let sampling: Promise<void> = Promise.resolve();
 try {
+  await discoverNewMounts(runtime.db, mounts, [runtime.dataDir, runtime.cacheDir]);
+  sampling = sampleMounts(runtime.db, mounts, stopController.signal).catch(() => { process.stderr.write('挂载抽样失败\n'); });
   const ffmpeg = await probeFfmpeg();
   runtime.db.prepare("INSERT INTO settings(key,value) VALUES('worker.ffmpeg',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(JSON.stringify(ffmpeg));
   process.stdout.write(`worker 编码器: ${ffmpeg.encoder}\n`);
@@ -35,5 +43,7 @@ try {
     }
   }
 } finally {
+  stopController.abort();
+  await sampling;
   clearInterval(heartbeatTimer); loop.disable(); runtime.db.close();
 }

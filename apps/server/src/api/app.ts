@@ -4,6 +4,7 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import type Database from 'better-sqlite3';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import path from 'node:path';
+import { realpath, stat, readdir } from 'node:fs/promises';
 import sharp from 'sharp';
 import { ZodError } from 'zod';
 import { CSRF_HEADER, endpoints, JobAction, Preferences, WallpaperConfig, defaultPreferences } from '@luvia/contracts';
@@ -14,6 +15,9 @@ import { FolderReader } from '../core/folder-reader.ts';
 import { pathAllowed } from '../core/paths.ts';
 import { jobView, publishJob } from '../core/job-view.ts';
 import type { JobRecord } from '../core/job-view.ts';
+import { detectMounts } from '../core/mounts.ts';
+import type { Mount } from '../core/mounts.ts';
+import { readSettings, writeSettings } from '../core/settings.ts';
 
 type UserRow = {
   id: string; username: string; password_hash: string; role: 'admin' | 'user';
@@ -24,7 +28,7 @@ type TokenRow = {
   created_at: number; last_used_at: number | null; expires_at: number | null; wallpaper: string | null;
 };
 type Identity = { user: UserRow; kind: 'session' | 'token'; scope?: string; sessionHash?: string };
-type Options = { db: Database.Database; legacyPending: boolean | (() => boolean); secureCookies?: boolean };
+type Options = { db: Database.Database; legacyPending: boolean | (() => boolean); secureCookies?: boolean; mounts?: () => Promise<Mount[]>; systemRoots?: string[] };
 class HttpError extends Error { constructor(publicStatus: number, code: string, message: string) { super(message); this.statusCode = publicStatus; this.code = code; } statusCode: number; code: string; }
 const fail = (status: number, code: string, message: string): never => { throw new HttpError(status, code, message); };
 const digest = (s: string) => createHash('sha256').update(s).digest('hex');
@@ -51,6 +55,37 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
   const folders = new FolderReader(db);
   const attempts = new Map<string, number[]>();
   const secure = options.secureCookies ?? process.env.NODE_ENV === 'production';
+  const systemRoots = options.systemRoots ?? [path.resolve(process.env.DATA_DIR ?? 'data'), path.resolve(process.env.CACHE_DIR ?? 'cache')];
+  const configuredMediaRoots = (process.env.MEDIA_ROOT ?? '').split(';').map((part) => part.trim()).filter(Boolean).map((part) => path.resolve(part));
+  const getMounts = options.mounts ?? (() => process.platform === 'darwin'
+    ? Promise.resolve(configuredMediaRoots.map((containerPath): Mount => ({ containerPath, hostPath: null, kind: 'candidate', libraryId: null, readOnly: true, mediaEstimate: null })))
+    : detectMounts({ mediaRoots: configuredMediaRoots, systemRoots, hostPaths: process.env.LUVIA_HOST_PATHS }));
+  const within = (root: string, target: string) => {
+    const relative = path.relative(root, target);
+    return relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+  };
+  async function findRoot(root: string): Promise<{ root: string; hostRoot: string | null }> {
+    if (!path.isAbsolute(root)) return fail(400, 'VALIDATION', '媒体库路径必须为绝对路径');
+    const normalized = path.resolve(root);
+    let actual: string;
+    try { actual = await realpath(normalized); if (!(await stat(actual)).isDirectory()) return fail(400, 'VALIDATION', '媒体库路径必须是目录'); }
+    catch (error) { if (error instanceof HttpError) throw error; return fail(400, 'VALIDATION', '媒体库路径不可访问'); }
+    for (const system of systemRoots) {
+      let resolved: string;
+      try { resolved = await realpath(system); } catch { resolved = path.resolve(system); }
+      if (within(resolved, actual) || within(actual, resolved)) return fail(400, 'VALIDATION', '媒体库不能包含系统目录');
+    }
+    const candidates = (await getMounts()).filter((mount) => mount.kind === 'candidate' && within(mount.containerPath, normalized))
+      .sort((a, b) => b.containerPath.length - a.containerPath.length);
+    for (const mount of candidates) {
+      let realMount: string;
+      try { realMount = await realpath(mount.containerPath); } catch { continue; }
+      if (!within(realMount, actual)) continue;
+      const relative = path.relative(mount.containerPath, normalized).split(path.sep).join('/');
+      return { root: normalized, hostRoot: mount.hostPath ? path.posix.join(mount.hostPath, relative) : null };
+    }
+    return fail(400, 'VALIDATION', '媒体库路径不在检测到的挂载内');
+  }
   const findUser = db.prepare('SELECT * FROM users WHERE username = ?');
   const countUsers = db.prepare('SELECT count(*) AS n FROM users');
   const pending = () => typeof options.legacyPending === 'function' ? options.legacyPending() : options.legacyPending;
@@ -271,6 +306,64 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     if (query.exclude && query.exclude.length > 500) fail(400, 'VALIDATION', '排除的媒体不能超过 500 个');
     return media.random(query, mediaContext(req));
   });
+  type LibraryRow = { id: string; name: string; root: string; enabled: number; status: string; last_scan_at: number | null; host_root: string | null; host_root_source: 'auto' | 'manual' | null; exclude: string; media_count: number };
+  const librarySql = 'SELECT l.*,COALESCE(f.media_count,0) AS media_count FROM libraries l LEFT JOIN folders f ON f.path=l.id';
+  const libraryOut = (row: LibraryRow) => ({ id: row.id, name: row.name, root: row.root, enabled: !!row.enabled,
+    status: row.status, lastScanAt: iso(row.last_scan_at), hostRoot: row.host_root, hostRootSource: row.host_root_source,
+    exclude: JSON.parse(row.exclude), mediaCount: row.media_count });
+  register('listLibraries', async () => ({ libraries: (db.prepare(`${librarySql} ORDER BY l.name COLLATE NOCASE,l.id`).all() as LibraryRow[]).map(libraryOut) }));
+  register('createLibrary', async (_req, _reply, body) => {
+    const resolved = await findRoot(body.root);
+    if (db.prepare('SELECT 1 FROM libraries WHERE root=?').get(resolved.root)) fail(409, 'CONFLICT', '媒体库已经存在');
+    const id = randomUUID();
+    const manual = typeof body.hostRoot === 'string';
+    db.prepare('INSERT INTO libraries(id,name,root,enabled,host_root,host_root_source,exclude) VALUES (?,?,?,?,?,?,?)')
+      .run(id, body.name, resolved.root, body.enabled ? 1 : 0, manual ? body.hostRoot : resolved.hostRoot,
+        manual ? 'manual' : resolved.hostRoot ? 'auto' : null, JSON.stringify(body.exclude ?? ['@eaDir', '#recycle', '.*', '.thumbnails']));
+    return libraryOut(db.prepare(`${librarySql} WHERE l.id=?`).get(id) as LibraryRow);
+  });
+  register('updateLibrary', async (req, _reply, body) => {
+    const { id } = req.params as { id: string };
+    const row = (db.prepare(`${librarySql} WHERE l.id=?`).get(id) as LibraryRow | undefined) ?? fail(404, 'NOT_FOUND', '媒体库不存在');
+    let hostRoot = row.host_root; let source = row.host_root_source;
+    if (body.hostRoot !== undefined) {
+      if (body.hostRoot === null) {
+        try { hostRoot = (await findRoot(row.root)).hostRoot; } catch (error) { if (!(error instanceof HttpError)) throw error; hostRoot = null; }
+        source = hostRoot ? 'auto' : null;
+      } else { hostRoot = body.hostRoot; source = 'manual'; }
+    }
+    db.prepare('UPDATE libraries SET name=?,enabled=?,host_root=?,host_root_source=?,exclude=? WHERE id=?')
+      .run(body.name ?? row.name, body.enabled === undefined ? row.enabled : body.enabled ? 1 : 0, hostRoot, source,
+        body.exclude === undefined ? row.exclude : JSON.stringify(body.exclude), id);
+    return libraryOut(db.prepare(`${librarySql} WHERE l.id=?`).get(id) as LibraryRow);
+  });
+  register('deleteLibrary', async (req) => {
+    const { id } = req.params as { id: string };
+    if (!db.prepare('DELETE FROM libraries WHERE id=?').run(id).changes) fail(404, 'NOT_FOUND', '媒体库不存在');
+  });
+  register('mounts', async () => {
+    const libraries = db.prepare('SELECT id,root FROM libraries').all() as { id: string; root: string }[];
+    const estimateRow = db.prepare("SELECT value FROM settings WHERE key='mount.estimates'").get() as { value: string } | undefined;
+    const estimates = estimateRow ? JSON.parse(estimateRow.value) as Record<string, number | null> : {};
+    return { mounts: (await getMounts()).map((mount) => {
+      const library = libraries.find((entry) => entry.root === mount.containerPath);
+      const mediaEstimate = Number.isSafeInteger(estimates[mount.containerPath]) && estimates[mount.containerPath]! >= 0 ? estimates[mount.containerPath] : null;
+      return library && mount.kind === 'candidate' ? { ...mount, kind: 'library', libraryId: library.id, mediaEstimate } : { ...mount, mediaEstimate };
+    }) };
+  });
+  register('fsList', async (req) => {
+    const query = endpoints.fsList.query.parse(req.query);
+    if (!query.path) return { path: '', parent: null, dirs: (await getMounts()).filter((entry) => entry.kind === 'candidate').map((entry) => ({ name: path.basename(entry.containerPath), path: entry.containerPath })) };
+    const root = await findRoot(query.path);
+    const entries = await readdir(root.root, { withFileTypes: true });
+    const dirs = entries.filter((entry) => entry.isDirectory()).map((entry) => ({ name: entry.name, path: path.join(root.root, entry.name) }))
+      .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+    let parent: string | null = path.dirname(root.root);
+    try { await findRoot(parent); } catch { parent = null; }
+    return { path: root.root, parent, dirs };
+  });
+  register('getSettings', async () => readSettings(db));
+  register('updateSettings', async (_req, _reply, body) => writeSettings(db, body));
   register('listJobs', async (req) => {
     const query = endpoints.listJobs.query.parse(req.query);
     const rows = db.prepare(`SELECT * FROM jobs WHERE (? IS NULL OR status=?)
