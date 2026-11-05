@@ -115,12 +115,12 @@ test('根目录不可读或挂载消失时不可用，恢复触发全量对账',
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test('变更通知按媒体库节流并压缩完整路径段前缀', async () => {
+test('变更通知按媒体库节流并保留涉及的子目录', async () => {
   const m = await import('../src/watch/throttle.ts'); assert.ok(m, '通知节流模块尚未实现');
   const clock = new TestClock(); const events: unknown[] = [];
   const t = new m.ChangeThrottle({ libraryId: 'lib', clock, publish: (event) => events.push(event) });
   t.add({ source: 'watch', folders: ['lib/a/b', 'lib/a', 'lib/abc'], added: 1 });
-  assert.deepEqual(events, [{ libraryId: 'lib', source: 'watch', folders: ['lib/a', 'lib/abc'], added: 1, removed: 0, updated: 0, moved: 0 }]);
+  assert.deepEqual(events, [{ libraryId: 'lib', source: 'watch', folders: ['lib/a', 'lib/a/b', 'lib/abc'], added: 1, removed: 0, updated: 0, moved: 0 }]);
   t.add({ source: 'watch', folders: ['lib/a/c'], moved: 1 });
   await clock.advance(1999); assert.equal(events.length, 1); await clock.advance(1);
   assert.deepEqual(events[1], { libraryId: 'lib', source: 'watch', folders: ['lib/a/c'], added: 0, removed: 0, updated: 0, moved: 1 });

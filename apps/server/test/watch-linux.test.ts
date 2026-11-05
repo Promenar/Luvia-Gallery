@@ -28,9 +28,10 @@ class Index implements LibraryIndexPort {
   async findMissingCandidates(_entry: MoveCandidate) { return [...this.rows.values()].filter((v) => v.missingAt !== null); }
   async writeAdded(entry: MoveCandidate) { const id = entry.isDir ? null : `id-${++this.next}`; this.rows.set(entry.path, { ...entry, mediaId: id, missingAt: null }); return id; }
   async writeUpdated(old: IndexedRecord, entry: MoveCandidate) { this.rows.set(entry.path, { ...entry, mediaId: old.mediaId, missingAt: null }); }
-  async writeMoved(old: IndexedRecord, entry: MoveCandidate) { this.move(old, entry); }
-  async writeMissing(old: IndexedRecord, at: number) { for (const row of this.rows.values()) if (row.path === old.path || (old.isDir && row.path.startsWith(`${old.path}/`))) row.missingAt = at; }
-  async writeRestored(old: IndexedRecord, entry: MoveCandidate) { this.move(old, entry); }
+  async writeMoved(old: IndexedRecord, entry: MoveCandidate) { this.move(old, entry); return 0; }
+  async readSubdirectories(dir: string) { return [...this.rows.values()].filter((row) => row.isDir && row.path.startsWith(`${dir}/`)).map((row) => row.path); }
+  async writeMissing(old: IndexedRecord, at: number) { let count = 0; for (const row of this.rows.values()) if (row.path === old.path || (old.isDir && row.path.startsWith(`${old.path}/`))) { if (!row.isDir && row.missingAt === null) count++; row.missingAt = at; } return count; }
+  async writeRestored(old: IndexedRecord, entry: MoveCandidate) { this.move(old, entry); return 0; }
   async writeRemoved(old: IndexedRecord) { for (const p of this.rows.keys()) if (p === old.path || (old.isDir && p.startsWith(`${old.path}/`))) this.rows.delete(p); }
   async appendChange(change: WatchLibraryChange) { this.changes.push(change); }
   async requestFullReconcile(_reason: string) {}

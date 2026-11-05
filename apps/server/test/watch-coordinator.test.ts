@@ -33,12 +33,13 @@ class TestClock {
 class MemoryIndex implements LibraryIndexPort {
   records = new Map<string, IndexedRecord>(); events: LibraryChangedEvent[] = []; changes: WatchLibraryChange[] = []; requests: string[] = []; nextId = 0;
   async readDirectory(dir: string) { return [...this.records.values()].filter((v) => { const parent = path.posix.dirname(v.path); return (parent === '.' ? '' : parent) === dir; }).map((v) => ({ ...v })); }
+  async readSubdirectories(dir: string) { return [...this.records.values()].filter((v) => v.isDir && v.path.startsWith(`${dir}/`)).map((v) => v.path); }
   async findMissingCandidates(_candidate: MoveCandidate) { return [...this.records.values()].filter((v) => v.missingAt !== null).map((v) => ({ ...v })); }
   async writeAdded(entry: MoveCandidate) { const id = entry.isDir ? null : `media-${++this.nextId}`; this.records.set(entry.path, { ...entry, mediaId: id, missingAt: null }); return id; }
   async writeUpdated(old: IndexedRecord, entry: MoveCandidate) { this.records.set(entry.path, { ...entry, mediaId: old.mediaId, missingAt: null }); }
-  async writeMoved(old: IndexedRecord, entry: MoveCandidate) { if (entry.mediaId) this.records.delete(entry.path); this.relocate(old, entry); }
-  async writeMissing(old: IndexedRecord, at: number) { for (const value of this.records.values()) if (value.path === old.path || (old.isDir && value.path.startsWith(`${old.path}/`))) value.missingAt = at; }
-  async writeRestored(old: IndexedRecord, entry: MoveCandidate) { if (entry.mediaId) this.records.delete(entry.path); this.relocate(old, entry); }
+  async writeMoved(old: IndexedRecord, entry: MoveCandidate) { if (entry.mediaId) this.records.delete(entry.path); this.relocate(old, entry); return 0; }
+  async writeMissing(old: IndexedRecord, at: number) { let count = 0; for (const value of this.records.values()) if (value.path === old.path || (old.isDir && value.path.startsWith(`${old.path}/`))) { if (!value.isDir && value.missingAt === null) count++; value.missingAt = at; } return count; }
+  async writeRestored(old: IndexedRecord, entry: MoveCandidate) { if (entry.mediaId) this.records.delete(entry.path); this.relocate(old, entry); return 0; }
   async writeRemoved(old: IndexedRecord) { for (const p of this.records.keys()) if (p === old.path || (old.isDir && p.startsWith(`${old.path}/`))) this.records.delete(p); }
   async appendChange(change: WatchLibraryChange) { this.changes.push(change); }
   async requestFullReconcile(reason: string) { this.requests.push(reason); }
@@ -191,6 +192,7 @@ nodeTest('目标目录先写入子媒体后配对目录移动，保留原媒体 
     watcher.emit({ eventType: 'rename', path: 'a/trip' }); await coordinator.idle(); await advance(2000);
     assert.equal(port.records.get('b/trip/pic.jpg')?.mediaId, id);
     assert.equal(port.records.has('a/trip/pic.jpg'), false);
+    assert.equal(port.events.reduce((sum, event) => sum + event.added - event.removed, 0), 1);
   } finally { await coordinator.stop(); port.close(); await rm(root, { recursive: true, force: true }); }
 });
 
@@ -342,6 +344,9 @@ test('新增候选等待期间出现持久化缺失记录时，释放前仍能�
     await s.advance(10000);
     assert.equal(s.port.records.get('new.jpg')?.mediaId, 'prior-id'); assert.equal(s.port.records.has('old.jpg'), false);
     assert.ok(s.port.changes.some((change) => change.kind === 'restored' && change.path === 'new.jpg'));
+    const totals = s.port.events.reduce((sum, event) => ({ added: sum.added + event.added, removed: sum.removed + event.removed }), { added: 0, removed: 0 });
+    assert.deepEqual(totals, { added: 1, removed: 0 });
+    assert.ok(s.port.events.every((event) => event.added >= 0));
   } finally { await s.coordinator.stop(); s.port.close(); await rm(s.root, { recursive: true, force: true }); }
 });
 
@@ -368,12 +373,48 @@ test('新增文件七秒内通知，随后出现的消失项合并为移动并�
     s.watcher.emit({ eventType: 'rename', path: 'old.jpg' }); await s.coordinator.idle();
     await s.advance(2000); await s.advance(2000);
     assert.equal(s.port.records.get('new.jpg')?.mediaId, original); assert.equal(s.port.records.has('old.jpg'), false);
-    const moved = s.port.events.at(-1); assert.equal(moved?.moved, 1); assert.equal(moved?.added, -1);
+    const moved = s.port.events.at(-1); assert.equal(moved?.moved, 1); assert.equal(moved?.added, 0); assert.equal(moved?.removed, 1);
+    const net = s.port.events.reduce((sum, event) => sum + event.added - event.removed, 0);
+    assert.equal(net, 1);
     if ('testDb' in s.port) {
       assert.equal((s.port.testDb.prepare("SELECT count(*) n FROM favorites WHERE item_id=?").get(original) as { n: number }).n, 1);
       assert.equal((s.port.testDb.prepare("SELECT count(*) n FROM files WHERE id=?").get(temporary) as { n: number }).n, 0);
     }
   } finally { await s.coordinator.stop(); s.port.close(); await rm(s.root, { recursive: true, force: true }); }
+});
+
+test('空目录新增、移动和缺失不增加媒体事件计数', async () => {
+  const s = await setup();
+  try {
+    await mkdir(path.join(s.root, 'empty')); await s.coordinator.reconcileDirectory(''); await s.advance(10_000);
+    await rename(path.join(s.root, 'empty'), path.join(s.root, 'renamed')); await s.coordinator.reconcileDirectory(''); await s.advance(10_000);
+    await rm(path.join(s.root, 'renamed'), { recursive: true }); await s.coordinator.reconcileDirectory(''); await s.advance(12_000);
+    for (const event of s.port.events) assert.deepEqual([event.added, event.removed, event.updated, event.moved], [0, 0, 0, 0]);
+  } finally { await s.coordinator.stop(); s.port.close(); await rm(s.root, { recursive: true, force: true }); }
+});
+
+test('目录整体缺失与恢复时媒体事件净计数匹配可见文件', async () => {
+  const s = await setup(); const parked = `${s.root}-parked`;
+  try {
+    await mkdir(path.join(s.root, 'trip')); await writeFile(path.join(s.root, 'trip/a.jpg'), 'photo');
+    await s.coordinator.reconcileDirectory(''); await s.advance(13_000);
+    await rename(path.join(s.root, 'trip'), parked); await s.coordinator.reconcileDirectory(''); await s.advance(10_000);
+    await rename(parked, path.join(s.root, 'trip')); await s.coordinator.reconcileDirectory(''); await s.advance(15_000);
+    const totals = s.port.events.reduce((sum, event) => ({ added: sum.added + event.added, removed: sum.removed + event.removed }), { added: 0, removed: 0 });
+    assert.equal(totals.added - totals.removed, s.port.records.get('trip/a.jpg')?.missingAt === null ? 1 : 0);
+    assert.equal(totals.removed, 1);
+  } finally { await s.coordinator.stop(); s.port.close(); await rm(s.root, { recursive: true, force: true }); await rm(parked, { recursive: true, force: true }); }
+});
+
+test('目录整体缺失事件保留受影响的深层目录', async () => {
+  const s = await setup(); const parked = `${s.root}-parked`;
+  try {
+    await mkdir(path.join(s.root, 'trip/nested'), { recursive: true }); await writeFile(path.join(s.root, 'trip/nested/a.jpg'), 'photo');
+    await s.coordinator.reconcileDirectory(''); await s.advance(13_000);
+    await rename(path.join(s.root, 'trip'), parked); await s.coordinator.reconcileDirectory(''); await s.advance(12_000);
+    const event = s.port.events.find((value) => value.removed === 1); assert.ok(event);
+    assert.ok(event.folders.includes('lib/trip/nested'));
+  } finally { await s.coordinator.stop(); s.port.close(); await rm(s.root, { recursive: true, force: true }); await rm(parked, { recursive: true, force: true }); }
 });
 
 test('移动候选存在歧义时稳定的新文件仍即时可见', async () => {

@@ -104,3 +104,66 @@ test('全量扫描事件准确反映修改、移动和进入缺失的媒体', as
     assert.equal(event.source, 'scan'); assert.equal(event.updated, 1); assert.equal(event.moved, 1); assert.equal(event.removed, 1); assert.equal(event.added, 0);
   } finally { db.close(); await rm(root, { recursive: true, force: true }); }
 });
+
+test('扫描新目录和缺失目录时事件只统计实际媒体', async () => {
+  const { runNextJob } = await import('../src/worker/runner.ts');
+  const { flushLibraryEvents } = await import('../src/worker/watch-events.ts');
+  const { mkdir } = await import('node:fs/promises');
+  const root = await mkdtemp(path.join(tmpdir(), 'luvia-scan-directory-events-')); const db = openDatabase(':memory:');
+  try {
+    await mkdir(path.join(root, 'trip')); await mkdir(path.join(root, 'empty')); await writeFile(path.join(root, 'trip/a.jpg'), 'photo');
+    db.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib','照片',?)").run(root);
+    const scan = async (id: string) => {
+      db.prepare("INSERT INTO jobs(id,type,label,status,trigger,payload,created_at) VALUES (?,'scan','扫描','queued','manual',?,unixepoch())").run(id, JSON.stringify({ libraryId: 'lib' }));
+      await runNextJob(db, { owner: 'worker', allowedRoots: [root], legacyDir: root, systemRoots: [] });
+      db.prepare("UPDATE jobs SET status='succeeded' WHERE type='metadata'").run();
+    };
+    await scan('first');
+    const first = JSON.parse((db.prepare("SELECT payload FROM job_events WHERE event_type='library' ORDER BY id DESC LIMIT 1").get() as {payload:string}).payload);
+    assert.equal(first.added, 1); assert.equal(first.removed, 0); assert.ok(first.folders.includes('lib/trip'));
+    await rm(path.join(root, 'trip'), { recursive: true }); await rm(path.join(root, 'empty'), { recursive: true });
+    await scan('second'); flushLibraryEvents(db, Date.now() + 3000);
+    const second = JSON.parse((db.prepare("SELECT payload FROM job_events WHERE event_type='library' ORDER BY id DESC LIMIT 1").get() as {payload:string}).payload);
+    assert.equal(second.added, 0); assert.equal(second.removed, 1); assert.ok(second.folders.includes('lib/trip'));
+  } finally { db.close(); await rm(root, { recursive: true, force: true }); }
+});
+
+test('扫描缺失媒体以新路径恢复时累计计数匹配可见媒体变化', async () => {
+  const { runNextJob } = await import('../src/worker/runner.ts'); const { flushLibraryEvents } = await import('../src/worker/watch-events.ts');
+  const { mkdir, rename } = await import('node:fs/promises');
+  const dir = await mkdtemp(path.join(tmpdir(), 'luvia-scan-restore-events-')); const root = path.join(dir, 'media'); await mkdir(root);
+  const db = openDatabase(':memory:');
+  try {
+    await writeFile(path.join(root, 'old.jpg'), 'photo');
+    db.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib','照片',?)").run(root);
+    const scan = async (id: string, offset: number) => {
+      db.prepare("INSERT INTO jobs(id,type,label,status,trigger,payload,created_at) VALUES (?,'scan','扫描','queued','manual',?,unixepoch())").run(id, JSON.stringify({ libraryId: 'lib' }));
+      await runNextJob(db, { owner: 'worker', allowedRoots: [root], legacyDir: root, systemRoots: [] });
+      db.prepare("UPDATE jobs SET status='succeeded' WHERE type='metadata'").run(); flushLibraryEvents(db, Date.now() + offset);
+    };
+    await scan('first', 0); await rename(path.join(root, 'old.jpg'), path.join(dir, 'parked.jpg')); await scan('missing', 3000);
+    await rename(path.join(dir, 'parked.jpg'), path.join(root, 'new.jpg')); await scan('restored', 6000);
+    const events = (db.prepare("SELECT payload FROM job_events WHERE event_type='library' ORDER BY id").all() as {payload:string}[]).map((row) => JSON.parse(row.payload));
+    const added = events.reduce((sum, event) => sum + event.added, 0); const removed = events.reduce((sum, event) => sum + event.removed, 0);
+    assert.equal(added - removed, (db.prepare('SELECT count(*) n FROM files WHERE missing_at_ms IS NULL').get() as {n:number}).n);
+    assert.equal(events.at(-1).moved, 1); assert.equal(events.at(-1).added, 1);
+  } finally { db.close(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('扫描目录移动事件保留新旧深层目录供权限过滤', async () => {
+  const { runNextJob } = await import('../src/worker/runner.ts'); const { flushLibraryEvents } = await import('../src/worker/watch-events.ts');
+  const { mkdir, rename } = await import('node:fs/promises');
+  const root = await mkdtemp(path.join(tmpdir(), 'luvia-scan-move-folders-')); const db = openDatabase(':memory:');
+  try {
+    await mkdir(path.join(root, 'old/nested'), { recursive: true }); await writeFile(path.join(root, 'old/nested/a.jpg'), 'photo');
+    db.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib','照片',?)").run(root);
+    const scan = async (id: string) => {
+      db.prepare("INSERT INTO jobs(id,type,label,status,trigger,payload,created_at) VALUES (?,'scan','扫描','queued','manual',?,unixepoch())").run(id, JSON.stringify({ libraryId: 'lib' }));
+      await runNextJob(db, { owner: 'worker', allowedRoots: [root], legacyDir: root, systemRoots: [] });
+      db.prepare("UPDATE jobs SET status='succeeded' WHERE type='metadata'").run();
+    };
+    await scan('first'); await rename(path.join(root, 'old'), path.join(root, 'new')); await scan('second'); flushLibraryEvents(db, Date.now() + 3000);
+    const event = JSON.parse((db.prepare("SELECT payload FROM job_events WHERE event_type='library' ORDER BY id DESC LIMIT 1").get() as {payload:string}).payload);
+    assert.ok(event.folders.includes('lib/old/nested')); assert.ok(event.folders.includes('lib/new/nested'));
+  } finally { db.close(); await rm(root, { recursive: true, force: true }); }
+});

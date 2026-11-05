@@ -26,15 +26,16 @@ export interface IndexedRecord extends MoveCandidate { missingAt: number | null 
 export interface LibraryIndexPort {
   /** 路径均为媒体库内相对路径；目录读取包含缺失记录。 */
   readDirectory(directory: string): Promise<IndexedRecord[]>;
+  readSubdirectories(directory: string): Promise<string[]>;
   findMissingCandidates(candidate: MoveCandidate): Promise<IndexedRecord[]>;
   writeAdded(entry: MoveCandidate): Promise<string | null>;
   writeUpdated(old: IndexedRecord, entry: MoveCandidate): Promise<void>;
   /** 目录移动须原子改写子孙路径并保留各自缺失状态。 */
-  writeMoved(old: IndexedRecord, entry: MoveCandidate): Promise<void>;
+  writeMoved(old: IndexedRecord, entry: MoveCandidate): Promise<number>;
   /** 目录缺失须使所有子孙进入不可见的缺失状态。 */
-  writeMissing(old: IndexedRecord, at: number): Promise<void>;
+  writeMissing(old: IndexedRecord, at: number): Promise<number>;
   /** 目录恢复时保留子孙缺失状态，直至各子项重新被对账确认。 */
-  writeRestored(old: IndexedRecord, entry: MoveCandidate): Promise<void>;
+  writeRestored(old: IndexedRecord, entry: MoveCandidate): Promise<number>;
   /** 目录清理须同时清理其仍缺失的子孙。 */
   writeRemoved(old: IndexedRecord): Promise<void>;
   appendChange(change: WatchLibraryChange): Promise<void>;
@@ -368,11 +369,13 @@ export class WatchCoordinator {
       else await this.options.port.requestFullReconcile('move-race');
       return;
     }
+    let removedProvisional = 0;
     if (old.missingAt !== null) {
-      await this.options.port.writeRestored(old, to);
+      removedProvisional = await this.options.port.writeRestored(old, to);
       if (to.mediaId !== null) await this.record('restored', to.path, null, to.isDir, old.mediaId, to.source, false);
-    } else await this.options.port.writeMoved(old, to);
-    await this.record('moved', to.path, from.path, to.isDir, old.mediaId, to.source, true, to.mediaId !== null);
+    } else removedProvisional = await this.options.port.writeMoved(old, to);
+    const removed = to.isDir ? removedProvisional : to.mediaId !== null && old.missingAt === null ? 1 : 0;
+    await this.record('moved', to.path, from.path, to.isDir, old.mediaId, to.source, true, removed);
     if (to.isDir) await this.reconcile(to.path, to.source, true);
   }
   private async applyMissing(item: Candidate): Promise<void> {
@@ -381,7 +384,8 @@ export class WatchCoordinator {
     const old = (await this.options.port.readDirectory(parentOf(item.path))).find((value) => value.path === item.path);
     if (!old || old.missingAt !== null) return;
     if (!(await this.checkRoot())) return;
-    await this.options.port.writeMissing(old, this.clock.now()); await this.record('missing', old.path, null, old.isDir, old.mediaId, item.source);
+    const missingMedia = await this.options.port.writeMissing(old, this.clock.now());
+    await this.record('missing', old.path, null, old.isDir, old.mediaId, item.source, true, 0, missingMedia);
   }
   private async finalizeAdded(item: Candidate): Promise<void> {
     const match = await this.findMissingMatch(item);
@@ -406,11 +410,17 @@ export class WatchCoordinator {
     const mediaId = await this.options.port.writeAdded(item); item.mediaId = mediaId;
     await this.record('added', item.path, null, item.isDir, mediaId, item.source);
   }
-  private async record(kind: WatchLibraryChange['kind'], relative: string, fromPath: string | null, isDir: boolean, mediaId: string | null, source: Source, notify = true, compensateAdded = false): Promise<void> {
+  private async record(kind: WatchLibraryChange['kind'], relative: string, fromPath: string | null, isDir: boolean, mediaId: string | null, source: Source, notify = true, removeProvisional = 0, missingMedia = 0): Promise<void> {
     await this.options.port.appendChange({ ts: new Date(this.clock.now()).toISOString(), kind, path: relative, fromPath, isDir, mediaId, source });
     if (!notify || kind === 'removed') return;
-    const folders = [parentOf(relative), ...(fromPath === null ? [] : [parentOf(fromPath)])].map((dir) => dir ? `${this.options.libraryId}/${dir}` : this.options.libraryId);
-    this.throttle.add({ source, folders, added: compensateAdded ? -1 : kind === 'added' || kind === 'restored' ? 1 : 0,
-      updated: kind === 'updated' ? 1 : 0, moved: kind === 'moved' ? 1 : 0, removed: kind === 'missing' ? 1 : 0 });
+    const paths = [parentOf(relative), ...(fromPath === null ? [] : [parentOf(fromPath)])];
+    if (isDir) {
+      const affected = await this.options.port.readSubdirectories(relative);
+      paths.push(relative, ...affected);
+      if (fromPath !== null) paths.push(fromPath, ...affected.map((dir) => fromPath + dir.slice(relative.length)));
+    }
+    const folders = paths.map((dir) => dir ? `${this.options.libraryId}/${dir}` : this.options.libraryId);
+    this.throttle.add({ source, folders, added: !isDir && (kind === 'added' || kind === 'restored') ? 1 : 0,
+      updated: !isDir && kind === 'updated' ? 1 : 0, moved: !isDir && kind === 'moved' ? 1 : 0, removed: kind === 'missing' ? missingMedia : removeProvisional });
   }
 }

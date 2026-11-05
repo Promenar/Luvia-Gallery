@@ -65,6 +65,11 @@ export class SqliteLibraryIndex implements LibraryIndexPort {
     const files = this.db.prepare('SELECT id,relative_path,size,modified_at,mtime_ms,dev,ino,head_hash,missing_at_ms FROM files WHERE library_id=? AND folder=?').all(this.libraryId, parent) as FileRow[];
     return [...folders.map((row) => this.folder(row)), ...files.map((row) => this.file(row))];
   }
+  async readSubdirectories(directory: string): Promise<string[]> {
+    const virtual = virtualPath(this.libraryId, directory);
+    return (this.db.prepare('SELECT path FROM folders WHERE library_id=? AND path>=? AND path<?').all(this.libraryId, `${virtual}/`, `${virtual}0`) as {path:string}[])
+      .map((row) => row.path.slice(this.libraryId.length + 1));
+  }
   async findMissingCandidates(candidate: MoveCandidate): Promise<IndexedRecord[]> {
     const values = new Map<string, IndexedRecord>();
     const dev = identity(candidate.dev); const ino = identity(candidate.ino);
@@ -194,12 +199,13 @@ export class SqliteLibraryIndex implements LibraryIndexPort {
       if (!updated.changes) throw new Error('媒体索引已变化'); this.refresh([parent]);
     });
   }
-  private relocate(old: IndexedRecord, entry: MoveCandidate): void {
+  private relocate(old: IndexedRecord, entry: MoveCandidate): number {
     const target = virtualPath(this.libraryId, entry.path);
     const fromParent = virtualPath(this.libraryId, parentOf(old.path)); const toParent = virtualPath(this.libraryId, parentOf(entry.path));
+    let removedProvisional = 0;
     if (old.isDir) {
       if (old.path !== entry.path) {
-        this.mergeProvisionalDirectory(old.path, entry.path);
+        removedProvisional = this.mergeProvisionalDirectory(old.path, entry.path);
         moveDirectoryPaths(this.db, this.libraryId, old.path, entry.path, toParent);
       }
       if (!this.db.prepare('UPDATE folders SET name=?,parent=?,missing_at_ms=NULL,dev=?,ino=?,mtime_ms=? WHERE path=? AND library_id=?')
@@ -219,19 +225,22 @@ export class SqliteLibraryIndex implements LibraryIndexPort {
         latitude=NULL,longitude=NULL,altitude=NULL,playability=NULL WHERE id=?`).run(Math.floor(entry.mtimeMs / 1000), old.mediaId);
       this.refresh([fromParent, toParent]);
     }
+    return removedProvisional;
   }
-  private mergeProvisionalDirectory(from: string, to: string): void {
+  private mergeProvisionalDirectory(from: string, to: string): number {
     const source = virtualPath(this.libraryId, from); const target = virtualPath(this.libraryId, to);
+    let removed = 0;
     const files = this.db.prepare(`SELECT id,relative_path,dev,ino FROM files WHERE library_id=? AND (folder=? OR (folder>=? AND folder<?))`)
       .all(this.libraryId, source, `${source}/`, `${source}0`) as { id: string; relative_path: string; dev: string | null; ino: string | null }[];
     for (const file of files) {
       const relative = to + file.relative_path.slice(from.length);
-      const provisional = this.db.prepare('SELECT id,dev,ino FROM files WHERE library_id=? AND relative_path=?').get(this.libraryId, relative) as { id: string; dev: string | null; ino: string | null } | undefined;
+      const provisional = this.db.prepare('SELECT id,dev,ino,missing_at_ms FROM files WHERE library_id=? AND relative_path=?').get(this.libraryId, relative) as { id: string; dev: string | null; ino: string | null; missing_at_ms: number | null } | undefined;
       if (!provisional) continue;
       if (!file.dev || !file.ino || file.dev !== provisional.dev || file.ino !== provisional.ino) throw new Error('目录移动的目标媒体身份冲突');
       this.db.prepare("INSERT OR IGNORE INTO favorites(user_id,item_id,item_type,created_at) SELECT user_id,?,'file',created_at FROM favorites WHERE item_type='file' AND item_id=?").run(file.id, provisional.id);
       this.db.prepare('INSERT OR IGNORE INTO album_items(album_id,file_id,created_at) SELECT album_id,?,created_at FROM album_items WHERE file_id=?').run(file.id, provisional.id);
       this.db.prepare('UPDATE albums SET cover_id=? WHERE cover_id=?').run(file.id, provisional.id);
+      if (provisional.missing_at_ms === null) removed++;
       this.removeFile(provisional.id);
     }
     const folders = this.db.prepare('SELECT path,dev,ino FROM folders WHERE library_id=? AND (path=? OR (path>=? AND path<?)) ORDER BY length(path) DESC')
@@ -242,13 +251,16 @@ export class SqliteLibraryIndex implements LibraryIndexPort {
       if (provisional && (!folder.dev || !folder.ino || folder.dev !== provisional.dev || folder.ino !== provisional.ino)) throw new Error('目录移动的目标目录身份冲突');
       this.db.prepare('DELETE FROM folders WHERE library_id=? AND path=?').run(this.libraryId, destination);
     }
+    return removed;
   }
-  async writeMoved(old: IndexedRecord, entry: MoveCandidate): Promise<void> {
+  async writeMoved(old: IndexedRecord, entry: MoveCandidate): Promise<number> {
+    let removed = 0;
     this.begin({ kinds: ['moved'], oldPath: old.path, path: entry.path, isDir: old.isDir, mediaId: old.mediaId }, () => {
       this.verify(old);
       this.removeProvisional(old, entry);
-      this.relocate(old, entry);
+      removed = this.relocate(old, entry);
     });
+    return removed;
   }
   private removeProvisional(old: IndexedRecord, entry: MoveCandidate): void {
       if (entry.mediaId !== null && entry.mediaId !== old.mediaId) {
@@ -263,23 +275,30 @@ export class SqliteLibraryIndex implements LibraryIndexPort {
         this.removeFile(entry.mediaId);
       }
   }
-  async writeRestored(old: IndexedRecord, entry: MoveCandidate): Promise<void> {
-    this.begin({ kinds: ['restored', 'moved'], oldPath: old.path, path: entry.path, isDir: old.isDir, mediaId: old.mediaId }, () => { this.verify(old); this.removeProvisional(old, entry); this.relocate(old, entry); });
+  async writeRestored(old: IndexedRecord, entry: MoveCandidate): Promise<number> {
+    let removed = 0;
+    this.begin({ kinds: ['restored', 'moved'], oldPath: old.path, path: entry.path, isDir: old.isDir, mediaId: old.mediaId }, () => { this.verify(old); this.removeProvisional(old, entry); removed = this.relocate(old, entry); });
+    return removed;
   }
-  async writeMissing(old: IndexedRecord, at: number): Promise<void> {
+  async writeMissing(old: IndexedRecord, at: number): Promise<number> {
     const virtual = virtualPath(this.libraryId, old.path); const parent = virtualPath(this.libraryId, parentOf(old.path));
+    let missingMedia = 0;
     this.begin({ kinds: ['missing'], oldPath: null, path: old.path, isDir: old.isDir, mediaId: old.mediaId }, () => {
       this.verify(old);
       if (old.isDir) {
-        this.db.prepare('UPDATE files SET missing_at_ms=COALESCE(missing_at_ms,?) WHERE library_id=? AND (folder=? OR (folder>=? AND folder<?))')
-          .run(at, this.libraryId, virtual, `${virtual}/`, `${virtual}0`);
+        missingMedia = this.db.prepare('UPDATE files SET missing_at_ms=? WHERE library_id=? AND missing_at_ms IS NULL AND (folder=? OR (folder>=? AND folder<?))')
+          .run(at, this.libraryId, virtual, `${virtual}/`, `${virtual}0`).changes;
         const changed = this.db.prepare('UPDATE folders SET missing_at_ms=COALESCE(missing_at_ms,?) WHERE library_id=? AND (path=? OR (path>=? AND path<?))')
           .run(at, this.libraryId, virtual, `${virtual}/`, `${virtual}0`);
         if (!changed.changes) throw new Error('目录索引已变化');
-      } else if (!this.db.prepare('UPDATE files SET missing_at_ms=COALESCE(missing_at_ms,?) WHERE id=? AND library_id=? AND relative_path=?')
-        .run(at, old.mediaId, this.libraryId, old.path).changes) throw new Error('媒体索引已变化');
+      } else {
+        missingMedia = this.db.prepare('UPDATE files SET missing_at_ms=COALESCE(missing_at_ms,?) WHERE id=? AND library_id=? AND relative_path=?')
+          .run(at, old.mediaId, this.libraryId, old.path).changes;
+        if (!missingMedia) throw new Error('媒体索引已变化');
+      }
       this.refresh([parent]);
     });
+    return missingMedia;
   }
   private removeFile(id: string): void {
     this.db.prepare("DELETE FROM favorites WHERE item_type='file' AND item_id=?").run(id);
