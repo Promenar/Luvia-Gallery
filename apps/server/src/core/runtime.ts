@@ -18,6 +18,8 @@ export async function openRuntime() {
   return { db, dataDir, cacheDir, legacyDir, mediaRoots };
 }
 export async function loadLegacyJwtSecret(legacyDir: string, dataDir: string): Promise<string> {
+  const configured = process.env.JWT_SECRET;
+  if (configured) return configured;
   const read = async (filename: string) => {
     const value = (await readFile(filename, 'utf8')).trim();
     if (!value) throw new Error('旧客户端签名密钥为空');

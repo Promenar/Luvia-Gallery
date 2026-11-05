@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import * as runtime from '../src/core/runtime.ts';
 
+delete process.env.JWT_SECRET;
 test('旧版 JWT 密钥优先使用旧数据目录，新密钥原子持久化且权限收窄', async () => {
   const load = Reflect.get(runtime, 'loadLegacyJwtSecret');
   assert.equal(typeof load, 'function');
@@ -19,4 +20,15 @@ test('旧版 JWT 密钥优先使用旧数据目录，新密钥原子持久化且
     await writeFile(path.join(legacy, 'jwt_secret.key'), 'synthetic-legacy-key');
     assert.equal(await load(legacy, data), 'synthetic-legacy-key');
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('合成环境变量指定的旧 JWT 签名密钥优先于旧密钥文件', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'luvia-jwt-env-'));
+  const data = path.join(root, 'data'); const legacy = path.join(root, 'legacy');
+  await mkdir(data); await mkdir(legacy);
+  try {
+    await writeFile(path.join(legacy, 'jwt_secret.key'), 'synthetic-file-key');
+    process.env.JWT_SECRET = 'synthetic-environment-key';
+    assert.equal(await runtime.loadLegacyJwtSecret(legacy, data), 'synthetic-environment-key');
+  } finally { delete process.env.JWT_SECRET; await rm(root, { recursive: true, force: true }); }
 });
