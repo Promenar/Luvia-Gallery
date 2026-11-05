@@ -24,6 +24,12 @@ npx -y -p node@24 -- pnpm --filter @luvia/server bench
 
 基准默认生成一百万条合成媒体，并在独立进程持续扫描合成文件时测量默认读取路径；临时数据库在结束时删除。无筛选时间线使用物化月份统计，筛选查询与真实 NAS I/O 仍需另行测量。
 
+生成本机联调素材（需要 FFmpeg，目标同名文件存在时拒绝覆盖）：
+
+```sh
+npx -y -p node@24 -- pnpm --filter @luvia/server fixtures --output /path/to/fixture
+```
+
 使用 Node 24 启动本地双进程：
 
 ```sh
