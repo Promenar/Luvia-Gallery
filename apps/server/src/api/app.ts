@@ -198,11 +198,12 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
   });
   app.addHook('onRequest', async (req) => {
     const url = new URL(req.raw.url ?? '/', 'http://localhost');
-    if (url.pathname.startsWith('/api/v2/') && [...url.searchParams.keys()].some((key) => key.toLowerCase() === 'token')) {
+    const v2 = url.pathname.startsWith('/api/v2/') || (req.routeOptions.url?.startsWith('/api/v2/') ?? false);
+    if (v2 && [...url.searchParams.keys()].some((key) => key.toLowerCase() === 'token')) {
       fail(400, 'VALIDATION', '不允许在 URL 中传递令牌');
     }
     const identity = authenticateRequest(req);
-    if (url.pathname.startsWith('/api/v2/') && req.method !== 'GET' && identity?.kind === 'session' && req.headers[CSRF_HEADER.toLowerCase()] !== '1') {
+    if (v2 && req.method !== 'GET' && req.method !== 'HEAD' && identity?.kind === 'session' && req.headers[CSRF_HEADER.toLowerCase()] !== '1') {
       fail(403, 'FORBIDDEN', '请求缺少安全标头');
     }
     if (identity) identities.set(req, identity);
