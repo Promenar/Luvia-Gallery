@@ -41,12 +41,12 @@ test('只在设置允许时把新挂载建库并排队扫描', async () => {
   } finally { db.close(); await rm(root, { recursive: true, force: true }); }
 });
 
-test('尚未支持的作业类型返回失败状态', async () => {
+test('缺少媒体任务参数的作业返回失败状态', async () => {
   const module = await import('../src/worker/runner.ts').catch(() => null);
   assert.ok(module, 'worker 执行器尚未实现');
   const db = openDatabase(':memory:');
   try {
-    db.prepare("INSERT INTO jobs(id,type,label,status,trigger,created_at) VALUES ('job','previews','预览','queued','manual',1)").run();
+    db.prepare("INSERT INTO jobs(id,type,label,status,trigger,created_at) VALUES ('job','thumbnails','缩略图','queued','manual',1)").run();
     await module.runNextJob(db, { owner: 'worker-a', allowedRoots: [], legacyDir: '/nonexistent', systemRoots: [] });
     const row = db.prepare("SELECT status,error FROM jobs WHERE id='job'").get() as { status: string; error: string };
     assert.equal(row.status, 'failed');
