@@ -141,7 +141,8 @@ export async function importLegacy(db: DatabaseType.Database, options: { legacyD
           VALUES (?,?,?,?,?,?,?,?,?,1)`).run(idFor('tok', user.wallpaperToken), actual.id, hash, '旧版壁纸令牌', 'wallpaper', user.wallpaperToken.slice(0, 8), now, JSON.stringify(wallpaper), decoded.exp);
       }
     }
-    if (locked && !db.prepare("SELECT 1 FROM users WHERE role='admin' LIMIT 1").get()) throw new LegacyIdentityUncertainError();
+    const pending = db.prepare("SELECT value FROM settings WHERE key='legacy.pending'").get() as { value: string } | undefined;
+    if ((locked || pending?.value === 'true') && !db.prepare("SELECT 1 FROM users WHERE role='admin' LIMIT 1").get()) throw new LegacyIdentityUncertainError();
   }).immediate();
   if (!hasDb) return { ...counts(db), unmappedRoots };
   const source = new Database(legacyPath, { readonly: true, fileMustExist: true });
