@@ -5,7 +5,7 @@ export type MaintenanceResult = { busy: number; log: number; checkpointed: numbe
 export function runSqliteMaintenance(filename: string): Promise<MaintenanceResult> {
   return new Promise((resolve, reject) => {
     const worker = new Worker(new URL('./sqlite-maintenance-thread.ts', import.meta.url), { workerData: { filename } });
-    let finished = false;
+    let finished = false; let failed = false; let result: MaintenanceResult | undefined;
     const timeout = setTimeout(() => { void worker.terminate(); }, 10_000);
     timeout.unref();
     const fail = () => {
@@ -14,10 +14,14 @@ export function runSqliteMaintenance(filename: string): Promise<MaintenanceResul
     };
     worker.once('message', (message: MaintenanceResult | { error: true } | undefined) => {
       if (finished) return;
-      if (!message || 'error' in message) { fail(); return; }
-      finished = true; clearTimeout(timeout); resolve(message);
+      if (!message || 'error' in message) { failed = true; return; }
+      result = message;
     });
-    worker.once('error', fail);
-    worker.once('exit', fail);
+    worker.once('error', () => { failed = true; });
+    worker.once('exit', (code) => {
+      if (finished) return;
+      if (code !== 0 || failed || !result) { fail(); return; }
+      finished = true; clearTimeout(timeout); resolve(result);
+    });
   });
 }
