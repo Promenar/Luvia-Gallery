@@ -162,6 +162,11 @@ export async function importLegacy(db: DatabaseType.Database, options: { legacyD
         options.assertLease?.();
         for (const favorite of batch) {
           const user = db.prepare('SELECT u.id FROM users u JOIN legacy_import_users i ON i.user_id=u.id AND i.username=u.username WHERE u.username=?').get(favorite.user_id) as { id: string } | undefined;
+          if (!user) {
+            const existing = db.prepare('SELECT 1 FROM users WHERE username=?').get(favorite.user_id);
+            const origin = db.prepare('SELECT user_id FROM legacy_import_users WHERE username=?').get(favorite.user_id) as { user_id: string } | undefined;
+            if (existing && !origin?.user_id) throw new LegacyIdentityUncertainError();
+          }
           const byId = findId?.get(favorite.item_id) as { path: string } | undefined;
           const byPath = byId ? undefined : findPath?.get(favorite.item_id) as { path: string } | undefined;
           const candidate = byId?.path ?? byPath?.path ?? (favorite.item_type === 'folder' && path.isAbsolute(favorite.item_id) ? favorite.item_id : decodedAbsolute(favorite.item_id));

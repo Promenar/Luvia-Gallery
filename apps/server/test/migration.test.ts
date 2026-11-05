@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash, scryptSync } from 'node:crypto';
-import { mkdtemp, mkdir, writeFile, readFile, rm, symlink } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, rm, symlink, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import Database from 'better-sqlite3';
@@ -195,4 +195,29 @@ test('嵌套媒体库的旧收藏只匹配用户有权访问的目录', async ()
     const libraries = db.prepare("SELECT f.library_id FROM favorites v JOIN files f ON f.id=v.item_id WHERE v.user_id='u' ORDER BY f.library_id").all() as { library_id: string }[];
     assert.deepEqual(libraries.map((row) => row.library_id), ['child', 'parent']);
   } finally { db.close(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('缺少旧配置时，身份不明的现有用户收藏不会静默推进游标', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'luvia-old-favorite-identity-')); const filename = path.join(dir, 'v2.db');
+  let db = openDatabase(filename);
+  try {
+    const config = path.join(dir, 'lumina-config.json');
+    await writeFile(config, JSON.stringify({ users: [
+      { username: 'alice', password: 'synthetic password', isAdmin: true },
+      { username: 'bob', password: 'synthetic password', isAdmin: true },
+    ] }));
+    await importLegacy(db, { legacyDir: dir, mediaRoots: [] });
+    db.prepare("DELETE FROM legacy_jwt_users WHERE user_id=(SELECT id FROM users WHERE username='alice')").run();
+    db.prepare("INSERT INTO legacy_jwt_revoked_users(username) VALUES ('alice')").run();
+    db.exec('DROP TABLE legacy_import_users; DROP TABLE legacy_import_tokens; ALTER TABLE api_tokens DROP COLUMN legacy_jwt; PRAGMA user_version=21');
+    db.close(); db = openDatabase(filename); await unlink(config);
+    const source = new Database(path.join(dir, 'lumina.db'));
+    source.exec('CREATE TABLE files(id TEXT,path TEXT); CREATE TABLE favorites(user_id TEXT,item_id TEXT,item_type TEXT,created_at INTEGER)');
+    source.prepare("INSERT INTO favorites VALUES ('alice',?,'file',1)").run(Buffer.from(path.join(dir, 'photo.jpg')).toString('base64')); source.close();
+    db.prepare("INSERT INTO jobs(id,type,label,status,trigger,created_at) VALUES ('legacy','import_legacy','旧导入','queued','manual',1)").run();
+    await runNextJob(db, { owner: 'worker', allowedRoots: [], legacyDir: dir, systemRoots: [] });
+    const job = db.prepare("SELECT status,error FROM jobs WHERE id='legacy'").get() as { status: string; error: string };
+    assert.equal(job.status, 'failed'); assert.match(job.error, /无法安全确认/);
+    assert.equal(db.prepare("SELECT value FROM settings WHERE key='legacy.favorites.rowid'").get(), undefined);
+  } finally { if (db.open) db.close(); await rm(dir, { recursive: true, force: true }); }
 });
