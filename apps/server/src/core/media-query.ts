@@ -27,7 +27,7 @@ function allowedClause(paths: string[] | null, params: Params, column = 'f.folde
   if (!paths.length) return '0';
   return `(${paths.map((prefix) => prefixClause(column, prefix, params)).join(' OR ')})`;
 }
-function where(filter: Partial<Query> | RandomFilter, context: Context, db: Database.Database): { sql: string; params: Params } {
+export function where(filter: Partial<Query> | RandomFilter, context: Context, db: Database.Database): { sql: string; params: Params } {
   const params: Params = [];
   const clauses = [allowedClause(context.allowedPaths, params), 'EXISTS(SELECT 1 FROM libraries library WHERE library.id=f.library_id AND library.enabled=1)'];
   if (context.ids) { clauses.push('f.id IN (SELECT value FROM json_each(?))'); params.push(JSON.stringify(context.ids)); }
@@ -215,8 +215,13 @@ export class MediaReader {
     return { folders, cameras: cameras.map((row) => row.name), media: this.page(MediaListQuery.parse({ q: query, limit: 10 }), context).items };
   }
 
-  random(filter: RandomFilter, context: Context) {
+  random(filter: RandomFilter, context: Context, restriction?: RandomFilter) {
     const condition = where(filter, context, this.db);
+    if (restriction) {
+      const scoped = where(restriction, context, this.db);
+      condition.sql += ` AND (${scoped.sql})`;
+      condition.params.push(...scoped.params);
+    }
     const range = rowIdRange(this.db);
     if (range.min === null || range.max === null) return { items: [] };
     const start = range.max <= 2 ** 48 ? randomInt(range.min, range.max + 1) : range.min;
@@ -233,7 +238,7 @@ export class MediaReader {
     return rows[0]![0] as { count: number; start: number | null; end: number | null };
   }
 
-  contains(filter: Query, context: Context, id: string): boolean {
+  contains(filter: Query | RandomFilter, context: Context, id: string): boolean {
     const condition = where(filter, context, this.db);
     return !!this.db.prepare(`SELECT 1 FROM files f WHERE ${condition.sql} AND f.id=?`).get(...condition.params, id);
   }

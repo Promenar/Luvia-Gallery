@@ -396,6 +396,21 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     const u = userOut(requireUser(req).user);
     return { id: u.id, allowedPaths: u.allowedPaths };
   }
+  function wallpaperFilter(identity: Identity): ReturnType<typeof RandomQuery.parse> | null | undefined {
+    if (identity.scope !== 'wallpaper') return undefined;
+    const config = WallpaperConfig.parse(identity.wallpaper ? JSON.parse(identity.wallpaper) : {});
+    if (config.source === 'folder' && !config.folder) return null;
+    return RandomQuery.parse({ types: config.includeVideos ? ['image', 'video'] : ['image'],
+      ...(config.source === 'folder' ? { under: config.folder } : {}),
+      ...(config.source === 'favorites' ? { favorite: true, favoriteFolders: true } : {}),
+      ...(config.landscapeOnly ? { orientation: 'landscape' } : {}) });
+  }
+  function requireWallpaperMedia(identity: Identity, id: string): void {
+    const filter = wallpaperFilter(identity);
+    if (filter === null || (filter && !media.contains(filter, { id: identity.user.id, allowedPaths: userOut(identity.user).allowedPaths }, id))) {
+      fail(404, 'NOT_FOUND', '媒体不存在或不可访问');
+    }
+  }
   function folderContext(req: FastifyRequest) {
     const user = userOut(requireUser(req).user);
     return { id: user.id, allowedPaths: user.allowedPaths, isAdmin: user.role === 'admin' };
@@ -533,7 +548,8 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
   register('randomMedia', async (req) => {
     const query = endpoints.randomMedia.query.parse(req.query);
     if (query.exclude && query.exclude.length > 500) fail(400, 'VALIDATION', '排除的媒体不能超过 500 个');
-    return media.random(query, mediaContext(req));
+    const filter = wallpaperFilter(requireUser(req));
+    return filter === null ? { items: [] } : media.random(query, mediaContext(req), filter);
   });
   register('mediaDetail', async (req) => {
     const context = mediaContext(req); const { id } = req.params as { id: string };
@@ -664,6 +680,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
           WHERE f.id=? AND f.folder=? AND f.size=? AND f.modified_at=?`).get(row.id, row.folder, row.size, row.modified_at)) {
         fail(404, 'NOT_FOUND', '媒体不可访问');
       }
+      requireWallpaperMedia(current, row.id);
     };
   }
   async function hlsResponse(req: FastifyRequest, reply: FastifyReply, row: BinaryRow, principal: string, resource: string, authorize: () => unknown) {
@@ -712,6 +729,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
       if (identityPrincipal(current) !== principal || !pathAllowed(row.folder, userOut(current.user).allowedPaths)) fail(404, 'NOT_FOUND', '媒体不可访问');
       if (!db.prepare(`SELECT 1 FROM files f JOIN libraries l ON l.id=f.library_id AND l.enabled=1
         WHERE f.id=? AND f.size=? AND f.modified_at=? AND f.playability='transcode'`).get(id, row.size, row.modified_at) || !readSettings(db).transcode.enabled) fail(404, 'NOT_FOUND', '媒体不可访问');
+      requireWallpaperMedia(current, id);
     };
     authorize();
     return hlsResponse(req, reply, row, principal, resource, authorize);
@@ -1064,8 +1082,8 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     };
     const limit = number(query.limit, 100, 1, 500); const offset = number(query.offset, 0, 0, Number.MAX_SAFE_INTEGER);
     const context = mediaContext(req);
-    const wallpaper = identity.scope === 'wallpaper' ? WallpaperConfig.parse(identity.wallpaper ? JSON.parse(identity.wallpaper) : {}) : null;
-    if (wallpaper?.source === 'folder' && !wallpaper.folder) return { files: [], total: 0, totalExact: true, hasMore: false, sources: [{ id: 'local', name: 'Local Storage', count: 0, countExact: true }] };
+    const wallpaper = wallpaperFilter(identity);
+    if (wallpaper === null) return { files: [], total: 0, totalExact: true, hasMore: false, sources: [{ id: 'local', name: 'Local Storage', count: 0, countExact: true }] };
     const firstLibrary = query.folder !== undefined && ['', '/', 'root'].includes(query.folder)
       ? db.prepare('SELECT id FROM libraries WHERE enabled=1 ORDER BY rowid LIMIT 1').get() as { id: string } | undefined : undefined;
     const requestedFolder = query.folder === undefined ? null : firstLibrary?.id ?? legacyVirtual(query.folder);
@@ -1078,11 +1096,10 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     let rows: LegacyRow[];
     let hasMore: boolean;
     if (query.random === 'true' && wallpaper) {
-      const randomQuery = RandomQuery.parse({ types: wallpaper.includeVideos ? ['image', 'video'] : ['image'], ...(query.search ? { q: query.search } : {}), count: Math.min(100, limit + 1),
-        ...(wallpaper?.source === 'favorites' || query.favorites === 'true' ? { favorite: true, favoriteFolders: !!wallpaper } : {}),
-        ...(wallpaper?.source === 'folder' && wallpaper.folder ? { under: wallpaper.folder } : requestedFolder ? { under: requestedFolder } : {}),
-        ...(wallpaper?.landscapeOnly ? { orientation: 'landscape' } : {}) });
-      const sampled = media.random({ ...randomQuery, count: limit + 1 }, context).items;
+      const randomQuery = RandomQuery.parse({ ...(query.search ? { q: query.search } : {}), count: Math.min(100, limit + 1),
+        ...(query.favorites === 'true' ? { favorite: true, favoriteFolders: true } : {}),
+        ...(requestedFolder ? { under: requestedFolder } : {}) });
+      const sampled = media.random({ ...randomQuery, count: limit + 1 }, context, wallpaper).items;
       hasMore = sampled.length > limit;
       rows = sampled.slice(0, limit).map((item) => {
         const source = db.prepare('SELECT f.relative_path,l.root FROM files f JOIN libraries l ON l.id=f.library_id WHERE f.id=?').get(item.id) as { relative_path: string; root: string };
@@ -1094,7 +1111,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
       const page = await legacyPage(db, queries, { userId: context.id, allowedPaths: context.allowedPaths, folder: requestedFolder,
         recursive: query.recursive === 'true', favorite: query.favorites === 'true', search: query.search,
         mediaType: query.mediaType, excludeMediaType: query.excludeMediaType, from, to, sort: query.sort,
-        random: query.random === 'true', seed: Number.isSafeInteger(rawSeed) && rawSeed >= 0 ? rawSeed : null, limit, offset });
+        random: query.random === 'true', seed: Number.isSafeInteger(rawSeed) && rawSeed >= 0 ? rawSeed : null, limit, offset, wallpaper });
       rows = page.rows; hasMore = page.hasMore;
     }
     const files = rows.map((row) => {
