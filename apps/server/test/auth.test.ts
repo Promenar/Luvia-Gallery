@@ -126,5 +126,8 @@ test('壁纸令牌可创建并合并修改，普通令牌不接受壁纸配置',
     assert.notEqual(bearer.json().error.message, '请求缺少安全标头');
     const readToken = await app.inject({ method: 'POST', url: '/api/v2/me/tokens', headers: { ...header, cookie }, payload: { name: '读取', scope: 'read', wallpaper: { source: 'library' } } });
     assert.equal(readToken.statusCode, 400);
+    assert.equal((await app.inject({ method: 'DELETE', url: `/api/v2/me/tokens/${meta.id}`, headers: { ...header, cookie } })).statusCode, 204);
+    assert.equal((await app.inject({ method: 'GET', url: '/api/v2/media/random', headers: { authorization: `Bearer ${token}` } })).statusCode, 401);
+    assert.equal((await app.inject({ method: 'GET', url: '/api/v2/me/tokens', headers: { cookie } })).json().tokens.length, 0);
   } finally { await app.close(); db.close(); }
 });
