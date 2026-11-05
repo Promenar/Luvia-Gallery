@@ -168,7 +168,15 @@ export const MediaFacets = z.object({
 export type MediaFacets = z.infer<typeof MediaFacets>;
 
 /** GET /api/v2/media/random?count=&（MediaFilter）：rowid 区间抽样，非全表排序。 */
-export const RandomQuery = MediaFilter.extend({ count: z.coerce.number().int().min(1).max(100).default(24) });
+export const RandomQuery = MediaFilter.extend({
+  count: z.coerce.number().int().min(1).max(100).default(24),
+  /** 仅该文件夹的直接子媒体（与 under 的含子孙语义区分），用于“随机播放当前文件夹”。 */
+  folder: z.string().optional(),
+  /** 与 favorite=true 同用：同时包含当前用户收藏文件夹之下的媒体（首页“收藏”轮播）。 */
+  favoriteFolders: queryBool.optional(),
+  /** 逗号分隔的媒体 ID，本次抽样排除（幻灯片随机播放时避免短期重复），最多 500 个。 */
+  exclude: csv(z.string()).optional(),
+});
 export const MediaItems = z.object({ items: z.array(MediaItem) });
 export type MediaItems = z.infer<typeof MediaItems>;
 
@@ -220,4 +228,14 @@ export const mediaUrls = {
   download: (id: string) => `/api/v2/media/${encodeURIComponent(id)}/original?download=1`,
   preview: (id: string) => `/api/v2/media/${encodeURIComponent(id)}/preview`,
   hls: (id: string) => `/api/v2/media/${encodeURIComponent(id)}/hls/index.m3u8`,
+  /**
+   * 浏览器可直接解码的全分辨率版本：原图为 JPEG/PNG/WebP/AVIF/GIF 时返回原文件；HEIC/RAW/TIFF 等在 worker 中
+   * 转为同尺寸 WebP 并缓存。查看器放大超过 l 尺寸缩略图分辨率、右键复制图片时使用。
+   */
+  display: (id: string, v: number) => `/api/v2/media/${encodeURIComponent(id)}/display?v=${v}`,
+  /**
+   * 超大图深度缩放（长边超过 8192 像素时提供）：DZI 描述文件，瓦片 256px WebP，按需生成并缓存，
+   * 瓦片地址为 `/api/v2/media/:id/tiles/:level/:col_:row.webp?v=`。
+   */
+  tiles: (id: string, v: number) => `/api/v2/media/${encodeURIComponent(id)}/tiles.dzi?v=${v}`,
 };
