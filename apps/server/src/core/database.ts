@@ -157,6 +157,20 @@ const schemaV6 = `
   CREATE INDEX folders_library_marker ON folders(library_id,scan_marker);
 `;
 
+const schemaV7 = `
+  ALTER TABLE jobs ADD COLUMN dedupe_key TEXT;
+  CREATE UNIQUE INDEX jobs_active_dedupe ON jobs(dedupe_key)
+    WHERE dedupe_key IS NOT NULL AND status IN ('queued','running','paused');
+`;
+
+const schemaV8 = `
+  CREATE TABLE cache_entries (
+    cache_key TEXT PRIMARY KEY, relative_path TEXT NOT NULL UNIQUE,
+    bytes INTEGER NOT NULL, last_access_at INTEGER NOT NULL
+  );
+  CREATE INDEX cache_lru ON cache_entries(last_access_at,cache_key);
+`;
+
 export function openDatabase(filename: string, options: { readonly?: boolean; bootstrapLegacy?: boolean } = {}): Database.Database {
   const readonly = options.readonly ?? false;
   const db = new Database(filename, { readonly, fileMustExist: readonly });
@@ -170,7 +184,7 @@ export function openDatabase(filename: string, options: { readonly?: boolean; bo
       db.pragma('synchronous = NORMAL');
       db.transaction(() => {
         const version = db.pragma('user_version', { simple: true });
-        if (version !== 0 && version !== 1 && version !== 2 && version !== 3 && version !== 4 && version !== 5 && version !== 6) throw new Error(`不支持的数据库版本: ${version}`);
+        if (version !== 0 && version !== 1 && version !== 2 && version !== 3 && version !== 4 && version !== 5 && version !== 6 && version !== 7 && version !== 8) throw new Error(`不支持的数据库版本: ${version}`);
         if (version === 0) {
           db.exec(schemaV1);
           db.pragma('user_version = 1');
@@ -195,12 +209,20 @@ export function openDatabase(filename: string, options: { readonly?: boolean; bo
           db.exec(schemaV6);
           db.pragma('user_version = 6');
         }
+        if (version === 0 || version === 1 || version === 2 || version === 3 || version === 4 || version === 5 || version === 6) {
+          db.exec(schemaV7);
+          db.pragma('user_version = 7');
+        }
+        if (version === 0 || version === 1 || version === 2 || version === 3 || version === 4 || version === 5 || version === 6 || version === 7) {
+          db.exec(schemaV8);
+          db.pragma('user_version = 8');
+        }
         if (version === 0 && options.bootstrapLegacy) {
           db.prepare("INSERT INTO settings(key,value) VALUES('legacy.pending','true')").run();
           db.prepare("INSERT INTO jobs(id,type,label,status,trigger,created_at) VALUES (?,'import_legacy','导入旧版数据','queued','system',unixepoch())").run(randomUUID());
         }
       }).immediate();
-    } else if (db.pragma('user_version', { simple: true }) !== 6) {
+    } else if (db.pragma('user_version', { simple: true }) !== 8) {
       throw new Error('数据库尚未就绪或版本不受支持');
     }
     return db;
