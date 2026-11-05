@@ -5,6 +5,7 @@ import { lstat } from 'node:fs/promises';
 import { JobQueue } from '../core/jobs.ts';
 import { publishJob } from '../core/job-view.ts';
 import { scanLibrary } from './scan.ts';
+import { publishLibraryEvent } from './watch-events.ts';
 import { importLegacy, LegacyIdentityUncertainError, reconcileLegacyFavorites } from './import-legacy.ts';
 import { generateMediaCache } from './media-cache.ts';
 import path from 'node:path';
@@ -100,8 +101,7 @@ export async function runNextJob(db: Database.Database, options: WorkerOptions):
           db.prepare("UPDATE libraries SET status='ok',last_scan_at=? WHERE id=?").run(now(), library.id);
           if (!queue.finish(job.id, result)) throw new Error('作业租约已失效');
           enqueueMetadata(db, library.id);
-          db.prepare("INSERT INTO job_events(event_type,payload) VALUES ('library',?)")
-            .run(JSON.stringify({ folders: [library.id], added: result.added, removed: result.removed, updated: 0 }));
+          publishLibraryEvent(db, { libraryId: library.id, source: 'scan', folders: [library.id], added: result.added, removed: result.removed, updated: 0, moved: 0 });
           if (payload.legacyImportId) {
             const other = db.prepare("SELECT count(*) AS n FROM jobs WHERE type='scan' AND json_extract(payload,'$.legacyImportId')=? AND status<>'succeeded'")
               .get(payload.legacyImportId) as { n: number };
