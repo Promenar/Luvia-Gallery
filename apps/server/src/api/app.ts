@@ -48,6 +48,14 @@ type Identity = { user: UserRow; kind: 'session' | 'token' | 'legacy'; scope?: s
 type Options = { db: Database.Database; legacyPending: boolean | (() => boolean); secureCookies?: boolean; mounts?: () => Promise<Mount[]>; systemRoots?: string[]; cacheDir?: string; staticDir?: string; legacyJwtSecret?: string };
 class HttpError extends Error { constructor(publicStatus: number, code: string, message: string) { super(message); this.statusCode = publicStatus; this.code = code; } statusCode: number; code: string; }
 const fail = (status: number, code: string, message: string): never => { throw new HttpError(status, code, message); };
+const DUMMY_PASSWORD_HASH = `scrypt$v2$${'00'.repeat(16)}$${'00'.repeat(64)}`;
+async function verifyLoginPassword(password: string, stored: string | undefined) {
+  const verification = await verifyPassword(password, stored ?? DUMMY_PASSWORD_HASH);
+  if (stored !== undefined && !/^scrypt\$(?:v2\$)?[0-9a-fA-F]{32}\$[0-9a-fA-F]{128}$/.test(stored)) {
+    await verifyPassword(password, DUMMY_PASSWORD_HASH);
+  }
+  return verification;
+}
 const digest = (s: string) => createHash('sha256').update(s).digest('hex');
 const now = () => Math.floor(Date.now() / 1000);
 const iso = (n: number | null) => n === null ? null : new Date(n * 1000).toISOString();
@@ -65,7 +73,14 @@ const tokenOut = (t: TokenRow) => ({
 
 export async function createApp(options: Options): Promise<FastifyInstance> {
   const { db } = options;
-  const app = Fastify({ logger: false, routerOptions: { maxParamLength: 8192 } });
+  const proxyValue = (process.env.TRUST_PROXY ?? '').trim().toLowerCase();
+  if (proxyValue && proxyValue !== 'true' && proxyValue !== 'false' && (!/^\d+$/.test(proxyValue) || !Number.isSafeInteger(Number(proxyValue)))) {
+    throw new Error('TRUST_PROXY 必须为 true、false 或非负整数');
+  }
+  const proxyHops = Number(proxyValue);
+  const trustProxy = proxyValue === 'true' ? true : proxyValue === '' || proxyValue === 'false' || proxyHops === 0
+    ? false : (_address: string, hop: number) => hop < proxyHops;
+  const app = Fastify({ logger: false, trustProxy, routerOptions: { maxParamLength: 8192 } });
   await app.register(cookie);
   const identities = new WeakMap<FastifyRequest, Identity>();
   const queries = new QueryExecutor(db);
@@ -79,7 +94,23 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
   });
   const folders = new FolderReader(db);
   const attempts = new Map<string, number[]>();
-  const secure = options.secureCookies ?? process.env.NODE_ENV === 'production';
+  const cookieSecure = process.env.COOKIE_SECURE?.trim().toLowerCase();
+  if (cookieSecure !== undefined && cookieSecure !== 'true' && cookieSecure !== 'false') throw new Error('COOKIE_SECURE 必须为 true 或 false');
+  const secure = options.secureCookies ?? (cookieSecure === undefined ? process.env.NODE_ENV === 'production' : cookieSecure === 'true');
+  const sseConnections = new Map<string, number>();
+  const zipConnections = new Map<string, number>();
+  function reserveUserSlot(slots: Map<string, number>, userId: string, limit: number): () => void {
+    const active = slots.get(userId) ?? 0;
+    if (active >= limit) fail(429, 'RATE_LIMITED', '并发请求过多，请稍后重试');
+    slots.set(userId, active + 1);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const remaining = (slots.get(userId) ?? 1) - 1;
+      if (remaining) slots.set(userId, remaining); else slots.delete(userId);
+    };
+  }
   const systemRoots = options.systemRoots ?? [path.resolve(process.env.DATA_DIR ?? 'data'), path.resolve(process.env.CACHE_DIR ?? 'cache')];
   const configuredMediaRoots = (process.env.MEDIA_ROOT ?? '').split(';').map((part) => part.trim()).filter(Boolean).map((part) => path.resolve(part));
   const getMounts = options.mounts ?? (() => process.platform === 'darwin'
@@ -175,12 +206,16 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
       httpOnly: true, sameSite: 'lax', secure, path: '/', ...(remember ? { maxAge: 30 * 86400 } : {}),
     });
   }
-  function limitLogin(ip: string): void {
+  function limitLogin(ip: string, kind: 'login' | 'share', subject: string): void {
     const cutoff = Date.now() - 60_000;
-    const previous = (attempts.get(ip) ?? []).filter((v) => v > cutoff);
-    if (previous.length >= 10) fail(429, 'RATE_LIMITED', '请求过于频繁，请稍后重试');
-    previous.push(Date.now());
-    attempts.set(ip, previous);
+    const overallKey = JSON.stringify(['ip', ip]);
+    const subjectKey = JSON.stringify([kind, ip, subject]);
+    const overall = (attempts.get(overallKey) ?? []).filter((v) => v > cutoff);
+    const previous = (attempts.get(subjectKey) ?? []).filter((v) => v > cutoff);
+    if (overall.length >= 100 || previous.length >= 10) fail(429, 'RATE_LIMITED', '请求过于频繁，请稍后重试');
+    const time = Date.now();
+    overall.push(time); previous.push(time);
+    attempts.set(overallKey, overall); attempts.set(subjectKey, previous);
     if (attempts.size > 10000) {
       for (const [key, values] of attempts) if (!values.some((v) => v > cutoff)) attempts.delete(key);
       if (attempts.size > 10000) attempts.delete(attempts.keys().next().value!);
@@ -194,15 +229,21 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
   app.setErrorHandler((err, _req, reply) => {
     if (err instanceof ZodError) return reply.code(400).send({ error: { code: 'VALIDATION', message: '请求参数无效' } });
     if (err instanceof HttpError) return reply.code(err.statusCode).send({ error: { code: err.code, message: err.message } });
+    const status = (err as { statusCode?: unknown } | null)?.statusCode;
+    if (typeof status === 'number' && Number.isInteger(status) && status >= 100 && status < 500) {
+      const messages: Record<number, string> = { 400: '请求参数无效', 413: '请求体过大', 415: '不支持的媒体类型' };
+      return reply.code(status).send({ error: { code: 'VALIDATION', message: messages[status] ?? '请求无法处理' } });
+    }
     return reply.code(500).send({ error: { code: 'INTERNAL', message: '服务器内部错误' } });
   });
   app.addHook('onRequest', async (req) => {
     const url = new URL(req.raw.url ?? '/', 'http://localhost');
-    if (url.pathname.startsWith('/api/v2/') && [...url.searchParams.keys()].some((key) => key.toLowerCase() === 'token')) {
+    const v2 = url.pathname.startsWith('/api/v2/') || (req.routeOptions.url?.startsWith('/api/v2/') ?? false);
+    if (v2 && [...url.searchParams.keys()].some((key) => key.toLowerCase() === 'token')) {
       fail(400, 'VALIDATION', '不允许在 URL 中传递令牌');
     }
     const identity = authenticateRequest(req);
-    if (url.pathname.startsWith('/api/v2/') && req.method !== 'GET' && identity?.kind === 'session' && req.headers[CSRF_HEADER.toLowerCase()] !== '1') {
+    if (v2 && req.method !== 'GET' && req.method !== 'HEAD' && identity?.kind === 'session' && req.headers[CSRF_HEADER.toLowerCase()] !== '1') {
       fail(403, 'FORBIDDEN', '请求缺少安全标头');
     }
     if (identity) identities.set(req, identity);
@@ -232,7 +273,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
   register('setup', async (req, reply, body) => {
     if (pending()) fail(503, 'MIGRATION_PENDING', '旧数据导入尚未完成');
     if ((countUsers.get() as { n: number }).n > 0) fail(409, 'CONFLICT', '系统已经初始化');
-    limitLogin(req.ip);
+    limitLogin(req.ip, 'login', body.username);
     const passwordHash = await hashPassword(body.password);
     const u: UserRow = { id: randomUUID(), username: body.username, password_hash: passwordHash, role: 'admin', allowed_paths: null, preferences: JSON.stringify(defaultPreferences()), created_at: now(), last_login_at: now() };
     db.transaction(() => {
@@ -245,10 +286,10 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     return { user: userOut(u) };
   });
   register('login', async (req, reply, body) => {
-    limitLogin(req.ip);
-    const u = (findUser.get(body.username) as UserRow | undefined) ?? fail(401, 'UNAUTHORIZED', '用户名或密码错误');
-    const verification = await verifyPassword(body.password, u.password_hash);
-    if (!verification.valid) fail(401, 'UNAUTHORIZED', '用户名或密码错误');
+    limitLogin(req.ip, 'login', body.username);
+    const u = findUser.get(body.username) as UserRow | undefined;
+    const verification = await verifyLoginPassword(body.password, u?.password_hash);
+    if (!u || !verification.valid) return fail(401, 'UNAUTHORIZED', '用户名或密码错误');
     const upgraded = verification.needsUpgrade ? await hashPassword(body.password) : null;
     db.transaction(() => {
       u.last_login_at = now();
@@ -383,6 +424,21 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
   function mediaContext(req: FastifyRequest) {
     const u = userOut(requireUser(req).user);
     return { id: u.id, allowedPaths: u.allowedPaths };
+  }
+  function wallpaperFilter(identity: Identity): ReturnType<typeof RandomQuery.parse> | null | undefined {
+    if (identity.scope !== 'wallpaper') return undefined;
+    const config = WallpaperConfig.parse(identity.wallpaper ? JSON.parse(identity.wallpaper) : {});
+    if (config.source === 'folder' && !config.folder) return null;
+    return RandomQuery.parse({ types: config.includeVideos ? ['image', 'video'] : ['image'],
+      ...(config.source === 'folder' ? { under: config.folder } : {}),
+      ...(config.source === 'favorites' ? { favorite: true, favoriteFolders: true } : {}),
+      ...(config.landscapeOnly ? { orientation: 'landscape' } : {}) });
+  }
+  function requireWallpaperMedia(identity: Identity, id: string): void {
+    const filter = wallpaperFilter(identity);
+    if (filter === null || (filter && !media.contains(filter, { id: identity.user.id, allowedPaths: userOut(identity.user).allowedPaths }, id))) {
+      fail(404, 'NOT_FOUND', '媒体不存在或不可访问');
+    }
   }
   function folderContext(req: FastifyRequest) {
     const user = userOut(requireUser(req).user);
@@ -521,7 +577,8 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
   register('randomMedia', async (req) => {
     const query = endpoints.randomMedia.query.parse(req.query);
     if (query.exclude && query.exclude.length > 500) fail(400, 'VALIDATION', '排除的媒体不能超过 500 个');
-    return media.random(query, mediaContext(req));
+    const filter = wallpaperFilter(requireUser(req));
+    return filter === null ? { items: [] } : media.random(query, mediaContext(req), filter);
   });
   register('mediaDetail', async (req) => {
     const context = mediaContext(req); const { id } = req.params as { id: string };
@@ -583,9 +640,19 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
           return sendFile(req, reply, previous, { mime: 'image/webp', name: row.name, etagKey: `legacy:${cacheKey(row, variant)}`, authorize });
         }
       }
-      const waiter = wait ? randomUUID() : undefined;
-      const jobId = enqueueMediaTask(db, row, variant, { waiter });
-      if (wait) {
+      const { waiter, jobId } = db.transaction(() => {
+        if (variant.kind === 'tile') {
+          const key = `media:${cacheKey(row, variant)}`;
+          const existing = db.prepare("SELECT 1 FROM jobs WHERE dedupe_key=? AND status IN ('queued','running','paused')").get(key);
+          const active = (db.prepare(`SELECT count(*) AS n FROM jobs WHERE type='thumbnails' AND status IN ('queued','running','paused')
+            AND json_valid(payload) AND json_extract(payload,'$.mediaId')=? AND json_extract(payload,'$.variant.kind')='tile'`).get(row.id) as { n: number }).n;
+          if (!existing && active >= 8) fail(503, 'UNAVAILABLE', '瓦片生成任务已满，请稍后重试');
+        }
+        const active = wait ? (db.prepare('SELECT count(*) AS n FROM media_waiters WHERE lease_expires_at>unixepoch()').get() as { n: number }).n : 0;
+        const waiter = wait && active < 32 ? randomUUID() : undefined;
+        return { waiter, jobId: enqueueMediaTask(db, row, variant, { waiter }) };
+      }).immediate();
+      if (waiter) {
         let disconnected = false; let released = false; let ready = false; let renewal = Date.now() + 5000;
         const release = (cancel: boolean) => {
           if (released) return;
@@ -649,6 +716,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
           WHERE f.id=? AND f.folder=? AND f.size=? AND f.modified_at=?`).get(row.id, row.folder, row.size, row.modified_at)) {
         fail(404, 'NOT_FOUND', '媒体不可访问');
       }
+      requireWallpaperMedia(current, row.id);
     };
   }
   async function hlsResponse(req: FastifyRequest, reply: FastifyReply, row: BinaryRow, principal: string, resource: string, authorize: () => unknown) {
@@ -656,7 +724,8 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     const current = db.prepare('SELECT playability FROM files WHERE id=?').get(row.id) as { playability: string | null } | undefined;
     if (row.media_type !== 'video' || current?.playability !== 'transcode' || !readSettings(db).transcode.enabled) return fail(404, 'NOT_FOUND', '视频不需要转码或转码已关闭');
     const id = hlsId(row, principal);
-    let session = resource === 'index.m3u8' ? ensureHls(db, row, principal)
+    const ensure = () => ensureHls(db, row, principal) ?? fail(503, 'UNAVAILABLE', '视频转码任务已满，请稍后重试');
+    let session = resource === 'index.m3u8' ? ensure()
       : db.prepare('SELECT * FROM hls_sessions WHERE id=? AND principal_hash=?').get(id, principal) as HlsSession | undefined;
     if (!session) return fail(404, 'NOT_FOUND', 'HLS 会话不存在');
     db.prepare('UPDATE hls_sessions SET last_access_at=? WHERE id=? AND principal_hash=?').run(Date.now(), id, principal);
@@ -668,7 +737,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
       if (resource !== 'index.m3u8') return fail(404, 'NOT_FOUND', 'HLS 分片尚未就绪');
       if (session.state === 'ready') {
         db.prepare("UPDATE hls_sessions SET state='failed' WHERE id=? AND state='ready' AND generation=?").run(id, session.generation);
-        session = ensureHls(db, row, principal);
+        session = ensure();
       }
       return reply.header('Retry-After', '1').code(202).send({ status: 'pending' });
     }
@@ -696,6 +765,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
       if (identityPrincipal(current) !== principal || !pathAllowed(row.folder, userOut(current.user).allowedPaths)) fail(404, 'NOT_FOUND', '媒体不可访问');
       if (!db.prepare(`SELECT 1 FROM files f JOIN libraries l ON l.id=f.library_id AND l.enabled=1
         WHERE f.id=? AND f.size=? AND f.modified_at=? AND f.playability='transcode'`).get(id, row.size, row.modified_at) || !readSettings(db).transcode.enabled) fail(404, 'NOT_FOUND', '媒体不可访问');
+      requireWallpaperMedia(current, id);
     };
     authorize();
     return hlsResponse(req, reply, row, principal, resource, authorize);
@@ -842,7 +912,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
   register('unlockShare', async (req, reply, body) => {
     const { token } = req.params as { token: string }; const row = shareByToken(token);
     if (!row.password_hash) return;
-    limitLogin(req.ip);
+    limitLogin(req.ip, 'share', token);
     if (!(await verifyPassword(body.password, row.password_hash)).valid) return fail(401, 'UNAUTHORIZED', '分享密码错误');
     const value = secret(); const expires = Math.min(row.expires_at ?? now() + 7 * 86400, now() + 7 * 86400);
     db.transaction(() => {
@@ -908,14 +978,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
         WHERE f.id=? AND f.size=? AND f.modified_at=? AND f.playability='transcode'`).get(id, row.size, row.modified_at) || !readSettings(db).transcode.enabled) fail(404, 'NOT_FOUND', '媒体不可访问');
     };
     check();
-    const cookieName = `luvia_hls_${initial.share.id.replaceAll('-', '')}`;
-    let visitor = req.cookies[cookieName];
-    if (!visitor || !/^[A-Za-z0-9_-]{32,128}$/.test(visitor)) {
-      if (resource !== 'index.m3u8') return fail(404, 'NOT_FOUND', 'HLS 会话不存在');
-      visitor = secret();
-      reply.setCookie(cookieName, visitor, { httpOnly: true, sameSite: 'lax', secure, path: `/api/v2/public/shares/${initial.share.token}`, maxAge: 7200 });
-    }
-    const principal = digest(`share:${initial.share.id}:${digest(visitor)}`);
+    const principal = digest('share:media');
     return hlsResponse(req, reply, row, principal, resource, check);
   });
   type DownloadTarget = ReturnType<typeof endpoints.createDownload.body.parse>;
@@ -945,6 +1008,8 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
   app.get('/api/v2/downloads/:ticket', async (req, reply) => {
     const identity = requireUser(req); const { ticket } = req.params as { ticket: string };
     if (ticket.length > 256) return fail(404, 'NOT_FOUND', '下载票据不存在或已过期');
+    const release = reserveUserSlot(zipConnections, identity.user.id, 2);
+    reply.raw.once('finish', release); reply.raw.once('close', release);
     const target = db.transaction(() => {
       const user = currentSessionUser(identity);
       const record = db.prepare('SELECT target FROM download_tickets WHERE token_hash=? AND user_id=? AND expires_at>?')
@@ -1029,10 +1094,10 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
   }
   app.post('/api/auth/login', async (req) => {
     const body = endpoints.login.body.parse(req.body);
-    limitLogin(req.ip);
-    const user = (findUser.get(body.username) as UserRow | undefined) ?? fail(401, 'UNAUTHORIZED', '用户名或密码错误');
-    const verified = await verifyPassword(body.password, user.password_hash);
-    if (!verified.valid) return fail(401, 'UNAUTHORIZED', '用户名或密码错误');
+    limitLogin(req.ip, 'login', body.username);
+    const user = findUser.get(body.username) as UserRow | undefined;
+    const verified = await verifyLoginPassword(body.password, user?.password_hash);
+    if (!user || !verified.valid) return fail(401, 'UNAUTHORIZED', '用户名或密码错误');
     if (!options.legacyJwtSecret) return fail(503, 'INTERNAL', '旧客户端登录暂不可用');
     const replacement = verified.needsUpgrade ? await hashPassword(body.password) : user.password_hash;
     const token = jwt.sign({ username: user.username, role: user.role }, options.legacyJwtSecret, { algorithm: 'HS256', expiresIn: '7d', subject: user.id, jwtid: randomUUID() });
@@ -1055,8 +1120,8 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     };
     const limit = number(query.limit, 100, 1, 500); const offset = number(query.offset, 0, 0, Number.MAX_SAFE_INTEGER);
     const context = mediaContext(req);
-    const wallpaper = identity.scope === 'wallpaper' ? WallpaperConfig.parse(identity.wallpaper ? JSON.parse(identity.wallpaper) : {}) : null;
-    if (wallpaper?.source === 'folder' && !wallpaper.folder) return { files: [], total: 0, totalExact: true, hasMore: false, sources: [{ id: 'local', name: 'Local Storage', count: 0, countExact: true }] };
+    const wallpaper = wallpaperFilter(identity);
+    if (wallpaper === null) return { files: [], total: 0, totalExact: true, hasMore: false, sources: [{ id: 'local', name: 'Local Storage', count: 0, countExact: true }] };
     const firstLibrary = query.folder !== undefined && ['', '/', 'root'].includes(query.folder)
       ? db.prepare('SELECT id FROM libraries WHERE enabled=1 ORDER BY rowid LIMIT 1').get() as { id: string } | undefined : undefined;
     const requestedFolder = query.folder === undefined ? null : firstLibrary?.id ?? legacyVirtual(query.folder);
@@ -1069,11 +1134,10 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     let rows: LegacyRow[];
     let hasMore: boolean;
     if (query.random === 'true' && wallpaper) {
-      const randomQuery = RandomQuery.parse({ types: wallpaper.includeVideos ? ['image', 'video'] : ['image'], ...(query.search ? { q: query.search } : {}), count: Math.min(100, limit + 1),
-        ...(wallpaper?.source === 'favorites' || query.favorites === 'true' ? { favorite: true, favoriteFolders: !!wallpaper } : {}),
-        ...(wallpaper?.source === 'folder' && wallpaper.folder ? { under: wallpaper.folder } : requestedFolder ? { under: requestedFolder } : {}),
-        ...(wallpaper?.landscapeOnly ? { orientation: 'landscape' } : {}) });
-      const sampled = media.random({ ...randomQuery, count: limit + 1 }, context).items;
+      const randomQuery = RandomQuery.parse({ ...(query.search ? { q: query.search } : {}), count: Math.min(100, limit + 1),
+        ...(query.favorites === 'true' ? { favorite: true, favoriteFolders: true } : {}),
+        ...(requestedFolder ? { under: requestedFolder } : {}) });
+      const sampled = media.random({ ...randomQuery, count: limit + 1 }, context, wallpaper).items;
       hasMore = sampled.length > limit;
       rows = sampled.slice(0, limit).map((item) => {
         const source = db.prepare('SELECT f.relative_path,l.root FROM files f JOIN libraries l ON l.id=f.library_id WHERE f.id=?').get(item.id) as { relative_path: string; root: string };
@@ -1085,7 +1149,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
       const page = await legacyPage(db, queries, { userId: context.id, allowedPaths: context.allowedPaths, folder: requestedFolder,
         recursive: query.recursive === 'true', favorite: query.favorites === 'true', search: query.search,
         mediaType: query.mediaType, excludeMediaType: query.excludeMediaType, from, to, sort: query.sort,
-        random: query.random === 'true', seed: Number.isSafeInteger(rawSeed) && rawSeed >= 0 ? rawSeed : null, limit, offset });
+        random: query.random === 'true', seed: Number.isSafeInteger(rawSeed) && rawSeed >= 0 ? rawSeed : null, limit, offset, wallpaper });
       rows = page.rows; hasMore = page.hasMore;
     }
     const files = rows.map((row) => {
@@ -1131,7 +1195,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     } else if (query.favorites === 'true') selected = folders.favorites(context).folders;
     const aggregates = (await queries.run([{ sql: `SELECT folder,count(*) AS count,max(modified_at) AS latest FROM files
       WHERE folder IN (SELECT value FROM json_each(?)) AND media_type IN ('image','video') GROUP BY folder`,
-      params: [JSON.stringify(selected.map((folder) => folder.path))] }]))[0] as { folder: string; count: number; latest: number }[];
+      params: [JSON.stringify(selected.filter((folder) => pathAllowed(folder.path, context.allowedPaths)).map((folder) => folder.path))] }]))[0] as { folder: string; count: number; latest: number }[];
     const byPath = new Map(aggregates.map((entry) => [entry.folder, entry]));
     const result = [];
     for (const folder of selected) {
@@ -1154,7 +1218,9 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
         }
       }
       const aggregate = byPath.get(folder.path);
-      result.push({ name: path.basename(absolute), path: absolute, mediaCount: aggregate?.count ?? 0, coverMedia, lastModified: aggregate?.latest ?? 0, isFavorite: folder.favorite });
+      const accessible = pathAllowed(folder.path, context.allowedPaths);
+      result.push({ name: path.basename(absolute), path: absolute, mediaCount: accessible ? aggregate?.count ?? 0 : folder.mediaCount, coverMedia,
+        lastModified: accessible ? aggregate?.latest ?? 0 : folder.latestAt ? Date.parse(folder.latestAt) / 1000 : 0, isFavorite: folder.favorite });
     }
     return { folders: result };
   });
@@ -1313,6 +1379,8 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
   app.get('/api/v2/events', async (req, reply) => {
     const identity = requireUser(req);
     if (identity.scope === 'wallpaper') fail(403, 'FORBIDDEN', '令牌权限不足');
+    const release = reserveUserSlot(sseConnections, identity.user.id, 8);
+    reply.raw.once('finish', release); reply.raw.once('close', release);
     const last = req.headers['last-event-id'];
     let cursor = typeof last === 'string' && /^\d{1,15}$/.test(last) ? Number(last) :
       (db.prepare('SELECT COALESCE(max(id),0) AS n FROM job_events').get() as { n: number }).n;
@@ -1342,7 +1410,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
           if (record.event_type === 'library') {
             const event = JSON.parse(record.payload) as { folders: string[]; added: number; removed: number; updated: number };
             const allowed = userOut(current.user).allowedPaths;
-            if (allowed !== null && event.folders.length) {
+            if (allowed !== null) {
               event.folders = event.folders.filter((folder) => pathAllowed(folder, allowed));
               if (!event.folders.length) continue;
             }

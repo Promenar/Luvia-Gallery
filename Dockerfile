@@ -21,10 +21,11 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /data /cache \
     && chown node:node /data /cache
-COPY --from=dependencies --chown=node:node /app/node_modules /app/node_modules
-COPY --from=dependencies --chown=node:node /app/apps/server /app/apps/server
-COPY --from=dependencies --chown=node:node /app/packages/contracts /app/packages/contracts
-COPY --from=frontend --chown=node:node /app/apps/web/dist /app/apps/web/dist
+COPY --from=dependencies /app/node_modules /app/node_modules
+COPY --from=dependencies /app/apps/server /app/apps/server
+COPY --from=dependencies /app/packages/contracts /app/packages/contracts
+COPY --from=frontend /app/apps/web/dist /app/apps/web/dist
+RUN chmod -R go-w /app
 ENV NODE_ENV=production PORT=3001 DATA_DIR=/data CACHE_DIR=/cache
 USER node
 EXPOSE 3001

@@ -72,3 +72,27 @@ test('受限用户的祖先目录统计与宿主机路径遵守权限设置', as
     assert.equal(enabled.folders[0]?.hostPath, '/volume/photos/allowed');
   } finally { await app.close(); db.close(); await rm(root, { recursive: true, force: true }); }
 });
+
+test('v1 祖先目录只暴露受限用户有权查看的统计', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'luvia-v1-ancestor-'));
+  const db = openDatabase(':memory:'); const app = await createApp({ db, legacyPending: false });
+  try {
+    await mkdir(path.join(root, 'allowed'));
+    await writeFile(path.join(root, 'private-a.jpg'), 'a');
+    await writeFile(path.join(root, 'private-b.jpg'), 'b');
+    await writeFile(path.join(root, 'allowed', 'visible.jpg'), 'c');
+    db.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib','照片',?)").run(root);
+    await scanLibrary(db, { id: 'lib', root }, { allowedRoots: [root] });
+    db.prepare("UPDATE files SET modified_at=200 WHERE folder='lib'").run();
+    db.prepare("UPDATE files SET modified_at=100 WHERE folder='lib/allowed'").run();
+    db.prepare("UPDATE folders SET latest_at=200 WHERE path='lib'").run();
+    db.prepare("UPDATE folders SET latest_at=100 WHERE path='lib/allowed'").run();
+    const setup = await app.inject({ method: 'POST', url: '/api/v2/auth/setup', payload: { username: 'admin', password: 'test password' } });
+    const cookie = (setup.headers['set-cookie'] as string).split(';')[0]!;
+    const admin = (await app.inject({ method: 'GET', url: '/api/library/folders', headers: { cookie } })).json().folders[0];
+    assert.equal(admin.mediaCount, 2); assert.equal(admin.lastModified, 200);
+    db.prepare("UPDATE users SET role='user',allowed_paths=? WHERE username='admin'").run(JSON.stringify(['lib/allowed']));
+    const limited = (await app.inject({ method: 'GET', url: '/api/library/folders', headers: { cookie } })).json().folders[0];
+    assert.deepEqual({ mediaCount: limited.mediaCount, lastModified: limited.lastModified }, { mediaCount: 1, lastModified: 100 });
+  } finally { await app.close(); db.close(); await rm(root, { recursive: true, force: true }); }
+});

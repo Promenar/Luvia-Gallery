@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import { scryptSync } from 'node:crypto';
+import { createHook } from 'node:async_hooks';
 import assert from 'node:assert/strict';
 import { AuthState, UserResponse, CreatedToken } from '@luvia/contracts';
 import { openDatabase } from '../src/core/database.ts';
@@ -130,4 +131,45 @@ test('壁纸令牌可创建并合并修改，普通令牌不接受壁纸配置',
     assert.equal((await app.inject({ method: 'GET', url: '/api/v2/media/random', headers: { authorization: `Bearer ${token}` } })).statusCode, 401);
     assert.equal((await app.inject({ method: 'GET', url: '/api/v2/me/tokens', headers: { cookie } })).json().tokens.length, 0);
   } finally { await app.close(); db.close(); }
+});
+
+test('编码路径和令牌参数大小写不能绕过 v2 安全检查', async () => {
+  const db = openDatabase(':memory:'); const app = await createApp({ db, legacyPending: false });
+  try {
+    const setup = await app.inject({ method: 'POST', url: '/api/v2/auth/setup', payload: { username: 'admin', password: 'test password' } });
+    const cookie = (setup.headers['set-cookie'] as string).split(';')[0]!;
+    const writeStatuses = [];
+    for (const url of ['/api/%762/me/tokens', '/api/%76%32/%6De/tokens', '/api/%76%32/%6de/tokens']) {
+      const response = await app.inject({ method: 'POST', url, headers: { cookie }, payload: { name: '设备', scope: 'read' } });
+      writeStatuses.push(response.statusCode);
+    }
+    const readStatuses = [];
+    for (const url of ['/api/%762/auth/state?token=abc', '/api/v%32/auth/state?ToKeN=abc']) {
+      readStatuses.push((await app.inject({ method: 'GET', url })).statusCode);
+    }
+    assert.deepEqual({ writeStatuses, readStatuses }, { writeStatuses: [403, 403, 403], readStatuses: [400, 400] });
+    assert.equal((db.prepare('SELECT count(*) AS n FROM api_tokens').get() as { n: number }).n, 0);
+    assert.equal((await app.inject({ method: 'POST', url: '/api/%762/me/tokens', headers: { ...header, cookie }, payload: { name: '设备', scope: 'read' } })).statusCode, 200);
+    assert.equal((await app.inject({ method: 'HEAD', url: '/api/%762/auth/state', headers: { cookie } })).statusCode, 200);
+  } finally { await app.close(); db.close(); }
+});
+
+test('v1 与 v2 登录对不存在的用户执行与现有用户相同的口令哈希校验', async () => {
+  const db = openDatabase(':memory:'); const app = await createApp({ db, legacyPending: false });
+  let hashes = 0; const hook = createHook({ init(_id, type) { if (type === 'SCRYPTREQUEST') hashes++; } });
+  try {
+    await app.inject({ method: 'POST', url: '/api/v2/auth/setup', payload: { username: 'admin', password: 'test password' } });
+    db.prepare("INSERT INTO users(id,username,password_hash,role,preferences,created_at) VALUES ('legacy','legacy','legacy password','user','{}',1),('corrupt','corrupt','scrypt$invalid','user','{}',1)").run();
+    db.prepare("INSERT INTO users(id,username,password_hash,role,preferences,created_at) VALUES ('case','case',?,'user','{}',1)")
+      .run(`SCRYPT$${'00'.repeat(16)}$${'00'.repeat(64)}`);
+    const counts: number[] = [];
+    for (const url of ['/api/v2/auth/login', '/api/auth/login']) for (const username of ['admin', 'missing', 'legacy', 'corrupt', 'case']) {
+      hashes = 0; hook.enable();
+      const response = await app.inject({ method: 'POST', url, payload: { username, password: 'wrong password' } });
+      hook.disable();
+      assert.equal(response.statusCode, 401);
+      counts.push(hashes);
+    }
+    assert.deepEqual(counts, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
+  } finally { hook.disable(); await app.close(); db.close(); }
 });
