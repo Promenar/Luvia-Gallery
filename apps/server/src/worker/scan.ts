@@ -5,10 +5,12 @@ import { randomUUID } from 'node:crypto';
 import { lookup } from 'mime-types';
 import { mediaId, virtualPath } from '../core/paths.ts';
 import { statFields } from '../watch/file-info.ts';
+import { readSettings } from '../core/settings.ts';
+import { cleanupDeletedMediaCache } from './cache-prune.ts';
 
 type Options = {
   allowedRoots: string[]; openDir?: typeof opendir; signal?: AbortSignal;
-  batchSize?: number; statConcurrency?: number; owner?: string; jobId?: string; jobLeaseToken?: string; clock?: () => number;
+  batchSize?: number; statConcurrency?: number; owner?: string; jobId?: string; jobLeaseToken?: string; clock?: () => number; cacheDir?: string;
 };
 type Candidate = { relative: string; size: number; mtime: number; mtimeMs: number; dev: string; ino: string; movedId: string | null };
 type ScanResult = { added: number; removed: number; errors: number };
@@ -72,6 +74,7 @@ async function scanWithLock(db: Database.Database, library: { id: string; root: 
   const batchSize = Math.max(1, Math.min(1000, options.batchSize ?? 256));
   const concurrency = Math.max(1, Math.min(32, options.statConcurrency ?? 8));
   const root = await realpath(library.root);
+  const rootIdentity = await stat(root, { bigint: true });
   const allowedRoots = await Promise.all(options.allowedRoots.map((allowed) => realpath(allowed)));
   if (!allowedRoots.some((allowed) => within(allowed, root))) throw new Error('扫描路径不在允许的挂载根目录内');
   const libraryRow = db.prepare('SELECT name,exclude FROM libraries WHERE id=?').get(library.id) as { name: string; exclude: string } | undefined;
@@ -106,8 +109,19 @@ async function scanWithLock(db: Database.Database, library: { id: string; root: 
   let batch: Candidate[] = [];
   let pending: Promise<void>[] = [];
   const existing = db.prepare('SELECT id FROM files WHERE id=?');
-  const existingPath = db.prepare('SELECT id,dev,ino FROM files WHERE library_id=? AND relative_path=?');
-  const identity = db.prepare('SELECT id,relative_path FROM files WHERE library_id=? AND dev=? AND ino=? LIMIT 2');
+  const existingPath = db.prepare('SELECT id,dev,ino,missing_at_ms FROM files WHERE library_id=? AND relative_path=?');
+  const identity = db.prepare('SELECT f.id,f.relative_path FROM file_watch_index w JOIN files f ON f.id=w.file_id WHERE w.library_id=? AND w.dev=? AND w.ino=? LIMIT 2');
+  const grace = readSettings(db).libraries.missingGraceDays * 86_400_000;
+  const scanNow = () => options.clock ? options.clock() * 1000 : Date.now();
+  const removeFile = (id: string) => {
+    db.prepare("DELETE FROM favorites WHERE item_type='file' AND item_id=?").run(id);
+    db.prepare('UPDATE albums SET cover_id=NULL WHERE cover_id=?').run(id);
+    db.prepare(`INSERT OR REPLACE INTO cache_gc(cache_key,relative_path) SELECT cache_key,relative_path FROM cache_entries
+      WHERE media_id=? AND (variant IS NULL OR variant<>'hls')`).run(id);
+    db.prepare('DELETE FROM cache_entries WHERE media_id=? OR hls_session_id IN (SELECT id FROM hls_sessions WHERE media_id=?)').run(id, id);
+    db.prepare('DELETE FROM files WHERE id=?').run(id);
+  };
+  const isExpired = (at: number | null) => at !== null && (grace === 0 || scanNow() > at + grace);
   const resetMetadata = ['orientation','duration_sec','codec','audio_codec','container','fps','bitrate','make','model','lens','f_number','exposure_time','iso','focal_length','focal_length35','software','latitude','longitude','altitude','playability']
     .map((column) => `${column}=CASE WHEN files.size != excluded.size OR files.modified_at != excluded.modified_at THEN NULL ELSE files.${column} END`).join(',');
   const upsert = db.prepare(`INSERT INTO files
@@ -126,20 +140,23 @@ async function scanWithLock(db: Database.Database, library: { id: string; root: 
       ${resetMetadata},
       has_preview=CASE WHEN files.size != excluded.size OR files.modified_at != excluded.modified_at THEN 0 ELSE files.has_preview END,
       head_hash=CASE WHEN files.size != excluded.size OR files.mtime_ms != excluded.mtime_ms THEN NULL ELSE files.head_hash END,
-      size=excluded.size, modified_at=excluded.modified_at, scan_marker=excluded.scan_marker,dev=excluded.dev,ino=excluded.ino,mtime_ms=excluded.mtime_ms`);
+      size=excluded.size, modified_at=excluded.modified_at, scan_marker=excluded.scan_marker,dev=excluded.dev,ino=excluded.ino,mtime_ms=excluded.mtime_ms,missing_at_ms=NULL`);
   const flush = (allowDefer = true) => {
     if (!batch.length) return;
     const current = batch; batch = [];
     db.transaction(() => {
       assertLease();
       for (const file of current) {
-        const byPath = existingPath.get(library.id, file.relative) as { id: string; dev: string | null; ino: string | null } | undefined;
-        if (allowDefer && byPath?.dev && byPath.ino && (byPath.dev !== file.dev || byPath.ino !== file.ino)) {
+        let byPath = existingPath.get(library.id, file.relative) as { id: string; dev: string | null; ino: string | null; missing_at_ms: number | null } | undefined;
+        let moved = file.movedId ? db.prepare('SELECT id,missing_at_ms FROM files WHERE id=? AND library_id=? AND dev=? AND ino=? AND (scan_marker IS NULL OR scan_marker<>?)').get(file.movedId, library.id, file.dev, file.ino, marker) as { id: string; missing_at_ms: number | null } | undefined : undefined;
+        if (allowDefer && ((byPath?.missing_at_ms ?? null) !== null || (moved?.missing_at_ms ?? null) !== null ||
+          (byPath?.dev && byPath.ino && (byPath.dev !== file.dev || byPath.ino !== file.ino)))) {
           db.prepare(`INSERT OR REPLACE INTO scan_conflicts(library_id,marker,relative_path,size,mtime,mtime_ms,dev,ino,moved_id)
             VALUES (?,?,?,?,?,?,?,?,?)`).run(library.id, marker, file.relative, file.size, file.mtime, file.mtimeMs, file.dev, file.ino, file.movedId);
           continue;
         }
-        const moved = file.movedId ? db.prepare('SELECT id FROM files WHERE id=? AND library_id=? AND dev=? AND ino=? AND (scan_marker IS NULL OR scan_marker<>?)').get(file.movedId, library.id, file.dev, file.ino, marker) as { id: string } | undefined : undefined;
+        if (!allowDefer && byPath && isExpired(byPath.missing_at_ms)) { removeFile(byPath.id); result.removed++; if (moved?.id === byPath.id) moved = undefined; byPath = undefined; }
+        if (!allowDefer && moved && isExpired(moved.missing_at_ms)) { removeFile(moved.id); result.removed++; moved = undefined; }
         const preferred = mediaId(library.id, file.relative);
         const id = byPath?.id ?? moved?.id ?? (existing.get(preferred) ? randomUUID() : preferred);
         const kind = typeOf(file.relative)!;
@@ -150,7 +167,7 @@ async function scanWithLock(db: Database.Database, library: { id: string; root: 
           size: file.size, mtime: file.mtime, marker, dev: file.dev, ino: file.ino, mtime_ms: file.mtimeMs });
         if (!allowDefer) db.prepare('DELETE FROM scan_conflicts WHERE library_id=? AND marker=? AND relative_path=?').run(library.id, marker, file.relative);
       }
-      if (jobId) db.prepare('UPDATE scan_runs SET added=? WHERE job_id=?').run(result.added, jobId);
+      if (jobId) db.prepare('UPDATE scan_runs SET added=?,removed=? WHERE job_id=?').run(result.added, result.removed, jobId);
     }).immediate();
   };
   let writeFailure: unknown;
@@ -163,9 +180,11 @@ async function scanWithLock(db: Database.Database, library: { id: string; root: 
     if (relativeDir === undefined) break;
     const children: string[] = [];
     const dir = path.join(root, relativeDir);
+    let dirInfo: ReturnType<typeof statFields> | null = null;
     try {
       const resolved = await realpath(dir);
       if (!within(root, resolved)) throw new Error('目录越出媒体库');
+      dirInfo = statFields(await stat(resolved, { bigint: true }));
       for await (const entry of await openDir(resolved)) {
         signal?.throwIfAborted();
         const relative = relativeDir ? `${relativeDir}/${entry.name}` : entry.name;
@@ -202,6 +221,7 @@ async function scanWithLock(db: Database.Database, library: { id: string; root: 
       }
     } catch (error) {
       if (signal?.aborted || error instanceof LeaseLost || error === writeFailure) throw error;
+      dirInfo = null;
       result.errors++;
     }
     await Promise.all(pending); pending = [];
@@ -212,9 +232,10 @@ async function scanWithLock(db: Database.Database, library: { id: string; root: 
       const folderPath = virtualPath(library.id, relativeDir);
       const parentRelative = relativeDir ? path.posix.dirname(relativeDir) : null;
       const parent = parentRelative === null ? null : virtualPath(library.id, parentRelative === '.' ? '' : parentRelative);
-      db.prepare(`INSERT INTO folders(path,library_id,parent,name,scan_marker) VALUES (?,?,?,?,?)
-        ON CONFLICT(path) DO UPDATE SET parent=excluded.parent,name=excluded.name,scan_marker=excluded.scan_marker`)
-        .run(folderPath, library.id, parent, relativeDir ? path.posix.basename(relativeDir) : libraryRow.name, marker);
+      if (dirInfo) db.prepare(`INSERT INTO folders(path,library_id,parent,name,scan_marker,dev,ino,mtime_ms) VALUES (?,?,?,?,?,?,?,?)
+        ON CONFLICT(path) DO UPDATE SET parent=excluded.parent,name=excluded.name,scan_marker=excluded.scan_marker,
+          dev=excluded.dev,ino=excluded.ino,mtime_ms=excluded.mtime_ms,missing_at_ms=NULL`)
+        .run(folderPath, library.id, parent, relativeDir ? path.posix.basename(relativeDir) : libraryRow.name, marker, dirInfo.dev, dirInfo.ino, dirInfo.mtimeMs);
       if (jobId) {
         const insert = db.prepare('INSERT OR IGNORE INTO scan_directories(job_id,relative_path) VALUES (?,?)');
         for (const child of children) insert.run(jobId, child);
@@ -224,35 +245,71 @@ async function scanWithLock(db: Database.Database, library: { id: string; root: 
     }).immediate();
     if (!jobId) queue.push(...children);
   }
+  const rootAvailable = async () => {
+    try {
+      const finalRoot = await realpath(library.root); const finalIdentity = await stat(finalRoot, { bigint: true });
+      return finalRoot === root && finalIdentity.dev === rootIdentity.dev && finalIdentity.ino === rootIdentity.ino;
+    } catch { return false; }
+  };
+  if (result.errors === 0 && !(await rootAvailable())) result.errors++;
   while (result.errors === 0) {
     signal?.throwIfAborted();
     const conflicts = db.prepare(`SELECT relative_path AS relative,size,mtime,mtime_ms AS mtimeMs,dev,ino,moved_id AS movedId
       FROM scan_conflicts WHERE library_id=? AND marker=? ORDER BY relative_path LIMIT ?`).all(library.id, marker, batchSize) as Candidate[];
     if (!conflicts.length) break;
+    if (!(await rootAvailable())) { result.errors++; break; }
     batch = conflicts; flush(false);
     await new Promise<void>((resolve) => setImmediate(resolve));
   }
   if (result.errors === 0) {
-    const remove = db.prepare(`DELETE FROM files WHERE rowid IN
-      (SELECT rowid FROM files WHERE library_id=? AND (scan_marker IS NULL OR scan_marker<>?) LIMIT 256)`);
+    const nowMs = scanNow();
+    const expired = db.prepare(`SELECT id FROM files WHERE library_id=? AND (scan_marker IS NULL OR scan_marker<>?)
+      AND missing_at_ms IS NOT NULL AND ${grace === 0 ? 'missing_at_ms<=?' : 'missing_at_ms<?'} LIMIT 256`);
     let count: number;
     do {
       signal?.throwIfAborted();
+      if (!(await rootAvailable())) { result.errors++; break; }
       count = db.transaction(() => {
         assertLease();
-        const changes = Number(remove.run(library.id, marker).changes);
-        result.removed += changes;
+        const rows = expired.all(library.id, marker, nowMs - grace) as { id: string }[];
+        for (const { id } of rows) removeFile(id);
+        result.removed += rows.length;
         if (jobId) db.prepare('UPDATE scan_runs SET removed=? WHERE job_id=?').run(result.removed, jobId);
-        return changes;
+        return rows.length;
       }).immediate();
       if (count) await new Promise<void>((resolve) => setImmediate(resolve));
     } while (count);
-    db.transaction(() => {
-      assertLease();
-      db.prepare('DELETE FROM folders WHERE library_id=? AND (scan_marker IS NULL OR scan_marker<>?)').run(library.id, marker);
-    }).immediate();
+    const markFiles = db.prepare(`UPDATE files SET missing_at_ms=? WHERE rowid IN (SELECT rowid FROM files WHERE library_id=?
+      AND (scan_marker IS NULL OR scan_marker<>?) AND missing_at_ms IS NULL LIMIT 256)`);
+    while (result.errors === 0) {
+      signal?.throwIfAborted(); if (!(await rootAvailable())) { result.errors++; break; }
+      count = db.transaction(() => { assertLease(); return Number(markFiles.run(nowMs, library.id, marker).changes); }).immediate();
+      if (!count) break; await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    const expiredFolders = db.prepare(`SELECT path FROM folders WHERE library_id=? AND (scan_marker IS NULL OR scan_marker<>?)
+      AND missing_at_ms IS NOT NULL AND ${grace === 0 ? 'missing_at_ms<=?' : 'missing_at_ms<?'} LIMIT 256`);
+    while (result.errors === 0) {
+      signal?.throwIfAborted(); if (!(await rootAvailable())) { result.errors++; break; }
+      count = db.transaction(() => {
+        assertLease(); const stale = expiredFolders.all(library.id, marker, nowMs - grace) as { path: string }[];
+        for (const { path: folder } of stale) {
+          db.prepare("DELETE FROM favorites WHERE item_type='folder' AND item_id=?").run(folder);
+          db.prepare('DELETE FROM folders WHERE path=?').run(folder);
+        }
+        return stale.length;
+      }).immediate();
+      if (!count) break; await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    const markFolders = db.prepare(`UPDATE folders SET missing_at_ms=? WHERE rowid IN (SELECT rowid FROM folders WHERE library_id=?
+      AND (scan_marker IS NULL OR scan_marker<>?) AND missing_at_ms IS NULL LIMIT 256)`);
+    while (result.errors === 0) {
+      signal?.throwIfAborted(); if (!(await rootAvailable())) { result.errors++; break; }
+      count = db.transaction(() => { assertLease(); return Number(markFolders.run(nowMs, library.id, marker).changes); }).immediate();
+      if (!count) break; await new Promise<void>((resolve) => setImmediate(resolve));
+    }
   }
   await materializeFolders(db, library.id, assertLease, signal);
+  if (options.cacheDir) await cleanupDeletedMediaCache(db, options.cacheDir, { owner: options.owner ?? 'scan-cache-cleanup', signal, assertLease });
   if (jobId) db.transaction(() => {
     assertLease();
     db.prepare('UPDATE scan_runs SET complete=1 WHERE job_id=?').run(jobId);
@@ -262,12 +319,12 @@ async function scanWithLock(db: Database.Database, library: { id: string; root: 
 
 async function materializeFolders(db: Database.Database, libraryId: string, assertLease: () => void, signal?: AbortSignal): Promise<void> {
   type Folder = { path: string; parent: string | null; direct: number; total: number; children: number; latest: number | null; cover: string | null; coverAt: number | null };
-  const folders = (db.prepare('SELECT path,parent FROM folders WHERE library_id=?').all(libraryId) as { path: string; parent: string | null }[])
+  const folders = (db.prepare('SELECT path,parent FROM folders WHERE library_id=? AND missing_at_ms IS NULL').all(libraryId) as { path: string; parent: string | null }[])
     .map((folder): Folder => ({ ...folder, direct: 0, total: 0, children: 0, latest: null, cover: null, coverAt: null }));
   const byPath = new Map(folders.map((folder) => [folder.path, folder]));
-  const count = db.prepare('SELECT count(*) AS n FROM files WHERE folder=?');
-  const latest = db.prepare('SELECT taken_at FROM files WHERE folder=? ORDER BY taken_at DESC,id ASC LIMIT 1');
-  const cover = db.prepare('SELECT id,taken_at FROM files WHERE folder=? AND thumb_ready=1 ORDER BY taken_at DESC,id ASC LIMIT 1');
+  const count = db.prepare('SELECT count(*) AS n FROM files WHERE folder=? AND missing_at_ms IS NULL');
+  const latest = db.prepare('SELECT taken_at FROM files WHERE folder=? AND missing_at_ms IS NULL ORDER BY taken_at DESC,id ASC LIMIT 1');
+  const cover = db.prepare('SELECT id,taken_at FROM files WHERE folder=? AND missing_at_ms IS NULL AND thumb_ready=1 ORDER BY taken_at DESC,id ASC LIMIT 1');
   for (const folder of folders) {
     signal?.throwIfAborted();
     folder.direct = (count.get(folder.path) as { n: number }).n;
