@@ -9,13 +9,14 @@ import { access, realpath, stat, readdir } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import sharp from 'sharp';
+import jwt from 'jsonwebtoken';
 import { ZodError } from 'zod';
-import { CSRF_HEADER, endpoints, JobAction, Preferences, WallpaperConfig, defaultPreferences } from '@luvia/contracts';
-import type { User } from '@luvia/contracts';
+import { CSRF_HEADER, endpoints, JobAction, MediaListQuery, Preferences, RandomQuery, WallpaperConfig, defaultPreferences } from '@luvia/contracts';
+import type { MediaItem, User } from '@luvia/contracts';
 import { hashPassword, verifyPassword } from '../core/password.ts';
 import { MediaReader } from '../core/media-query.ts';
 import { FolderReader } from '../core/folder-reader.ts';
-import { pathAllowed, secureMediaPath } from '../core/paths.ts';
+import { mediaId, pathAllowed, secureMediaPath, virtualPath } from '../core/paths.ts';
 import { sendFile } from './binary.ts';
 import { jobView, publishJob } from '../core/job-view.ts';
 import type { JobRecord } from '../core/job-view.ts';
@@ -33,8 +34,8 @@ type TokenRow = {
   id: string; name: string; scope: 'read' | 'wallpaper'; prefix: string;
   created_at: number; last_used_at: number | null; expires_at: number | null; wallpaper: string | null;
 };
-type Identity = { user: UserRow; kind: 'session' | 'token'; scope?: string; sessionHash?: string };
-type Options = { db: Database.Database; legacyPending: boolean | (() => boolean); secureCookies?: boolean; mounts?: () => Promise<Mount[]>; systemRoots?: string[]; cacheDir?: string; staticDir?: string };
+type Identity = { user: UserRow; kind: 'session' | 'token' | 'legacy'; scope?: string; sessionHash?: string; wallpaper?: string | null };
+type Options = { db: Database.Database; legacyPending: boolean | (() => boolean); secureCookies?: boolean; mounts?: () => Promise<Mount[]>; systemRoots?: string[]; cacheDir?: string; staticDir?: string; legacyJwtSecret?: string };
 class HttpError extends Error { constructor(publicStatus: number, code: string, message: string) { super(message); this.statusCode = publicStatus; this.code = code; } statusCode: number; code: string; }
 const fail = (status: number, code: string, message: string): never => { throw new HttpError(status, code, message); };
 const digest = (s: string) => createHash('sha256').update(s).digest('hex');
@@ -54,7 +55,7 @@ const tokenOut = (t: TokenRow) => ({
 
 export async function createApp(options: Options): Promise<FastifyInstance> {
   const { db } = options;
-  const app = Fastify({ logger: false });
+  const app = Fastify({ logger: false, routerOptions: { maxParamLength: 8192 } });
   await app.register(cookie);
   const identities = new WeakMap<FastifyRequest, Identity>();
   const media = new MediaReader(db);
@@ -95,15 +96,30 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
   const findUser = db.prepare('SELECT * FROM users WHERE username = ?');
   const countUsers = db.prepare('SELECT count(*) AS n FROM users');
   const pending = () => typeof options.legacyPending === 'function' ? options.legacyPending() : options.legacyPending;
+  const isLegacyPath = (pathname: string) => pathname === '/api/scan/results' || pathname === '/api/library/folders' || pathname.startsWith('/api/thumb/') || pathname.startsWith('/api/file/');
 
+  function tokenIdentity(value: string, legacy: boolean): Identity | undefined {
+    if (!value || value.length > 4096) return undefined;
+    const row = db.prepare(`SELECT u.*, t.scope AS token_scope, t.wallpaper AS token_wallpaper FROM api_tokens t JOIN users u ON u.id=t.user_id
+      WHERE t.token_hash=? AND (t.expires_at IS NULL OR t.expires_at>?)`).get(digest(value), now()) as (UserRow & { token_scope: string; token_wallpaper: string | null }) | undefined;
+    if (row) return { user: row, kind: 'token', scope: row.token_scope, wallpaper: row.token_wallpaper };
+    if (legacy && options.legacyJwtSecret) {
+      try {
+        const decoded = jwt.verify(value, options.legacyJwtSecret, { algorithms: ['HS256'] });
+        if (typeof decoded !== 'object' || typeof decoded.username !== 'string') return undefined;
+        const user = findUser.get(decoded.username) as UserRow | undefined;
+        return user ? { user, kind: 'legacy', scope: decoded.isWallpaper === true ? 'wallpaper' : 'read' } : undefined;
+      } catch { return undefined; }
+    }
+    return undefined;
+  }
   function authenticate(req: FastifyRequest): Identity | undefined {
     const auth = req.headers.authorization;
     if (auth) {
       const match = /^Bearer ([A-Za-z0-9._~+\/-]+={0,2})$/i.exec(auth);
       if (!match) return undefined;
-      const row = db.prepare(`SELECT u.*, t.scope AS token_scope FROM api_tokens t JOIN users u ON u.id=t.user_id
-        WHERE t.token_hash=? AND (t.expires_at IS NULL OR t.expires_at>?)`).get(digest(match[1]!), now()) as (UserRow & { token_scope: string }) | undefined;
-      return row ? { user: row, kind: 'token', scope: row.token_scope } : undefined;
+      const pathname = new URL(req.raw.url ?? '/', 'http://localhost').pathname;
+      return tokenIdentity(match[1]!, isLegacyPath(pathname));
     }
     const value = req.cookies.luvia_session;
     if (!value || value.length > 256) return undefined;
@@ -144,7 +160,9 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     if (url.pathname.startsWith('/api/v2/') && [...url.searchParams.keys()].some((key) => key.toLowerCase() === 'token')) {
       fail(400, 'VALIDATION', '不允许在 URL 中传递令牌');
     }
-    const identity = authenticate(req);
+    const isLegacy = isLegacyPath(url.pathname);
+    const queryTokens = isLegacy ? url.searchParams.getAll('token') : [];
+    const identity = authenticate(req) ?? (queryTokens.length ? tokenIdentity(queryTokens.at(-1)!, true) : undefined);
     if (url.pathname.startsWith('/api/v2/') && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) && identity?.kind !== 'token' && req.headers[CSRF_HEADER.toLowerCase()] !== '1') {
       fail(403, 'FORBIDDEN', '请求缺少安全标头');
     }
@@ -389,6 +407,137 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     const scale = 2 ** (maxLevel - level);
     if (col * 256 >= Math.ceil(row.width / scale) || tileRow * 256 >= Math.ceil(row.height / scale)) return fail(404, 'NOT_FOUND', '瓦片不存在');
     return cachedMedia(req, reply, row, { kind: 'tile', level, col, row: tileRow }, false);
+  });
+  function legacyVirtual(absolute: string): string | null {
+    if (!path.isAbsolute(absolute)) return null;
+    const normalized = path.resolve(absolute);
+    const libraries = db.prepare('SELECT id,root FROM libraries WHERE enabled=1').all() as { id: string; root: string }[];
+    const match = libraries.filter((library) => within(library.root, normalized)).sort((a, b) => b.root.length - a.root.length)[0];
+    if (!match) return null;
+    const relative = path.relative(match.root, normalized).split(path.sep).join('/');
+    return virtualPath(match.id, relative);
+  }
+  function legacyAbsolute(virtual: string): string | null {
+    const [id, ...parts] = virtual.split('/');
+    const library = db.prepare('SELECT root FROM libraries WHERE id=? AND enabled=1').get(id) as { root: string } | undefined;
+    return library ? path.join(library.root, ...parts) : null;
+  }
+  function legacyMediaId(value: string): string | null {
+    const direct = db.prepare('SELECT id FROM files WHERE legacy_id=?').get(value) as { id: string } | undefined;
+    if (direct) return direct.id;
+    if (!/^[A-Za-z0-9+/_-]+={0,2}$/.test(value)) return null;
+    const bytes = Buffer.from(value, 'base64');
+    if (bytes.toString('base64url') !== value.replace(/=+$/, '').replaceAll('+', '-').replaceAll('/', '_')) return null;
+    const absolute = bytes.toString('utf8');
+    if (!Buffer.from(absolute).equals(bytes) || !path.isAbsolute(absolute) || absolute.includes('\0')) return null;
+    const folder = legacyVirtual(path.dirname(absolute));
+    if (!folder) return null;
+    const slash = folder.indexOf('/');
+    const libraryId = slash < 0 ? folder : folder.slice(0, slash);
+    const relativeDir = slash < 0 ? '' : folder.slice(slash + 1);
+    return mediaId(libraryId, relativeDir ? `${relativeDir}/${path.basename(absolute)}` : path.basename(absolute));
+  }
+  app.post('/api/auth/login', async (req) => {
+    const body = endpoints.login.body.parse(req.body);
+    limitLogin(req.ip);
+    const user = (findUser.get(body.username) as UserRow | undefined) ?? fail(401, 'UNAUTHORIZED', '用户名或密码错误');
+    const verified = await verifyPassword(body.password, user.password_hash);
+    if (!verified.valid) return fail(401, 'UNAUTHORIZED', '用户名或密码错误');
+    if (!options.legacyJwtSecret) return fail(503, 'INTERNAL', '旧客户端登录暂不可用');
+    if (verified.needsUpgrade) {
+      const replacement = await hashPassword(body.password);
+      const changed = db.prepare('UPDATE users SET password_hash=? WHERE id=? AND password_hash=?').run(replacement, user.id, user.password_hash);
+      if (!changed.changes) return fail(409, 'CONFLICT', '账户状态已经变化');
+    }
+    const token = jwt.sign({ username: user.username, role: user.role }, options.legacyJwtSecret, { algorithm: 'HS256', expiresIn: '7d' });
+    const allowedPaths = user.allowed_paths ? (JSON.parse(user.allowed_paths) as string[]).flatMap((value) => legacyAbsolute(value) ?? []) : [];
+    return { token, user: { username: user.username, isAdmin: user.role === 'admin', allowedPaths } };
+  });
+  app.get('/api/scan/results', async (req) => {
+    const identity = requireUser(req);
+    const query = req.query as Record<string, string | undefined>;
+    const number = (value: string | undefined, fallback: number, min: number, max: number) => {
+      if (value === undefined) return fallback;
+      if (!/^\d+$/.test(value)) return fail(400, 'VALIDATION', '分页参数无效');
+      const parsed = Number(value);
+      return Number.isSafeInteger(parsed) && parsed >= min && parsed <= max ? parsed : fail(400, 'VALIDATION', '分页参数无效');
+    };
+    const limit = number(query.limit, 100, 1, 500); const offset = number(query.offset, 0, 0, Number.MAX_SAFE_INTEGER);
+    const context = mediaContext(req);
+    const wallpaper = identity.scope === 'wallpaper' ? WallpaperConfig.parse(identity.wallpaper ? JSON.parse(identity.wallpaper) : {}) : null;
+    if (wallpaper?.source === 'folder' && !wallpaper.folder) return { files: [], total: 0, totalExact: true, hasMore: false, sources: [{ id: 'local', name: 'Local Storage', count: 0, countExact: true }] };
+    const requestedFolder = query.folder && !['/', 'root'].includes(query.folder) ? legacyVirtual(query.folder) : null;
+    if (query.folder && !['/', 'root'].includes(query.folder) && !requestedFolder) return { files: [], total: 0, totalExact: true, hasMore: false, sources: [{ id: 'local', name: 'Local Storage', count: 0, countExact: true }] };
+    const types = wallpaper ? (wallpaper.includeVideos ? ['image', 'video'] : ['image']) : query.mediaType ? query.mediaType.split(',') : undefined;
+    const common = { ...(types ? { types } : {}), ...(query.search ? { q: query.search } : {}) };
+    let items: MediaItem[];
+    let hasMore: boolean;
+    if (query.random === 'true') {
+      const randomQuery = RandomQuery.parse({ ...common, count: Math.min(100, limit + 1),
+        ...(wallpaper?.source === 'favorites' || query.favorites === 'true' ? { favorite: true, favoriteFolders: !!wallpaper } : {}),
+        ...(wallpaper?.source === 'folder' && wallpaper.folder ? { under: wallpaper.folder } : requestedFolder ? { under: requestedFolder } : {}),
+        ...(wallpaper?.landscapeOnly ? { orientation: 'landscape' } : {}) });
+      const sampled = media.random({ ...randomQuery, count: limit + 1 }, context).items;
+      hasMore = sampled.length > limit; items = sampled.slice(0, limit);
+    } else {
+      const base = MediaListQuery.parse({ ...common, scope: requestedFolder ? 'folder' : query.favorites === 'true' ? 'favorites' : 'all',
+        ...(requestedFolder ? { folder: requestedFolder, recursive: query.recursive === 'true' } : {}), sort: 'modified_desc', limit: Math.min(limit, 500) });
+      let remaining = offset; let cursor: string | undefined; let exhausted = false;
+      while (remaining > 0) {
+        const skip = media.page({ ...base, limit: Math.min(remaining, 500), cursor }, context);
+        remaining -= skip.items.length;
+        if (!skip.nextCursor) { exhausted = true; break; }
+        cursor = skip.nextCursor;
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+      if (exhausted) { items = []; hasMore = false; }
+      else {
+        const page = media.page({ ...base, cursor }, context);
+        items = page.items; hasMore = page.nextCursor !== null;
+      }
+    }
+    const files = items.map((item) => {
+      const row = db.prepare('SELECT f.relative_path,l.root FROM files f JOIN libraries l ON l.id=f.library_id WHERE f.id=?').get(item.id) as { relative_path: string; root: string };
+      const absolute = path.join(row.root, row.relative_path);
+      const legacyId = Buffer.from(absolute).toString('base64');
+      return { id: legacyId, url: `/api/file/${encodeURIComponent(legacyId)}`, thumbnailUrl: `/api/thumb/${encodeURIComponent(legacyId)}`,
+        name: item.name, path: absolute, folderPath: path.dirname(absolute), size: item.size, type: item.mime, lastModified: item.modifiedAt,
+        mediaType: item.mediaType, sourceId: 'local', isFavorite: item.favorite, width: item.width, height: item.height,
+        aspectRatio: item.width && item.height ? item.width / item.height : null };
+    });
+    const unfiltered = identity.user.role === 'admin' && !wallpaper && query.favorites !== 'true' && !query.folder && !query.search && !query.mediaType;
+    const total = unfiltered ? (db.prepare('SELECT COALESCE(sum(count),0) AS n FROM timeline_counts').get() as { n: number }).n : offset + files.length + (hasMore ? 1 : 0);
+    const totalExact = unfiltered || !hasMore;
+    return { files, total, totalExact, hasMore, sources: [{ id: 'local', name: 'Local Storage', count: total, countExact: totalExact }] };
+  });
+  app.get('/api/library/folders', async (req) => {
+    requireUser(req);
+    const query = req.query as { parentPath?: string; parent?: string };
+    const parent = query.parentPath ?? query.parent;
+    const virtual = parent && !['/', 'root'].includes(parent) ? legacyVirtual(parent) : '';
+    if (virtual === null) return { folders: [] };
+    const listing = folders.list(virtual, folderContext(req));
+    if (!listing) return fail(403, 'FORBIDDEN', '文件夹不可访问');
+    return { folders: listing.folders.map((folder) => {
+      const absolute = legacyAbsolute(folder.path)!;
+      const row = db.prepare('SELECT latest_at FROM folders WHERE path=?').get(folder.path) as { latest_at: number | null };
+      return { name: path.basename(absolute), path: absolute, mediaCount: folder.mediaCount, coverMedia: null, lastModified: row.latest_at ?? 0, isFavorite: folder.favorite };
+    }) };
+  });
+  app.get('/api/file/*', async (req, reply) => {
+    const legacyId = (req.params as { '*': string })['*'];
+    const id = legacyMediaId(legacyId) ?? fail(404, 'NOT_FOUND', '媒体不存在');
+    const { row, filename } = await binaryMedia(req, id);
+    return sendFile(req, reply, filename, { mime: row.mime, name: row.name, etagKey: row.id });
+  });
+  app.get('/api/thumb/:id', async (req, reply) => {
+    const legacyId = (req.params as { id: string }).id;
+    const id = legacyMediaId(legacyId) ?? fail(404, 'NOT_FOUND', '媒体不存在');
+    const { row } = await binaryMedia(req, id);
+    const hash = createHash('md5').update(legacyId).digest('hex');
+    const previous = path.join(cacheDir, hash.slice(0, 2), hash.slice(2, 4), `${hash}.webp`);
+    if (await exists(previous)) return sendFile(req, reply, previous, { mime: 'image/webp', name: row.name, etagKey: hash });
+    return cachedMedia(req, reply, row, { kind: 'thumb', size: 'm' }, true);
   });
   type LibraryRow = { id: string; name: string; root: string; enabled: number; status: string; last_scan_at: number | null; host_root: string | null; host_root_source: 'auto' | 'manual' | null; exclude: string; media_count: number };
   const librarySql = 'SELECT l.*,COALESCE(f.media_count,0) AS media_count FROM libraries l LEFT JOIN folders f ON f.path=l.id';
