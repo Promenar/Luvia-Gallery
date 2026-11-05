@@ -130,7 +130,7 @@ test('升级已有导入记录时不恢复升级前撤销的壁纸令牌', async
   const token = jwt.sign({ username: 'alice', isWallpaper: true }, signingKey, { expiresIn: '1h' });
   let db = openDatabase(file);
   try {
-    await writeFile(path.join(root, 'lumina-config.json'), JSON.stringify({ users: [{ username: 'alice', password: 'synthetic password', wallpaperToken: token }] }));
+    await writeFile(path.join(root, 'lumina-config.json'), JSON.stringify({ users: [{ username: 'alice', password: 'synthetic password', isAdmin: true, wallpaperToken: token }] }));
     await importLegacy(db, { legacyDir: root, mediaRoots: [] });
     db.prepare('DELETE FROM api_tokens').run();
     db.exec('DROP TABLE legacy_import_users; DROP TABLE legacy_import_tokens; ALTER TABLE api_tokens DROP COLUMN legacy_jwt; PRAGMA user_version=21');
@@ -139,6 +139,49 @@ test('升级已有导入记录时不恢复升级前撤销的壁纸令牌', async
     const app = await createApp({ db, legacyPending: false, legacyJwtSecret: signingKey });
     try { assert.equal((await app.inject({ method: 'GET', url: `/api/scan/results?random=true&token=${token}` })).statusCode, 401); }
     finally { await app.close(); }
+  } finally { if (db.open) db.close(); await rm(root, { recursive: true, force: true }); }
+});
+
+test('旧版导入中途崩溃后升级无法确认身份时保持迁移阻断', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'luvia-legacy-interrupted-upgrade-'));
+  const file = path.join(root, 'v2.db'); let db = openDatabase(file);
+  try {
+    await writeFile(path.join(root, 'lumina-config.json'), JSON.stringify({ users: [{ username: 'alice', password: 'synthetic password', isAdmin: true }] }));
+    db.prepare("INSERT INTO settings(key,value) VALUES ('legacy.pending','true')").run();
+    db.prepare("INSERT INTO jobs(id,type,label,status,trigger,created_at,started_at,owner,lease_expires_at) VALUES ('old-import','import_legacy','旧导入','running','system',1,2,'old-worker',1)").run();
+    db.exec('DROP TABLE legacy_import_users; DROP TABLE legacy_import_tokens; ALTER TABLE api_tokens DROP COLUMN legacy_jwt; PRAGMA user_version=21');
+    db.close(); db = openDatabase(file);
+    const app = await createApp({ db, legacyPending: () => (db.prepare("SELECT value FROM settings WHERE key='legacy.pending'").get() as { value: string } | undefined)?.value === 'true' });
+    try {
+      await runNextJob(db, { owner: 'new-worker', allowedRoots: [], legacyDir: root, systemRoots: [] });
+      const failed = db.prepare("SELECT status,error FROM jobs WHERE id='old-import'").get() as { status: string; error: string };
+      assert.equal(failed.status, 'failed'); assert.match(failed.error, /无法安全确认/);
+      assert.equal((db.prepare("SELECT value FROM settings WHERE key='legacy.pending'").get() as { value: string }).value, 'true');
+      assert.equal((await app.inject({ method: 'POST', url: '/api/v2/auth/setup', payload: { username: 'replacement', password: 'synthetic password' } })).statusCode, 503);
+      assert.equal((await app.inject({ method: 'POST', url: '/api/v2/auth/login', payload: { username: 'alice', password: 'synthetic password' } })).statusCode, 401);
+    } finally { await app.close(); }
+  } finally { if (db.open) db.close(); await rm(root, { recursive: true, force: true }); }
+});
+
+test('旧账户已改密且升级后身份来源不明时，收藏导入不能静默成功', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'luvia-legacy-identity-uncertain-'));
+  const file = path.join(root, 'v2.db'); let db = openDatabase(file);
+  try {
+    await writeFile(path.join(root, 'lumina-config.json'), JSON.stringify({ users: [{ username: 'alice', password: 'synthetic password', isAdmin: true }] }));
+    await importLegacy(db, { legacyDir: root, mediaRoots: [] });
+    const app = await createApp({ db, legacyPending: false });
+    try {
+      const login = await app.inject({ method: 'POST', url: '/api/v2/auth/login', payload: { username: 'alice', password: 'synthetic password' } });
+      const headers = { cookie: (login.headers['set-cookie'] as string).split(';')[0]!, 'x-luvia-request': '1' };
+      assert.equal((await app.inject({ method: 'POST', url: '/api/v2/me/password', headers, payload: { current: 'synthetic password', next: 'new synthetic password' } })).statusCode, 204);
+    } finally { await app.close(); }
+    db.exec('DROP TABLE legacy_import_users; DROP TABLE legacy_import_tokens; ALTER TABLE api_tokens DROP COLUMN legacy_jwt; PRAGMA user_version=21');
+    db.close(); db = openDatabase(file);
+    db.prepare("INSERT INTO jobs(id,type,label,status,trigger,created_at) VALUES ('old-import','import_legacy','旧导入','queued','manual',1)").run();
+    await runNextJob(db, { owner: 'new-worker', allowedRoots: [], legacyDir: root, systemRoots: [] });
+    const failed = db.prepare("SELECT status,error FROM jobs WHERE id='old-import'").get() as { status: string; error: string };
+    assert.equal(failed.status, 'failed'); assert.match(failed.error, /无法安全确认/);
+    assert.equal(db.prepare("SELECT value FROM settings WHERE key='legacy.favorites.rowid'").get(), undefined);
   } finally { if (db.open) db.close(); await rm(root, { recursive: true, force: true }); }
 });
 

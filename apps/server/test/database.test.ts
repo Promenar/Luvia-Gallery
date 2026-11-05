@@ -79,7 +79,7 @@ test('已有版本 1 数据库升级时保留数据并创建扫描锁表', async
   const dir = await mkdtemp(path.join(tmpdir(), 'luvia-upgrade-'));
   const filename = path.join(dir, 'luvia.db');
   const old = new Database(filename);
-  old.exec("CREATE TABLE libraries (id TEXT PRIMARY KEY, name TEXT NOT NULL); CREATE TABLE folders (path TEXT PRIMARY KEY, library_id TEXT NOT NULL,cover_file_id TEXT); CREATE TABLE users (id TEXT PRIMARY KEY,username TEXT NOT NULL); CREATE TABLE api_tokens (id TEXT PRIMARY KEY,user_id TEXT,token_hash TEXT); CREATE TABLE jobs (id TEXT PRIMARY KEY, status TEXT NOT NULL,type TEXT,started_at INTEGER); CREATE TABLE files (id TEXT PRIMARY KEY,folder TEXT NOT NULL,taken_at INTEGER NOT NULL,created_at INTEGER NOT NULL DEFAULT 0); CREATE TABLE settings (key TEXT PRIMARY KEY,value TEXT NOT NULL); INSERT INTO libraries VALUES ('lib1','测试'); PRAGMA user_version=1");
+  old.exec("CREATE TABLE libraries (id TEXT PRIMARY KEY, name TEXT NOT NULL); CREATE TABLE folders (path TEXT PRIMARY KEY, library_id TEXT NOT NULL,cover_file_id TEXT); CREATE TABLE users (id TEXT PRIMARY KEY,username TEXT NOT NULL,role TEXT NOT NULL); CREATE TABLE api_tokens (id TEXT PRIMARY KEY,user_id TEXT,token_hash TEXT); CREATE TABLE jobs (id TEXT PRIMARY KEY, status TEXT NOT NULL,type TEXT,started_at INTEGER); CREATE TABLE files (id TEXT PRIMARY KEY,folder TEXT NOT NULL,taken_at INTEGER NOT NULL,created_at INTEGER NOT NULL DEFAULT 0); CREATE TABLE settings (key TEXT PRIMARY KEY,value TEXT NOT NULL); INSERT INTO libraries VALUES ('lib1','测试'); PRAGMA user_version=1");
   old.close();
   try {
     const db = openDatabase(filename);

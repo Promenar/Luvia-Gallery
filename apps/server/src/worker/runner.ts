@@ -5,7 +5,7 @@ import { lstat } from 'node:fs/promises';
 import { JobQueue } from '../core/jobs.ts';
 import { publishJob } from '../core/job-view.ts';
 import { scanLibrary } from './scan.ts';
-import { importLegacy, reconcileLegacyFavorites } from './import-legacy.ts';
+import { importLegacy, LegacyIdentityUncertainError, reconcileLegacyFavorites } from './import-legacy.ts';
 import { generateMediaCache } from './media-cache.ts';
 import path from 'node:path';
 import { pruneCache } from './cache-prune.ts';
@@ -203,7 +203,9 @@ export async function runNextJob(db: Database.Database, options: WorkerOptions):
       throw new Error('作业类型尚未实现');
     }
   } catch (error) {
-    const message = error instanceof Error && error.message === '作业类型尚未实现' ? error.message : '作业执行失败，请检查媒体库及工作进程';
+    const message = error instanceof LegacyIdentityUncertainError ? error.message
+      : error instanceof Error && error.message === '作业类型尚未实现' ? error.message : '作业执行失败，请检查媒体库及工作进程';
+    if (error instanceof LegacyIdentityUncertainError) options.log?.('warn', error.message, { type: job.type });
     if (options.signal?.aborted) queue.release(job.id);
     else queue.fail(job.id, message);
   } finally {
