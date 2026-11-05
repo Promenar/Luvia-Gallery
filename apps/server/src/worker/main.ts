@@ -30,8 +30,20 @@ const logger = createWorkerLogger(runtime.db);
 logger.info('工作进程已启动');
 const owner = newWorkerOwner();
 const stopController = new AbortController();
-process.on('SIGINT', () => stopController.abort());
-process.on('SIGTERM', () => stopController.abort());
+let stopWatch: (() => void) | undefined;
+let shutdownDeadline: NodeJS.Timeout | undefined;
+const requestStop = () => {
+  stopController.abort(); stopWatch?.();
+  if (!shutdownDeadline) {
+    shutdownDeadline = setTimeout(() => {
+      try { runtime.db.prepare('DELETE FROM watch_leases WHERE owner=?').run(owner); } catch { /* 已失效的租约会按期限释放。 */ }
+      process.exit(1);
+    }, 12_000);
+    shutdownDeadline.unref();
+  }
+};
+process.on('SIGINT', requestStop);
+process.on('SIGTERM', requestStop);
 const mounts = process.platform === 'darwin'
   ? runtime.mediaRoots.map((containerPath): Mount => ({ containerPath, hostPath: null, kind: 'candidate', libraryId: null, readOnly: true, mediaEstimate: null }))
   : await detectMounts({ mediaRoots: runtime.mediaRoots, systemRoots: [runtime.dataDir, runtime.cacheDir], hostPaths: process.env.LUVIA_HOST_PATHS });
@@ -87,8 +99,10 @@ let backfill: Promise<void> = Promise.resolve();
 let cacheCleanup: Promise<void> = Promise.resolve();
 let timelineRebuild: Promise<void> = Promise.resolve();
 const watchLoop = startWatchLoop(new WatchRuntime(runtime.db, { owner, allowedRoots }), { onError: () => logger.warn('实时监控检查失败') });
+stopWatch = () => { void watchLoop.stop(); };
+if (stopController.signal.aborted) stopWatch();
 try {
-  await watchLoop.ready.catch(() => { logger.warn('实时监控启动失败，将重试'); });
+  void watchLoop.ready.catch(() => { logger.warn('实时监控启动失败，将重试'); });
   schedulePrune();
   flushMetadataFolders(runtime.db);
   scheduleHlsCleanup();
@@ -111,4 +125,5 @@ try {
   await Promise.all([sampling, backfill, cacheCleanup, timelineRebuild]);
   clearInterval(heartbeatTimer); clearInterval(pruneTimer); clearInterval(scanTimer); clearInterval(reconcileTimer); clearInterval(eventTimer); clearInterval(folderTimer); clearInterval(hlsTimer); clearInterval(maintenanceTimer);
   await Promise.all([hlsCleanup, maintenance]); loop.disable(); runtime.db.close();
+  if (shutdownDeadline) clearTimeout(shutdownDeadline);
 }

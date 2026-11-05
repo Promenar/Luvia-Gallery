@@ -106,6 +106,20 @@ test('同一媒体库的目录对账串行运行', async () => {
   } finally { await s.coordinator.stop(); s.port.close(); await rm(s.root, { recursive: true, force: true }); }
 });
 
+test('停止等待中的对账后清除新登记的全部定时器', async () => {
+  const s = await setup();
+  let release!: () => void; const blocked = new Promise<void>((resolve) => { release = resolve; });
+  let entered!: () => void; const ready = new Promise<void>((resolve) => { entered = resolve; });
+  const original = s.port.readDirectory.bind(s.port);
+  s.port.readDirectory = async (dir) => { entered(); await blocked; return original(dir); };
+  try {
+    await writeFile(path.join(s.root, 'a.jpg'), 'a');
+    const work = s.coordinator.reconcileDirectory(''); await ready;
+    const stopping = s.coordinator.stop(); release(); await work; await stopping;
+    assert.equal(s.clock.timers.size, 0);
+  } finally { release(); await s.coordinator.stop(); s.port.close(); await rm(s.root, { recursive: true, force: true }); }
+});
+
 test('移动窗口到期后的宽限期恢复保留 ID，过期记录在后续对账清理', async () => {
   const s = await setup();
   try {

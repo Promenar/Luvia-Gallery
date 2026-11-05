@@ -1,7 +1,7 @@
 import type { WatchRuntime } from './watch-runtime.ts';
 
-/** 串行执行配置检查，停机时等待检查结束再关闭监控连接。 */
-export function startWatchLoop(runtime: WatchRuntime, options: { intervalMs?: number; onError?: (error: unknown) => void } = {}) {
+/** 串行触发配置检查，停机时立即停止续租并限制等待时间。 */
+export function startWatchLoop(runtime: WatchRuntime, options: { intervalMs?: number; stopTimeoutMs?: number; onError?: (error: unknown) => void } = {}) {
   let stopping = false;
   let busy = true;
   let inFlight = runtime.tick().finally(() => { busy = false; });
@@ -16,7 +16,11 @@ export function startWatchLoop(runtime: WatchRuntime, options: { intervalMs?: nu
   return { ready, stop: () => {
     if (!stopPromise) {
       stopping = true; clearInterval(timer);
-      stopPromise = inFlight.catch((error: unknown) => { options.onError?.(error); }).then(() => runtime.stop());
+      const stopped = runtime.stop();
+      stopPromise = new Promise<void>((resolve) => {
+        const timeout = setTimeout(resolve, options.stopTimeoutMs ?? 5000);
+        void Promise.allSettled([inFlight, stopped]).then(() => { clearTimeout(timeout); resolve(); });
+      });
     }
     return stopPromise;
   } };
