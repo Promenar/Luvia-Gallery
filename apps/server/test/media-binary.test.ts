@@ -88,6 +88,28 @@ test('缩略图由 worker 合并生成并填充 ThumbHash', async () => {
   } finally { await app.close(); db.close(); await rm(root, { recursive: true, force: true }); await rm(cache, { recursive: true, force: true }); }
 });
 
+test('等待缩略图期间会话被撤销时不返回图片', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'luvia-thumb-revoke-'));
+  const cache = await mkdtemp(path.join(tmpdir(), 'luvia-thumb-revoke-cache-'));
+  const db = openDatabase(':memory:'); const app = await createApp({ db, legacyPending: false, cacheDir: cache });
+  try {
+    await sharp({ create: { width: 400, height: 300, channels: 3, background: '#6388aa' } }).jpeg().toFile(path.join(root, 'photo.jpg'));
+    db.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib','照片',?)").run(root);
+    await scanLibrary(db, { id: 'lib', root }, { allowedRoots: [root] });
+    const { id } = db.prepare('SELECT id FROM files').get() as { id: string };
+    const setup = await app.inject({ method: 'POST', url: '/api/v2/auth/setup', payload: { username: 'admin', password: 'test password' } });
+    const cookie = (setup.headers['set-cookie'] as string).split(';')[0]!;
+    const response = app.inject({ method: 'GET', url: `/api/v2/media/${id}/thumb?size=s`, headers: { cookie } });
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if ((db.prepare("SELECT count(*) AS n FROM jobs WHERE type='thumbnails' AND status='queued'").get() as { n: number }).n) break;
+      await new Promise<void>((resolve) => setTimeout(resolve, 10));
+    }
+    db.prepare('DELETE FROM sessions').run();
+    await runNextJob(db, { owner: 'worker', allowedRoots: [root], legacyDir: root, systemRoots: [], cacheDir: cache });
+    assert.equal((await response).statusCode, 401);
+  } finally { await app.close(); db.close(); await rm(root, { recursive: true, force: true }); await rm(cache, { recursive: true, force: true }); }
+});
+
 test('TIFF display 与大图瓦片在 worker 生成前返回 202，生成后提供 WebP', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'luvia-display-'));
   const cache = await mkdtemp(path.join(tmpdir(), 'luvia-display-cache-'));

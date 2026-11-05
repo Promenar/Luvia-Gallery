@@ -9,7 +9,7 @@ import path from 'node:path';
 import { pruneCache } from './cache-prune.ts';
 import { readSettings } from '../core/settings.ts';
 import { processMetadataBatch } from './metadata.ts';
-import { cacheKey, enqueueMediaTask } from '../core/media-cache.ts';
+import { cacheKey, cancelUnobservedMediaTask, enqueueMediaTask } from '../core/media-cache.ts';
 import type { Variant } from '../core/media-cache.ts';
 import { generateHls } from './hls.ts';
 import { withThumbnailSlot } from './ffmpeg-slots.ts';
@@ -50,8 +50,18 @@ export async function runNextJob(db: Database.Database, options: WorkerOptions):
     catch { controller.abort(); }
   }, 5000);
   timer.unref();
+  let waiterTimer: NodeJS.Timeout | undefined;
   try {
     const payload = job.payload ? JSON.parse(job.payload) as Payload : {};
+    if (job.type === 'thumbnails' && payload.mediaId) {
+      const checkWaiters = () => {
+        try { if (cancelUnobservedMediaTask(db, job.id) || !queue.active(job.id)) controller.abort(); }
+        catch { controller.abort(); }
+      };
+      checkWaiters();
+      waiterTimer = setInterval(checkWaiters, 250); waiterTimer.unref();
+      controller.signal.throwIfAborted();
+    }
     if (job.type === 'scan') {
       if (!payload.libraryId) {
         const libraries = db.prepare('SELECT id FROM libraries WHERE enabled=1').all() as { id: string }[];
@@ -131,8 +141,10 @@ export async function runNextJob(db: Database.Database, options: WorkerOptions):
             ];
             for (const variant of variants) {
               const key = cacheKey(row, variant);
-              if (db.prepare('SELECT 1 FROM cache_entries WHERE cache_key=?').get(key) || db.prepare("SELECT 1 FROM jobs WHERE dedupe_key=? AND status IN ('queued','running','paused')").get(`media:${key}`)) continue;
-              enqueueMediaTask(db, row, variant); queued++;
+              if (db.prepare('SELECT 1 FROM cache_entries WHERE cache_key=?').get(key)) continue;
+              const existing = db.prepare("SELECT 1 FROM jobs WHERE dedupe_key=? AND status IN ('queued','running','paused')").get(`media:${key}`);
+              enqueueMediaTask(db, row, variant);
+              if (!existing) queued++;
             }
             lastId = row.id;
             db.prepare('UPDATE jobs SET checkpoint=?,progress_done=? WHERE id=?').run(JSON.stringify({ lastId, queued }), queued, job.id);
@@ -161,7 +173,7 @@ export async function runNextJob(db: Database.Database, options: WorkerOptions):
     if (options.signal?.aborted) queue.release(job.id);
     else queue.fail(job.id, message);
   } finally {
-    clearInterval(timer); options.signal?.removeEventListener('abort', stop);
+    clearInterval(timer); if (waiterTimer) clearInterval(waiterTimer); options.signal?.removeEventListener('abort', stop);
     const final = db.prepare('SELECT status FROM jobs WHERE id=?').get(job.id) as { status: string } | undefined;
     if (final?.status === 'succeeded' || final?.status === 'failed') options.log?.(final.status === 'failed' ? 'warn' : 'info', '作业结束', { type: job.type, status: final.status });
   }
