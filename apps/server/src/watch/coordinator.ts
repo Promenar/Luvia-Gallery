@@ -327,6 +327,14 @@ export class WatchCoordinator {
     }
     const old = (await this.options.port.readDirectory(parentOf(item.path))).find((value) => value.path === item.path);
     if (old) { await this.reconcile(parentOf(item.path), item.source); return; }
+    const restored = await this.findMissingMatch(item);
+    if (restored) {
+      await this.options.port.writeRestored(restored, item);
+      await this.record('restored', item.path, null, item.isDir, restored.mediaId, item.source);
+      if (restored.path !== item.path) await this.record('moved', item.path, restored.path, item.isDir, restored.mediaId, item.source, false);
+      if (item.isDir) await this.reconcile(item.path, item.source, true);
+      return;
+    }
     const mediaId = await this.options.port.writeAdded(item); await this.record('added', item.path, null, item.isDir, mediaId, item.source);
   }
   private async record(kind: WatchLibraryChange['kind'], relative: string, fromPath: string | null, isDir: boolean, mediaId: string | null, source: Source, notify = true): Promise<void> {

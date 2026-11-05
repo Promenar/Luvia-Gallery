@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { LibraryChangedEvent } from '@luvia/contracts';
@@ -226,4 +226,17 @@ test('缺失目录在原路径恢复时递归发现离线期间新增的文件',
     await s.advance(3000); assert.equal(s.port.records.get('album/nested/old.jpg')?.missingAt, null); await s.advance(10000);
     assert.equal(s.port.records.get('album/nested/old.jpg')?.mediaId, id); assert.ok(s.port.records.get('album/nested/new.jpg')?.mediaId);
   } finally { await s.coordinator.stop(); await rm(s.root, { recursive: true, force: true }); await rm(parked, { recursive: true, force: true }); }
+});
+
+test('新增候选等待期间出现持久化缺失记录时，释放前仍能恢复原媒体 ID', async () => {
+  const s = await setup();
+  try {
+    await writeFile(path.join(s.root, 'new.jpg'), 'same'); await s.coordinator.reconcileDirectory(''); await s.advance(3000);
+    const info = await stat(path.join(s.root, 'new.jpg'));
+    s.port.records.set('old.jpg', { path: 'old.jpg', isDir: false, mediaId: 'prior-id', size: info.size,
+      mtimeMs: info.mtimeMs, dev: info.dev, ino: info.ino, headHash: null, missingAt: s.clock.now() });
+    await s.advance(10000);
+    assert.equal(s.port.records.get('new.jpg')?.mediaId, 'prior-id'); assert.equal(s.port.records.has('old.jpg'), false);
+    assert.ok(s.port.changes.some((change) => change.kind === 'restored' && change.path === 'new.jpg'));
+  } finally { await s.coordinator.stop(); await rm(s.root, { recursive: true, force: true }); }
 });
