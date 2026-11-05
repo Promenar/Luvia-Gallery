@@ -982,7 +982,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
         WHERE f.id=? AND f.size=? AND f.modified_at=? AND f.playability='transcode'`).get(id, row.size, row.modified_at) || !readSettings(db).transcode.enabled) fail(404, 'NOT_FOUND', '媒体不可访问');
     };
     check();
-    const principal = digest('share:media');
+    const principal = `share:${digest(initial.share.id)}`;
     return hlsResponse(req, reply, row, principal, resource, check);
   });
   type DownloadTarget = ReturnType<typeof endpoints.createDownload.body.parse>;
@@ -1170,12 +1170,17 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     return { files, total, totalExact, hasMore, sources: [{ id: 'local', name: 'Local Storage', count: total, countExact: totalExact }] };
   });
   app.get('/api/library/folders', async (req) => {
-    requireUser(req);
+    const identity = requireUser(req);
+    const config = identity.scope === 'wallpaper' ? WallpaperConfig.parse(identity.wallpaper ? JSON.parse(identity.wallpaper) : {}) : null;
+    if (config && config.source !== 'folder') return fail(403, 'FORBIDDEN', '壁纸令牌无法列出此来源的目录');
+    if (config && !config.folder) return { folders: [] };
     const query = req.query as { parentPath?: string; parent?: string; favorites?: string; search?: string; limit?: string };
     const parent = query.parentPath ?? query.parent;
     const virtual = parent && !['/', 'root'].includes(parent) ? legacyVirtual(parent) : '';
     if (virtual === null) return { folders: [] };
     const context = folderContext(req);
+    const scope = config?.folder ?? null;
+    if (scope && virtual && !pathAllowed(virtual, [scope]) && !pathAllowed(scope, [virtual])) return { folders: [] };
     if (virtual && !pathAllowed(virtual, context.allowedPaths)) return fail(403, 'FORBIDDEN', '文件夹不可访问');
     const listing = folders.list(virtual, context);
     if (!listing) return fail(403, 'FORBIDDEN', '文件夹不可访问');
@@ -1186,6 +1191,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
       if (query.limit !== undefined && query.limit !== '' && (!/^\d+$/.test(query.limit) || !Number.isSafeInteger(limit) || limit < 1 || limit > 100)) return fail(400, 'VALIDATION', '搜索数量无效');
       const conditions = ['l.enabled=1', 'f.media_count>0']; const params: (string | number)[] = [];
       if (virtual) { conditions.push('f.path>=? AND f.path<?'); params.push(`${virtual}/`, `${virtual}0`); }
+      if (scope) { conditions.push('(f.path=? OR (f.path>=? AND f.path<?))'); params.push(scope, `${scope}/`, `${scope}0`); }
       if (context.allowedPaths !== null) {
         conditions.push(context.allowedPaths.length ? `(${context.allowedPaths.map(() => '(f.path=? OR (f.path>=? AND f.path<?))').join(' OR ')})` : '0');
         for (const allowed of context.allowedPaths) params.push(allowed, `${allowed}/`, `${allowed}0`);
@@ -1197,6 +1203,8 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
       const matches = (await queries.run([{ sql: `SELECT f.path FROM folders f JOIN libraries l ON l.id=f.library_id WHERE ${conditions.join(' AND ')} ORDER BY f.path COLLATE NOCASE LIMIT ?`, params: [...params, limit] }]))[0] as { path: string }[];
       selected = matches.flatMap(({ path: folder }) => folders.get(folder, context) ?? []);
     } else if (query.favorites === 'true') selected = folders.favorites(context).folders;
+    else if (scope && (!virtual || (virtual !== scope && pathAllowed(scope, [virtual])))) selected = folders.get(scope, context) ? [folders.get(scope, context)!] : [];
+    if (scope) selected = selected.filter((folder) => pathAllowed(folder.path, [scope]));
     const aggregates = (await queries.run([{ sql: `SELECT folder,count(*) AS count,max(modified_at) AS latest FROM files
       WHERE folder IN (SELECT value FROM json_each(?)) AND media_type IN ('image','video') GROUP BY folder`,
       params: [JSON.stringify(selected.filter((folder) => pathAllowed(folder.path, context.allowedPaths)).map((folder) => folder.path))] }]))[0] as { folder: string; count: number; latest: number }[];

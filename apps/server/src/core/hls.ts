@@ -6,6 +6,10 @@ import type { MediaSource } from './media-cache.ts';
 
 export type HlsSession = { id: string; media_id: string; principal_hash: string; source_size: number; source_modified: number;
   job_id: string | null; generation: string | null; state: string; last_access_at: number };
+const USER_HLS_LIMIT = 8;
+const SHARE_HLS_LIMIT = 2;
+const PER_SHARE_HLS_LIMIT = 1;
+const LEGACY_SHARE_PRINCIPAL = createHash('sha256').update('share:media').digest('hex');
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
 export const hlsId = (source: MediaSource, principal: string) => hash(JSON.stringify([source.id, source.size, source.modified_at, principal]));
 export const hlsCacheKey = (session: string, generation: string, name: string) => hash(JSON.stringify([session, generation, name]));
@@ -26,8 +30,15 @@ export function ensureHls(db: Database.Database, source: MediaSource, principal:
         return { ...previous, last_access_at: time, generation: reset ? null : previous.generation, state: reset ? 'queued' : previous.state };
       }
     }
-    const active = db.prepare("SELECT count(*) AS n FROM jobs WHERE dedupe_key LIKE 'hls:%' AND status IN ('queued','running','paused')").get() as { n: number };
-    if (active.n >= 8) return undefined;
+    const share = principal.startsWith('share:');
+    const counts = db.prepare(`SELECT
+      count(*) FILTER (WHERE s.principal_hash LIKE 'share:%' OR s.principal_hash=?) AS shares,
+      count(*) FILTER (WHERE s.principal_hash=? ) AS current_share,
+      count(*) FILTER (WHERE s.principal_hash IS NULL OR (s.principal_hash NOT LIKE 'share:%' AND s.principal_hash<>?)) AS users
+      FROM jobs j LEFT JOIN hls_sessions s ON s.job_id=j.id
+      WHERE j.dedupe_key LIKE 'hls:%' AND j.status IN ('queued','running','paused')`)
+      .get(LEGACY_SHARE_PRINCIPAL, principal, LEGACY_SHARE_PRINCIPAL) as { shares: number; current_share: number; users: number };
+    if (share ? counts.shares >= SHARE_HLS_LIMIT || counts.current_share >= PER_SHARE_HLS_LIMIT : counts.users >= USER_HLS_LIMIT) return undefined;
     const jobId = randomUUID();
     db.prepare("INSERT INTO jobs(id,type,label,status,trigger,payload,created_at,dedupe_key) VALUES (?,'previews','视频转码','queued','system',?,unixepoch(),?)")
       .run(jobId, JSON.stringify({ hlsSessionId: id }), `hls:${id}`);

@@ -33,19 +33,23 @@ test('分享访客无 Cookie 多次访问同一视频只排队一次', async () 
   } finally { await f.close(); }
 });
 
-test('HLS 排队或运行达到全局上限时拒绝新作业但允许复用', async () => {
-  const f = await fixture(9);
+test('分享 HLS 按分享及全站限额隔离，登录用户保留独立名额', async () => {
+  const f = await fixture(12);
   try {
-    const url = (id: string) => `/api/v2/public/shares/share-token/media/${id}/hls/index.m3u8`;
-    for (const row of f.rows.slice(0, 8)) assert.equal((await f.app.inject({ method: 'GET', url: url(row.id) })).statusCode, 202);
-    f.db.prepare("UPDATE jobs SET status='running' WHERE id=(SELECT id FROM jobs WHERE dedupe_key LIKE 'hls:%' LIMIT 1)").run();
-    assert.equal((await f.app.inject({ method: 'GET', url: url(f.rows[0]!.id) })).statusCode, 202);
-    const overflow = await f.app.inject({ method: 'GET', url: url(f.rows[8]!.id) });
-    assert.equal(overflow.statusCode, 503);
-    assert.match(overflow.json().error.message, /转码/);
-    assert.equal((f.db.prepare("SELECT count(*) AS n FROM jobs WHERE dedupe_key LIKE 'hls:%' AND status IN ('queued','running')").get() as { n: number }).n, 8);
-    f.db.prepare("UPDATE jobs SET status='succeeded' WHERE status='running' AND dedupe_key LIKE 'hls:%'").run();
-    assert.equal((await f.app.inject({ method: 'GET', url: url(f.rows[8]!.id) })).statusCode, 202);
+    for (const n of [2, 3]) f.db.prepare(`INSERT INTO shares(id,user_id,token,title,target,allow_download,created_at)
+      SELECT ?,id,?,'测试','{"type":"folder","path":"lib"}',0,1 FROM users WHERE username='admin'`).run(`share${n}`, `token${n}`);
+    const share = (token: string, i: number) => f.app.inject({ method: 'GET', url: `/api/v2/public/shares/${token}/media/${f.rows[i]!.id}/hls/index.m3u8` });
+    const user = (i: number) => f.app.inject({ method: 'GET', url: `/api/v2/media/${f.rows[i]!.id}/hls/index.m3u8`, headers: { cookie: f.cookie } });
+    assert.equal((await share('share-token', 0)).statusCode, 202);
+    assert.equal((await share('share-token', 1)).statusCode, 503);
+    assert.equal((await share('share-token', 0)).statusCode, 202);
+    assert.equal((await share('token2', 1)).statusCode, 202);
+    f.db.prepare("UPDATE jobs SET status='paused' WHERE id=(SELECT job_id FROM hls_sessions WHERE media_id=?)").run(f.rows[1]!.id);
+    assert.equal((await share('token3', 2)).statusCode, 503);
+    for (let i = 2; i < 10; i++) assert.equal((await user(i)).statusCode, 202);
+    assert.equal((await user(10)).statusCode, 503);
+    f.db.prepare("UPDATE jobs SET status='succeeded' WHERE id=(SELECT job_id FROM hls_sessions WHERE media_id=?)").run(f.rows[1]!.id);
+    assert.equal((await share('token3', 2)).statusCode, 202);
   } finally { await f.close(); }
 });
 
