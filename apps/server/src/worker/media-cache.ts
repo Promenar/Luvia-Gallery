@@ -67,7 +67,7 @@ export async function generateMediaCache(db: Database.Database, payload: unknown
         input = frame;
       }
       const dimension = { s: 256, m: 768, l: 1600 }[task.variant.size];
-      await sharp(input).rotate().resize({ width: dimension, height: dimension, fit: 'inside', withoutEnlargement: true }).webp({ quality: 82 }).toFile(temp);
+      await sharp(input).rotate().resize({ width: dimension, height: dimension, fit: 'outside', withoutEnlargement: true }).webp({ quality: 82 }).toFile(temp);
       const placeholder = await sharp(input).rotate().resize({ width: 100, height: 100, fit: 'inside', withoutEnlargement: true }).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
       hash = Buffer.from(rgbaToThumbHash(placeholder.info.width, placeholder.info.height, placeholder.data)).toString('base64');
     } else if (task.variant.kind === 'preview') {
