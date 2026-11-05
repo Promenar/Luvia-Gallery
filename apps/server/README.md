@@ -83,3 +83,5 @@ worker 每 15 分钟在独立线程执行 SQLite 检查点截断与 `PRAGMA opti
 根目录的 Dockerfile 和 Compose 配置使用同一 Node 24 镜像运行 API 与 worker，媒体挂载为只读；应用目录由 root 持有且运行用户不可写，数据与缓存目录由运行用户持有。可按 Compose 注释启用 NVIDIA 设备。容器构建、卷权限、GPU 与前端资源尚需在 FNOS 验证，当前后端仍不可用于生产。
 
 存在 `apps/web/dist/index.html` 时，API 提供前端静态文件与 SPA 回退；带哈希资源可长期缓存，首页不缓存，未知 API 路径返回 404。
+
+壁纸作用域令牌访问旧版 `/api/library/folders` 时，仅列出配置目录及其子树；未选择目录时返回空列表，来源为全部或收藏时返回 403。旧版随机壁纸获取接口继续按壁纸配置工作。

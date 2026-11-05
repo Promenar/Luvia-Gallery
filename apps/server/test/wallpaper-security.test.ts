@@ -33,6 +33,15 @@ test('壁纸配置约束随机、旧版分页和全部媒体二进制读取', as
     const cookie = (setup.headers['set-cookie'] as string).split(';')[0]!; const admin = { cookie, 'x-luvia-request': '1' };
     const created = await app.inject({ method: 'POST', url: '/api/v2/me/tokens', headers: admin, payload: { name: '壁纸', scope: 'wallpaper', wallpaper: { source: 'folder', folder: 'lib/inside', landscapeOnly: true, includeVideos: false } } });
     const token = created.json().token as string; const tokenId = created.json().meta.id as string; const bearer = { authorization: `Bearer ${token}` };
+    const folderPaths = async (query = '') => {
+      const response = await app.inject({ method: 'GET', url: `/api/library/folders${query}`, headers: bearer });
+      assert.equal(response.statusCode, 200);
+      return response.json().folders.map((folder: { path: string }) => folder.path);
+    };
+    assert.deepEqual(await folderPaths(`?parentPath=${encodeURIComponent(root)}`), [path.join(root, 'inside')]);
+    assert.deepEqual(await folderPaths(`?parentPath=${encodeURIComponent(path.join(root, 'inside'))}`), [path.join(root, 'inside', 'nested')]);
+    assert.deepEqual(await folderPaths('?search=outside'), []);
+    assert.deepEqual(await folderPaths(`?parentPath=${encodeURIComponent(path.join(root, 'outside'))}`), []);
     const random = await app.inject({ method: 'GET', url: '/api/v2/media/random?count=20', headers: bearer });
     const legacy = await app.inject({ method: 'GET', url: `/api/scan/results?limit=20&sort=nameAsc&token=${token}` });
     const secret = byName('secret.jpg'); const legacyId = encodeURIComponent(Buffer.from(path.join(root, secret.relative_path)).toString('base64'));
@@ -54,10 +63,12 @@ test('壁纸配置约束随机、旧版分页和全部媒体二进制读取', as
     const userId = setup.json().user.id as string;
     db.prepare("INSERT INTO favorites(user_id,item_id,item_type) VALUES (?,?,'file'), (?,?,'folder')").run(userId, byName('secret.jpg').id, userId, 'lib/inside/nested');
     await app.inject({ method: 'PATCH', url: `/api/v2/me/tokens/${tokenId}`, headers: admin, payload: { wallpaper: { source: 'favorites', landscapeOnly: true, includeVideos: false } } });
+    assert.equal((await app.inject({ method: 'GET', url: '/api/library/folders', headers: bearer })).statusCode, 403);
     const favorites = await app.inject({ method: 'GET', url: `/api/scan/results?sort=nameAsc&token=${token}` });
     assert.deepEqual(favorites.json().files.map((item: { name: string }) => item.name), ['b.jpg', 'secret.jpg']);
     assert.equal((await app.inject({ method: 'GET', url: `/api/v2/media/${byName('a.jpg').id}/original`, headers: bearer })).statusCode, 404);
     await app.inject({ method: 'PATCH', url: `/api/v2/me/tokens/${tokenId}`, headers: admin, payload: { wallpaper: { source: 'folder', folder: null } } });
+    assert.deepEqual(await folderPaths(), []);
     assert.deepEqual((await app.inject({ method: 'GET', url: '/api/v2/media/random', headers: bearer })).json().items, []);
     assert.equal((await app.inject({ method: 'GET', url: `/api/v2/media/${byName('a.jpg').id}/original`, headers: bearer })).statusCode, 404);
   } finally { await app.close(); db.close(); await rm(root, { recursive: true, force: true }); await rm(cache, { recursive: true, force: true }); }
