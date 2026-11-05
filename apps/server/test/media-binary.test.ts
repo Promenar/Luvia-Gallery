@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, symlink } from 'node:fs/promises';
+import { appendFile, mkdtemp, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import sharp from 'sharp';
@@ -64,6 +64,27 @@ test('缩略图由 worker 合并生成并填充 ThumbHash', async () => {
     assert.equal((await sharp(a.rawPayload).metadata()).format, 'webp');
     const row = db.prepare('SELECT thumbhash,thumb_version FROM files WHERE id=?').get(id) as { thumbhash: string | null; thumb_version: number };
     assert.ok(row.thumbhash); assert.equal(row.thumb_version, 1);
+    assert.equal((db.prepare("SELECT cover_file_id FROM folders WHERE path='lib'").get() as { cover_file_id: string | null }).cover_file_id, id);
+    db.prepare('DELETE FROM cache_entries WHERE media_id=?').run(id);
+    db.prepare('UPDATE files SET thumb_ready=0 WHERE id=?').run(id);
+    assert.equal((await app.inject({ method: 'GET', url: `/api/v2/media/${id}/thumb?size=s`, headers: { cookie } })).statusCode, 200);
+    assert.equal((db.prepare('SELECT count(*) AS n FROM cache_entries WHERE media_id=?').get(id) as { n: number }).n, 1);
+    await appendFile(path.join(root, 'photo.jpg'), Buffer.from([0]));
+    await scanLibrary(db, { id: 'lib', root }, { allowedRoots: [root] });
+    const changed = await app.inject({ method: 'GET', url: '/api/v2/media', headers: { cookie } });
+    assert.equal(changed.json().items[0].thumbVersion, 0);
+    const regenerate = app.inject({ method: 'GET', url: `/api/v2/media/${id}/thumb?size=s`, headers: { cookie } });
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if ((db.prepare("SELECT count(*) AS n FROM jobs WHERE type='thumbnails' AND status='queued'").get() as { n: number }).n) break;
+      await new Promise<void>((resolve) => setTimeout(resolve, 10));
+    }
+    await runNextJob(db, { owner: 'worker-a', allowedRoots: [root], legacyDir: root, systemRoots: [], cacheDir: cache });
+    assert.equal((await regenerate).statusCode, 200);
+    assert.equal((await app.inject({ method: 'GET', url: '/api/v2/media', headers: { cookie } })).json().items[0].thumbVersion, 2);
+    const { pruneCache } = await import('../src/worker/cache-prune.ts');
+    await pruneCache(db, cache, 0);
+    assert.equal((await app.inject({ method: 'GET', url: '/api/v2/media', headers: { cookie } })).json().items[0].thumbVersion, 0);
+    assert.equal((db.prepare("SELECT cover_file_id FROM folders WHERE path='lib'").get() as { cover_file_id: string | null }).cover_file_id, null);
   } finally { await app.close(); db.close(); await rm(root, { recursive: true, force: true }); await rm(cache, { recursive: true, force: true }); }
 });
 

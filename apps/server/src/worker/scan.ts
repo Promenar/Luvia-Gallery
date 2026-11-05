@@ -107,7 +107,8 @@ async function scanWithLock(db: Database.Database, library: { id: string; root: 
       taken_at=CASE WHEN files.size != excluded.size OR files.modified_at != excluded.modified_at THEN excluded.modified_at ELSE files.taken_at END,
       taken_at_source=CASE WHEN files.size != excluded.size OR files.modified_at != excluded.modified_at THEN 'mtime' ELSE files.taken_at_source END,
       metadata_status=CASE WHEN files.size != excluded.size OR files.modified_at != excluded.modified_at THEN 'pending' ELSE files.metadata_status END,
-      thumb_version=CASE WHEN files.size != excluded.size OR files.modified_at != excluded.modified_at THEN files.thumb_version + 1 ELSE files.thumb_version END,
+      thumb_version=CASE WHEN (files.size != excluded.size OR files.modified_at != excluded.modified_at) AND files.thumb_version>0 THEN files.thumb_version + 1 ELSE files.thumb_version END,
+      thumb_ready=CASE WHEN files.size != excluded.size OR files.modified_at != excluded.modified_at THEN 0 ELSE files.thumb_ready END,
       thumbhash=CASE WHEN files.size != excluded.size OR files.modified_at != excluded.modified_at THEN NULL ELSE files.thumbhash END,
       width=CASE WHEN files.size != excluded.size OR files.modified_at != excluded.modified_at THEN NULL ELSE files.width END,
       height=CASE WHEN files.size != excluded.size OR files.modified_at != excluded.modified_at THEN NULL ELSE files.height END,
@@ -226,7 +227,7 @@ async function materializeFolders(db: Database.Database, libraryId: string, asse
   const byPath = new Map(folders.map((folder) => [folder.path, folder]));
   const count = db.prepare('SELECT count(*) AS n FROM files WHERE folder=?');
   const latest = db.prepare('SELECT taken_at FROM files WHERE folder=? ORDER BY taken_at DESC,id ASC LIMIT 1');
-  const cover = db.prepare('SELECT id,taken_at FROM files WHERE folder=? AND thumb_version>0 ORDER BY taken_at DESC,id ASC LIMIT 1');
+  const cover = db.prepare('SELECT id,taken_at FROM files WHERE folder=? AND thumb_ready=1 ORDER BY taken_at DESC,id ASC LIMIT 1');
   for (const folder of folders) {
     signal?.throwIfAborted();
     folder.direct = (count.get(folder.path) as { n: number }).n;

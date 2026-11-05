@@ -11,6 +11,7 @@ test('管理员概览报告真实索引、缓存与作业计数，日志不包�
     const add = db.prepare(`INSERT INTO files(id,library_id,relative_path,folder,name,mime,media_type,size,modified_at,taken_at,taken_at_source,thumb_version,metadata_status,has_preview)
       VALUES (?,'lib',?,'lib',?,'image/jpeg',?,1,1,1,'mtime',?,?,?)`);
     add.run('photo', 'photo.jpg', 'photo.jpg', 'image', 1, 'done', 0);
+    db.prepare("UPDATE files SET thumb_ready=1 WHERE id='photo'").run();
     add.run('video', 'video.mp4', 'video.mp4', 'video', 0, 'pending', 1);
     db.prepare("INSERT INTO cache_entries(cache_key,relative_path,bytes,last_access_at) VALUES ('key','fixture',123,1)").run();
     db.prepare("INSERT INTO jobs(id,type,label,status,trigger,created_at) VALUES ('queued','scan','扫描','queued','manual',1),('running','metadata','元数据','running','manual',1)").run();

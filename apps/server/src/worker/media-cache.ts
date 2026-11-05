@@ -9,6 +9,7 @@ import { cacheKey, cachePath } from '../core/media-cache.ts';
 import { secureMediaPath } from '../core/paths.ts';
 import { runFfmpeg } from './ffmpeg-slots.ts';
 import { readSettings } from '../core/settings.ts';
+import { noteThumbnail } from '../core/folder-covers.ts';
 
 const Variant = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('thumb'), size: z.enum(['s', 'm', 'l']) }),
@@ -99,11 +100,12 @@ export async function generateMediaCache(db: Database.Database, payload: unknown
     const output = await stat(destination);
     db.transaction(() => {
       options.assertLease();
-      db.prepare(`INSERT INTO cache_entries(cache_key,relative_path,bytes,last_access_at,media_id,variant) VALUES (?,?,?,?,?,?)
-        ON CONFLICT(cache_key) DO UPDATE SET bytes=excluded.bytes,last_access_at=excluded.last_access_at,media_id=excluded.media_id,variant=excluded.variant`)
-        .run(cacheKey(row, task.variant), path.relative(cacheRoot, destination), output.size, Date.now(), row.id, task.variant.kind);
-      if (hash) db.prepare('UPDATE files SET thumbhash=?,thumb_version=CASE WHEN thumb_version=0 THEN 1 ELSE thumb_version END WHERE id=? AND size=? AND modified_at=?')
+      db.prepare(`INSERT INTO cache_entries(cache_key,relative_path,bytes,last_access_at,media_id,variant,source_size,source_modified) VALUES (?,?,?,?,?,?,?,?)
+        ON CONFLICT(cache_key) DO UPDATE SET bytes=excluded.bytes,last_access_at=excluded.last_access_at,media_id=excluded.media_id,variant=excluded.variant,source_size=excluded.source_size,source_modified=excluded.source_modified`)
+        .run(cacheKey(row, task.variant), path.relative(cacheRoot, destination), output.size, Date.now(), row.id, task.variant.kind, row.size, row.modified_at);
+      if (hash) db.prepare('UPDATE files SET thumbhash=?,thumb_ready=1,thumb_version=CASE WHEN thumb_version=0 THEN 1 ELSE thumb_version END WHERE id=? AND size=? AND modified_at=?')
         .run(hash, row.id, row.size, row.modified_at);
+      if (hash) noteThumbnail(db, row.id);
       if (task.variant.kind === 'preview') db.prepare('UPDATE files SET has_preview=1 WHERE id=? AND size=? AND modified_at=?').run(row.id, row.size, row.modified_at);
     }).immediate();
   } finally { await unlink(temp).catch(() => {}); await unlink(frame).catch(() => {}); }

@@ -6,7 +6,7 @@ import type Database from 'better-sqlite3';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { constants } from 'node:fs';
-import { access, realpath, stat, readdir, open as openFile } from 'node:fs/promises';
+import { access, realpath, stat, lstat, readdir, open as openFile } from 'node:fs/promises';
 import { once } from 'node:events';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
@@ -20,6 +20,7 @@ import { hashPassword, verifyPassword } from '../core/password.ts';
 import { MediaReader } from '../core/media-query.ts';
 import { QueryExecutor } from '../core/query-executor.ts';
 import { Observability } from '../core/observability.ts';
+import { noteThumbnail } from '../core/folder-covers.ts';
 import { FolderReader } from '../core/folder-reader.ts';
 import { mediaId, pathAllowed, secureMediaPath, virtualPath } from '../core/paths.ts';
 import { sendFile } from './binary.ts';
@@ -546,9 +547,23 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     }
     authorize?.();
     const touched = Date.now();
-    db.prepare('UPDATE cache_entries SET last_access_at=? WHERE cache_key=? AND last_access_at<?')
-      .run(touched, cacheKey(row, variant), touched - 60_000);
-    return sendFile(req, reply, filename, { mime: 'image/webp', name: row.name, etagKey: cacheKey(row, variant) });
+    const key = cacheKey(row, variant);
+    const recorded = db.prepare('SELECT source_size,source_modified FROM cache_entries WHERE cache_key=?').get(key) as { source_size: number | null; source_modified: number | null } | undefined;
+    if (!recorded || recorded.source_size !== row.size || recorded.source_modified !== row.modified_at) {
+      let info;
+      try { info = await lstat(filename); } catch { return fail(404, 'NOT_FOUND', '媒体缓存不可访问'); }
+      if (!info.isFile() || info.isSymbolicLink()) return fail(404, 'NOT_FOUND', '媒体缓存不可访问');
+      authorize?.();
+      db.prepare(`INSERT INTO cache_entries(cache_key,relative_path,bytes,last_access_at,media_id,variant,source_size,source_modified) VALUES (?,?,?,?,?,?,?,?)
+        ON CONFLICT(cache_key) DO UPDATE SET bytes=excluded.bytes,last_access_at=excluded.last_access_at,media_id=excluded.media_id,variant=excluded.variant,source_size=excluded.source_size,source_modified=excluded.source_modified`)
+        .run(key, path.relative(cacheDir, filename), info.size, touched, row.id, variant.kind, row.size, row.modified_at);
+    } else db.prepare('UPDATE cache_entries SET last_access_at=? WHERE cache_key=? AND last_access_at<?').run(touched, key, touched - 60_000);
+    if (variant.kind === 'thumb') db.transaction(() => {
+      const changed = db.prepare('UPDATE files SET thumb_ready=1,thumb_version=CASE WHEN thumb_version=0 THEN 1 ELSE thumb_version END WHERE id=? AND size=? AND modified_at=? AND thumb_ready=0')
+        .run(row.id, row.size, row.modified_at);
+      if (changed.changes) noteThumbnail(db, row.id);
+    }).immediate();
+    return sendFile(req, reply, filename, { mime: 'image/webp', name: row.name, etagKey: key });
   }
   app.get('/api/v2/media/:id/:resource', async (req, reply) => {
     const { id, resource } = req.params as { id: string; resource: string };
@@ -1053,7 +1068,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
   register('adminOverview', async () => {
     const result = await queries.run([
       { sql: `SELECT count(*) AS total,COALESCE(sum(f.media_type='image'),0) AS images,COALESCE(sum(f.media_type='video'),0) AS videos,
-        COALESCE(sum(f.media_type='audio'),0) AS audio,COALESCE(sum(f.thumb_version>0),0) AS thumbs,
+        COALESCE(sum(f.media_type='audio'),0) AS audio,COALESCE(sum(f.thumb_ready=1),0) AS thumbs,
         COALESCE(sum(f.metadata_status='done'),0) AS indexed,COALESCE(sum(f.media_type='video' AND f.has_preview=1),0) AS previews
         FROM files f JOIN libraries l ON l.id=f.library_id AND l.enabled=1`, params: [] },
       { sql: 'SELECT COALESCE(sum(bytes),0) AS bytes FROM cache_entries', params: [] },
