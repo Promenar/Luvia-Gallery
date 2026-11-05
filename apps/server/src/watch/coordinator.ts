@@ -65,6 +65,7 @@ export class WatchCoordinator {
   private readonly matcher: MoveMatcher;
   private readonly throttle: ChangeThrottle;
   private tail: Promise<void> = Promise.resolve();
+  private diskTail: Promise<void> = Promise.resolve();
   private started = false;
   private stopping = false;
   private pollTimer: unknown = null;
@@ -118,9 +119,11 @@ export class WatchCoordinator {
     } else if (this.state === 'polling' || this.state === 'degraded') this.schedulePoll();
   }
   async stop(): Promise<void> {
-    this.stopping = true; this.watcher.stop(); this.watcherActive = false; this.dirty.stop(); this.stable.stop(); this.matcher.stop(); this.throttle.stop();
+    this.stopping = true; this.watcher.stop(); this.watcherActive = false;
+    await this.idle();
+    this.dirty.stop(); this.stable.stop(); this.matcher.stop(); this.throttle.stop();
     if (this.pollTimer !== null) this.clock.clearTimeout(this.pollTimer); this.pollTimer = null;
-    await this.idle(); this.pendingSources.clear(); this.started = false;
+    this.pendingSources.clear(); this.started = false;
   }
   async idle(): Promise<void> {
     while (true) { await this.stable.idle(); const current = this.tail; await current; await this.stable.idle(); if (this.tail === current) return; }
@@ -132,6 +135,7 @@ export class WatchCoordinator {
   }
   async checkRoot(): Promise<boolean> {
     const status = await this.guard.check();
+    if (this.stopping) return false;
     if (status.state === 'unavailable') {
       this.rootUnavailable = true; this.state = 'degraded'; this.degradedReason = '媒体库根目录不可用或挂载身份不符，等待恢复';
       if (this.watcherActive) { this.watcher.stop(); this.watcherActive = false; }
@@ -212,14 +216,20 @@ export class WatchCoordinator {
     if (!inside(root, actual)) throw new Error('路径越出媒体库根目录');
     return full;
   }
+  private disk<T>(work: () => Promise<T>): Promise<T> {
+    const task = this.diskTail.then(() => { if (this.stopping) throw new Error('实时监控已停止'); return work(); });
+    this.diskTail = task.then(() => {}, () => {});
+    return task;
+  }
   private async statEntry(relative: string): Promise<MoveCandidate | null> {
-    try {
+    return this.disk(async () => { try {
       const full = await this.checkedPath(relative); const info = await lstat(full, { bigint: true });
       if (info.isSymbolicLink() || (!info.isDirectory() && !info.isFile())) return null;
       return { path: relative, isDir: info.isDirectory(), ...statFields(info), mediaId: null, headHash: null };
-    } catch (error) { if (missingError(error)) return null; throw error; }
+    } catch (error) { if (missingError(error)) return null; throw error; } });
   }
   private async readDisk(directory: string): Promise<DirectoryEntry[]> {
+    return this.disk(async () => {
     const full = await realpath(await this.checkedPath(directory)); const entries = await readdir(full, { withFileTypes: true }); const result: DirectoryEntry[] = [];
     for (const entry of entries) {
       if (entry.isSymbolicLink()) continue;
@@ -232,11 +242,14 @@ export class WatchCoordinator {
       result.push({ name: entry.name, isDir, ...statFields(info) });
     }
     return result;
+    });
   }
   private async hashHead(relative: string): Promise<string> {
+    return this.disk(async () => {
     const full = await this.checkedPath(relative); const file = await open(full, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
     try { const buffer = Buffer.alloc(65_536); const { bytesRead } = await file.read(buffer, 0, buffer.length, 0); return createHash('sha256').update(buffer.subarray(0, bytesRead)).digest('hex'); }
     finally { await file.close(); }
+    });
   }
   private async reconcile(directory: string, source: Source, recursive = false): Promise<void> {
     const directories = [{ path: directory, recursive }];

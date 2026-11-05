@@ -64,15 +64,17 @@ function inside(root: string, target: string): boolean {
 /** 首次确认和挂载变化都以已有媒体内容为依据，监控与扫描共用。 */
 export async function confirmLibraryMount(db: Database.Database, library: { id: string; root: string }, options: {
   allowedRoots: string[]; mount?: (root: string) => Promise<string | null>; probe?: (root: string) => Promise<boolean>;
-  allowChange?: boolean; assertLease?: () => void;
+  allowChange?: boolean; assertLease?: () => void; signal?: AbortSignal;
 }): Promise<{ available: boolean; identity: string | null; reason: string | null; changed: boolean }> {
   const unavailable = (reason: string) => ({ available: false, identity: null, reason, changed: false });
   try {
     const actual = await realpath(library.root);
     const allowed = await Promise.all(options.allowedRoots.map((root) => realpath(root).catch(() => null)));
+    options.signal?.throwIfAborted();
     if (!allowed.some((root) => root !== null && inside(root, actual))) return unavailable('媒体库根目录不在允许的挂载根目录内');
     if (!(await (options.probe ?? readableRoot)(actual))) return unavailable('媒体库根目录不可读');
     const identity = await (options.mount ?? readRootMountIdentity)(actual);
+    options.signal?.throwIfAborted();
     const saved = db.prepare('SELECT l.root,s.mount_root,s.mount_identity FROM libraries l LEFT JOIN library_watch_state s ON s.library_id=l.id WHERE l.id=?')
       .get(library.id) as { root: string; mount_root: string | null; mount_identity: string | null } | undefined;
     if (!saved || saved.root !== library.root) return unavailable('媒体库根目录配置已改变');
@@ -83,6 +85,7 @@ export async function confirmLibraryMount(db: Database.Database, library: { id: 
         .all(library.id) as { relative_path: string; size: number; mtime_ms: number | null }[];
       let matches = 0;
       for (const file of sample) {
+        options.signal?.throwIfAborted();
         try {
           const full = await realpath(path.join(actual, file.relative_path));
           if (!inside(actual, full)) continue;
@@ -92,6 +95,7 @@ export async function confirmLibraryMount(db: Database.Database, library: { id: 
       }
       if (sample.length && matches / sample.length < 0.9) return unavailable('媒体库挂载内容抽样不符，等待恢复');
       const accepted = db.transaction(() => {
+        options.signal?.throwIfAborted();
         options.assertLease?.();
         const current = db.prepare('SELECT l.root,s.mount_root,s.mount_identity FROM libraries l LEFT JOIN library_watch_state s ON s.library_id=l.id WHERE l.id=?').get(library.id) as typeof saved;
         if (!current || current.root !== saved.root || current.mount_root !== saved.mount_root || current.mount_identity !== saved.mount_identity) return false;

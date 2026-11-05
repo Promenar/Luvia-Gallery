@@ -189,3 +189,75 @@ test('首次挂载恢复后按真实网络文件系统选择轮询', async () =>
     assert.equal(starts, 0);
   } finally { await runtime.stop(); db.close(); await rm(dir, { recursive: true, force: true }); }
 });
+
+test('一个库的根检查卡住时其他库仍能启动且停机有上限', async () => {
+  const { WatchRuntime } = await import('../src/worker/watch-runtime.ts');
+  const dir = await mkdtemp(path.join(tmpdir(), 'luvia-watch-blocked-')); const slow = path.join(dir, 'slow'); const fast = path.join(dir, 'fast');
+  await mkdir(slow); await mkdir(fast); const db = openDatabase(path.join(dir, 'db.sqlite'));
+  db.prepare("INSERT INTO libraries(id,name,root) VALUES ('slow','慢库',?),('fast','快库',?)").run(slow, fast);
+  let release!: () => void; const blocked = new Promise<void>((resolve) => { release = resolve; }); let fastStarted = false;
+  let fastReady!: () => void; const ready = new Promise<void>((resolve) => { fastReady = resolve; });
+  const runtime = new WatchRuntime(db, { owner: 'worker', rootTimeoutMs: 300, watcher: (root) => { if (root === fast) { fastStarted = true; fastReady(); } return new FakeWatcher(); },
+    mount: async (root) => { if (path.basename(root) === 'slow') await blocked; return 'mount'; } });
+  const tick = runtime.tick();
+  try {
+    const startedBeforeTimeout = await Promise.race([ready.then(() => true), new Promise<false>((resolve) => setTimeout(() => resolve(false), 150))]);
+    assert.equal(startedBeforeTimeout, true);
+    const finished = await Promise.race([tick.then(() => true), new Promise<false>((resolve) => setTimeout(() => resolve(false), 1000))]);
+    assert.equal(finished, true); assert.equal(fastStarted, true);
+    assert.equal((db.prepare("SELECT state FROM library_watch_state WHERE library_id='slow'").get() as {state:string}).state, 'degraded');
+    const stopped = await Promise.race([runtime.stop().then(() => true), new Promise<false>((resolve) => setTimeout(() => resolve(false), 500))]);
+    assert.equal(stopped, true);
+  } finally { release(); await tick.catch(() => {}); await runtime.stop(); db.close(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('停机时卡住的目录对账不会阻止释放租约', async () => {
+  const { WatchRuntime } = await import('../src/worker/watch-runtime.ts');
+  const { WatchCoordinator } = await import('../src/watch/coordinator.ts');
+  const { SqliteLibraryIndex } = await import('../src/watch/sqlite-index.ts');
+  const dir = await mkdtemp(path.join(tmpdir(), 'luvia-watch-stop-')); const root = path.join(dir, 'media'); await mkdir(root);
+  const db = openDatabase(path.join(dir, 'db.sqlite')); db.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib','照片',?)").run(root);
+  const runtime = new WatchRuntime(db, { owner: 'worker', rootTimeoutMs: 40, watcher: () => new FakeWatcher(), mount: async () => null });
+  let release!: () => void; const blocked = new Promise<void>((resolve) => { release = resolve; });
+  let entered!: () => void; const ready = new Promise<void>((resolve) => { entered = resolve; });
+  try {
+    await runtime.tick();
+    const running = (runtime as unknown as { running: Map<string, { coordinator: InstanceType<typeof WatchCoordinator>; port: InstanceType<typeof SqliteLibraryIndex> }> }).running.get('lib')!;
+    const original = running.port.readDirectory.bind(running.port);
+    running.port.readDirectory = async (dir) => { entered(); await blocked; return original(dir); };
+    const work = running.coordinator.reconcileDirectory('').catch(() => {}); await ready;
+    const stop = runtime.stop();
+    const finished = await Promise.race([stop.then(() => true), new Promise<false>((resolve) => setTimeout(() => resolve(false), 500))]);
+    try { assert.equal(finished, true); assert.equal(db.prepare('SELECT 1 FROM watch_leases').get(), undefined); }
+    finally { release(); await work; await stop; }
+  } finally { release(); await runtime.stop(); db.close(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('根检查耗时时租约仍按独立心跳续期', async () => {
+  const { WatchRuntime } = await import('../src/worker/watch-runtime.ts');
+  const dir = await mkdtemp(path.join(tmpdir(), 'luvia-watch-heartbeat-')); const root = path.join(dir, 'media'); await mkdir(root);
+  const db = openDatabase(path.join(dir, 'db.sqlite')); db.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib','照片',?)").run(root);
+  let blocked = false; let entered!: () => void; const ready = new Promise<void>((resolve) => { entered = resolve; });
+  let release!: () => void; const pending = new Promise<void>((resolve) => { release = resolve; });
+  const runtime = new WatchRuntime(db, { owner: 'worker', heartbeatMs: 20, rootTimeoutMs: 500,
+    watcher: () => new FakeWatcher(), mount: async () => { if (blocked) { entered(); await pending; } return 'mount'; } });
+  try {
+    await runtime.tick(); blocked = true; const tick = runtime.tick(); await ready;
+    db.prepare('UPDATE watch_leases SET lease_expires_at=unixepoch()+2').run();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.ok((db.prepare('SELECT lease_expires_at-unixepoch() remaining FROM watch_leases').get() as {remaining:number}).remaining > 20);
+    release(); await tick;
+  } finally { release(); await runtime.stop(); db.close(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('监控首轮未完成时停止循环仍可在期限内返回', async () => {
+  const { startWatchLoop } = await import('../src/worker/watch-loop.ts');
+  const { WatchRuntime } = await import('../src/worker/watch-runtime.ts');
+  let release!: () => void; const pending = new Promise<void>((resolve) => { release = resolve; }); let stopped = false;
+  const fake = { tick: () => pending, stop: async () => { stopped = true; } } as unknown as InstanceType<typeof WatchRuntime>;
+  const loop = startWatchLoop(fake, { stopTimeoutMs: 40 });
+  try {
+    const done = await Promise.race([loop.stop().then(() => true), new Promise<false>((resolve) => setTimeout(() => resolve(false), 500))]);
+    assert.equal(done, true); assert.equal(stopped, true);
+  } finally { release(); await loop.ready; }
+});
