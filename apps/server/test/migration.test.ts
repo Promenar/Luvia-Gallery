@@ -5,6 +5,7 @@ import { mkdtemp, mkdir, writeFile, readFile, rm, symlink } from 'node:fs/promis
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import Database from 'better-sqlite3';
+import jwt from 'jsonwebtoken';
 import { openDatabase } from '../src/core/database.ts';
 import * as legacyImport from '../src/worker/import-legacy.ts';
 import { scanLibrary } from '../src/worker/scan.ts';
@@ -13,6 +14,7 @@ import { createApp } from '../src/api/app.ts';
 import { verifyPassword } from '../src/core/password.ts';
 
 const sha = (text: string | Buffer) => createHash('sha256').update(text).digest('hex');
+const signingKey = 'synthetic-legacy-signing-key';
 const { importLegacy } = legacyImport;
 
 test('旧库只导入用户数据，收藏在扫描后匹配，孤儿保留且重复导入幂等', async () => {
@@ -37,7 +39,7 @@ test('旧库只导入用户数据，收藏在扫描后匹配，孤儿保留且�
   source.close();
   const salt = Buffer.alloc(16, 2);
   const password = `scrypt$${salt.toString('hex')}$${scryptSync('测试密码', salt, 64).toString('hex')}`;
-  const token = 'fixture-wallpaper-token';
+  const token = jwt.sign({ username: 'alice', isWallpaper: true }, signingKey, { expiresIn: '3650d' });
   await writeFile(path.join(legacy, 'lumina-config.json'), JSON.stringify({ title: '家庭图库', libraryPaths: [media, path.join(dir, 'missing')], users: [{ username: 'alice', password, isAdmin: true, wallpaperToken: token }] }));
   const before = sha(await readFile(oldPath));
   const db = openDatabase(':memory:');
@@ -69,11 +71,13 @@ test('旧库只导入用户数据，收藏在扫描后匹配，孤儿保留且�
 test('旧壁纸默认保留竖图、未知尺寸与视频，并迁移兼容设置', async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'luvia-old-wallpaper-')); const media = path.join(dir, 'media'); const legacy = path.join(dir, 'legacy');
   await mkdir(media); await mkdir(legacy);
+  const aliceToken = jwt.sign({ username: 'alice', isWallpaper: true }, signingKey, { expiresIn: '3650d' });
+  const bobToken = jwt.sign({ username: 'bob', isWallpaper: true }, signingKey, { expiresIn: '3650d' });
   await writeFile(path.join(legacy, 'lumina-config.json'), JSON.stringify({ libraryPaths: [media], users: [
-    { username: 'alice', password: 'synthetic password', isAdmin: true, wallpaperToken: 'synthetic-wallpaper' },
-    { username: 'bob', password: 'synthetic password', wallpaperToken: 'synthetic-no-video', wallpaperConfig: { interval: 45, showVideos: false } },
+    { username: 'alice', password: 'synthetic password', isAdmin: true, wallpaperToken: aliceToken },
+    { username: 'bob', password: 'synthetic password', wallpaperToken: bobToken, wallpaperConfig: { interval: 45, showVideos: false } },
   ] }));
-  const db = openDatabase(':memory:'); const app = await createApp({ db, legacyPending: false });
+  const db = openDatabase(':memory:'); const app = await createApp({ db, legacyPending: false, legacyJwtSecret: signingKey });
   try {
     await importLegacy(db, { legacyDir: legacy, mediaRoots: [media] });
     const library = (db.prepare('SELECT id FROM libraries').get() as { id: string }).id;
@@ -81,10 +85,10 @@ test('旧壁纸默认保留竖图、未知尺寸与视频，并迁移兼容设�
     add.run('portrait', library, 'portrait.jpg', library, 'portrait.jpg', 'image/jpeg', 'image', 1, 1, 1, 100, 200);
     add.run('unknown', library, 'unknown.jpg', library, 'unknown.jpg', 'image/jpeg', 'image', 1, 1, 1, null, null);
     add.run('video', library, 'video.mp4', library, 'video.mp4', 'video/mp4', 'video', 1, 1, 1, null, null);
-    const response = await app.inject({ method: 'GET', url: '/api/scan/results?random=true&token=synthetic-wallpaper' });
+    const response = await app.inject({ method: 'GET', url: `/api/scan/results?random=true&token=${aliceToken}` });
     assert.equal(response.statusCode, 200);
     assert.deepEqual(response.json().files.map((item: { name: string }) => item.name).sort(), ['portrait.jpg', 'unknown.jpg', 'video.mp4']);
-    const config = db.prepare("SELECT wallpaper FROM api_tokens WHERE name='旧版壁纸令牌' AND token_hash=?").get(sha('synthetic-no-video')) as { wallpaper: string };
+    const config = db.prepare("SELECT wallpaper FROM api_tokens WHERE name='旧版壁纸令牌' AND token_hash=?").get(sha(bobToken)) as { wallpaper: string };
     assert.deepEqual(JSON.parse(config.wallpaper), { source: 'library', folder: null, intervalSec: 45, landscapeOnly: false, includeVideos: false });
   } finally { await app.close(); db.close(); await rm(dir, { recursive: true, force: true }); }
 });
