@@ -48,6 +48,14 @@ type Identity = { user: UserRow; kind: 'session' | 'token' | 'legacy'; scope?: s
 type Options = { db: Database.Database; legacyPending: boolean | (() => boolean); secureCookies?: boolean; mounts?: () => Promise<Mount[]>; systemRoots?: string[]; cacheDir?: string; staticDir?: string; legacyJwtSecret?: string };
 class HttpError extends Error { constructor(publicStatus: number, code: string, message: string) { super(message); this.statusCode = publicStatus; this.code = code; } statusCode: number; code: string; }
 const fail = (status: number, code: string, message: string): never => { throw new HttpError(status, code, message); };
+const DUMMY_PASSWORD_HASH = `scrypt$v2$${'00'.repeat(16)}$${'00'.repeat(64)}`;
+async function verifyLoginPassword(password: string, stored: string | undefined) {
+  const verification = await verifyPassword(password, stored ?? DUMMY_PASSWORD_HASH);
+  if (stored !== undefined && !/^scrypt\$(?:v2\$)?[0-9a-fA-F]{32}\$[0-9a-fA-F]{128}$/.test(stored)) {
+    await verifyPassword(password, DUMMY_PASSWORD_HASH);
+  }
+  return verification;
+}
 const digest = (s: string) => createHash('sha256').update(s).digest('hex');
 const now = () => Math.floor(Date.now() / 1000);
 const iso = (n: number | null) => n === null ? null : new Date(n * 1000).toISOString();
@@ -258,9 +266,9 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
   });
   register('login', async (req, reply, body) => {
     limitLogin(req.ip, 'login', body.username);
-    const u = (findUser.get(body.username) as UserRow | undefined) ?? fail(401, 'UNAUTHORIZED', '用户名或密码错误');
-    const verification = await verifyPassword(body.password, u.password_hash);
-    if (!verification.valid) fail(401, 'UNAUTHORIZED', '用户名或密码错误');
+    const u = findUser.get(body.username) as UserRow | undefined;
+    const verification = await verifyLoginPassword(body.password, u?.password_hash);
+    if (!u || !verification.valid) return fail(401, 'UNAUTHORIZED', '用户名或密码错误');
     const upgraded = verification.needsUpgrade ? await hashPassword(body.password) : null;
     db.transaction(() => {
       u.last_login_at = now();
@@ -1057,9 +1065,9 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
   app.post('/api/auth/login', async (req) => {
     const body = endpoints.login.body.parse(req.body);
     limitLogin(req.ip, 'login', body.username);
-    const user = (findUser.get(body.username) as UserRow | undefined) ?? fail(401, 'UNAUTHORIZED', '用户名或密码错误');
-    const verified = await verifyPassword(body.password, user.password_hash);
-    if (!verified.valid) return fail(401, 'UNAUTHORIZED', '用户名或密码错误');
+    const user = findUser.get(body.username) as UserRow | undefined;
+    const verified = await verifyLoginPassword(body.password, user?.password_hash);
+    if (!user || !verified.valid) return fail(401, 'UNAUTHORIZED', '用户名或密码错误');
     if (!options.legacyJwtSecret) return fail(503, 'INTERNAL', '旧客户端登录暂不可用');
     const replacement = verified.needsUpgrade ? await hashPassword(body.password) : user.password_hash;
     const token = jwt.sign({ username: user.username, role: user.role }, options.legacyJwtSecret, { algorithm: 'HS256', expiresIn: '7d', subject: user.id, jwtid: randomUUID() });
