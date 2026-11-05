@@ -5,11 +5,14 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import type Database from 'better-sqlite3';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import path from 'node:path';
-import { access, realpath, stat, readdir } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { access, realpath, stat, readdir, open as openFile } from 'node:fs/promises';
+import { once } from 'node:events';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import sharp from 'sharp';
 import jwt from 'jsonwebtoken';
+import { ZipArchive } from 'archiver';
 import { ZodError } from 'zod';
 import { CSRF_HEADER, endpoints, JobAction, MediaListQuery, Preferences, RandomQuery, ShareTarget, WallpaperConfig, defaultPreferences } from '@luvia/contracts';
 import type { MediaItem, User } from '@luvia/contracts';
@@ -730,6 +733,86 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
       return sendFile(req, reply, filename, { mime: 'video/mp4', name: row.name, etagKey: cacheKey(row, variant) });
     }
     return sendFile(req, reply, filename, { mime: row.mime, name: row.name, download: (req.query as { download?: string }).download === '1', etagKey: row.id });
+  });
+  type DownloadTarget = ReturnType<typeof endpoints.createDownload.body.parse>;
+  function validateDownload(target: DownloadTarget, owner: UserRow): void {
+    const user = userOut(owner); const context = { id: owner.id, allowedPaths: user.allowedPaths };
+    if ('ids' in target) requireVisibleMedia([...new Set(target.ids)], context);
+    else if ('albumId' in target) ownedAlbum(target.albumId, owner.id);
+    else if (!folders.canFavorite(target.folder, { ...context, isAdmin: owner.role === 'admin' })) fail(403, 'FORBIDDEN', '文件夹不可访问');
+  }
+  function downloadScope(target: DownloadTarget, owner: UserRow) {
+    const user = userOut(owner);
+    const context = { id: owner.id, allowedPaths: user.allowedPaths, ...('ids' in target ? { ids: [...new Set(target.ids)] } : {}) };
+    const query = MediaListQuery.parse('albumId' in target ? { scope: 'album', albumId: target.albumId, limit: 100 }
+      : 'folder' in target ? { scope: 'folder', folder: target.folder, recursive: true, limit: 100 } : { limit: 100 });
+    return { context, query };
+  }
+  register('createDownload', async (req, _reply, body) => {
+    const identity = requireUser(req); const ticket = secret(); const expires = now() + 600;
+    db.transaction(() => {
+      const user = currentSessionUser(identity);
+      validateDownload(body, user);
+      db.prepare('INSERT INTO download_tickets(token_hash,user_id,target,expires_at) VALUES (?,?,?,?)')
+        .run(digest(ticket), user.id, JSON.stringify(body), expires);
+    }).immediate();
+    return { url: `/api/v2/downloads/${ticket}`, expiresAt: iso(expires)!, fileName: 'Luvia Gallery.zip' };
+  });
+  app.get('/api/v2/downloads/:ticket', async (req, reply) => {
+    const identity = requireUser(req); const { ticket } = req.params as { ticket: string };
+    if (ticket.length > 256) return fail(404, 'NOT_FOUND', '下载票据不存在或已过期');
+    const target = db.transaction(() => {
+      const user = currentSessionUser(identity);
+      const record = db.prepare('SELECT target FROM download_tickets WHERE token_hash=? AND user_id=? AND expires_at>?')
+        .get(digest(ticket), user.id, now()) as { target: string } | undefined;
+      if (!record) return fail(404, 'NOT_FOUND', '下载票据不存在或已过期');
+      const value = endpoints.createDownload.body.parse(JSON.parse(record.target));
+      validateDownload(value, user);
+      if (!db.prepare('DELETE FROM download_tickets WHERE token_hash=? AND user_id=?').run(digest(ticket), user.id).changes) return fail(404, 'NOT_FOUND', '下载票据不存在或已过期');
+      return value;
+    }).immediate();
+    const archive = new ZipArchive({ store: true, forceZip64: true });
+    let stopped = false; let active: { destroy: () => void } | undefined;
+    reply.raw.on('close', () => { if (!reply.raw.writableFinished) { stopped = true; active?.destroy(); archive.abort(); } });
+    archive.on('warning', (error) => archive.destroy(error));
+    archive.on('error', () => { stopped = true; active?.destroy(); reply.raw.destroy(); });
+    reply.type('application/zip').header('Content-Disposition', "attachment; filename*=UTF-8''Luvia%20Gallery.zip");
+    reply.send(archive);
+    const produce = async () => {
+      let cursor: string | undefined;
+      do {
+        if (stopped) return;
+        const owner = currentSessionUser(identity); const scope = downloadScope(target, owner);
+        const page = media.page({ ...scope.query, cursor }, scope.context);
+        for (const item of page.items) {
+          if (stopped) return;
+          let current = downloadScope(target, currentSessionUser(identity));
+          if (!media.contains(current.query, current.context, item.id)) throw new Error('下载权限已经变化');
+          const row = db.prepare(`SELECT f.library_id,f.relative_path,l.root FROM files f JOIN libraries l ON l.id=f.library_id AND l.enabled=1 WHERE f.id=?`)
+            .get(item.id) as { library_id: string; relative_path: string; root: string } | undefined;
+          if (!row) throw new Error('下载媒体不可用');
+          const archiveName = virtualPath(row.library_id, row.relative_path);
+          const filename = await secureMediaPath(row.root, row.relative_path);
+          current = downloadScope(target, currentSessionUser(identity));
+          if (!media.contains(current.query, current.context, item.id)) throw new Error('下载权限已经变化');
+          const handle = await openFile(filename, constants.O_RDONLY | constants.O_NOFOLLOW);
+          try {
+            const info = await handle.stat();
+            current = downloadScope(target, currentSessionUser(identity));
+            if (!info.isFile() || !media.contains(current.query, current.context, item.id)) throw new Error('下载媒体不可用');
+          } catch (error) { await handle.close(); throw error; }
+          const stream = handle.createReadStream({ autoClose: true }); active = stream;
+          const completed = once(archive, 'entry');
+          try { archive.append(stream, { name: archiveName, store: true }); }
+          catch (error) { void completed.catch(() => {}); throw error; }
+          await completed; active = undefined;
+        }
+        cursor = page.nextCursor ?? undefined;
+      } while (cursor);
+      if (!stopped) await archive.finalize();
+    };
+    void produce().catch(() => { stopped = true; active?.destroy(); archive.destroy(new Error('下载流已中断')); });
+    return reply;
   });
   function legacyVirtual(absolute: string): string | null {
     if (!path.isAbsolute(absolute)) return null;
