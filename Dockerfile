@@ -27,7 +27,8 @@ COPY --from=dependencies /app/node_modules /app/node_modules
 COPY --from=dependencies /app/apps/server /app/apps/server
 COPY --from=dependencies /app/packages/contracts /app/packages/contracts
 COPY --from=frontend /app/apps/web/dist /app/apps/web/dist
-RUN chmod -R go-w /app
+# 统一权限，不依赖构建机检出的 umask/ACL（如检出为 700 时 node 用户无法读取源码）；运行用户只读
+RUN chmod -R u+rwX,go+rX,go-w /app
 ENV NODE_ENV=production PORT=3001 DATA_DIR=/data CACHE_DIR=/cache
 USER node
 EXPOSE 3001
