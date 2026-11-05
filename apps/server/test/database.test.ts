@@ -12,7 +12,7 @@ test('数据库迁移持久且可重复，支持只读连接', async () => {
   try {
     const db = openDatabase(filename);
     assert.equal(db.pragma('journal_mode', { simple: true }), 'wal');
-    assert.equal(db.pragma('user_version', { simple: true }), 3);
+    assert.equal(db.pragma('user_version', { simple: true }), 4);
     db.prepare("INSERT INTO libraries (id, name, root) VALUES ('lib1', '测试', '/test')").run();
     db.close();
     const writable = openDatabase(filename);
@@ -46,11 +46,11 @@ test('已有版本 1 数据库升级时保留数据并创建扫描锁表', async
   const dir = await mkdtemp(path.join(tmpdir(), 'luvia-upgrade-'));
   const filename = path.join(dir, 'luvia.db');
   const old = new Database(filename);
-  old.exec("CREATE TABLE libraries (id TEXT PRIMARY KEY, name TEXT NOT NULL); CREATE TABLE api_tokens (id TEXT PRIMARY KEY); INSERT INTO libraries VALUES ('lib1','测试'); PRAGMA user_version=1");
+  old.exec("CREATE TABLE libraries (id TEXT PRIMARY KEY, name TEXT NOT NULL); CREATE TABLE api_tokens (id TEXT PRIMARY KEY); CREATE TABLE jobs (id TEXT PRIMARY KEY, status TEXT NOT NULL); INSERT INTO libraries VALUES ('lib1','测试'); PRAGMA user_version=1");
   old.close();
   try {
     const db = openDatabase(filename);
-    assert.equal(db.pragma('user_version', { simple: true }), 3);
+    assert.equal(db.pragma('user_version', { simple: true }), 4);
     assert.equal((db.prepare('SELECT count(*) AS n FROM libraries').get() as { n: number }).n, 1);
     db.prepare("INSERT INTO scan_locks(library_id,owner,acquired_at) VALUES ('lib1','owner',1)").run();
     db.close();

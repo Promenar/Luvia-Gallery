@@ -115,6 +115,28 @@ const schemaV2 = `
 
 const schemaV3 = `ALTER TABLE api_tokens ADD COLUMN wallpaper TEXT;`;
 
+const schemaV4 = `
+  ALTER TABLE jobs ADD COLUMN owner TEXT;
+  ALTER TABLE jobs ADD COLUMN heartbeat_at INTEGER;
+  ALTER TABLE jobs ADD COLUMN lease_expires_at INTEGER;
+  ALTER TABLE scan_locks ADD COLUMN heartbeat_at INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE scan_locks ADD COLUMN lease_expires_at INTEGER NOT NULL DEFAULT 0;
+  CREATE INDEX jobs_lease ON jobs(status, lease_expires_at);
+  CREATE TABLE scan_runs (
+    job_id TEXT PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE,
+    library_id TEXT NOT NULL REFERENCES libraries(id) ON DELETE CASCADE,
+    marker TEXT NOT NULL, added INTEGER NOT NULL DEFAULT 0,
+    removed INTEGER NOT NULL DEFAULT 0, errors INTEGER NOT NULL DEFAULT 0,
+    complete INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE TABLE scan_directories (
+    job_id TEXT NOT NULL REFERENCES scan_runs(job_id) ON DELETE CASCADE,
+    relative_path TEXT NOT NULL, done INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY(job_id,relative_path)
+  );
+  CREATE INDEX scan_directories_pending ON scan_directories(job_id,done,relative_path);
+`;
+
 export function openDatabase(filename: string, options: { readonly?: boolean } = {}): Database.Database {
   const readonly = options.readonly ?? false;
   const db = new Database(filename, { readonly, fileMustExist: readonly });
@@ -128,7 +150,7 @@ export function openDatabase(filename: string, options: { readonly?: boolean } =
       db.pragma('synchronous = NORMAL');
       db.transaction(() => {
         const version = db.pragma('user_version', { simple: true });
-        if (version !== 0 && version !== 1 && version !== 2 && version !== 3) throw new Error(`不支持的数据库版本: ${version}`);
+        if (version !== 0 && version !== 1 && version !== 2 && version !== 3 && version !== 4) throw new Error(`不支持的数据库版本: ${version}`);
         if (version === 0) {
           db.exec(schemaV1);
           db.pragma('user_version = 1');
@@ -141,8 +163,12 @@ export function openDatabase(filename: string, options: { readonly?: boolean } =
           db.exec(schemaV3);
           db.pragma('user_version = 3');
         }
+        if (version === 0 || version === 1 || version === 2 || version === 3) {
+          db.exec(schemaV4);
+          db.pragma('user_version = 4');
+        }
       }).immediate();
-    } else if (db.pragma('user_version', { simple: true }) !== 3) {
+    } else if (db.pragma('user_version', { simple: true }) !== 4) {
       throw new Error('数据库尚未就绪或版本不受支持');
     }
     return db;
