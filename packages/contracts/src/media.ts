@@ -126,6 +126,8 @@ export type MediaFilter = z.infer<typeof MediaFilter>;
  * - folder：仅 folder 参数指定文件夹的直接子媒体（recursive=true 时含子孙）
  * - album：albumId 指定相册中的媒体
  * - favorites：当前用户收藏的媒体（含收藏文件夹之下的媒体）
+ * 处于删除宽限期（文件已从磁盘消失）的媒体不出现在列表、分桶、筛选候选、随机、回忆与 v1 兼容接口中；
+ * 其收藏、相册关系与缩略图保留，文件在宽限期内重新出现（含移动后被识别）时恢复原媒体 ID。
  */
 export const MediaListQuery = MediaFilter.extend({
   scope: z.enum(['all', 'folder', 'album', 'favorites']).default('all'),

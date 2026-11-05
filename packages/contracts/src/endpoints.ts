@@ -74,6 +74,7 @@ export const endpoints = {
   createLibrary: d({ method: 'POST', path: '/api/v2/admin/libraries', auth: 'admin', body: Ad.CreateLibraryBody, response: Ad.Library }),
   updateLibrary: d({ method: 'PATCH', path: '/api/v2/admin/libraries/:id', auth: 'admin', body: Ad.UpdateLibraryBody, response: Ad.Library }),
   deleteLibrary: d({ method: 'DELETE', path: '/api/v2/admin/libraries/:id', auth: 'admin', response: null }),
+  libraryChanges: d({ method: 'GET', path: '/api/v2/admin/libraries/:id/changes', auth: 'admin', query: z.object({ limit: z.coerce.number().int().min(1).max(500).default(100) }), response: Ad.LibraryChangeList }),
   mounts: d({ method: 'GET', path: '/api/v2/admin/mounts', auth: 'admin', response: Ad.MountList }),
   fsList: d({ method: 'GET', path: '/api/v2/admin/fs', auth: 'admin', query: z.object({ path: z.string().optional() }), response: Ad.FsListing }),
   getSettings: d({ method: 'GET', path: '/api/v2/admin/settings', auth: 'admin', response: Ad.AdminSettings }),
