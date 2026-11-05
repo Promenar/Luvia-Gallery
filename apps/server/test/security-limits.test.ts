@@ -49,3 +49,25 @@ test('单个 IP 的大量不同账号请求仍受总体上限约束', async () =
     assert.equal((await attempt(100)).statusCode, 429);
   } finally { await app.close(); db.close(); }
 });
+
+test('Fastify 客户端错误保留状态且不会写入错误日志', async () => {
+  const db = openDatabase(':memory:'); const app = await createApp({ db, legacyPending: false });
+  app.get('/test-internal-error', async () => { throw new Error('synthetic internal error'); });
+  try {
+    const setup = await app.inject({ method: 'POST', url: '/api/v2/auth/setup', payload: { username: 'admin', password: 'test password' } });
+    const cookie = (setup.headers['set-cookie'] as string).split(';')[0]!;
+    const requests = [
+      { method: 'POST' as const, url: '/api/v2/auth/login', headers: { 'content-type': 'application/json' }, payload: '{' },
+      { method: 'POST' as const, url: '/api/v2/auth/login', headers: { 'content-type': 'application/json' }, payload: `"${'a'.repeat(1_048_576)}"` },
+      { method: 'POST' as const, url: '/api/v2/auth/login', headers: { 'content-type': 'application/x-unsupported' }, payload: 'fixture' },
+    ];
+    const responses = [];
+    for (const request of requests) responses.push(await app.inject(request));
+    assert.deepEqual(responses.map((response) => response.statusCode), [400, 413, 415]);
+    for (const response of responses) assert.match(response.json().error.message, /[\u4e00-\u9fff]/);
+    const logs = () => app.inject({ method: 'GET', url: '/api/v2/admin/logs?level=error', headers: { cookie } });
+    assert.deepEqual((await logs()).json().logs, []);
+    assert.equal((await app.inject({ method: 'GET', url: '/test-internal-error' })).statusCode, 500);
+    assert.equal((await logs()).json().logs.length, 1);
+  } finally { await app.close(); db.close(); }
+});
