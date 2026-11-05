@@ -80,6 +80,7 @@ export class WatchCoordinator {
   private lastEventAt: string | null = null;
   private lastReconcileAt: string | null = null;
   private readonly pendingSources = new Map<string, Source>();
+  private readonly provisionalRetries = new Set<string>();
 
   constructor(options: Options) {
     this.options = options; this.clock = options.clock ?? systemClock; this.fsType = options.fsType ?? null;
@@ -91,7 +92,7 @@ export class WatchCoordinator {
     this.stable = new StabilityTracker({ clock: this.clock,
       stat: async (relative) => { const item = await this.statEntry(relative); return item && !item.isDir ? item : null; },
       onStable: (relative, snapshot) => { void this.run(() => this.onStable(relative, snapshot)).catch(() => {}); },
-      onDropped: (relative) => this.pendingSources.delete(relative),
+      onDropped: (relative) => { this.pendingSources.delete(relative); this.provisionalRetries.delete(relative); },
       onError: (error) => this.options.onError?.(error),
     });
     this.matcher = new MoveMatcher({ clock: this.clock,
@@ -124,7 +125,7 @@ export class WatchCoordinator {
     await this.idle();
     this.dirty.stop(); this.stable.stop(); this.matcher.stop(); this.throttle.stop();
     if (this.pollTimer !== null) this.clock.clearTimeout(this.pollTimer); this.pollTimer = null;
-    this.pendingSources.clear(); this.started = false;
+    this.pendingSources.clear(); this.provisionalRetries.clear(); this.started = false;
   }
   async idle(): Promise<void> {
     while (true) { await this.stable.idle(); const current = this.tail; await current; await this.stable.idle(); if (this.tail === current) return; }
@@ -277,7 +278,7 @@ export class WatchCoordinator {
           }
           continue;
         }
-        this.stable.cancel(old.path); this.matcher.cancelAdded(old.path); this.pendingSources.delete(old.path);
+        this.stable.cancel(old.path); this.matcher.cancelAdded(old.path); this.pendingSources.delete(old.path); this.provisionalRetries.delete(old.path);
         if (!this.matcher.hasVanished(old.path)) { const vanished: Candidate = { ...old, source }; this.matcher.vanished(vanished); }
       }
       for (const entry of entries) {
@@ -317,9 +318,12 @@ export class WatchCoordinator {
     if (existing && existing.isDir === candidate.isDir) {
       if (existing.missingAt !== null) { await this.restorePresent(existing, candidate); return; }
       this.matcher.cancelVanished(relative);
-      if (existing.size !== candidate.size || existing.mtimeMs !== candidate.mtimeMs || existing.dev !== candidate.dev || existing.ino !== candidate.ino) {
+      if (existing.size !== candidate.size || existing.mtimeMs !== candidate.mtimeMs || existing.dev !== candidate.dev || existing.ino !== candidate.ino ||
+        (existing.headHash !== null && existing.headHash !== candidate.headHash)) {
         await this.options.port.writeUpdated(existing, candidate); await this.record('updated', relative, null, false, existing.mediaId, source);
       }
+      const refreshed: Candidate = { ...candidate, mediaId: existing.mediaId };
+      if (!this.matcher.refreshAdded(refreshed) && this.provisionalRetries.delete(relative)) this.matcher.appeared(refreshed);
       return;
     }
     const pendingKind = this.matcher.pendingMatchForAdded(candidate);
@@ -365,7 +369,10 @@ export class WatchCoordinator {
     const target = await this.statEntry(to.path); const source = await this.statEntry(from.path);
     if (!old || !target || source || target.isDir !== to.isDir) { await this.options.port.requestFullReconcile('move-race'); return; }
     if (target.dev !== to.dev || target.ino !== to.ino || (!target.isDir && (target.size !== to.size || target.mtimeMs !== to.mtimeMs))) {
-      this.matcher.vanished(from); if (!target.isDir) { this.pendingSources.set(to.path, to.source); this.stable.track(to.path, target); }
+      this.matcher.vanished(from); if (!target.isDir) {
+        if (to.mediaId !== null) this.provisionalRetries.add(to.path);
+        this.pendingSources.set(to.path, to.source); this.stable.track(to.path, target);
+      }
       else await this.options.port.requestFullReconcile('move-race');
       return;
     }
