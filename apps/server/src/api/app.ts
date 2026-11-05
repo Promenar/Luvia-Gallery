@@ -74,11 +74,12 @@ const tokenOut = (t: TokenRow) => ({
 export async function createApp(options: Options): Promise<FastifyInstance> {
   const { db } = options;
   const proxyValue = (process.env.TRUST_PROXY ?? '').trim().toLowerCase();
-  if (proxyValue && proxyValue !== 'true' && proxyValue !== 'false' && (!/^\d+$/.test(proxyValue) || !Number.isSafeInteger(Number(proxyValue)))) {
-    throw new Error('TRUST_PROXY 必须为 true、false 或非负整数');
+  // 只接受可信代理跳数。true（信任全部代理）会取客户端可伪造的最左侧转发地址，使按 IP 限速失效，因此拒绝
+  if (proxyValue && proxyValue !== 'false' && (!/^\d+$/.test(proxyValue) || !Number.isSafeInteger(Number(proxyValue)))) {
+    throw new Error('TRUST_PROXY 必须为 false 或可信代理跳数（非负整数，例如 1）');
   }
   const proxyHops = Number(proxyValue);
-  const trustProxy = proxyValue === 'true' ? true : proxyValue === '' || proxyValue === 'false' || proxyHops === 0
+  const trustProxy = proxyValue === '' || proxyValue === 'false' || proxyHops === 0
     ? false : (_address: string, hop: number) => hop < proxyHops;
   const app = Fastify({ logger: false, trustProxy, routerOptions: { maxParamLength: 8192 } });
   await app.register(cookie);
@@ -90,7 +91,10 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
   app.addHook('onClose', async () => { observability.close(); });
   app.addHook('onResponse', async (req, reply) => {
     observability.record(reply.elapsedTime);
-    if (reply.statusCode >= 500) observability.logger.error({ ctx: { method: req.method, route: req.routeOptions.url ?? 'unknown', status: reply.statusCode } }, '请求处理失败');
+    // 503 是容量或暂不可用（转码、瓦片任务已满，旧数据导入中），属于预期的降级，记为警告；其余 5xx 才记为错误
+    const ctx = { ctx: { method: req.method, route: req.routeOptions.url ?? 'unknown', status: reply.statusCode } };
+    if (reply.statusCode === 503) observability.logger.warn(ctx, '服务暂时不可用');
+    else if (reply.statusCode >= 500) observability.logger.error(ctx, '请求处理失败');
   });
   const folders = new FolderReader(db);
   const attempts = new Map<string, number[]>();
