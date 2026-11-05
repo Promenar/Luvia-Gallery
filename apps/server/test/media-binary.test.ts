@@ -150,7 +150,7 @@ test('HEIC 元数据、完整尺寸显示图和缩略图通过后台解码生成
     await runNextJob(db, options);
     const result = await thumb;
     assert.equal(result.statusCode, 200);
-    assert.equal((await sharp(result.rawPayload).metadata()).width, 256);
+    assert.equal((await sharp(result.rawPayload).metadata()).height, 256);
   } finally { await app.close(); db.close(); await rm(root, { recursive: true, force: true }); await rm(cache, { recursive: true, force: true }); }
 });
 
