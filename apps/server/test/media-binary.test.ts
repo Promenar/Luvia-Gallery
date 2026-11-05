@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { appendFile, mkdtemp, rm, symlink } from 'node:fs/promises';
+import { appendFile, copyFile, mkdtemp, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import sharp from 'sharp';
@@ -114,6 +114,43 @@ test('TIFF display 与大图瓦片在 worker 生成前返回 202，生成后提�
     const tile = await app.inject({ method: 'GET', url: tileUrl, headers: { cookie } });
     assert.equal(tile.statusCode, 200); assert.equal((await sharp(tile.rawPayload).metadata()).width, 256);
     assert.equal((await app.inject({ method: 'GET', url: `/api/v2/media/${id}/tiles/14/999_0.webp`, headers: { cookie } })).statusCode, 404);
+  } finally { await app.close(); db.close(); await rm(root, { recursive: true, force: true }); await rm(cache, { recursive: true, force: true }); }
+});
+
+test('HEIC 元数据、完整尺寸显示图和缩略图通过后台解码生成', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'luvia-heic-'));
+  const cache = await mkdtemp(path.join(tmpdir(), 'luvia-heic-cache-'));
+  const db = openDatabase(':memory:'); const app = await createApp({ db, legacyPending: false, cacheDir: cache });
+  try {
+    await copyFile(new URL('./fixtures/synthetic.heic', import.meta.url), path.join(root, 'image.heic'));
+    db.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib','照片',?)").run(root);
+    await scanLibrary(db, { id: 'lib', root }, { allowedRoots: [root] });
+    const { id } = db.prepare('SELECT id FROM files').get() as { id: string };
+    db.prepare("INSERT INTO jobs(id,type,label,status,trigger,payload,created_at) VALUES ('metadata','metadata','元数据','queued','manual',?,1)").run(JSON.stringify({ libraryId: 'lib' }));
+    const options = { owner: 'worker', allowedRoots: [root], legacyDir: root, systemRoots: [], cacheDir: cache };
+    await runNextJob(db, options);
+    const metadata = db.prepare('SELECT width,height,metadata_status FROM files WHERE id=?').get(id) as { width: number; height: number; metadata_status: string };
+    assert.deepEqual(metadata, { width: 512, height: 384, metadata_status: 'done' });
+    const setup = await app.inject({ method: 'POST', url: '/api/v2/auth/setup', headers: { 'x-luvia-request': '1' }, payload: { username: 'admin', password: 'test password' } });
+    const cookie = (setup.headers['set-cookie'] as string).split(';')[0]!;
+    const displayUrl = `/api/v2/media/${id}/display`;
+    assert.equal((await app.inject({ method: 'GET', url: displayUrl, headers: { cookie } })).statusCode, 202);
+    await runNextJob(db, options);
+    const display = await app.inject({ method: 'GET', url: displayUrl, headers: { cookie } });
+    assert.equal(display.statusCode, 200);
+    const displayImage = await sharp(display.rawPayload).metadata();
+    assert.equal(displayImage.format, 'webp'); assert.equal(displayImage.width, 512); assert.equal(displayImage.height, 384);
+    const range = await app.inject({ method: 'GET', url: displayUrl, headers: { cookie, range: 'bytes=0-9' } });
+    assert.equal(range.statusCode, 206); assert.equal(range.rawPayload.length, 10); assert.ok(range.headers.etag);
+    const thumb = app.inject({ method: 'GET', url: `/api/v2/media/${id}/thumb?size=s`, headers: { cookie } });
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if ((db.prepare("SELECT count(*) AS n FROM jobs WHERE type='thumbnails' AND status='queued'").get() as { n: number }).n) break;
+      await new Promise<void>((resolve) => setTimeout(resolve, 10));
+    }
+    await runNextJob(db, options);
+    const result = await thumb;
+    assert.equal(result.statusCode, 200);
+    assert.equal((await sharp(result.rawPayload).metadata()).width, 256);
   } finally { await app.close(); db.close(); await rm(root, { recursive: true, force: true }); await rm(cache, { recursive: true, force: true }); }
 });
 

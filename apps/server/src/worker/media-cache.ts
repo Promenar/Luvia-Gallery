@@ -53,10 +53,15 @@ export async function generateMediaCache(db: Database.Database, payload: unknown
   await mkdir(path.dirname(destination), { recursive: true });
   const temp = `${destination}.${randomUUID()}.tmp`;
   const frame = `${temp}.jpg`;
+  const decoded = `${temp}.png`;
   let hash: string | null = null;
   try {
+    let input = filename;
+    if (row.media_type === 'image' && ['.heic', '.heif'].includes(path.extname(row.relative_path).toLowerCase())) {
+      await runFfmpeg(db, options.owner, ['-n', '-i', filename, '-map', '0:v:0', '-frames:v', '1', '-threads', '1', '-f', 'image2', '-vcodec', 'png', decoded], options);
+      input = decoded;
+    }
     if (task.variant.kind === 'thumb') {
-      let input = filename;
       if (row.media_type === 'video') {
         await runFfmpeg(db, options.owner, ['-n', '-i', filename, '-map', '0:v:0', '-frames:v', '1', '-threads', '1', '-f', 'image2', '-vcodec', 'mjpeg', frame], options);
         input = frame;
@@ -80,7 +85,7 @@ export async function generateMediaCache(db: Database.Database, payload: unknown
         catch { options.signal?.throwIfAborted(); options.assertLease(); await unlink(temp).catch(() => {}); await encode(false); }
       } else await encode(false);
     } else if (task.variant.kind === 'display') {
-      await sharp(filename).rotate().webp({ quality: 90 }).toFile(temp);
+      await sharp(input).rotate().webp({ quality: 90 }).toFile(temp);
     } else {
       if (!row.width || !row.height || Math.max(row.width, row.height) <= 8192) throw new Error('媒体不支持深度缩放');
       const maxLevel = Math.ceil(Math.log2(Math.max(row.width, row.height)));
@@ -89,7 +94,7 @@ export async function generateMediaCache(db: Database.Database, payload: unknown
       const width = Math.ceil(row.width / scale); const height = Math.ceil(row.height / scale);
       const left = task.variant.col * 256; const top = task.variant.row * 256;
       if (left >= width || top >= height) throw new Error('瓦片位置无效');
-      await sharp(filename).rotate().resize(width, height, { fit: 'fill' }).extract({ left, top, width: Math.min(256, width - left), height: Math.min(256, height - top) }).webp({ quality: 82 }).toFile(temp);
+      await sharp(input).rotate().resize(width, height, { fit: 'fill' }).extract({ left, top, width: Math.min(256, width - left), height: Math.min(256, height - top) }).webp({ quality: 82 }).toFile(temp);
     }
     options.signal?.throwIfAborted(); options.assertLease();
     const sourceAfter = await stat(filename);
@@ -108,5 +113,5 @@ export async function generateMediaCache(db: Database.Database, payload: unknown
       if (hash) noteThumbnail(db, row.id);
       if (task.variant.kind === 'preview') db.prepare('UPDATE files SET has_preview=1 WHERE id=? AND size=? AND modified_at=?').run(row.id, row.size, row.modified_at);
     }).immediate();
-  } finally { await unlink(temp).catch(() => {}); await unlink(frame).catch(() => {}); }
+  } finally { await unlink(temp).catch(() => {}); await unlink(frame).catch(() => {}); await unlink(decoded).catch(() => {}); }
 }
