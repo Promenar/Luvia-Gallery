@@ -12,6 +12,7 @@ services:
       MEDIA_ROOT: /media
       TZ: ${TZ:-Asia/Shanghai}
       LUVIA_HOST_PATHS: "${LUVIA_HOST_PATHS:-}"
+      JWT_SECRET: "${JWT_SECRET:-}"
     volumes:
       - luvia-data:/data
       - luvia-cache:/cache
