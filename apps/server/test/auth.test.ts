@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import { scryptSync } from 'node:crypto';
+import { createHook } from 'node:async_hooks';
 import assert from 'node:assert/strict';
 import { AuthState, UserResponse, CreatedToken } from '@luvia/contracts';
 import { openDatabase } from '../src/core/database.ts';
@@ -151,4 +152,24 @@ test('编码路径和令牌参数大小写不能绕过 v2 安全检查', async (
     assert.equal((await app.inject({ method: 'POST', url: '/api/%762/me/tokens', headers: { ...header, cookie }, payload: { name: '设备', scope: 'read' } })).statusCode, 200);
     assert.equal((await app.inject({ method: 'HEAD', url: '/api/%762/auth/state', headers: { cookie } })).statusCode, 200);
   } finally { await app.close(); db.close(); }
+});
+
+test('v1 与 v2 登录对不存在的用户执行与现有用户相同的口令哈希校验', async () => {
+  const db = openDatabase(':memory:'); const app = await createApp({ db, legacyPending: false });
+  let hashes = 0; const hook = createHook({ init(_id, type) { if (type === 'SCRYPTREQUEST') hashes++; } });
+  try {
+    await app.inject({ method: 'POST', url: '/api/v2/auth/setup', payload: { username: 'admin', password: 'test password' } });
+    db.prepare("INSERT INTO users(id,username,password_hash,role,preferences,created_at) VALUES ('legacy','legacy','legacy password','user','{}',1),('corrupt','corrupt','scrypt$invalid','user','{}',1)").run();
+    db.prepare("INSERT INTO users(id,username,password_hash,role,preferences,created_at) VALUES ('case','case',?,'user','{}',1)")
+      .run(`SCRYPT$${'00'.repeat(16)}$${'00'.repeat(64)}`);
+    const counts: number[] = [];
+    for (const url of ['/api/v2/auth/login', '/api/auth/login']) for (const username of ['admin', 'missing', 'legacy', 'corrupt', 'case']) {
+      hashes = 0; hook.enable();
+      const response = await app.inject({ method: 'POST', url, payload: { username, password: 'wrong password' } });
+      hook.disable();
+      assert.equal(response.statusCode, 401);
+      counts.push(hashes);
+    }
+    assert.deepEqual(counts, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
+  } finally { hook.disable(); await app.close(); db.close(); }
 });
