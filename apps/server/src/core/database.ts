@@ -413,6 +413,36 @@ const schemaV29 = `
     PRIMARY KEY(library_id,marker,relative_path)
   );
 `;
+const schemaV30 = `
+  CREATE TABLE watch_reconcile_requests (
+    library_id TEXT PRIMARY KEY REFERENCES libraries(id) ON DELETE CASCADE,
+    reason TEXT NOT NULL, requested_at INTEGER NOT NULL
+  );
+`;
+const schemaV31 = `
+  CREATE TABLE watch_leases (library_id TEXT PRIMARY KEY REFERENCES libraries(id) ON DELETE CASCADE,
+    owner TEXT NOT NULL, token TEXT NOT NULL, lease_expires_at INTEGER NOT NULL);
+`;
+const schemaV32 = `
+  ALTER TABLE libraries ADD COLUMN watch_mode TEXT NOT NULL DEFAULT 'auto';
+  ALTER TABLE libraries ADD COLUMN watch_poll_interval_sec INTEGER NOT NULL DEFAULT 300;
+`;
+const schemaV33 = `
+  CREATE TABLE library_watch_state (
+    library_id TEXT PRIMARY KEY REFERENCES libraries(id) ON DELETE CASCADE,
+    mount_root TEXT, mount_identity TEXT, mount_attempted INTEGER NOT NULL DEFAULT 0, state TEXT NOT NULL DEFAULT 'starting',
+    watched_dirs INTEGER, last_event_at TEXT, degraded_reason TEXT
+  );
+  CREATE TRIGGER library_watch_root_reset AFTER UPDATE OF root ON libraries WHEN old.root<>new.root BEGIN
+    UPDATE library_watch_state SET mount_root=NULL,mount_identity=NULL,mount_attempted=0,state='starting',watched_dirs=NULL,degraded_reason=NULL WHERE library_id=new.id;
+  END;
+`;
+const schemaV34 = `CREATE TABLE watch_worker_usage(owner TEXT PRIMARY KEY,watched_count INTEGER NOT NULL,lease_expires_at INTEGER NOT NULL);`;
+const schemaV35 = `CREATE TABLE library_event_pending(library_id TEXT NOT NULL REFERENCES libraries(id) ON DELETE CASCADE,source TEXT NOT NULL,payload TEXT NOT NULL,queued_at_ms INTEGER NOT NULL,PRIMARY KEY(library_id,source));
+  CREATE TABLE library_event_sent(library_id TEXT PRIMARY KEY REFERENCES libraries(id) ON DELETE CASCADE,sent_at_ms INTEGER NOT NULL);`;
+const schemaV36 = `CREATE TABLE scan_event_counts(job_id TEXT PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE,added INTEGER NOT NULL DEFAULT 0,removed INTEGER NOT NULL DEFAULT 0,updated INTEGER NOT NULL DEFAULT 0,moved INTEGER NOT NULL DEFAULT 0);
+  CREATE TABLE scan_event_restored(job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,path TEXT NOT NULL,PRIMARY KEY(job_id,path));`;
+const schemaV37 = `CREATE TABLE IF NOT EXISTS scan_event_folders(job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,path TEXT NOT NULL,PRIMARY KEY(job_id,path));`;
 
 export function openDatabase(filename: string, options: { readonly?: boolean; bootstrapLegacy?: boolean } = {}): Database.Database {
   const readonly = options.readonly ?? false;
@@ -427,7 +457,7 @@ export function openDatabase(filename: string, options: { readonly?: boolean; bo
       db.pragma('synchronous = NORMAL');
       db.transaction(() => {
         const version = db.pragma('user_version', { simple: true });
-        if (typeof version !== 'number' || version < 0 || version > 29) throw new Error(`不支持的数据库版本: ${version}`);
+        if (typeof version !== 'number' || version < 0 || version > 39) throw new Error(`不支持的数据库版本: ${version}`);
         if (version === 0) {
           db.exec(schemaV1);
           db.pragma('user_version = 1');
@@ -552,6 +582,50 @@ export function openDatabase(filename: string, options: { readonly?: boolean; bo
           db.exec(schemaV29);
           db.pragma('user_version = 29');
         }
+        if (version <= 29) {
+          db.exec(schemaV30);
+          db.pragma('user_version = 30');
+        }
+        if (version <= 30) {
+          db.exec(schemaV31);
+          db.pragma('user_version = 31');
+        }
+        if (version <= 31) {
+          db.exec(schemaV32);
+          db.pragma('user_version = 32');
+        }
+        if (version <= 32) {
+          db.exec(schemaV33);
+          db.pragma('user_version = 33');
+        }
+        if (version <= 33) {
+          db.exec(schemaV34);
+          db.pragma('user_version = 34');
+        }
+        if (version <= 34) {
+          db.exec(schemaV35);
+          db.pragma('user_version = 35');
+        }
+        if (version <= 35) {
+          db.exec(schemaV36);
+          db.pragma('user_version = 36');
+        }
+        if (version <= 36) {
+          db.exec(schemaV37);
+          db.pragma('user_version = 37');
+        }
+        if (version <= 37) {
+          const columns = new Set((db.pragma('table_info(watch_reconcile_requests)') as { name: string }[]).map((column) => column.name));
+          for (const [name, definition] of [['attempts', 'INTEGER NOT NULL DEFAULT 0'], ['next_attempt_at', 'INTEGER NOT NULL DEFAULT 0'],
+            ['generation', 'INTEGER NOT NULL DEFAULT 1'], ['job_generation', 'INTEGER'], ['job_id', 'TEXT']] as const) {
+            if (!columns.has(name)) db.exec(`ALTER TABLE watch_reconcile_requests ADD COLUMN ${name} ${definition}`);
+          }
+          db.pragma('user_version = 38');
+        }
+        if (version <= 38) {
+          db.exec('CREATE TABLE IF NOT EXISTS scan_pending_media_moves (file_id TEXT PRIMARY KEY REFERENCES files(id) ON DELETE CASCADE)');
+          db.pragma('user_version = 39');
+        }
         const timezone = process.env.TZ ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
         const previous = db.prepare("SELECT value FROM settings WHERE key='timeline.timezone'").get() as { value: string } | undefined;
         if (previous && previous.value !== timezone) {
@@ -563,7 +637,7 @@ export function openDatabase(filename: string, options: { readonly?: boolean; bo
           db.prepare("INSERT INTO jobs(id,type,label,status,trigger,created_at) VALUES (?,'import_legacy','导入旧版数据','queued','system',unixepoch())").run(randomUUID());
         }
       }).immediate();
-    } else if (db.pragma('user_version', { simple: true }) !== 29) {
+    } else if (db.pragma('user_version', { simple: true }) !== 39) {
       throw new Error('数据库尚未就绪或版本不受支持');
     }
     return db;

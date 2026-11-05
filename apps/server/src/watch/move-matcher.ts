@@ -37,6 +37,10 @@ export class MoveMatcher {
     return hash === 0 ? null : hash === 1 ? 'hash' : 'ambiguous';
   }
   hasAdded(path: string): boolean { return this.added.has(path); }
+  refreshAdded(item: MoveCandidate): boolean {
+    const held = this.added.get(item.path); if (!held) return false;
+    held.item = { ...item, mediaId: held.item.mediaId }; return true;
+  }
   hasVanished(path: string): boolean { return this.missing.has(path); }
   cancelAdded(path: string): void { this.added.delete(path); this.schedule(); }
   cancelVanished(path: string): void { this.missing.delete(path); this.schedule(); }

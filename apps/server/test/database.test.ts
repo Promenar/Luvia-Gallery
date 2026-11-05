@@ -7,6 +7,35 @@ import { openDatabase } from '../src/core/database.ts';
 import Database from 'better-sqlite3';
 import { createApp } from '../src/api/app.ts';
 
+test('版本 38 升级保留媒体并创建待确认目录移动记录', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'luvia-move-upgrade-')); const filename = path.join(dir, 'db.sqlite');
+  try {
+    const old = openDatabase(filename); old.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib','照片','/media')").run();
+    old.exec('DROP TABLE scan_pending_media_moves; PRAGMA user_version=38'); old.close();
+    const upgraded = openDatabase(filename);
+    try {
+      assert.equal(upgraded.pragma('user_version', { simple: true }), 39);
+      assert.ok(upgraded.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='scan_pending_media_moves'").get());
+      assert.ok(upgraded.prepare("SELECT 1 FROM libraries WHERE id='lib'").get());
+    } finally { upgraded.close(); }
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test('版本 36 升级增加扫描事件目录记录并保留已有媒体库', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'luvia-event-upgrade-')); const filename = path.join(dir, 'db.sqlite');
+  try {
+    const old = openDatabase(filename);
+    old.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib','照片','/media')").run();
+    old.exec('DROP TABLE scan_event_folders; DROP TABLE scan_pending_media_moves; PRAGMA user_version=36'); old.close();
+    const upgraded = openDatabase(filename);
+    try {
+      assert.equal(upgraded.pragma('user_version', { simple: true }), 39);
+      assert.ok(upgraded.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='scan_event_folders'").get());
+      assert.ok(upgraded.prepare("SELECT 1 FROM libraries WHERE id='lib'").get());
+    } finally { upgraded.close(); }
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
 test('版本 22 升级保留媒体及关联数据并提供持久身份字段', async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'luvia-watch-upgrade-'));
   const filename = path.join(dir, 'v22.sqlite');
@@ -14,7 +43,7 @@ test('版本 22 升级保留媒体及关联数据并提供持久身份字段', a
     await copyFile(new URL('./fixtures/watch-v22.sqlite', import.meta.url), filename);
     const db = openDatabase(filename);
     try {
-      assert.equal(db.pragma('user_version', { simple: true }), 29);
+      assert.equal(db.pragma('user_version', { simple: true }), 39);
       assert.deepEqual(db.prepare("SELECT id,missing_at_ms,dev,ino,mtime_ms,head_hash FROM files WHERE id='f'").get(),
         { id: 'f', missing_at_ms: null, dev: null, ino: null, mtime_ms: null, head_hash: null });
       db.prepare("UPDATE files SET dev=?,ino=?,mtime_ms=?,head_hash=? WHERE id='f'").run('18446744073709551615', '18446744073709551614', 1234.5, 'abc');
@@ -37,7 +66,7 @@ test('数据库迁移持久且可重复，支持只读连接', async () => {
   try {
     const db = openDatabase(filename);
     assert.equal(db.pragma('journal_mode', { simple: true }), 'wal');
-    assert.equal(db.pragma('user_version', { simple: true }), 29);
+    assert.equal(db.pragma('user_version', { simple: true }), 39);
     db.prepare("INSERT INTO libraries (id, name, root) VALUES ('lib1', '测试', '/test')").run();
     db.close();
     const writable = openDatabase(filename);
@@ -146,7 +175,7 @@ test('已有版本 1 数据库升级时保留数据并创建扫描锁表', async
   old.close();
   try {
     const db = openDatabase(filename);
-    assert.equal(db.pragma('user_version', { simple: true }), 29);
+    assert.equal(db.pragma('user_version', { simple: true }), 39);
     assert.equal((db.prepare('SELECT count(*) AS n FROM libraries').get() as { n: number }).n, 1);
     db.prepare("INSERT INTO scan_locks(library_id,owner,acquired_at) VALUES ('lib1','owner',1)").run();
     db.close();

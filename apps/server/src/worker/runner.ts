@@ -5,6 +5,7 @@ import { lstat } from 'node:fs/promises';
 import { JobQueue } from '../core/jobs.ts';
 import { publishJob } from '../core/job-view.ts';
 import { scanLibrary } from './scan.ts';
+import { publishScanChanges } from './watch-events.ts';
 import { importLegacy, LegacyIdentityUncertainError, reconcileLegacyFavorites } from './import-legacy.ts';
 import { generateMediaCache } from './media-cache.ts';
 import path from 'node:path';
@@ -16,10 +17,21 @@ import type { Variant } from '../core/media-cache.ts';
 import { generateHls } from './hls.ts';
 import { withThumbnailSlot } from './ffmpeg-slots.ts';
 import { withMediaGenerationLock } from './media-lock.ts';
+import { finishWatchReconcile } from './watch-reconcile-queue.ts';
 
 export type WorkerOptions = { owner: string; allowedRoots: string[]; legacyDir: string; systemRoots: string[]; configuredMediaRoots?: string[]; cacheDir?: string; signal?: AbortSignal; hlsIdleMs?: number; log?: (level: 'info' | 'warn', message: string, ctx: Record<string, string>) => void };
 type Payload = { libraryId?: string | null; legacyImportId?: string; mediaId?: string; hlsSessionId?: string; sourceSize?: number; sourceModified?: number; sourceGeneration?: number; variant?: Variant };
 const now = () => Math.floor(Date.now() / 1000);
+function safeScanError(error: unknown): string {
+  const code = (error as NodeJS.ErrnoException | null)?.code;
+  if (code === 'ENOENT' || code === 'ENOTDIR') return '媒体库根目录或扫描目录不可用';
+  if (code === 'EACCES' || code === 'EPERM') return '媒体库目录读取权限不足';
+  const message = error instanceof Error ? error.message : '';
+  if (message.includes('挂载') || message.includes('根目录')) return '媒体库挂载身份或根目录不可用';
+  if (message === '媒体库存在读取错误') return '媒体库扫描存在读取错误或挂载中断';
+  if (message === '媒体库不可用') return '媒体库已停用或不存在';
+  return '媒体库扫描失败，请检查挂载和工作进程';
+}
 const childId = (parent: string, library: string) => `scan_${createHash('sha256').update(parent).update('\0').update(library).digest('base64url').slice(0, 24)}`;
 function enqueueScan(db: Database.Database, id: string, libraryId: string, legacyImportId?: string) {
   db.prepare("INSERT OR IGNORE INTO jobs(id,type,label,status,trigger,payload,created_at) VALUES (?,'scan','扫描媒体库','queued','system',?,?)")
@@ -99,9 +111,9 @@ export async function runNextJob(db: Database.Database, options: WorkerOptions):
           assertLease();
           db.prepare("UPDATE libraries SET status='ok',last_scan_at=? WHERE id=?").run(now(), library.id);
           if (!queue.finish(job.id, result)) throw new Error('作业租约已失效');
+          finishWatchReconcile(db, job.id, true);
           enqueueMetadata(db, library.id);
-          db.prepare("INSERT INTO job_events(event_type,payload) VALUES ('library',?)")
-            .run(JSON.stringify({ folders: [library.id], added: result.added, removed: result.removed, updated: 0 }));
+          publishScanChanges(db, job.id, library.id, true);
           if (payload.legacyImportId) {
             const other = db.prepare("SELECT count(*) AS n FROM jobs WHERE type='scan' AND json_extract(payload,'$.legacyImportId')=? AND status<>'succeeded'")
               .get(payload.legacyImportId) as { n: number };
@@ -203,11 +215,27 @@ export async function runNextJob(db: Database.Database, options: WorkerOptions):
       throw new Error('作业类型尚未实现');
     }
   } catch (error) {
-    const message = error instanceof LegacyIdentityUncertainError ? error.message
+    const watchScan = job.type === 'scan' && !!db.prepare('SELECT 1 FROM watch_reconcile_requests WHERE job_id=?').get(job.id);
+    const message = watchScan ? safeScanError(error) : error instanceof LegacyIdentityUncertainError ? error.message
       : error instanceof Error && error.message === '作业类型尚未实现' ? error.message : '作业执行失败，请检查媒体库及工作进程';
     if (error instanceof LegacyIdentityUncertainError) options.log?.('warn', error.message, { type: job.type });
-    if (options.signal?.aborted) queue.release(job.id);
-    else queue.fail(job.id, message);
+    if (options.signal?.aborted) db.transaction(() => {
+      if (queue.release(job.id) && job.type === 'scan') {
+        const run = db.prepare('SELECT library_id FROM scan_runs WHERE job_id=?').get(job.id) as { library_id: string } | undefined;
+        if (run) publishScanChanges(db, job.id, run.library_id, false);
+      }
+    }).immediate();
+    else {
+      db.transaction(() => {
+        if (!queue.fail(job.id, message)) return;
+        if (watchScan) finishWatchReconcile(db, job.id, false);
+        if (job.type === 'scan') {
+          const run = db.prepare('SELECT library_id FROM scan_runs WHERE job_id=?').get(job.id) as { library_id: string } | undefined;
+          if (run) publishScanChanges(db, job.id, run.library_id, false);
+        }
+      }).immediate();
+      if (watchScan) options.log?.('warn', message, { type: job.type });
+    }
   } finally {
     clearInterval(timer); if (waiterTimer) clearInterval(waiterTimer); options.signal?.removeEventListener('abort', stop);
     const final = db.prepare('SELECT status FROM jobs WHERE id=?').get(job.id) as { status: string } | undefined;
