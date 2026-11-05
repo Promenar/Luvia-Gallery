@@ -33,6 +33,7 @@ export const endpoints = {
   changePassword: d({ method: 'POST', path: '/api/v2/me/password', auth: 'user', body: A.ChangePasswordBody, response: null }),
   listTokens: d({ method: 'GET', path: '/api/v2/me/tokens', auth: 'user', response: A.ApiTokenList }),
   createToken: d({ method: 'POST', path: '/api/v2/me/tokens', auth: 'user', body: A.CreateTokenBody, response: A.CreatedToken }),
+  updateToken: d({ method: 'PATCH', path: '/api/v2/me/tokens/:id', auth: 'user', body: A.UpdateTokenBody, response: A.ApiToken }),
   deleteToken: d({ method: 'DELETE', path: '/api/v2/me/tokens/:id', auth: 'user', response: null }),
 
   // 媒体
@@ -48,6 +49,7 @@ export const endpoints = {
 
   // 文件夹与相册
   folders: d({ method: 'GET', path: '/api/v2/folders', auth: 'user', query: z.object({ path: z.string().optional() }), response: L.FolderListing }),
+  folderTree: d({ method: 'GET', path: '/api/v2/folders/tree', auth: 'user', query: z.object({ path: z.string().optional() }), response: L.FolderTree }),
   setFolderFavorite: d({ method: 'PUT', path: '/api/v2/folders/favorite', auth: 'user', body: L.SetFolderFavoriteBody, response: Ok }),
   favoriteFolders: d({ method: 'GET', path: '/api/v2/folders/favorites', auth: 'user', response: L.FavoriteFolders }),
   listAlbums: d({ method: 'GET', path: '/api/v2/albums', auth: 'user', response: L.AlbumList }),
@@ -72,6 +74,7 @@ export const endpoints = {
   createLibrary: d({ method: 'POST', path: '/api/v2/admin/libraries', auth: 'admin', body: Ad.CreateLibraryBody, response: Ad.Library }),
   updateLibrary: d({ method: 'PATCH', path: '/api/v2/admin/libraries/:id', auth: 'admin', body: Ad.UpdateLibraryBody, response: Ad.Library }),
   deleteLibrary: d({ method: 'DELETE', path: '/api/v2/admin/libraries/:id', auth: 'admin', response: null }),
+  mounts: d({ method: 'GET', path: '/api/v2/admin/mounts', auth: 'admin', response: Ad.MountList }),
   fsList: d({ method: 'GET', path: '/api/v2/admin/fs', auth: 'admin', query: z.object({ path: z.string().optional() }), response: Ad.FsListing }),
   getSettings: d({ method: 'GET', path: '/api/v2/admin/settings', auth: 'admin', response: Ad.AdminSettings }),
   updateSettings: d({ method: 'PATCH', path: '/api/v2/admin/settings', auth: 'admin', body: Ad.AdminSettingsPatch, response: Ad.AdminSettings }),
