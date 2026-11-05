@@ -457,7 +457,7 @@ export function openDatabase(filename: string, options: { readonly?: boolean; bo
       db.pragma('synchronous = NORMAL');
       db.transaction(() => {
         const version = db.pragma('user_version', { simple: true });
-        if (typeof version !== 'number' || version < 0 || version > 37) throw new Error(`不支持的数据库版本: ${version}`);
+        if (typeof version !== 'number' || version < 0 || version > 39) throw new Error(`不支持的数据库版本: ${version}`);
         if (version === 0) {
           db.exec(schemaV1);
           db.pragma('user_version = 1');
@@ -614,6 +614,18 @@ export function openDatabase(filename: string, options: { readonly?: boolean; bo
           db.exec(schemaV37);
           db.pragma('user_version = 37');
         }
+        if (version <= 37) {
+          const columns = new Set((db.pragma('table_info(watch_reconcile_requests)') as { name: string }[]).map((column) => column.name));
+          for (const [name, definition] of [['attempts', 'INTEGER NOT NULL DEFAULT 0'], ['next_attempt_at', 'INTEGER NOT NULL DEFAULT 0'],
+            ['generation', 'INTEGER NOT NULL DEFAULT 1'], ['job_generation', 'INTEGER'], ['job_id', 'TEXT']] as const) {
+            if (!columns.has(name)) db.exec(`ALTER TABLE watch_reconcile_requests ADD COLUMN ${name} ${definition}`);
+          }
+          db.pragma('user_version = 38');
+        }
+        if (version <= 38) {
+          db.exec('CREATE TABLE IF NOT EXISTS scan_pending_media_moves (file_id TEXT PRIMARY KEY REFERENCES files(id) ON DELETE CASCADE)');
+          db.pragma('user_version = 39');
+        }
         const timezone = process.env.TZ ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
         const previous = db.prepare("SELECT value FROM settings WHERE key='timeline.timezone'").get() as { value: string } | undefined;
         if (previous && previous.value !== timezone) {
@@ -625,7 +637,7 @@ export function openDatabase(filename: string, options: { readonly?: boolean; bo
           db.prepare("INSERT INTO jobs(id,type,label,status,trigger,created_at) VALUES (?,'import_legacy','导入旧版数据','queued','system',unixepoch())").run(randomUUID());
         }
       }).immediate();
-    } else if (db.pragma('user_version', { simple: true }) !== 37) {
+    } else if (db.pragma('user_version', { simple: true }) !== 39) {
       throw new Error('数据库尚未就绪或版本不受支持');
     }
     return db;

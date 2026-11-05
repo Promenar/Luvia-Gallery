@@ -4,8 +4,17 @@ import { compressFolders } from '../watch/throttle.ts';
 
 function merge(a: LibraryChangedEvent, b: LibraryChangedEvent): LibraryChangedEvent {
   return { libraryId: a.libraryId, source: b.source,
-    folders: a.folders.length && b.folders.length ? compressFolders([...a.folders, ...b.folders]) : [],
+    folders: compressFolders([...a.folders, ...b.folders]),
     added: a.added + b.added, removed: a.removed + b.removed, updated: a.updated + b.updated, moved: a.moved + b.moved };
+}
+export function publishScanChanges(db: Database.Database, jobId: string, libraryId: string, includeEmpty: boolean): void {
+  const summary = (db.prepare('SELECT added,removed,updated,moved FROM scan_event_counts WHERE job_id=?').get(jobId) as { added: number; removed: number; updated: number; moved: number } | undefined)
+    ?? { added: 0, removed: 0, updated: 0, moved: 0 };
+  const folders = (db.prepare('SELECT path FROM scan_event_folders WHERE job_id=? ORDER BY path').all(jobId) as { path: string }[]).map((row) => row.path);
+  if (includeEmpty || folders.length) publishLibraryEvent(db, { libraryId, source: 'scan', folders, ...summary });
+  db.prepare('DELETE FROM scan_event_restored WHERE job_id=?').run(jobId);
+  db.prepare('DELETE FROM scan_event_counts WHERE job_id=?').run(jobId);
+  db.prepare('DELETE FROM scan_event_folders WHERE job_id=?').run(jobId);
 }
 function flushOne(db: Database.Database, libraryId: string, at: number): boolean {
   const pending = db.prepare('SELECT source,payload FROM library_event_pending WHERE library_id=? ORDER BY queued_at_ms,source LIMIT 1').get(libraryId) as { source: string; payload: string } | undefined;

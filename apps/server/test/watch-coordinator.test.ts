@@ -226,9 +226,11 @@ test('目录消失进入宽限期后以新路径恢复，保留全部子孙的 I
     const id = s.port.records.get('album/pic.jpg')?.mediaId; assert.ok(id);
     await rename(path.join(s.root, 'album'), parked); await s.coordinator.reconcileDirectory(''); await s.advance(10000);
     assert.equal(typeof s.port.records.get('album')?.missingAt, 'number');
+    await s.advance(2000); s.port.events.length = 0;
     await rename(parked, path.join(s.root, 'restored')); await s.coordinator.reconcileDirectory(''); await s.advance(13000);
     assert.equal(s.port.records.get('restored/pic.jpg')?.mediaId, id);
     assert.ok(s.port.changes.some((v) => v.kind === 'restored' && v.path === 'restored' && v.isDir));
+    assert.equal(s.port.events.reduce((sum, event) => sum + event.moved, 0), 1);
   } finally { await s.coordinator.stop(); s.port.close(); await rm(s.root, { recursive: true, force: true }); await rm(parked, { recursive: true, force: true }); }
 });
 
@@ -390,6 +392,29 @@ test('空目录新增、移动和缺失不增加媒体事件计数', async () =>
     await rename(path.join(s.root, 'empty'), path.join(s.root, 'renamed')); await s.coordinator.reconcileDirectory(''); await s.advance(10_000);
     await rm(path.join(s.root, 'renamed'), { recursive: true }); await s.coordinator.reconcileDirectory(''); await s.advance(12_000);
     for (const event of s.port.events) assert.deepEqual([event.added, event.removed, event.updated, event.moved], [0, 0, 0, 0]);
+  } finally { await s.coordinator.stop(); s.port.close(); await rm(s.root, { recursive: true, force: true }); }
+});
+
+test('移动包含媒体的目录时按实际媒体数量计入 moved', async () => {
+  const s = await setup();
+  try {
+    await mkdir(path.join(s.root, 'old')); await writeFile(path.join(s.root, 'old/a.jpg'), 'photo');
+    await s.coordinator.reconcileDirectory(''); await s.advance(13_000); s.port.events.length = 0;
+    await rename(path.join(s.root, 'old'), path.join(s.root, 'new')); await s.coordinator.reconcileDirectory(''); await s.advance(12_000);
+    assert.equal(s.port.events.reduce((sum, event) => sum + event.moved, 0), 1);
+    assert.equal(s.port.records.get('new/a.jpg')?.missingAt, null);
+  } finally { await s.coordinator.stop(); s.port.close(); await rm(s.root, { recursive: true, force: true }); }
+});
+
+test('目录移动前文件已删除时只计实际移动的媒体', async () => {
+  const s = await setup();
+  try {
+    await mkdir(path.join(s.root, 'old')); await writeFile(path.join(s.root, 'old/a.jpg'), 'a'); await writeFile(path.join(s.root, 'old/b.jpg'), 'b');
+    await s.coordinator.reconcileDirectory(''); await s.advance(13_000); s.port.events.length = 0;
+    await rm(path.join(s.root, 'old/b.jpg')); await rename(path.join(s.root, 'old'), path.join(s.root, 'new'));
+    await s.coordinator.reconcileDirectory(''); await s.advance(13_000);
+    assert.equal(s.port.events.reduce((sum, event) => sum + event.moved, 0), 1);
+    assert.equal(s.port.events.reduce((sum, event) => sum + event.removed, 0), 1);
   } finally { await s.coordinator.stop(); s.port.close(); await rm(s.root, { recursive: true, force: true }); }
 });
 

@@ -371,6 +371,66 @@ test('扫描接管后从已持久化目录断点继续', async () => {
   } finally { db.close(); await rm(root, { recursive: true, force: true }); }
 });
 
+test('目录移动扫描中断后恢复不会重复累计媒体移动数', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'luvia-scan-move-resume-')); const db = openDatabase(':memory:');
+  try {
+    await mkdir(path.join(root, 'old')); await writeFile(path.join(root, 'old/a.jpg'), 'a'); await writeFile(path.join(root, 'old/b.jpg'), 'b');
+    db.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib','照片',?)").run(root);
+    await scanLibrary(db, { id: 'lib', root }, { allowedRoots: [root] });
+    await rename(path.join(root, 'old'), path.join(root, 'new'));
+    db.prepare("INSERT INTO jobs(id,type,label,status,trigger,created_at) VALUES ('scan','scan','扫描','queued','manual',100)").run();
+    const queue = new JobQueue(db, 'owner'); assert.ok(queue.claim(100));
+    const controller = new AbortController(); db.function('interrupt_scan_test', () => { controller.abort(); return 0; });
+    db.exec("CREATE TRIGGER interrupt_scan_test AFTER UPDATE OF scan_marker ON files WHEN new.relative_path LIKE 'new/%' BEGIN SELECT interrupt_scan_test(); END");
+    await assert.rejects(scanLibrary(db, { id: 'lib', root }, { allowedRoots: [root], owner: 'owner', jobId: 'scan', clock: () => 100, signal: controller.signal, batchSize: 1, statConcurrency: 1 }));
+    db.exec('DROP TRIGGER interrupt_scan_test');
+    assert.equal((db.prepare("SELECT moved FROM scan_event_counts WHERE job_id='scan'").get() as {moved:number}).moved, 1);
+    await scanLibrary(db, { id: 'lib', root }, { allowedRoots: [root], owner: 'owner', jobId: 'scan', clock: () => 100, batchSize: 1, statConcurrency: 1 });
+    assert.equal((db.prepare("SELECT moved FROM scan_event_counts WHERE job_id='scan'").get() as {moved:number}).moved, 2);
+  } finally { db.close(); await rm(root, { recursive: true, force: true }); }
+});
+
+test('另一扫描替换中断扫描的标记时保留已经提交的事件', async () => {
+  const { flushLibraryEvents } = await import('../src/worker/watch-events.ts');
+  const root = await mkdtemp(path.join(tmpdir(), 'luvia-scan-move-replaced-')); const db = openDatabase(':memory:');
+  try {
+    await mkdir(path.join(root, 'old')); await writeFile(path.join(root, 'old/a.jpg'), 'a'); await writeFile(path.join(root, 'old/b.jpg'), 'b');
+    db.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib','照片',?)").run(root);
+    await scanLibrary(db, { id: 'lib', root }, { allowedRoots: [root] }); await rename(path.join(root, 'old'), path.join(root, 'new'));
+    db.prepare("INSERT INTO jobs(id,type,label,status,trigger,created_at) VALUES ('scan','scan','扫描','queued','manual',100)").run();
+    new JobQueue(db, 'owner').claim(100);
+    const controller = new AbortController(); db.function('interrupt_scan_test', () => { controller.abort(); return 0; });
+    db.exec("CREATE TRIGGER interrupt_scan_test AFTER UPDATE OF scan_marker ON files WHEN new.relative_path LIKE 'new/%' BEGIN SELECT interrupt_scan_test(); END");
+    await assert.rejects(scanLibrary(db, { id: 'lib', root }, { allowedRoots: [root], owner: 'owner', jobId: 'scan', clock: () => 100, signal: controller.signal, batchSize: 1, statConcurrency: 1 }));
+    db.exec('DROP TRIGGER interrupt_scan_test');
+    await scanLibrary(db, { id: 'lib', root }, { allowedRoots: [root], clock: () => 100 });
+    flushLibraryEvents(db, Date.now() + 3000);
+    const events = (db.prepare("SELECT payload FROM job_events WHERE event_type='library'").all() as {payload:string}[]).map((row) => JSON.parse(row.payload));
+    assert.equal(events.reduce((sum, event) => sum + event.moved, 0), 1);
+    await scanLibrary(db, { id: 'lib', root }, { allowedRoots: [root], owner: 'owner', jobId: 'scan', clock: () => 100 });
+    assert.equal((db.prepare("SELECT moved FROM scan_event_counts WHERE job_id='scan'").get() as {moved:number}).moved, 1);
+  } finally { db.close(); await rm(root, { recursive: true, force: true }); }
+});
+
+test('目录移动后读取失败，后续作业接续尚未遍历的媒体移动', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'luvia-scan-move-unreadable-')); const db = openDatabase(':memory:');
+  try {
+    await mkdir(path.join(root, 'old')); await writeFile(path.join(root, 'old/a.jpg'), 'a');
+    db.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib','照片',?)").run(root);
+    await scanLibrary(db, { id: 'lib', root }, { allowedRoots: [root] }); await rename(path.join(root, 'old'), path.join(root, 'new'));
+    db.prepare("INSERT INTO jobs(id,type,label,status,trigger,created_at) VALUES ('first','scan','扫描','queued','manual',1)").run();
+    const queue = new JobQueue(db, 'owner'); queue.claim(); const resolvedRoot = await realpath(root);
+    const denied: typeof opendir = async (p, options) => { if (String(p) === path.join(resolvedRoot, 'new')) throw new Error('读取失败'); return opendir(p, options); };
+    const failed = await scanLibrary(db, { id: 'lib', root }, { allowedRoots: [root], owner: 'owner', jobId: 'first', openDir: denied });
+    assert.ok(failed.errors); assert.equal((db.prepare('SELECT relative_path FROM files').get() as {relative_path:string}).relative_path, 'new/a.jpg');
+    assert.ok(queue.fail('first', '失败'));
+    db.prepare("INSERT INTO jobs(id,type,label,status,trigger,created_at) VALUES ('second','scan','扫描','queued','manual',2)").run();
+    assert.equal(queue.claim()?.id, 'second');
+    await scanLibrary(db, { id: 'lib', root }, { allowedRoots: [root], owner: 'owner', jobId: 'second' });
+    assert.equal((db.prepare("SELECT moved FROM scan_event_counts WHERE job_id='second'").get() as {moved:number}).moved, 1);
+  } finally { db.close(); await rm(root, { recursive: true, force: true }); }
+});
+
 test('过期扫描者恢复后不能覆盖已经接管的扫描结果', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'luvia-scan-fence-'));
   const db = openDatabase(':memory:');

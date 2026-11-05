@@ -10,6 +10,7 @@ import { moveDirectoryPaths } from '../core/directory-move.ts';
 import type { IndexedRecord, LibraryIndexPort, WatchLibraryChange } from './coordinator.ts';
 import type { MoveCandidate } from './move-matcher.ts';
 import { statFields } from './file-info.ts';
+import { ScanLockedError } from './scan-lock-error.ts';
 
 type Options = {
   libraryId: string;
@@ -104,7 +105,7 @@ export class SqliteLibraryIndex implements LibraryIndexPort {
     this.db.exec('BEGIN IMMEDIATE');
     try {
       this.options.assertLease?.();
-      if (this.db.prepare('SELECT 1 FROM scan_locks WHERE library_id=? AND lease_expires_at>unixepoch()').get(this.libraryId)) throw new Error('媒体库正在全量扫描');
+      if (this.db.prepare('SELECT 1 FROM scan_locks WHERE library_id=? AND lease_expires_at>unixepoch()').get(this.libraryId)) throw new ScanLockedError();
       work(); this.pending = pending;
     }
     catch (error) { this.db.exec('ROLLBACK'); throw error; }
