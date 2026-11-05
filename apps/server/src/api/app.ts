@@ -945,10 +945,10 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     if (await exists(previous)) return sendFile(req, reply, previous, { mime: 'image/webp', name: row.name, etagKey: hash });
     return cachedMedia(req, reply, row, { kind: 'thumb', size: 'm' }, true);
   });
-  type LibraryRow = { id: string; name: string; root: string; enabled: number; status: string; last_scan_at: number | null; host_root: string | null; host_root_source: 'auto' | 'manual' | null; exclude: string; media_count: number };
-  const librarySql = 'SELECT l.*,COALESCE(f.media_count,0) AS media_count FROM libraries l LEFT JOIN folders f ON f.path=l.id';
+  type LibraryRow = { id: string; name: string; root: string; enabled: number; status: string; scanning: number; last_scan_at: number | null; host_root: string | null; host_root_source: 'auto' | 'manual' | null; exclude: string; media_count: number };
+  const librarySql = "SELECT l.*,COALESCE(f.media_count,0) AS media_count,EXISTS(SELECT 1 FROM scan_locks sl WHERE sl.library_id=l.id AND sl.lease_expires_at>unixepoch()) AS scanning FROM libraries l LEFT JOIN folders f ON f.path=l.id";
   const libraryOut = (row: LibraryRow) => ({ id: row.id, name: row.name, root: row.root, enabled: !!row.enabled,
-    status: row.status, lastScanAt: iso(row.last_scan_at), hostRoot: row.host_root, hostRootSource: row.host_root_source,
+    status: row.scanning ? 'scanning' : row.status, lastScanAt: iso(row.last_scan_at), hostRoot: row.host_root, hostRootSource: row.host_root_source,
     exclude: JSON.parse(row.exclude), mediaCount: row.media_count });
   register('listLibraries', async () => ({ libraries: (db.prepare(`${librarySql} ORDER BY l.name COLLATE NOCASE,l.id`).all() as LibraryRow[]).map(libraryOut) }));
   register('createLibrary', async (_req, _reply, body) => {
@@ -1033,6 +1033,10 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
       };
       const next = transitions[action]?.[row.status];
       if (!next) fail(409, 'CONFLICT', '当前状态不支持该操作');
+      if (action === 'retry' && row.type === 'scan') {
+        const removed = db.prepare('DELETE FROM scan_runs WHERE job_id=? AND complete=1 AND errors>0').run(id);
+        if (removed.changes) db.prepare('UPDATE jobs SET checkpoint=NULL,progress_done=0,progress_total=NULL WHERE id=?').run(id);
+      }
       db.prepare('UPDATE jobs SET status=?,owner=NULL,heartbeat_at=NULL,lease_expires_at=NULL,finished_at=? WHERE id=?')
         .run(next, next === 'cancelled' ? now() : null, id);
       publishJob(db, id);
