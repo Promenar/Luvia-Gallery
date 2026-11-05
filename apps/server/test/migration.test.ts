@@ -79,3 +79,20 @@ test('导入时转换明文口令并把越界、系统目录与缺失目录计�
     assert.equal((await verifyPassword('fixture password', row.password_hash)).valid, true);
   } finally { db.close(); await rm(dir, { recursive: true, force: true }); }
 });
+
+test('没有旧库路径和 MEDIA_ROOT 时，候选挂载不会自动启用', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'luvia-old-no-roots-'));
+  const mount = path.join(dir, 'mount'); const legacy = path.join(dir, 'legacy');
+  await mkdir(mount); await mkdir(legacy);
+  await writeFile(path.join(legacy, 'lumina-config.json'), JSON.stringify({ title: '合成库' }));
+  const db = openDatabase(':memory:'); const fallback = openDatabase(':memory:'); const empty = openDatabase(':memory:');
+  try {
+    await importLegacy(db, { legacyDir: legacy, mediaRoots: [mount] });
+    assert.equal((db.prepare('SELECT count(*) AS n FROM libraries').get() as { n: number }).n, 0);
+    await importLegacy(fallback, { legacyDir: legacy, mediaRoots: [mount], fallbackRoots: [mount] });
+    assert.equal((fallback.prepare('SELECT count(*) AS n FROM libraries').get() as { n: number }).n, 1);
+    await writeFile(path.join(legacy, 'lumina-config.json'), JSON.stringify({ libraryPaths: [] }));
+    await importLegacy(empty, { legacyDir: legacy, mediaRoots: [mount], fallbackRoots: [mount] });
+    assert.equal((empty.prepare('SELECT count(*) AS n FROM libraries').get() as { n: number }).n, 0);
+  } finally { db.close(); fallback.close(); empty.close(); await rm(dir, { recursive: true, force: true }); }
+});

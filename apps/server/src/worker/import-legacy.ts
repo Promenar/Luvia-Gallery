@@ -49,7 +49,7 @@ function counts(db: DatabaseType.Database): Counts {
   return totals;
 }
 
-export async function importLegacy(db: DatabaseType.Database, options: { legacyDir: string; mediaRoots: string[]; systemRoots?: string[]; batchSize?: number; assertLease?: () => void }): Promise<Counts & { unmappedRoots: number }> {
+export async function importLegacy(db: DatabaseType.Database, options: { legacyDir: string; mediaRoots: string[]; fallbackRoots?: string[]; systemRoots?: string[]; batchSize?: number; assertLease?: () => void }): Promise<Counts & { unmappedRoots: number }> {
   const configPath = path.join(options.legacyDir, 'lumina-config.json');
   const legacyPath = path.join(options.legacyDir, 'lumina.db');
   const hasConfig = await exists(configPath);
@@ -71,7 +71,7 @@ export async function importLegacy(db: DatabaseType.Database, options: { legacyD
   const system = await Promise.all((options.systemRoots ?? []).map(async (root) => {
     try { return await realpath(root); } catch { return path.resolve(root); }
   }));
-  const configured = config.libraryPaths?.length ? config.libraryPaths : options.mediaRoots;
+  const configured = config.libraryPaths ?? options.fallbackRoots ?? [];
   const roots: Root[] = [];
   let unmappedRoots = 0;
   for (const input of [...new Set(configured)]) {
