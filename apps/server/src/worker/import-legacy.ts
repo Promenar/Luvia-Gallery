@@ -1,17 +1,18 @@
 import Database from 'better-sqlite3';
 import type DatabaseType from 'better-sqlite3';
-import { readFile, access, realpath } from 'node:fs/promises';
+import { readFile, access, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { defaultPreferences } from '@luvia/contracts';
+import { defaultPreferences, WallpaperConfig } from '@luvia/contracts';
 import { mediaId, virtualPath } from '../core/paths.ts';
 import { hashPassword } from '../core/password.ts';
 
 type LegacyUser = { username: string; password: string; isAdmin?: boolean; allowedPaths?: string[]; wallpaperToken?: string };
 type LegacyConfig = { title?: string; libraryPaths?: string[]; users?: LegacyUser[] };
-type LegacyFile = { rowid: number; id: string; path: string; name: string; size: number; type: string; media_type: string; last_modified: number; thumb_width: number | null; thumb_height: number | null };
-type LegacyFavorite = { rowid: number; user_id: string; item_id: string; item_type: string; created_at: number };
+type LegacyFavorite = { source_rowid: number; user_id: string; item_id: string; item_type: string; created_at: number | null };
 type Root = { id: string; root: string };
+type Counts = { imported: number; pending: number; unmatched: number };
+type Pending = { source_key: string; user_id: string | null; absolute_path: string | null; item_type: string; created_at: number };
 const digest = (s: string) => createHash('sha256').update(s).digest('hex');
 const idFor = (label: string, value: string) => `${label}_${createHash('sha256').update(value).digest('base64url').slice(0, 22)}`;
 function isWithin(parent: string, child: string): boolean {
@@ -28,8 +29,27 @@ async function exists(filename: string): Promise<boolean> {
   try { await access(filename); return true; }
   catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false; throw error; }
 }
+function decodedAbsolute(value: string): string | null {
+  if (!/^[A-Za-z0-9+/_-]+={0,2}$/.test(value)) return null;
+  const bytes = Buffer.from(value, 'base64');
+  const canonical = bytes.toString('base64url');
+  if (canonical !== value.replace(/=+$/, '').replaceAll('+', '-').replaceAll('/', '_')) return null;
+  const decoded = bytes.toString('utf8');
+  if (!Buffer.from(decoded).equals(bytes) || decoded.includes('\0') || !path.isAbsolute(decoded)) return null;
+  return path.resolve(decoded);
+}
+function counts(db: DatabaseType.Database): Counts {
+  const rows = db.prepare('SELECT status,count(*) AS n FROM legacy_favorites_pending GROUP BY status').all() as { status: string; n: number }[];
+  const totals: Counts = { imported: 0, pending: 0, unmatched: 0 };
+  for (const row of rows) {
+    if (row.status === 'matched') totals.imported = row.n;
+    else if (row.status === 'pending') totals.pending = row.n;
+    else if (row.status === 'unmatched') totals.unmatched = row.n;
+  }
+  return totals;
+}
 
-export async function importLegacy(db: DatabaseType.Database, options: { legacyDir: string; mediaRoots: string[]; batchSize?: number }): Promise<void> {
+export async function importLegacy(db: DatabaseType.Database, options: { legacyDir: string; mediaRoots: string[]; systemRoots?: string[]; batchSize?: number }): Promise<Counts & { unmappedRoots: number }> {
   const configPath = path.join(options.legacyDir, 'lumina-config.json');
   const legacyPath = path.join(options.legacyDir, 'lumina.db');
   const hasConfig = await exists(configPath);
@@ -43,25 +63,31 @@ export async function importLegacy(db: DatabaseType.Database, options: { legacyD
     if (config.libraryPaths !== undefined && (!Array.isArray(config.libraryPaths) || config.libraryPaths.some((v) => typeof v !== 'string'))) throw new Error('旧版媒体路径格式无效');
     if (config.users !== undefined && (!Array.isArray(config.users) || config.users.some((u) => !u || typeof u.username !== 'string' || !u.username || typeof u.password !== 'string' || !u.password))) throw new Error('旧版用户格式无效');
   }
-  const whitelist = options.mediaRoots.map((root) => {
+  const whitelist: string[] = [];
+  for (const root of options.mediaRoots) {
     if (!path.isAbsolute(root)) throw new Error('媒体根必须为绝对路径');
-    return path.resolve(root);
-  });
-  const configured = config.libraryPaths?.length ? config.libraryPaths : whitelist;
-  const rootPaths = [...new Set(configured.map((root) => {
-    if (!path.isAbsolute(root)) throw new Error('旧版媒体库不是绝对路径');
-    const normalized = path.resolve(root);
-    if (whitelist.length && !whitelist.some((base) => isWithin(base, normalized))) throw new Error('旧版媒体库不在允许的挂载根目录内');
-    return normalized;
-  }))];
-  if (whitelist.length) {
-    const allowed = await Promise.all(whitelist.map((root) => realpath(root)));
-    for (const root of rootPaths) {
-      const actual = await realpath(root);
-      if (!allowed.some((base) => isWithin(base, actual))) throw new Error('旧版媒体库不在允许的挂载根目录内');
-    }
+    try { whitelist.push(await realpath(root)); } catch { /* 不可访问的挂载不能作为候选。 */ }
   }
-  const roots: Root[] = rootPaths.map((root) => ({ id: idFor('lib', root), root }));
+  const system = await Promise.all((options.systemRoots ?? []).map(async (root) => {
+    try { return await realpath(root); } catch { return path.resolve(root); }
+  }));
+  const configured = config.libraryPaths?.length ? config.libraryPaths : options.mediaRoots;
+  const roots: Root[] = [];
+  let unmappedRoots = 0;
+  for (const input of [...new Set(configured)]) {
+    if (!path.isAbsolute(input)) { unmappedRoots++; continue; }
+    const root = path.resolve(input);
+    let actual: string;
+    try {
+      actual = await realpath(root);
+      if (!(await stat(actual)).isDirectory()) { unmappedRoots++; continue; }
+    } catch { unmappedRoots++; continue; }
+    if (!whitelist.some((base) => isWithin(base, actual)) || system.some((base) => isWithin(base, actual) || isWithin(actual, base))) {
+      unmappedRoots++;
+      continue;
+    }
+    roots.push({ id: idFor('lib', root), root });
+  }
   const importedUsers: LegacyUser[] = [];
   for (const user of config.users ?? []) {
     if (user.allowedPaths !== undefined && (!Array.isArray(user.allowedPaths) || user.allowedPaths.some((p) => typeof p !== 'string' || !path.isAbsolute(p)))) throw new Error('旧版用户授权路径格式无效');
@@ -71,78 +97,82 @@ export async function importLegacy(db: DatabaseType.Database, options: { legacyD
   db.transaction(() => {
     for (const root of roots) {
       db.prepare('INSERT OR IGNORE INTO libraries (id,name,root) VALUES (?,?,?)').run(root.id, path.basename(root.root) || root.root, root.root);
-      const actual = db.prepare('SELECT id FROM libraries WHERE root=?').get(root.root) as { id: string };
-      root.id = actual.id;
+      root.id = (db.prepare('SELECT id FROM libraries WHERE root=?').get(root.root) as { id: string }).id;
     }
     if (typeof config.title === 'string' && config.title.trim()) db.prepare("INSERT OR IGNORE INTO settings (key,value) VALUES ('siteName',?)").run(JSON.stringify(config.title));
-    for (const u of importedUsers) {
-      const mapped = (u.allowedPaths ?? []).flatMap((p) => {
+    for (const user of importedUsers) {
+      const mapped = (user.allowedPaths ?? []).flatMap((p) => {
         const absolute = path.resolve(p);
         const match = mappedPath(absolute, roots);
         if (match) return [virtualPath(match.root.id, match.relative)];
         return roots.filter((r) => isWithin(absolute, r.root)).map((r) => r.id);
       });
-      const userId = idFor('usr', u.username);
       db.prepare(`INSERT OR IGNORE INTO users (id,username,password_hash,role,allowed_paths,preferences,created_at)
-        VALUES (?,?,?,?,?,?,?)`).run(userId, u.username, u.password, u.isAdmin ? 'admin' : 'user', u.isAdmin ? null : JSON.stringify(mapped), JSON.stringify(defaultPreferences()), now);
-      const actual = db.prepare('SELECT id FROM users WHERE username=?').get(u.username) as { id: string };
-      if (u.wallpaperToken) db.prepare(`INSERT OR IGNORE INTO api_tokens (id,user_id,token_hash,name,scope,prefix,created_at)
-        VALUES (?,?,?,?,?,?,?)`).run(idFor('tok', u.wallpaperToken), actual.id, digest(u.wallpaperToken), '旧版壁纸令牌', 'wallpaper', u.wallpaperToken.slice(0, 8), now);
+        VALUES (?,?,?,?,?,?,?)`).run(idFor('usr', user.username), user.username, user.password, user.isAdmin ? 'admin' : 'user', user.isAdmin ? null : JSON.stringify(mapped), JSON.stringify(defaultPreferences()), now);
+      const actual = db.prepare('SELECT id FROM users WHERE username=?').get(user.username) as { id: string };
+      if (user.wallpaperToken) db.prepare(`INSERT OR IGNORE INTO api_tokens (id,user_id,token_hash,name,scope,prefix,created_at,wallpaper)
+        VALUES (?,?,?,?,?,?,?,?)`).run(idFor('tok', user.wallpaperToken), actual.id, digest(user.wallpaperToken), '旧版壁纸令牌', 'wallpaper', user.wallpaperToken.slice(0, 8), now, JSON.stringify(WallpaperConfig.parse({ source: 'library' })));
     }
   }).immediate();
-  if (!hasDb) return;
+  if (!hasDb) return { ...counts(db), unmappedRoots };
   const source = new Database(legacyPath, { readonly: true, fileMustExist: true });
   try {
+    const hasTable = (name: string) => !!source.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name);
+    if (!hasTable('favorites')) return { ...counts(db), unmappedRoots };
+    const findId = hasTable('files') ? source.prepare('SELECT path FROM files WHERE id=?') : null;
+    const findPath = hasTable('files') ? source.prepare('SELECT path FROM files WHERE path=?') : null;
+    const favorites = source.prepare('SELECT rowid AS source_rowid,* FROM favorites WHERE rowid>? ORDER BY rowid LIMIT ?');
     const batchSize = Math.max(1, Math.min(1000, options.batchSize ?? 256));
-    const getCheckpoint = (key: string) => {
-      const row = db.prepare('SELECT value FROM settings WHERE key=?').get(key) as { value: string } | undefined;
-      return row ? Number(row.value) : 0;
-    };
-    const saveCheckpoint = db.prepare('INSERT INTO settings (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value');
-    const files = source.prepare(`SELECT rowid,* FROM files WHERE rowid>? ORDER BY rowid LIMIT ?`);
-    const insert = db.prepare(`INSERT INTO files (id,legacy_id,library_id,relative_path,folder,name,mime,media_type,size,modified_at,taken_at,taken_at_source,width,height)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,'mtime',?,?) ON CONFLICT(id) DO UPDATE SET legacy_id=COALESCE(files.legacy_id, excluded.legacy_id)`);
-    let cursor = getCheckpoint('legacy.files.rowid');
-    while (true) {
-      const batch = files.all(cursor, batchSize) as LegacyFile[];
-      if (!batch.length) break;
-      db.transaction(() => {
-        for (const file of batch) {
-          const match = mappedPath(file.path, roots);
-          if (!match?.relative) throw new Error('旧版媒体路径无法映射到已配置的媒体库');
-          if (!['image', 'video', 'audio'].includes(file.media_type) || !Number.isSafeInteger(file.last_modified) || file.last_modified < 0) throw new Error('旧版媒体记录格式无效');
-          if (file.last_modified > 253402300799) throw new Error('旧版修改时间戳超出常用日期范围，需要人工核验');
-          const folder = path.posix.dirname(match.relative);
-          insert.run(mediaId(match.root.id, match.relative), file.id, match.root.id, match.relative, virtualPath(match.root.id, folder === '.' ? '' : folder), file.name, file.type, file.media_type, file.size, file.last_modified, file.last_modified, file.thumb_width, file.thumb_height);
-        }
-        cursor = batch.at(-1)!.rowid;
-        saveCheckpoint.run('legacy.files.rowid', String(cursor));
-      }).immediate();
-      await new Promise<void>((resolve) => setImmediate(resolve));
-    }
-    const favorites = source.prepare('SELECT rowid,* FROM favorites WHERE rowid>? ORDER BY rowid LIMIT ?');
-    cursor = getCheckpoint('legacy.favorites.rowid');
+    const row = db.prepare("SELECT value FROM settings WHERE key='legacy.favorites.rowid'").get() as { value: string } | undefined;
+    let cursor = row ? Number(row.value) : 0;
     while (true) {
       const batch = favorites.all(cursor, batchSize) as LegacyFavorite[];
       if (!batch.length) break;
       db.transaction(() => {
         for (const favorite of batch) {
           const user = db.prepare('SELECT id FROM users WHERE username=?').get(favorite.user_id) as { id: string } | undefined;
-          if (!user) throw new Error('旧版收藏所属用户不存在');
-          let itemId: string | undefined;
-          if (favorite.item_type === 'file') itemId = (db.prepare('SELECT id FROM files WHERE legacy_id=?').get(favorite.item_id) as { id: string } | undefined)?.id;
-          else if (favorite.item_type === 'folder') {
-            const match = mappedPath(favorite.item_id, roots);
-            if (match) itemId = virtualPath(match.root.id, match.relative);
-          }
-          if (!itemId) throw new Error('旧版收藏目标无法映射');
-          db.prepare('INSERT OR IGNORE INTO favorites (user_id,item_id,item_type,created_at) VALUES (?,?,?,?)')
-            .run(user.id, itemId, favorite.item_type, favorite.created_at ?? now);
+          const byId = findId?.get(favorite.item_id) as { path: string } | undefined;
+          const byPath = byId ? undefined : findPath?.get(favorite.item_id) as { path: string } | undefined;
+          const candidate = byId?.path ?? byPath?.path ?? (favorite.item_type === 'folder' && path.isAbsolute(favorite.item_id) ? favorite.item_id : decodedAbsolute(favorite.item_id));
+          const absolute = candidate && path.isAbsolute(candidate) && !candidate.includes('\0') ? path.resolve(candidate) : null;
+          const validType = favorite.item_type === 'file' || favorite.item_type === 'folder';
+          const key = digest(JSON.stringify([favorite.user_id, favorite.item_type, favorite.item_id]));
+          db.prepare(`INSERT OR IGNORE INTO legacy_favorites_pending(source_key,username,user_id,legacy_item,absolute_path,item_type,created_at,status)
+            VALUES (?,?,?,?,?,?,?,?)`).run(key, favorite.user_id, user?.id ?? null, favorite.item_id, absolute, favorite.item_type, favorite.created_at ?? now, absolute && user && validType ? 'pending' : 'unmatched');
         }
-        cursor = batch.at(-1)!.rowid;
-        saveCheckpoint.run('legacy.favorites.rowid', String(cursor));
+        cursor = batch.at(-1)!.source_rowid;
+        db.prepare("INSERT INTO settings(key,value) VALUES('legacy.favorites.rowid',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(String(cursor));
       }).immediate();
       await new Promise<void>((resolve) => setImmediate(resolve));
     }
   } finally { source.close(); }
+  return { ...counts(db), unmappedRoots };
+}
+
+export function reconcileLegacyFavorites(db: DatabaseType.Database, options: { finalize: boolean }): Counts {
+  const roots = db.prepare('SELECT id,root FROM libraries').all() as Root[];
+  let cursor = '';
+  while (true) {
+    const rows = db.prepare("SELECT source_key,user_id,absolute_path,item_type,created_at FROM legacy_favorites_pending WHERE status='pending' AND source_key>? ORDER BY source_key LIMIT 256").all(cursor) as Pending[];
+    if (!rows.length) break;
+    db.transaction(() => {
+      for (const pending of rows) {
+        const match = pending.absolute_path ? mappedPath(pending.absolute_path, roots) : undefined;
+        let itemId: string | undefined;
+        if (match && pending.item_type === 'file' && match.relative) {
+          const id = mediaId(match.root.id, match.relative);
+          if (db.prepare('SELECT 1 FROM files WHERE id=?').get(id)) itemId = id;
+        } else if (match && pending.item_type === 'folder') {
+          const folder = virtualPath(match.root.id, match.relative);
+          if (db.prepare('SELECT 1 FROM folders WHERE path=?').get(folder)) itemId = folder;
+        }
+        if (itemId && pending.user_id) {
+          db.prepare('INSERT OR IGNORE INTO favorites(user_id,item_id,item_type,created_at) VALUES (?,?,?,?)').run(pending.user_id, itemId, pending.item_type, pending.created_at);
+          db.prepare("UPDATE legacy_favorites_pending SET status='matched' WHERE source_key=?").run(pending.source_key);
+        } else if (options.finalize) db.prepare("UPDATE legacy_favorites_pending SET status='unmatched' WHERE source_key=?").run(pending.source_key);
+      }
+    }).immediate();
+    cursor = rows.at(-1)!.source_key;
+  }
+  return counts(db);
 }
