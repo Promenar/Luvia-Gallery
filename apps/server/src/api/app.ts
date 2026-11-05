@@ -1370,7 +1370,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
           if (record.event_type === 'library') {
             const event = JSON.parse(record.payload) as { folders: string[]; added: number; removed: number; updated: number };
             const allowed = userOut(current.user).allowedPaths;
-            if (allowed !== null && event.folders.length) {
+            if (allowed !== null) {
               event.folders = event.folders.filter((folder) => pathAllowed(folder, allowed));
               if (!event.folders.length) continue;
             }
