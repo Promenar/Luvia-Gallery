@@ -1,11 +1,13 @@
 import Fastify from 'fastify';
 import cookie from '@fastify/cookie';
+import fastifyStatic from '@fastify/static';
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import type Database from 'better-sqlite3';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { access, realpath, stat, readdir } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
+import { fileURLToPath } from 'node:url';
 import sharp from 'sharp';
 import { ZodError } from 'zod';
 import { CSRF_HEADER, endpoints, JobAction, Preferences, WallpaperConfig, defaultPreferences } from '@luvia/contracts';
@@ -32,7 +34,7 @@ type TokenRow = {
   created_at: number; last_used_at: number | null; expires_at: number | null; wallpaper: string | null;
 };
 type Identity = { user: UserRow; kind: 'session' | 'token'; scope?: string; sessionHash?: string };
-type Options = { db: Database.Database; legacyPending: boolean | (() => boolean); secureCookies?: boolean; mounts?: () => Promise<Mount[]>; systemRoots?: string[]; cacheDir?: string };
+type Options = { db: Database.Database; legacyPending: boolean | (() => boolean); secureCookies?: boolean; mounts?: () => Promise<Mount[]>; systemRoots?: string[]; cacheDir?: string; staticDir?: string };
 class HttpError extends Error { constructor(publicStatus: number, code: string, message: string) { super(message); this.statusCode = publicStatus; this.code = code; } statusCode: number; code: string; }
 const fail = (status: number, code: string, message: string): never => { throw new HttpError(status, code, message); };
 const digest = (s: string) => createHash('sha256').update(s).digest('hex');
@@ -536,5 +538,18 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     timer.unref();
     reply.raw.on('close', () => clearInterval(timer));
   });
+  const staticDir = path.resolve(options.staticDir ?? fileURLToPath(new URL('../../../web/dist/', import.meta.url)));
+  if (await exists(path.join(staticDir, 'index.html'))) {
+    await app.register(fastifyStatic, { root: staticDir, cacheControl: false, allowedPath: (pathname) => !/^\/?api(?:\/|$)/.test(pathname), setHeaders: (reply, filename) => {
+      const immutable = /[/\\]assets[/\\][^/\\]+[-.][a-zA-Z0-9_-]{8,}\.[^/\\]+$/.test(filename);
+      reply.header('Cache-Control', immutable ? 'public, max-age=31536000, immutable' : 'no-cache, no-store, must-revalidate');
+    } });
+    app.setNotFoundHandler((req, reply) => {
+      const pathname = new URL(req.raw.url ?? '/', 'http://localhost').pathname;
+      if (req.method === 'GET' && pathname !== '/api' && !pathname.startsWith('/api/'))
+        return reply.header('Cache-Control', 'no-cache, no-store, must-revalidate').sendFile('index.html', { cacheControl: false });
+      return reply.code(404).send({ error: { code: 'NOT_FOUND', message: '接口不存在' } });
+    });
+  }
   return app;
 }

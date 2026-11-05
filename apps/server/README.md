@@ -33,3 +33,5 @@ DATA_DIR=./data CACHE_DIR=./cache MEDIA_ROOT=/path/to/fixture npx -y -p node@24 
 现有测试使用临时合成数据，不代表大媒体库性能、真实旧库迁移或生产环境验收。作业领取与扫描锁支持租约，扫描支持目录级断点。旧版导入只迁移用户数据并保留待匹配收藏；完整生产迁移、媒体管线与端到端性能尚未验收。
 
 根目录的 Dockerfile 和 Compose 配置使用同一 Node 24 镜像运行 API 与 worker，媒体挂载为只读；可按 Compose 注释启用 NVIDIA 设备。容器构建、卷权限、GPU 与前端资源尚需在 FNOS 验证，当前后端仍不可用于生产。
+
+存在 `apps/web/dist/index.html` 时，API 提供前端静态文件与 SPA 回退；带哈希资源可长期缓存，首页不缓存，未知 API 路径返回 404。
