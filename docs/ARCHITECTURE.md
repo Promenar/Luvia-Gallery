@@ -34,5 +34,26 @@
 - **类型安全导航**: 使用 Kotlin Serialization 定义路由类，避免字符串硬编码。
 - **Stitch 设计对齐**: 严格遵循 Stitch 产出的设计令牌进行 UI 开发。
 
-## 后端与 Web 端
-(保持原有架构，见旧版文档)
+## 后端与 Web 端（v2）
+
+### 代码结构
+- `packages/contracts`：zod 定义的接口契约与事件类型，是前后端唯一事实源。
+- `apps/server`：Node.js 24 + Fastify 5 + SQLite（WAL，`better-sqlite3`）。同一镜像提供两个进程入口：
+  - `src/api/main.ts`：HTTP 接口、静态网页、SSE 事件流（`/api/v2/events`）与 v1 兼容接口。
+  - `src/worker/main.ts`：持久化作业队列（扫描、元数据、缩略图、视频预览、HLS 转码、缓存淘汰、旧库导入、索引回填）、定时调度与实时监控运行时。
+- `apps/web`：React 19 + Vite + Tailwind CSS v4 + Base UI，TanStack Router/Query/Virtual；`src/mocks` 为基于 msw 的离线开发数据。
+
+### 进程协作
+api 与 worker 共享同一个 SQLite 数据库，不直接通信。作业、租约、调度状态和变化事件都持久化在数据库中：worker 写入 `jobs`、`job_events`，api 轮询 `job_events` 推送 SSE，并按用户的目录权限过滤媒体库事件。可以运行多个 worker 实例，作业与监控均通过带过期时间的租约互斥。
+
+### 媒体库实时监控
+- 每个启用且未关闭监控的媒体库由一个 worker 持有监控租约（带代次，心跳续租，过期可被其它 worker 接管），运行一个 `WatchCoordinator`（`src/watch/**`）。失去租约后，旧持有者的写入被代次栅栏拒绝。
+- 模式：`auto` 在本地文件系统用 inotify 递归监视，在网络文件系统或监视额度不足时改为轮询；`watch` 强制监视；`poll` 按间隔对账；`off` 关闭。
+- 文件写入完成并稳定（目录静默 2 秒、文件稳定 3 秒）后立即入库并推送事件；随后在配对窗口内出现匹配的消失项时合并为移动，保留原媒体 ID。目录级变化做目录对账，溢出、监视异常、根目录恢复与轮询才请求全量对账。
+- 索引写入使用独占 SQLite 连接，索引变更与 `library_changes` 变更记录在同一事务内提交；事件经持久队列节流，同库至多每 2 秒一条。
+- 挂载保护：媒体库根目录的挂载身份由文件系统类型、来源和文件系统内路径组成。首次建立或身份变化时，对已有文件随机抽样（最多 200 个、至少 90% 匹配大小与修改时间）确认是同一份数据，否则状态降级，不扫描、不标记缺失。监控与全量扫描共用这一确认。
+- 缺失文件进入删除宽限期（`missingGraceDays`，默认 7 天），在所有浏览与统计中隐藏，宽限期内重新出现即恢复；到期后清理关联与缓存。
+- 兜底：每天按 `dailyAt`（默认 04:00，服务器本地时间）全量扫描，多 worker 只排队一次。
+
+### 部署
+根目录 `docker-compose.yml` 定义 `api` 与 `worker` 服务，数据目录 `/data`、缓存目录 `/cache`、媒体目录只读挂载于 `/media`。`deploy/compose.fnos-dev.yml` 是 FNOS 开发调试覆盖文件（独立端口与数据目录，路径经环境变量提供）。

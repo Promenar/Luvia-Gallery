@@ -9,157 +9,105 @@
 
 # 🇨🇳 中文说明 (Chinese)
 
-Luvia Gallery 专为"已有归档媒体"设计：它不搬动、不重命名、也不上传您的文件。只需通过 Docker 映射现有目录，即可在 Web 和移动端优雅地浏览 NAS 或本地硬盘中的海量图片、视频与音频。
+Luvia Gallery 专为"已有归档媒体"设计：它不搬动、不重命名、也不上传您的文件。只需通过 Docker 映射现有目录，即可在浏览器中优雅地浏览 NAS 或本地硬盘中的海量图片、视频与音频。
 
 ## 🌟 核心特性
 
-- 🛡️ **零侵入存储**: 纯读取模式，不对原始文件进行任何改动。
-- 🔌 **即插即用**: 通过 Docker 卷映射 `/media` 即可入库，无需复杂的迁移过程。
-- 🚀 **极速响应**: 异步流式扫描、有界文件 I/O、120 条分页与稳定比例骨架，避免超大媒体库后台扫描或缩略图加载阻塞浏览请求。
-- 🧭 **统一可恢复导航**: WebUI 使用浏览器式单行工具栏整合地址、作用域搜索、排序和布局；媒体库、收藏夹与文件夹地址互不污染，进出目录、打开媒体或刷新后可恢复浏览位置。
-- 📱 **全端覆盖**: 统一的 Web (React) 与 移动端 (React Native) 体验。
-- 🧭 **非同步工具**: 专注"浏览"而非"同步/备份"，不具备上传功能，确保文件系统纯净。
-- 🔐 **用户认证**: 多用户支持，JWT 安全认证，用户级别路径访问控制。
-- ⭐ **收藏功能**: 快速收藏文件和文件夹，支持收藏夹浏览。
-- 🎵 **音频支持**: 支持 MP3、FLAC、WAV、AAC 等格式播放。
-- 🖼️ **壁纸服务**: 为 Wallpaper Engine 提供动态壁纸 API。
-- 🔄 **热更新**: 支持 Git 拉取自动重部署，无需重建镜像。
-- 📂 **多库支持**: 支持多个媒体库路径，分号分隔配置。
-- 🚀 **GPU 加速**: NVIDIA NVENC 视频转码加速。
+- 🛡️ **零侵入存储**: 媒体目录以只读方式挂载，不移动、不重命名、不修改原始文件。
+- 👀 **实时媒体库监控**: 在 NAS 或本机新增、修改、移动、删除文件后数秒内出现在界面中；移动或改名保留原媒体 ID 及收藏、相册关系。网络文件系统或监视额度不足时自动改为定时轮询，另有每日全量对账兜底。
+- 🧯 **防误删保护**: 文件消失后先进入删除宽限期（默认 7 天），宽限期内重新出现即恢复；媒体库所在磁盘未挂载或被替换时停止标记缺失，不会因为 NAS 晚启动而清空媒体库。
+- 🚀 **大库性能**: 面向百万级文件与数万目录，扫描分批续跑，缩略图、视频预览与 HLS 转码在独立 worker 中排队执行。
+- 🔐 **多用户与权限**: 会话与 API 令牌鉴权，按虚拟目录限制用户可见范围，登录限速。
+- ⭐ **收藏、相册与分享**: 手动相册与智能相册；分享支持密码、过期时间和原文件下载权限。
+- 🎵 **图片、视频与音频**: 视频按需 HLS 转码，支持 NVIDIA NVENC 硬件编码。
+- 🖼️ **壁纸服务**: 为 Wallpaper Engine 提供随机壁纸接口，兼容 v1 客户端。
+- 📦 **v1 平滑迁移**: 可导入 v1 的账户、收藏与壁纸令牌。
 
-## 🏗️ Docker 部署 (推荐)
+## 🏗️ Docker 部署
 
-```yaml
-services:
-  luvia:
-    image: promenarleng/luvia-gallery:latest
-    container_name: luvia-gallery
-    restart: unless-stopped
-    ports:
-      - "3000:3001"  # 宿主机端口:容器端口
-    volumes:
-      # 媒体库：支持多个目录映射（建议只读）
-      - /您的/真实/媒体目录:/media:ro
-      # - /另一个/媒体目录:/mnt/ext:ro
+仓库根目录的 `docker-compose.yml` 定义了 `api`（网页与接口）和 `worker`（扫描、监控、缩略图与转码）两个服务，二者使用同一镜像并共享数据卷：
 
-      # 持久化配置和数据库
-      - ./data:/app/data
-
-      # 缩略图缓存
-      - ./cache:/app/cache
-
-      # SSH 密钥（可选，用于私有仓库热更新）
-      # - ./ssh:/tmp/ssh_mount:ro
-    environment:
-      - NODE_ENV=production
-      # 多媒体库路径（分号分隔）
-      - MEDIA_ROOT=/media
-      # 热更新 API 安全令牌：未设置时热更新、迁移与更新状态接口一律拒绝（返回 403）
-      # - UPDATE_TOKEN=your_secret_token
-      # GPU 加速配置（NVIDIA）
-      - NVIDIA_VISIBLE_DEVICES=all
-      - NVIDIA_DRIVER_CAPABILITIES=compute,video,utility
-    # NVIDIA GPU 支持
-    privileged: true
-    runtime: nvidia
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
+```bash
+LUVIA_MEDIA_PATH=/您的/真实/媒体目录 docker compose up -d --build
 ```
+
+| 容器路径 / 变量 | 用途 |
+| --- | --- |
+| `/media`（只读） | 媒体目录；多个媒体库用 `MEDIA_ROOT` 以分号分隔，如 `/media/a;/media/b` |
+| `/data` | 数据库与配置，必须持久化 |
+| `/cache` | 缩略图、预览与转码缓存，可重建但建议持久化 |
+| `LUVIA_HOST_PATHS` | 可选，把容器路径映射回宿主机路径，用于在管理界面显示真实位置 |
+| `TRUST_PROXY` | 部署在反向代理后时填可信代理跳数（一层代理为 `1`） |
+| `COOKIE_SECURE` | 仅通过纯 HTTP 内网访问时设为 `false` |
+| `JWT_SECRET` | 可选，v1 旧版接口的 JWT 密钥 |
+
+需要 GPU 转码时，在 worker 服务上启用 compose 文件中注释掉的 NVIDIA 设备预留。实时监控在 Linux 上使用 inotify，媒体目录数量很大时请确认宿主机 `fs.inotify.max_user_watches` 足够（管理界面会显示用量）。
 
 ## 🛠️ 技术架构
 
-- **后端**: Node.js / Express / SQLite (`better-sqlite3`)
-- **核心**: FFmpeg (视频转码与封面)
-- **前端**: React / Vite / Tailwind CSS v4 / shadcn/ui（Base UI）
+- **后端**: Node.js 24 / Fastify 5 / SQLite（WAL，`better-sqlite3`，FTS5 全文搜索）/ sharp / FFmpeg；API 与 worker 双进程
+- **前端**: React 19 / Vite / TypeScript / Tailwind CSS v4 / shadcn/ui（Base UI）/ TanStack Router 与 Query
+- **接口契约**: `packages/contracts`（zod），前后端共用
 - **浏览器要求**: Chrome 111+、Safari / iOS 16.4+、Firefox 128+（Tailwind CSS v4 下限）
-- **移动**: React Native / Expo
 
 ## ⚠️ 使用须知
 
-- 本项目定位为"媒体浏览器"，**不具备上传功能**。
-- 建议将 `/media` 设为只读挂载 (`:ro`)。
-- 请务必持久化挂载 `/app/data` 和 `/app/cache`。
+- 本项目定位为"媒体浏览器"，**不具备上传功能**；请将媒体目录以只读方式挂载。
+- 请务必持久化挂载 `/data`；`/cache` 丢失只会导致缓存重新生成。
 - 首次访问会引导创建管理员账户。
-- 后台缓存统计与媒体扫描互斥运行；扫描遇到存储读取错误时会保留现有索引和收藏，不执行清理。
+- 修改账户密码或管理员重置密码会撤销该账户的登录会话，但不会撤销已创建的 API 令牌和壁纸令牌；如需停用令牌，请在令牌管理中单独撤销。
 
 ---
 
 # 🇺🇸 English Description
 
-Luvia Gallery is a non-destructive media browser for pre-archived libraries. It doesn't move or modify your files; it simply scans and serves them via Docker volume mapping for a fast, elegant experience across devices.
+Luvia Gallery is a non-destructive media browser for pre-archived libraries. It doesn't move or modify your files; it simply scans and serves them via Docker volume mapping for a fast, elegant experience in the browser.
 
 ## 🌟 Highlights
 
-- 🛡️ **Non-Destructive**: Read-only core—no moves, renames, or modifications.
-- 🔌 **Volume-First**: Map your library to `/media` and start browsing instantly.
-- 🚀 **Performance**: Streaming scans, bounded filesystem I/O, 120-item pages, and geometry-stable skeletons keep large libraries responsive.
-- 🧭 **Unified Restorable Navigation**: A browser-style toolbar combines location, scoped search, sorting, and layout controls while keeping library, favorites, and folder locations isolated and restorable.
-- 📱 **Cross-Platform**: Seamless experience on both Web and Mobile.
-- 🧭 **Library Focused**: Designed for browsing archives; no upload features to keep your filesystem clean.
-- 🔐 **Authentication**: Multi-user support with JWT security and path-based access control.
-- ⭐ **Favorites**: Quick bookmark for files and folders.
-- 🎵 **Audio Support**: MP3, FLAC, WAV, AAC playback.
-- 🖼️ **Wallpaper API**: Dynamic wallpaper service for Wallpaper Engine.
-- 🔄 **Hot Update**: Git-based auto-redeployment without rebuilding images.
-- 📂 **Multi-Library**: Multiple media paths supported via semicolon delimiter.
-- 🚀 **GPU Acceleration**: NVIDIA NVENC video transcoding.
+- 🛡️ **Non-Destructive**: Media folders are mounted read-only; nothing is moved, renamed or modified.
+- 👀 **Real-Time Library Monitoring**: Files added, changed, moved or deleted on your NAS show up within seconds. Moves and renames keep the original media ID with its favorites and albums. Falls back to periodic polling on network filesystems or when watch quota runs short, with a daily full reconcile as a safety net.
+- 🧯 **Deletion Safeguards**: Vanished files enter a grace period (7 days by default) and are restored if they reappear. When the library's disk is unmounted or replaced, nothing is marked missing, so a late-starting NAS never empties your library.
+- 🚀 **Large Libraries**: Built for millions of files and tens of thousands of folders; scans resume in batches, and thumbnails, previews and HLS transcoding run in a separate worker.
+- 🔐 **Users and Permissions**: Session and API-token auth, per-user virtual folder access, login rate limiting.
+- ⭐ **Favorites, Albums and Sharing**: Manual and smart albums; shares with password, expiry and original-download control.
+- 🎵 **Photos, Video and Audio**: On-demand HLS transcoding with NVIDIA NVENC support.
+- 🖼️ **Wallpaper API**: Random wallpaper endpoint for Wallpaper Engine, compatible with v1 clients.
+- 📦 **v1 Migration**: Imports v1 accounts, favorites and wallpaper tokens.
 
 ## 🏗️ Docker Compose
 
-```yaml
-services:
-  luvia:
-    image: promenarleng/luvia-gallery:latest
-    container_name: luvia-gallery
-    restart: unless-stopped
-    ports:
-      - "3000:3001"  # host:container
-    volumes:
-      # Media libraries (read-only recommended)
-      - /your/media/path:/media:ro
-      # - /another/media/path:/mnt/ext:ro
+The repository's `docker-compose.yml` defines two services sharing one image and the data volumes: `api` (web UI and API) and `worker` (scanning, monitoring, thumbnails and transcoding).
 
-      # Persistent config and database
-      - ./data:/app/data
-
-      # Thumbnail cache
-      - ./cache:/app/cache
-
-      # SSH keys (optional, for private repo hot updates)
-      # - ./ssh:/tmp/ssh_mount:ro
-    environment:
-      - NODE_ENV=production
-      # Multi-library paths (semicolon-separated)
-      - MEDIA_ROOT=/media
-      # Hot update API token: update, migrate and status endpoints are disabled (403) unless set
-      # - UPDATE_TOKEN=your_secret_token
-      # GPU acceleration (NVIDIA)
-      - NVIDIA_VISIBLE_DEVICES=all
-      - NVIDIA_DRIVER_CAPABILITIES=compute,video,utility
-    # NVIDIA GPU support
-    privileged: true
-    runtime: nvidia
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
+```bash
+LUVIA_MEDIA_PATH=/your/media/path docker compose up -d --build
 ```
+
+| Container path / variable | Purpose |
+| --- | --- |
+| `/media` (read-only) | Media folders; use `MEDIA_ROOT` with semicolons for several libraries, e.g. `/media/a;/media/b` |
+| `/data` | Database and settings; must be persisted |
+| `/cache` | Thumbnail, preview and transcode cache; rebuildable but best persisted |
+| `LUVIA_HOST_PATHS` | Optional mapping from container paths back to host paths, shown in the admin UI |
+| `TRUST_PROXY` | Number of trusted reverse-proxy hops (`1` for a single proxy) |
+| `COOKIE_SECURE` | Set to `false` only for plain-HTTP LAN access |
+| `JWT_SECRET` | Optional JWT secret for the legacy v1 API |
+
+For GPU transcoding, enable the commented NVIDIA device reservation on the worker service. Real-time monitoring uses inotify on Linux; for very large folder trees make sure the host's `fs.inotify.max_user_watches` is high enough (usage is shown in the admin UI).
 
 ## 🛠️ Tech Stack
 
-- **Backend**: Node.js / Express / SQLite (`better-sqlite3`)
-- **Processing**: FFmpeg
-- **Frontend**: React / Vite / Tailwind CSS v4 / shadcn/ui (Base UI)
+- **Backend**: Node.js 24 / Fastify 5 / SQLite (WAL, `better-sqlite3`, FTS5 search) / sharp / FFmpeg; separate API and worker processes
+- **Frontend**: React 19 / Vite / TypeScript / Tailwind CSS v4 / shadcn/ui (Base UI) / TanStack Router and Query
+- **Shared contracts**: `packages/contracts` (zod), used by both frontend and backend
 - **Browser support**: Chrome 111+, Safari / iOS 16.4+, Firefox 128+ (Tailwind CSS v4 baseline)
-- **Mobile**: React Native / Expo
+
+## ⚠️ Notes
+
+- Luvia is a media browser with **no upload feature**; mount media folders read-only.
+- Always persist `/data`; losing `/cache` only means caches are regenerated.
+- The first visit walks you through creating an admin account.
+- Changing a password, or an admin resetting it, signs that account out everywhere but does not revoke existing API or wallpaper tokens; revoke tokens separately in token management.
 
 ---
 
