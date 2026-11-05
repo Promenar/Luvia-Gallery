@@ -45,7 +45,8 @@ services:
       timeout: 5s
       start_period: 30s
       retries: 3
-    # 需要 NVIDIA 容器运行时和 GPU 时，可启用以下可选设备预留。
+    # 需要 NVIDIA 容器运行时和 GPU 时，启用以下设备预留，并在 worker 的 environment 中加入
+    # NVIDIA_DRIVER_CAPABILITIES: "compute,video,utility"（缺少 video 时 NVENC 不可用，自动回退 CPU 编码）。
     # deploy:
     #   resources:
     #     reservations:

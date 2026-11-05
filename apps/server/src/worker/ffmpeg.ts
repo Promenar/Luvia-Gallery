@@ -27,7 +27,8 @@ export async function probeFfmpeg(executable = 'ffmpeg', signal?: AbortSignal): 
   const displayVersion = version.output.split('\n')[0]?.slice(0, 160) || null;
   const encoders = await execute(executable, ['-hide_banner', '-encoders'], 5000, signal);
   if (encoders.code === 0 && /\bh264_nvenc\b/.test(encoders.output)) {
-    const test = await execute(executable, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=c=black:s=16x16:r=1', '-frames:v', '1', '-c:v', 'h264_nvenc', '-f', 'null', '-'], 10000, signal);
+    // 探测帧须不低于 NVENC 最小尺寸（H.264 约 145 像素），过小的帧会让真实 GPU 也初始化失败而回退 CPU。
+    const test = await execute(executable, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=c=black:s=256x256:r=1', '-frames:v', '1', '-c:v', 'h264_nvenc', '-f', 'null', '-'], 10000, signal);
     if (test.code === 0) return { available: true, version: displayVersion, hwaccels: ['nvenc'], encoder: 'nvenc' };
   }
   return { available: true, version: displayVersion, hwaccels: [], encoder: 'cpu' };

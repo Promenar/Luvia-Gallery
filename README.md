@@ -41,7 +41,7 @@ LUVIA_MEDIA_PATH=/您的/真实/媒体目录 docker compose up -d --build
 | `COOKIE_SECURE` | 仅通过纯 HTTP 内网访问时设为 `false` |
 | `JWT_SECRET` | 可选，v1 旧版接口的 JWT 密钥 |
 
-需要 GPU 转码时，在 worker 服务上启用 compose 文件中注释掉的 NVIDIA 设备预留。实时监控在 Linux 上使用 inotify，媒体目录数量很大时请确认宿主机 `fs.inotify.max_user_watches` 足够（管理界面会显示用量）。
+需要 GPU 转码时，在 worker 服务上启用 compose 文件中注释掉的 NVIDIA 设备预留，并设置 `NVIDIA_DRIVER_CAPABILITIES=compute,video,utility`（缺少 `video` 时 NVENC 不可用，会自动回退 CPU 编码）。实时监控在 Linux 上使用 inotify，媒体目录数量很大时请确认宿主机 `fs.inotify.max_user_watches` 足够（管理界面会显示用量）。
 
 ## 🛠️ 技术架构
 
@@ -93,7 +93,7 @@ LUVIA_MEDIA_PATH=/your/media/path docker compose up -d --build
 | `COOKIE_SECURE` | Set to `false` only for plain-HTTP LAN access |
 | `JWT_SECRET` | Optional JWT secret for the legacy v1 API |
 
-For GPU transcoding, enable the commented NVIDIA device reservation on the worker service. Real-time monitoring uses inotify on Linux; for very large folder trees make sure the host's `fs.inotify.max_user_watches` is high enough (usage is shown in the admin UI).
+For GPU transcoding, enable the commented NVIDIA device reservation on the worker service and set `NVIDIA_DRIVER_CAPABILITIES=compute,video,utility` (without `video`, NVENC is unavailable and encoding falls back to CPU). Real-time monitoring uses inotify on Linux; for very large folder trees make sure the host's `fs.inotify.max_user_watches` is high enough (usage is shown in the admin UI).
 
 ## 🛠️ Tech Stack
 
