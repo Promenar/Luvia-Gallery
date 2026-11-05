@@ -16,6 +16,7 @@ import { cleanupHls } from './hls.ts';
 import { runWorkerPool } from './pool.ts';
 import { flushMetadataFolders } from './metadata.ts';
 import { runSqliteMaintenance } from './sqlite-maintenance.ts';
+import { runIndexBackfill } from './index-backfill.ts';
 
 installFatalHandlers('worker');
 const runtime = await openRuntime();
@@ -72,12 +73,14 @@ const scheduleHlsCleanup = () => {
 };
 const hlsTimer = setInterval(scheduleHlsCleanup, 30_000); hlsTimer.unref();
 let sampling: Promise<void> = Promise.resolve();
+let backfill: Promise<void> = Promise.resolve();
 try {
   schedulePrune();
   flushMetadataFolders(runtime.db);
   scheduleHlsCleanup();
   await discoverNewMounts(runtime.db, mounts, [runtime.dataDir, runtime.cacheDir]);
   scheduleScans(runtime.db);
+  backfill = runIndexBackfill(runtime.db, { allowedRoots, signal: stopController.signal }).catch(() => { if (!stopController.signal.aborted) logger.warn('媒体索引回填失败'); });
   sampling = sampleMounts(runtime.db, mounts, stopController.signal).catch(() => { logger.warn('挂载抽样失败'); });
   const ffmpeg = await withFfmpegSlot(runtime.db, owner, (signal) => probeFfmpeg('ffmpeg', signal), { signal: stopController.signal });
   runtime.db.prepare("INSERT INTO settings(key,value) VALUES('worker.ffmpeg',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(JSON.stringify(ffmpeg));
@@ -86,7 +89,7 @@ try {
     log: (level, message, ctx) => logger[level]({ ctx }, message) });
 } finally {
   stopController.abort();
-  await sampling;
+  await Promise.all([sampling, backfill]);
   clearInterval(heartbeatTimer); clearInterval(pruneTimer); clearInterval(scanTimer); clearInterval(folderTimer); clearInterval(hlsTimer); clearInterval(maintenanceTimer);
   await Promise.all([hlsCleanup, maintenance]); loop.disable(); runtime.db.close();
 }

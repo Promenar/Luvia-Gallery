@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { restoreVersion21Fixture } from './database-upgrade-fixture.ts';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
@@ -133,7 +134,7 @@ test('升级已有导入记录时不恢复升级前撤销的壁纸令牌', async
     await writeFile(path.join(root, 'lumina-config.json'), JSON.stringify({ users: [{ username: 'alice', password: 'synthetic password', isAdmin: true, wallpaperToken: token }] }));
     await importLegacy(db, { legacyDir: root, mediaRoots: [] });
     db.prepare('DELETE FROM api_tokens').run();
-    db.exec('DROP TABLE legacy_import_users; DROP TABLE legacy_import_tokens; ALTER TABLE api_tokens DROP COLUMN legacy_jwt; PRAGMA user_version=21');
+    restoreVersion21Fixture(db);
     db.close(); db = openDatabase(file);
     await importLegacy(db, { legacyDir: root, mediaRoots: [] });
     const app = await createApp({ db, legacyPending: false, legacyJwtSecret: signingKey });
@@ -149,7 +150,7 @@ test('旧版导入中途崩溃后升级无法确认身份时保持迁移阻断',
     await writeFile(path.join(root, 'lumina-config.json'), JSON.stringify({ users: [{ username: 'alice', password: 'synthetic password', isAdmin: true }] }));
     db.prepare("INSERT INTO settings(key,value) VALUES ('legacy.pending','true')").run();
     db.prepare("INSERT INTO jobs(id,type,label,status,trigger,created_at,started_at,owner,lease_expires_at) VALUES ('old-import','import_legacy','旧导入','running','system',1,2,'old-worker',1)").run();
-    db.exec('DROP TABLE legacy_import_users; DROP TABLE legacy_import_tokens; ALTER TABLE api_tokens DROP COLUMN legacy_jwt; PRAGMA user_version=21');
+    restoreVersion21Fixture(db);
     db.close(); db = openDatabase(file);
     const app = await createApp({ db, legacyPending: () => (db.prepare("SELECT value FROM settings WHERE key='legacy.pending'").get() as { value: string } | undefined)?.value === 'true' });
     try {
@@ -195,7 +196,7 @@ test('旧账户已改密且升级后身份来源不明时，收藏导入不能�
       const headers = { cookie: (login.headers['set-cookie'] as string).split(';')[0]!, 'x-luvia-request': '1' };
       assert.equal((await app.inject({ method: 'POST', url: '/api/v2/me/password', headers, payload: { current: 'synthetic password', next: 'new synthetic password' } })).statusCode, 204);
     } finally { await app.close(); }
-    db.exec('DROP TABLE legacy_import_users; DROP TABLE legacy_import_tokens; ALTER TABLE api_tokens DROP COLUMN legacy_jwt; PRAGMA user_version=21');
+    restoreVersion21Fixture(db);
     db.close(); db = openDatabase(file);
     db.prepare("INSERT INTO jobs(id,type,label,status,trigger,created_at) VALUES ('old-import','import_legacy','旧导入','queued','manual',1)").run();
     await runNextJob(db, { owner: 'new-worker', allowedRoots: [], legacyDir: root, systemRoots: [] });
