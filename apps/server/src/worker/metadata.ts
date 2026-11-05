@@ -10,7 +10,7 @@ import { secureMediaPath } from '../core/paths.ts';
 import { readSettings } from '../core/settings.ts';
 import type { JobRow } from '../core/jobs.ts';
 
-type Source = { id: string; relative_path: string; name: string; media_type: string; size: number; modified_at: number; root: string };
+type Source = { id: string; relative_path: string; folder: string; name: string; media_type: string; size: number; modified_at: number; root: string };
 type Counts = { indexed: number; failed: number };
 type Metadata = {
   takenAt: number; takenAtSource: 'metadata' | 'filename' | 'mtime'; width: number | null; height: number | null;
@@ -107,6 +107,44 @@ async function readAv(filename: string, source: Source, signal: AbortSignal | un
   return result;
 }
 
+function refreshDirtyFolders(db: Database.Database): boolean {
+  const dirty = db.prepare(`SELECT d.path,d.updated FROM metadata_dirty_folders d WHERE NOT EXISTS (
+    SELECT 1 FROM folders f JOIN scan_locks s ON s.library_id=f.library_id WHERE f.path=d.path AND s.lease_expires_at>unixepoch()
+  ) ORDER BY d.path LIMIT 64`).all() as { path: string; updated: number }[];
+  const ancestors = new Set<string>();
+  const parent = db.prepare('SELECT parent FROM folders WHERE path=?');
+  for (const entry of dirty) {
+    let current: string | null = entry.path;
+    while (current && !ancestors.has(current)) {
+      ancestors.add(current);
+      current = (parent.get(current) as { parent: string | null } | undefined)?.parent ?? null;
+    }
+  }
+  const latestDirect = db.prepare('SELECT taken_at FROM files WHERE folder=? ORDER BY taken_at DESC,id ASC LIMIT 1');
+  const latestChild = db.prepare('SELECT max(latest_at) AS latest FROM folders WHERE parent=?');
+  const directCover = db.prepare('SELECT id,taken_at FROM files WHERE folder=? AND thumb_ready=1 ORDER BY taken_at DESC,id ASC LIMIT 1');
+  const childCover = db.prepare(`SELECT f.id,f.taken_at FROM folders child JOIN files f ON f.id=child.cover_file_id
+    WHERE child.parent=? AND f.thumb_ready=1 ORDER BY f.taken_at DESC,f.id ASC LIMIT 1`);
+  const update = db.prepare('UPDATE folders SET latest_at=?,cover_file_id=? WHERE path=?');
+  for (const folder of [...ancestors].sort((a, b) => b.length - a.length)) {
+    const own = (latestDirect.get(folder) as { taken_at: number } | undefined)?.taken_at ?? null;
+    const child = (latestChild.get(folder) as { latest: number | null }).latest;
+    const latest = own === null ? child : child === null ? own : Math.max(own, child);
+    const covers = [directCover.get(folder), childCover.get(folder)].filter(Boolean) as { id: string; taken_at: number }[];
+    covers.sort((a, b) => b.taken_at - a.taken_at || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    update.run(latest, covers[0]?.id ?? null, folder);
+  }
+  const clear = db.prepare('DELETE FROM metadata_dirty_folders WHERE path=?');
+  for (const entry of dirty) clear.run(entry.path);
+  if (dirty.length) db.prepare("INSERT INTO job_events(event_type,payload) VALUES ('library',?)")
+    .run(JSON.stringify({ folders: dirty.map((entry) => entry.path), added: 0, removed: 0, updated: dirty.reduce((sum, entry) => sum + entry.updated, 0) }));
+  return !!db.prepare('SELECT 1 FROM metadata_dirty_folders LIMIT 1').get();
+}
+
+export function flushMetadataFolders(db: Database.Database, assertLease: () => void = () => {}): boolean {
+  return db.transaction(() => { assertLease(); return refreshDirtyFolders(db); }).immediate();
+}
+
 export async function processMetadataBatch(db: Database.Database, job: JobRow, options: { owner: string; allowedRoots: string[]; libraryId?: string | null; assertLease: () => void; signal?: AbortSignal }): Promise<{ complete: boolean; counts: Counts }> {
   const previous = job.checkpoint ? JSON.parse(job.checkpoint) as Partial<Counts> : {};
   const counts: Counts = { indexed: previous.indexed ?? 0, failed: previous.failed ?? 0 };
@@ -118,7 +156,7 @@ export async function processMetadataBatch(db: Database.Database, job: JobRow, o
     const source = db.transaction(() => {
       options.assertLease();
       db.prepare('DELETE FROM metadata_claims WHERE lease_expires_at<=?').run(now());
-      const row = db.prepare(`SELECT f.id,f.relative_path,f.name,f.media_type,f.size,f.modified_at,l.root FROM files f
+      const row = db.prepare(`SELECT f.id,f.relative_path,f.folder,f.name,f.media_type,f.size,f.modified_at,l.root FROM files f
         JOIN libraries l ON l.id=f.library_id AND l.enabled=1 LEFT JOIN metadata_claims c ON c.file_id=f.id
         WHERE f.metadata_status='pending' AND c.file_id IS NULL${libraryClause} ORDER BY f.id LIMIT 1`).get(...libraryArgs) as Source | undefined;
       if (row) db.prepare('INSERT INTO metadata_claims(file_id,job_id,owner,lease_expires_at) VALUES (?,?,?,?)').run(row.id, job.id, options.owner, now() + 30);
@@ -159,6 +197,7 @@ export async function processMetadataBatch(db: Database.Database, job: JobRow, o
               metadata.container, metadata.fps, metadata.bitrate, metadata.make, metadata.model, metadata.lens, metadata.fNumber, metadata.exposure, metadata.iso,
               metadata.focalLength, metadata.focalLength35, metadata.software, metadata.latitude, metadata.longitude, metadata.altitude, metadata.playability, source.id);
           counts.indexed++;
+          db.prepare('INSERT INTO metadata_dirty_folders(path,updated) VALUES (?,1) ON CONFLICT(path) DO UPDATE SET updated=updated+1').run(source.folder);
         } else {
           db.prepare("UPDATE files SET metadata_status='failed',playability=CASE WHEN media_type='video' THEN 'unsupported' ELSE NULL END WHERE id=?").run(source.id);
           counts.failed++;
@@ -169,8 +208,8 @@ export async function processMetadataBatch(db: Database.Database, job: JobRow, o
     }).immediate();
     await delay(10, undefined, { signal });
   }
-  options.assertLease();
+  const dirtyRemaining = flushMetadataFolders(db, options.assertLease);
   const pending = db.prepare(`SELECT 1 FROM files f JOIN libraries l ON l.id=f.library_id AND l.enabled=1 WHERE f.metadata_status='pending'${libraryClause} LIMIT 1`).get(...libraryArgs);
-  if (pending) await delay(50, undefined, { signal: options.signal });
-  return { complete: !pending, counts };
+  if (pending || dirtyRemaining) await delay(50, undefined, { signal: options.signal });
+  return { complete: !pending && !dirtyRemaining, counts };
 }

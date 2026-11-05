@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { openDatabase } from '../src/core/database.ts';
 import { runNextJob } from '../src/worker/runner.ts';
 import { scanLibrary } from '../src/worker/scan.ts';
+import { flushMetadataFolders } from '../src/worker/metadata.ts';
 
 const fixtureScript = fileURLToPath(new URL('../scripts/fixtures.ts', import.meta.url));
 test('扫描后后台提取 EXIF、文件名日期和音视频元数据，损坏文件不阻断其他文件', async () => {
@@ -23,12 +24,19 @@ test('扫描后后台提取 EXIF、文件名日期和音视频元数据，损坏
     const options = { owner: 'worker-a', allowedRoots: [root], legacyDir: root, systemRoots: [] };
     await runNextJob(db, options);
     assert.equal((db.prepare("SELECT count(*) AS n FROM jobs WHERE type='metadata' AND status='queued'").get() as { n: number }).n, 1);
+    db.prepare("UPDATE files SET thumb_ready=1 WHERE name IN ('exif-gps.jpg','landscape.jpg')").run();
+    const originalCover = db.prepare("SELECT id FROM files WHERE name='exif-gps.jpg'").get() as { id: string };
+    db.prepare("UPDATE folders SET cover_file_id=? WHERE path IN ('lib','lib/photos','lib/photos/nested')").run(originalCover.id);
     await runNextJob(db, options);
     const row = (name: string) => db.prepare('SELECT * FROM files WHERE name=?').get(name) as Record<string, any>;
     const photo = row('exif-gps.jpg');
     assert.equal(photo.metadata_status, 'done'); assert.equal(photo.taken_at_source, 'metadata');
     assert.equal(photo.taken_at, Date.parse('2024-05-06T10:11:12+08:00') / 1000);
     assert.equal(photo.width, 960); assert.equal(photo.height, 640); assert.equal(photo.model, 'Fixture Camera');
+    assert.equal((db.prepare("SELECT latest_at FROM folders WHERE path='lib/photos/nested'").get() as { latest_at: number }).latest_at, photo.taken_at);
+    assert.equal((db.prepare("SELECT cover_file_id FROM folders WHERE path='lib/photos'").get() as { cover_file_id: string }).cover_file_id, row('landscape.jpg').id);
+    const changes = db.prepare("SELECT payload FROM job_events WHERE event_type='library'").all() as { payload: string }[];
+    assert.ok(changes.some(({ payload }) => JSON.parse(payload).updated > 0));
     assert.equal(photo.latitude, 30.5); assert.equal(photo.longitude, 120);
     assert.equal(row('IMG_20230908_121314.jpg').taken_at_source, 'filename');
     assert.equal(row('portrait.jpg').taken_at_source, 'mtime');
@@ -71,4 +79,25 @@ test('元数据作业分批保存断点，不抢占有效文件租约并接管�
     assert.equal(complete.status, 'succeeded'); assert.deepEqual(JSON.parse(complete.result), { indexed: 33, failed: 0 });
     assert.equal((db.prepare('SELECT metadata_status FROM files WHERE id=?').get(protectedFile.id) as { metadata_status: string }).metadata_status, 'done');
   } finally { db.close(); await rm(root, { recursive: true, force: true }); }
+});
+
+test('目录统计更新可恢复，并等待有效扫描租约结束', () => {
+  const db = openDatabase(':memory:');
+  try {
+    db.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib','照片','/synthetic')").run();
+    db.prepare("INSERT INTO folders(path,library_id,parent,name,latest_at) VALUES ('lib','lib',NULL,'根',1),('lib/child','lib','lib','子目录',1)").run();
+    db.prepare("INSERT INTO files(id,library_id,relative_path,folder,name,mime,media_type,size,modified_at,taken_at,taken_at_source,thumb_ready) VALUES ('photo','lib','child/a.jpg','lib/child','a.jpg','image/jpeg','image',1,1,123,'metadata',1)").run();
+    db.prepare("INSERT INTO metadata_dirty_folders(path,updated) VALUES ('lib/child',1)").run();
+    db.prepare("INSERT INTO scan_locks(library_id,owner,acquired_at,lease_expires_at) VALUES ('lib','scanner',unixepoch(),unixepoch()+30)").run();
+    assert.equal(flushMetadataFolders(db), true);
+    assert.equal((db.prepare("SELECT latest_at FROM folders WHERE path='lib/child'").get() as { latest_at: number }).latest_at, 1);
+    db.prepare("UPDATE scan_locks SET lease_expires_at=0 WHERE library_id='lib'").run();
+    assert.equal(flushMetadataFolders(db), false);
+    const rows = db.prepare('SELECT path,latest_at,cover_file_id FROM folders ORDER BY path').all();
+    assert.deepEqual(rows, [{ path: 'lib', latest_at: 123, cover_file_id: 'photo' }, { path: 'lib/child', latest_at: 123, cover_file_id: 'photo' }]);
+    const events = db.prepare("SELECT payload FROM job_events WHERE event_type='library'").all() as { payload: string }[];
+    assert.deepEqual(JSON.parse(events[0]!.payload), { folders: ['lib/child'], added: 0, removed: 0, updated: 1 });
+    assert.equal(flushMetadataFolders(db), false);
+    assert.equal((db.prepare("SELECT count(*) AS n FROM job_events WHERE event_type='library'").get() as { n: number }).n, 1);
+  } finally { db.close(); }
 });
