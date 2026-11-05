@@ -12,11 +12,35 @@ import { startWatchLoop } from '../src/worker/watch-loop.ts';
 import { runNextJob } from '../src/worker/runner.ts';
 import { flushLibraryEvents } from '../src/worker/watch-events.ts';
 import { createApp } from '../src/api/app.ts';
+import { scanLibrary } from '../src/worker/scan.ts';
 
 async function until(check: () => boolean, timeout = 18000): Promise<void> {
   const end = Date.now() + timeout;
   while (!check()) { if (Date.now() >= end) throw new Error('等待监控行为超时'); await delay(100); }
 }
+
+test('空挂载点启动后恢复，通过 worker 扫描保留全部媒体身份', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'luvia-watch-mount-e2e-')); const root = path.join(dir, 'media'); await mkdir(root);
+  const db = openDatabase(path.join(dir, 'db.sqlite')); const watcher = new FakeWatcher();
+  db.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib','照片',?)").run(root);
+  await writeFile(path.join(root, 'a.jpg'), 'photo');
+  await scanLibrary(db, { id: 'lib', root }, { allowedRoots: [root], mount: async () => 'nas' });
+  const before = db.prepare('SELECT id,missing_at_ms FROM files').all();
+  db.prepare('DELETE FROM library_watch_state').run();
+  await rename(path.join(root, 'a.jpg'), path.join(dir, 'saved.jpg'));
+  let mounted = false;
+  const runtime = new WatchRuntime(db, { owner: 'watch', allowedRoots: [root], watcher: () => watcher, mount: async () => mounted ? 'nas' : 'empty' });
+  const loop = startWatchLoop(runtime, { intervalMs: 50 });
+  try {
+    await loop.ready;
+    assert.equal((db.prepare('SELECT state FROM library_watch_state').get() as {state:string}).state, 'degraded');
+    assert.deepEqual(db.prepare('SELECT id,missing_at_ms FROM files').all(), before);
+    await rename(path.join(dir, 'saved.jpg'), path.join(root, 'a.jpg')); mounted = true;
+    await until(() => !!db.prepare("SELECT 1 FROM jobs WHERE type='scan' AND status='queued'").get(), 3000);
+    assert.equal(await runNextJob(db, { owner: 'scanner', allowedRoots: [root], legacyDir: root, systemRoots: [] }), true);
+    assert.deepEqual(db.prepare('SELECT id,missing_at_ms FROM files').all(), before);
+  } finally { await loop.stop(); db.close(); await rm(dir, { recursive: true, force: true }); }
+});
 
 test('worker 主循环对临时媒体库处理新增修改移动删除并发布事件', { timeout: 70000 }, async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'luvia-watch-e2e-')); const root = path.join(dir, 'media'); await mkdir(root);

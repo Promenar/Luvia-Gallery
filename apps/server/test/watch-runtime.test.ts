@@ -42,10 +42,14 @@ test('挂载身份改变时监控降级并保护索引，恢复后持久排队�
   db.prepare("INSERT INTO libraries(id,name,root,enabled) VALUES ('lib','照片',?,1)").run(media);
   const runtime = new WatchRuntime(db, { owner: 'one', watcher: () => new FakeWatcher(), mount: async () => identity });
   try {
+    const { writeFile } = await import('node:fs/promises');
+    const { scanLibrary } = await import('../src/worker/scan.ts');
+    await writeFile(path.join(media, 'old.jpg'), 'photo');
+    await scanLibrary(db, { id: 'lib', root: media }, { allowedRoots: [media], mount: async () => identity });
     await runtime.tick();
     const first = db.prepare("SELECT mount_identity FROM library_watch_state WHERE library_id='lib'").get() as { mount_identity: string };
     assert.equal(first.mount_identity, 'mount-a');
-    identity = 'mount-b'; await runtime.tick();
+    await rm(path.join(media, 'old.jpg')); identity = 'mount-b'; await runtime.tick();
     const unavailable = db.prepare("SELECT state,degraded_reason FROM library_watch_state WHERE library_id='lib'").get() as { state: string; degraded_reason: string };
     assert.equal(unavailable.state, 'degraded'); assert.match(unavailable.degraded_reason, /根目录|挂载/);
     db.prepare("UPDATE jobs SET status='succeeded' WHERE type='scan'").run();
@@ -80,7 +84,7 @@ test('全量扫描发现挂载身份改变时保留既有媒体且不标记缺�
     await writeFile(path.join(media, 'old.jpg'), 'photo');
     db.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib','照片',?)").run(media);
     await scanLibrary(db, { id: 'lib', root: media }, { allowedRoots: [media] });
-    db.prepare("INSERT INTO library_watch_state(library_id,mount_root,mount_identity) VALUES ('lib',?,'mount-a')").run(media);
+    db.prepare("UPDATE library_watch_state SET mount_root=?,mount_identity='mount-a' WHERE library_id='lib'").run(media);
     await rm(path.join(media, 'old.jpg'));
     await assert.rejects(scanLibrary(db, { id: 'lib', root: media }, { allowedRoots: [media], mount: async () => 'mount-b' }), /挂载/);
     assert.equal((db.prepare("SELECT missing_at_ms FROM files WHERE library_id='lib'").get() as {missing_at_ms:number|null}).missing_at_ms, null);
@@ -155,5 +159,19 @@ test('启动时根目录缺失，恢复后记录首次挂载身份并排队扫�
     const state = db.prepare("SELECT state,mount_root,mount_identity FROM library_watch_state WHERE library_id='lib'").get() as {state:string;mount_root:string;mount_identity:string};
     assert.deepEqual(state, { state: 'watching', mount_root: media, mount_identity: 'mount-a' });
     assert.ok(db.prepare("SELECT 1 FROM jobs WHERE type='scan' AND status='queued'").get());
+  } finally { await runtime.stop(); db.close(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('媒体库根目录在允许范围外时不认领或监视', async () => {
+  const { WatchRuntime } = await import('../src/worker/watch-runtime.ts');
+  const dir = await mkdtemp(path.join(tmpdir(), 'luvia-watch-outside-')); const allowed = path.join(dir, 'allowed'); const outside = path.join(dir, 'outside');
+  await mkdir(allowed); await mkdir(outside); const db = openDatabase(path.join(dir, 'db.sqlite')); let started = false;
+  db.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib','照片',?)").run(outside);
+  const runtime = new WatchRuntime(db, { owner: 'worker', allowedRoots: [allowed], watcher: () => { started = true; return new FakeWatcher(); } });
+  try {
+    await runtime.tick(); assert.equal(started, false);
+    assert.equal(db.prepare("SELECT 1 FROM watch_leases WHERE library_id='lib'").get(), undefined);
+    const state = db.prepare("SELECT state,degraded_reason FROM library_watch_state WHERE library_id='lib'").get() as { state: string; degraded_reason: string };
+    assert.equal(state.state, 'degraded'); assert.match(state.degraded_reason, /允许/);
   } finally { await runtime.stop(); db.close(); await rm(dir, { recursive: true, force: true }); }
 });

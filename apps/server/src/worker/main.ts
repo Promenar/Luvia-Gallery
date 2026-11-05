@@ -86,7 +86,7 @@ let sampling: Promise<void> = Promise.resolve();
 let backfill: Promise<void> = Promise.resolve();
 let cacheCleanup: Promise<void> = Promise.resolve();
 let timelineRebuild: Promise<void> = Promise.resolve();
-const watchLoop = startWatchLoop(new WatchRuntime(runtime.db, { owner }), { onError: () => logger.warn('实时监控检查失败') });
+const watchLoop = startWatchLoop(new WatchRuntime(runtime.db, { owner, allowedRoots }), { onError: () => logger.warn('实时监控检查失败') });
 try {
   await watchLoop.ready.catch(() => { logger.warn('实时监控启动失败，将重试'); });
   schedulePrune();

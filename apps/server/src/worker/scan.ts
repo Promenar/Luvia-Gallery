@@ -8,7 +8,7 @@ import { statFields } from '../watch/file-info.ts';
 import { readSettings } from '../core/settings.ts';
 import { cleanupDeletedMediaCache } from './cache-prune.ts';
 import { moveDirectoryPaths } from '../core/directory-move.ts';
-import { readRootMountIdentity } from '../watch/root-guard.ts';
+import { confirmLibraryMount } from '../watch/root-guard.ts';
 
 type Options = {
   allowedRoots: string[]; openDir?: typeof opendir; signal?: AbortSignal;
@@ -79,15 +79,16 @@ async function scanWithLock(db: Database.Database, library: { id: string; root: 
   const concurrency = Math.max(1, Math.min(32, options.statConcurrency ?? 8));
   const root = await realpath(library.root);
   const rootIdentity = await stat(root, { bigint: true });
+  const initialMount = await confirmLibraryMount(db, library, { ...options, assertLease });
+  if (!initialMount.available) {
+    db.prepare('INSERT OR IGNORE INTO library_watch_state(library_id) VALUES (?)').run(library.id);
+    db.prepare("UPDATE library_watch_state SET state='degraded',degraded_reason=? WHERE library_id=?").run(initialMount.reason, library.id);
+    throw new Error(initialMount.reason ?? '媒体库挂载身份未确认');
+  }
   const checkMount = async () => {
-    const current = db.prepare('SELECT l.root,s.mount_root,s.mount_identity,s.mount_attempted FROM libraries l LEFT JOIN library_watch_state s ON s.library_id=l.id WHERE l.id=?').get(library.id) as { root: string; mount_root: string | null; mount_identity: string | null; mount_attempted: number | null } | undefined;
-    if (!current || current.root !== library.root) return false;
-    if (current.mount_root === null) {
-      return !current.mount_attempted;
-    }
-    return current.mount_root === library.root && await (options.mount ?? readRootMountIdentity)(library.root) === current.mount_identity;
+    const current = await confirmLibraryMount(db, library, { ...options, allowChange: false });
+    return current.available && current.identity === initialMount.identity;
   };
-  if (!(await checkMount())) throw new Error('媒体库挂载身份不符或尚未确认');
   const allowedRoots = await Promise.all(options.allowedRoots.map((allowed) => realpath(allowed)));
   if (!allowedRoots.some((allowed) => within(allowed, root))) throw new Error('扫描路径不在允许的挂载根目录内');
   const libraryRow = db.prepare('SELECT name,exclude FROM libraries WHERE id=?').get(library.id) as { name: string; exclude: string } | undefined;

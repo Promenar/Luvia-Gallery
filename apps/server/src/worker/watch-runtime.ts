@@ -1,11 +1,13 @@
 import { randomUUID } from 'node:crypto';
+import path from 'node:path';
+import { realpath } from 'node:fs/promises';
 import type Database from 'better-sqlite3';
 import type { LibraryWatch } from '@luvia/contracts';
 import { openDatabase } from '../core/database.ts';
 import { readSettings } from '../core/settings.ts';
 import { WatchCoordinator } from '../watch/coordinator.ts';
 import { SqliteLibraryIndex } from '../watch/sqlite-index.ts';
-import { RootGuard, readRootMountIdentity } from '../watch/root-guard.ts';
+import { RootGuard, confirmLibraryMount } from '../watch/root-guard.ts';
 import { readInotifyQuota } from '../watch/mode.ts';
 import type { Watcher } from '../watch/watcher.ts';
 import { readProcessWatchCount } from '../watch/watcher.ts';
@@ -24,8 +26,8 @@ export class WatchRuntime {
   private running = new Map<string, Running>();
   private stopped = false;
   private readonly db: Database.Database;
-  private readonly options: { owner: string; watcher?: (root: string) => Watcher; mount?: (root: string) => Promise<string | null> };
-  constructor(db: Database.Database, options: { owner: string; watcher?: (root: string) => Watcher; mount?: (root: string) => Promise<string | null> }) { this.db = db; this.options = options; }
+  private readonly options: { owner: string; allowedRoots?: string[]; watcher?: (root: string) => Watcher; mount?: (root: string) => Promise<string | null> };
+  constructor(db: Database.Database, options: { owner: string; allowedRoots?: string[]; watcher?: (root: string) => Watcher; mount?: (root: string) => Promise<string | null> }) { this.db = db; this.options = options; }
   private config(row: LibraryRow, grace: number): string { return JSON.stringify([row.root, row.exclude, row.watch_mode, row.watch_poll_interval_sec, grace]); }
   async tick(): Promise<void> {
     if (this.stopped) return;
@@ -37,19 +39,20 @@ export class WatchRuntime {
       const renewed = this.db.prepare('UPDATE watch_leases SET lease_expires_at=? WHERE library_id=? AND owner=? AND token=? AND lease_expires_at>?')
         .run(at + 30, id, this.options.owner, current.token, at);
       if (!renewed.changes || !row || this.config(row, grace) !== current.config) { await this.stopLibrary(id); continue; }
-      const available = await current.coordinator.checkRoot();
-      if (available) {
-        const saved = this.db.prepare('SELECT mount_root FROM library_watch_state WHERE library_id=?').get(id) as { mount_root: string | null } | undefined;
-        if (saved && !saved.mount_root) {
-          const identity = await (this.options.mount ?? readRootMountIdentity)(row.root);
-          if (await current.coordinator.checkRoot()) this.db.prepare(`UPDATE library_watch_state SET mount_root=?,mount_identity=? WHERE library_id=? AND mount_root IS NULL AND EXISTS
-            (SELECT 1 FROM watch_leases WHERE library_id=? AND owner=? AND token=? AND lease_expires_at>unixepoch())`).run(row.root, identity, id, id, this.options.owner, current.token);
-        }
-      }
+      await current.coordinator.checkRoot();
       await this.writeStatus(id, current);
     }
     for (const row of rows) {
       if (this.running.has(row.id)) continue;
+      if (this.options.allowedRoots) {
+        const actual = await realpath(row.root).catch(() => path.resolve(row.root));
+        const allowed = await Promise.all(this.options.allowedRoots.map((root) => realpath(root).catch(() => path.resolve(root))));
+        if (!allowed.some((root) => { const rel = path.relative(root, actual); return rel === '' || (rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel)); })) {
+          this.db.prepare('INSERT OR IGNORE INTO library_watch_state(library_id) VALUES (?)').run(row.id);
+          this.db.prepare("UPDATE library_watch_state SET state='degraded',degraded_reason='媒体库根目录不在允许的媒体根目录内' WHERE library_id=?").run(row.id);
+          continue;
+        }
+      }
       const at = Math.floor(Date.now() / 1000); const token = randomUUID();
       const claimed = this.db.prepare(`INSERT INTO watch_leases(library_id,owner,token,lease_expires_at) VALUES (?,?,?,?)
         ON CONFLICT(library_id) DO UPDATE SET owner=excluded.owner,token=excluded.token,lease_expires_at=excluded.lease_expires_at
@@ -60,18 +63,11 @@ export class WatchRuntime {
         this.db.prepare('INSERT OR IGNORE INTO library_watch_state(library_id) VALUES (?)').run(row.id);
         this.db.prepare(`UPDATE library_watch_state SET mount_attempted=1 WHERE library_id=? AND EXISTS
           (SELECT 1 FROM watch_leases WHERE library_id=? AND owner=? AND token=? AND lease_expires_at>unixepoch())`).run(row.id, row.id, this.options.owner, token);
-        let saved = this.db.prepare('SELECT mount_root,mount_identity FROM library_watch_state WHERE library_id=?').get(row.id) as State;
-        const mount = this.options.mount ?? readRootMountIdentity;
-        if (!saved.mount_root) {
-          const probe = new RootGuard({ root: row.root, mount });
-          if ((await probe.check()).state === 'available') {
-            const identity = await mount(row.root);
-            this.db.prepare(`UPDATE library_watch_state SET mount_root=?,mount_identity=? WHERE library_id=? AND mount_root IS NULL AND EXISTS
-              (SELECT 1 FROM watch_leases WHERE library_id=? AND owner=? AND token=? AND lease_expires_at>unixepoch())`).run(row.root, identity, row.id, row.id, this.options.owner, token);
-            saved = this.db.prepare('SELECT mount_root,mount_identity FROM library_watch_state WHERE library_id=?').get(row.id) as State;
-          }
-        }
-        const guard = new RootGuard({ root: row.root, mount, ...(saved.mount_root ? { expectedMountIdentity: saved.mount_identity } : {}) });
+        const confirm = () => confirmLibraryMount(this.db, row, { allowedRoots: this.options.allowedRoots ?? [row.root], mount: this.options.mount,
+          assertLease: () => { if (!this.owns(row.id, token)) throw new Error('监控租约已失效'); } });
+        await confirm();
+        const saved = this.db.prepare('SELECT mount_root,mount_identity FROM library_watch_state WHERE library_id=?').get(row.id) as State;
+        const guard = new RootGuard({ root: row.root, confirm });
         connection = openDatabase(this.db.name); const owned = connection;
         port = new SqliteLibraryIndex(connection, { libraryId: row.id,
           assertLease: () => { if (!owned.prepare('SELECT 1 FROM watch_leases WHERE library_id=? AND owner=? AND token=? AND lease_expires_at>unixepoch()').get(row.id, this.options.owner, token)) throw new Error('监控租约已失效'); },
@@ -82,7 +78,7 @@ export class WatchRuntime {
           }).immediate(); },
         });
         let fsType: string | null = null;
-        try { const parts: unknown = saved.mount_identity && JSON.parse(saved.mount_identity); if (Array.isArray(parts) && typeof parts[3] === 'string') fsType = parts[3]; } catch { /* 无法解析时保持未知。 */ }
+        try { const parts: unknown = saved.mount_identity && JSON.parse(saved.mount_identity); if (Array.isArray(parts) && typeof parts[0] === 'string') fsType = parts[0]; } catch { /* 无法解析时保持未知。 */ }
         const quota = await readInotifyQuota();
         const used = serviceWatchUsage(this.db);
         const dirCount = (this.db.prepare('SELECT count(*) n FROM folders WHERE library_id=? AND missing_at_ms IS NULL').get(row.id) as {n:number}).n || 1;
