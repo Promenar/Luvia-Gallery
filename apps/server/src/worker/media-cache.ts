@@ -18,23 +18,23 @@ const Variant = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('preview') }),
   z.object({ kind: z.literal('tile'), level: z.number().int().nonnegative(), col: z.number().int().nonnegative(), row: z.number().int().nonnegative() }),
 ]);
-const Task = z.object({ mediaId: z.string().min(1), sourceSize: z.number().int().nonnegative(), sourceModified: z.number().int(), variant: Variant });
+const Task = z.object({ mediaId: z.string().min(1), sourceSize: z.number().int().nonnegative(), sourceModified: z.number().int(), sourceGeneration: z.number().int().nonnegative().default(0), variant: Variant });
 const within = (root: string, target: string) => {
   const relative = path.relative(root, target);
   return relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
 };
 export async function generateMediaCache(db: Database.Database, payload: unknown, options: { owner: string; cacheDir: string; allowedRoots: string[]; assertLease: () => void; signal?: AbortSignal }): Promise<void> {
   const task = Task.parse(payload);
-  const row = db.prepare(`SELECT f.id,f.size,f.modified_at,f.relative_path,f.media_type,f.width,f.height,l.root FROM files f
-    JOIN libraries l ON l.id=f.library_id WHERE f.id=? AND l.enabled=1`).get(task.mediaId) as
-    { id: string; size: number; modified_at: number; relative_path: string; media_type: string; width: number | null; height: number | null; root: string } | undefined;
-  if (!row || !(row.media_type === 'image' && task.variant.kind !== 'preview' || row.media_type === 'video' && (task.variant.kind === 'thumb' || task.variant.kind === 'preview')) || row.size !== task.sourceSize || row.modified_at !== task.sourceModified) throw new Error('媒体已变化或不支持');
+  const row = db.prepare(`SELECT f.id,f.size,f.modified_at,f.cache_generation,f.mtime_ms,f.relative_path,f.media_type,f.width,f.height,l.root FROM files f
+    JOIN libraries l ON l.id=f.library_id WHERE f.id=? AND l.enabled=1 AND f.missing_at_ms IS NULL`).get(task.mediaId) as
+    { id: string; size: number; modified_at: number; cache_generation: number; mtime_ms: number | null; relative_path: string; media_type: string; width: number | null; height: number | null; root: string } | undefined;
+  if (!row || !(row.media_type === 'image' && task.variant.kind !== 'preview' || row.media_type === 'video' && (task.variant.kind === 'thumb' || task.variant.kind === 'preview')) || row.size !== task.sourceSize || row.modified_at !== task.sourceModified || row.cache_generation !== task.sourceGeneration) throw new Error('媒体已变化或不支持');
   const realRoot = await realpath(row.root);
   const allowed = await Promise.all(options.allowedRoots.map((root) => realpath(root)));
   if (!allowed.some((root) => within(root, realRoot))) throw new Error('媒体库不在挂载内');
   const filename = await secureMediaPath(realRoot, row.relative_path);
   const info = await stat(filename);
-  if (info.size !== row.size || Math.floor(info.mtimeMs / 1000) !== row.modified_at) throw new Error('媒体已变化');
+  if (info.size !== row.size || Math.floor(info.mtimeMs / 1000) !== row.modified_at || (row.mtime_ms !== null && info.mtimeMs !== row.mtime_ms)) throw new Error('媒体已变化');
   options.signal?.throwIfAborted(); options.assertLease();
   if (task.variant.kind === 'dimensions') {
     const metadata = await sharp(filename).metadata();
@@ -43,8 +43,8 @@ export async function generateMediaCache(db: Database.Database, payload: unknown
     options.signal?.throwIfAborted();
     db.transaction(() => {
       options.assertLease();
-      db.prepare('UPDATE files SET width=?,height=?,orientation=? WHERE id=? AND size=? AND modified_at=?')
-        .run(rotated ? metadata.height : metadata.width, rotated ? metadata.width : metadata.height, metadata.orientation ?? null, row.id, row.size, row.modified_at);
+      db.prepare('UPDATE files SET width=?,height=?,orientation=? WHERE id=? AND size=? AND modified_at=? AND cache_generation=?')
+        .run(rotated ? metadata.height : metadata.width, rotated ? metadata.width : metadata.height, metadata.orientation ?? null, row.id, row.size, row.modified_at, row.cache_generation);
     }).immediate();
     return;
   }
@@ -98,20 +98,21 @@ export async function generateMediaCache(db: Database.Database, payload: unknown
     }
     options.signal?.throwIfAborted(); options.assertLease();
     const sourceAfter = await stat(filename);
-    if (sourceAfter.size !== row.size || Math.floor(sourceAfter.mtimeMs / 1000) !== row.modified_at) throw new Error('媒体已变化');
-    const current = db.prepare('SELECT size,modified_at FROM files WHERE id=?').get(row.id) as { size: number; modified_at: number } | undefined;
-    if (!current || current.size !== row.size || current.modified_at !== row.modified_at) throw new Error('媒体已变化');
+    if (sourceAfter.size !== row.size || Math.floor(sourceAfter.mtimeMs / 1000) !== row.modified_at || (row.mtime_ms !== null && sourceAfter.mtimeMs !== row.mtime_ms)) throw new Error('媒体已变化');
+    const current = db.prepare('SELECT size,modified_at,cache_generation FROM files WHERE id=? AND missing_at_ms IS NULL').get(row.id) as { size: number; modified_at: number; cache_generation: number } | undefined;
+    if (!current || current.size !== row.size || current.modified_at !== row.modified_at || current.cache_generation !== row.cache_generation) throw new Error('媒体已变化');
     await rename(temp, destination);
     const output = await stat(destination);
     db.transaction(() => {
       options.assertLease();
+      if (!db.prepare('SELECT 1 FROM files WHERE id=? AND size=? AND modified_at=? AND cache_generation=? AND missing_at_ms IS NULL').get(row.id, row.size, row.modified_at, row.cache_generation)) throw new Error('媒体已变化');
       db.prepare(`INSERT INTO cache_entries(cache_key,relative_path,bytes,last_access_at,media_id,variant,source_size,source_modified) VALUES (?,?,?,?,?,?,?,?)
         ON CONFLICT(cache_key) DO UPDATE SET bytes=excluded.bytes,last_access_at=excluded.last_access_at,media_id=excluded.media_id,variant=excluded.variant,source_size=excluded.source_size,source_modified=excluded.source_modified`)
         .run(cacheKey(row, task.variant), path.relative(cacheRoot, destination), output.size, Date.now(), row.id, task.variant.kind, row.size, row.modified_at);
-      if (hash) db.prepare('UPDATE files SET thumbhash=?,thumb_ready=1,thumb_version=CASE WHEN thumb_version=0 THEN 1 ELSE thumb_version END WHERE id=? AND size=? AND modified_at=?')
-        .run(hash, row.id, row.size, row.modified_at);
+      if (hash) db.prepare('UPDATE files SET thumbhash=?,thumb_ready=1,thumb_version=CASE WHEN thumb_version=0 THEN 1 ELSE thumb_version END WHERE id=? AND size=? AND modified_at=? AND cache_generation=?')
+        .run(hash, row.id, row.size, row.modified_at, row.cache_generation);
       if (hash) noteThumbnail(db, row.id);
-      if (task.variant.kind === 'preview') db.prepare('UPDATE files SET has_preview=1 WHERE id=? AND size=? AND modified_at=?').run(row.id, row.size, row.modified_at);
+      if (task.variant.kind === 'preview') db.prepare('UPDATE files SET has_preview=1 WHERE id=? AND size=? AND modified_at=? AND cache_generation=?').run(row.id, row.size, row.modified_at, row.cache_generation);
     }).immediate();
   } finally { await unlink(temp).catch(() => {}); await unlink(frame).catch(() => {}); await unlink(decoded).catch(() => {}); }
 }

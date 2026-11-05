@@ -1,4 +1,5 @@
-import { test } from 'node:test';
+import { test as nodeTest } from 'node:test';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -7,6 +8,12 @@ import type { LibraryChangedEvent } from '@luvia/contracts';
 import type { IndexedRecord, LibraryIndexPort, WatchLibraryChange } from '../src/watch/coordinator.ts';
 import type { MoveCandidate } from '../src/watch/move-matcher.ts';
 import { FakeWatcher } from '../src/watch/watcher.ts';
+import { sqliteHarness } from './watch-sqlite-harness.ts';
+
+const backend = new AsyncLocalStorage<'memory' | 'sqlite'>();
+function test(name: string, run: () => Promise<void>): void {
+  for (const kind of ['memory', 'sqlite'] as const) nodeTest(`${name} [${kind}]`, () => backend.run(kind, run));
+}
 
 class TestClock {
   time = 0; next = 0; timers = new Map<number, { at: number; fn: () => void }>();
@@ -36,6 +43,7 @@ class MemoryIndex implements LibraryIndexPort {
   async appendChange(change: WatchLibraryChange) { this.changes.push(change); }
   async requestFullReconcile(reason: string) { this.requests.push(reason); }
   async publishEvent(event: LibraryChangedEvent) { this.events.push(event); }
+  close() {}
   private relocate(old: IndexedRecord, entry: MoveCandidate) {
     for (const [p, value] of [...this.records]) if (p === old.path || (old.isDir && p.startsWith(`${old.path}/`))) {
       const next = entry.path + p.slice(old.path.length); this.records.delete(p);
@@ -43,11 +51,12 @@ class MemoryIndex implements LibraryIndexPort {
     }
   }
 }
+function makeIndex(root: string, clock: TestClock) { return backend.getStore() === 'sqlite' ? sqliteHarness(root, clock) : new MemoryIndex(); }
 
 async function setup() {
   const m = await import('../src/watch/coordinator.ts'); assert.ok(m, '协调器尚未实现');
   const root = await mkdtemp(path.join(tmpdir(), 'luvia-watch-core-')); const clock = new TestClock();
-  const watcher = new FakeWatcher(); const port = new MemoryIndex();
+  const watcher = new FakeWatcher(); const port = makeIndex(root, clock);
   const coordinator = new m.WatchCoordinator({ libraryId: 'lib', root, exclude: ['@eaDir', '.*'], watcher, port, clock, missingGraceDays: 7 });
   await coordinator.start(); const advance = (ms: number) => clock.advance(ms, () => coordinator.idle());
   return { root, clock, watcher, port, coordinator, advance };
@@ -58,17 +67,17 @@ test('协调器新增文件稳定后写入和推送，移动保留 ID，删除�
   try {
     await writeFile(path.join(s.root, 'a.jpg'), 'photo'); s.watcher.emit({ eventType: 'rename', path: 'a.jpg' }); await s.coordinator.idle();
     await s.advance(2000); await s.advance(2999); assert.equal(s.port.records.size, 0);
-    await s.advance(1); await s.advance(10000); assert.equal(s.port.records.get('a.jpg')?.mediaId, 'media-1');
+    await s.advance(1); await s.advance(10000); const id = s.port.records.get('a.jpg')?.mediaId; assert.ok(id);
     await s.advance(2000); assert.equal(s.port.events.at(-1)?.added, 1);
     await rename(path.join(s.root, 'a.jpg'), path.join(s.root, 'b.jpg'));
     s.watcher.emit({ eventType: 'rename', path: 'a.jpg' }); s.watcher.emit({ eventType: 'rename', path: 'b.jpg' }); await s.coordinator.idle();
     await s.advance(2000); await s.advance(3000);
-    assert.equal(s.port.records.get('b.jpg')?.mediaId, 'media-1'); assert.equal(s.port.records.has('a.jpg'), false);
+    assert.equal(s.port.records.get('b.jpg')?.mediaId, id); assert.equal(s.port.records.has('a.jpg'), false);
     assert.ok(s.port.changes.some((v) => v.kind === 'moved' && v.path === 'b.jpg' && v.fromPath === 'a.jpg'));
     await rm(path.join(s.root, 'b.jpg')); s.watcher.emit({ eventType: 'rename', path: 'b.jpg' }); await s.coordinator.idle();
     await s.advance(2000); await s.advance(10000);
     assert.equal(typeof s.port.records.get('b.jpg')?.missingAt, 'number'); assert.ok(s.port.changes.some((v) => v.kind === 'missing' && v.path === 'b.jpg'));
-  } finally { await s.coordinator.stop(); await rm(s.root, { recursive: true, force: true }); }
+  } finally { await s.coordinator.stop(); s.port.close(); await rm(s.root, { recursive: true, force: true }); }
 });
 
 test('监视错误、溢出、根目录恢复各自请求全量对账；不可用时不标记缺失', async () => {
@@ -81,7 +90,7 @@ test('监视错误、溢出、根目录恢复各自请求全量对账；不可�
     assert.equal(s.port.records.get('a.jpg')?.missingAt, null); assert.equal(s.port.changes.filter((v) => v.kind === 'missing').length, 0);
     await rename(`${s.root}-away`, s.root); await s.coordinator.checkRoot();
     assert.ok(s.port.requests.includes('root-recovered'));
-  } finally { await s.coordinator.stop(); await rm(s.root, { recursive: true, force: true }); await rm(`${s.root}-away`, { recursive: true, force: true }); }
+  } finally { await s.coordinator.stop(); s.port.close(); await rm(s.root, { recursive: true, force: true }); await rm(`${s.root}-away`, { recursive: true, force: true }); }
 });
 
 test('同一媒体库的目录对账串行运行', async () => {
@@ -94,21 +103,22 @@ test('同一媒体库的目录对账串行运行', async () => {
     s.port.readDirectory = async (dir) => { running++; peak = Math.max(peak, running); if (first) { first = false; entered(); await blocked; } const result = await original(dir); running--; return result; };
     const a = s.coordinator.reconcileDirectory('a'); const b = s.coordinator.reconcileDirectory('b');
     await enteredFirst; try { assert.equal(peak, 1); } finally { release(); } await Promise.all([a, b]); assert.equal(peak, 1);
-  } finally { await s.coordinator.stop(); await rm(s.root, { recursive: true, force: true }); }
+  } finally { await s.coordinator.stop(); s.port.close(); await rm(s.root, { recursive: true, force: true }); }
 });
 
 test('移动窗口到期后的宽限期恢复保留 ID，过期记录在后续对账清理', async () => {
   const s = await setup();
   try {
     await writeFile(path.join(s.root, 'a.jpg'), 'a'); await s.coordinator.reconcileDirectory(''); await s.advance(3000); await s.advance(10000);
+    const id = s.port.records.get('a.jpg')?.mediaId; assert.ok(id);
     await rename(path.join(s.root, 'a.jpg'), `${s.root}-parked.jpg`); await s.coordinator.reconcileDirectory(''); await s.advance(10000);
     assert.equal(typeof s.port.records.get('a.jpg')?.missingAt, 'number');
     await rename(`${s.root}-parked.jpg`, path.join(s.root, 'b.jpg')); await s.coordinator.reconcileDirectory(''); await s.advance(3000);
-    assert.equal(s.port.records.get('b.jpg')?.mediaId, 'media-1'); assert.ok(s.port.changes.some((v) => v.kind === 'restored'));
+    assert.equal(s.port.records.get('b.jpg')?.mediaId, id); assert.ok(s.port.changes.some((v) => v.kind === 'restored'));
     await rm(path.join(s.root, 'b.jpg')); await s.coordinator.reconcileDirectory(''); await s.advance(10000);
     await s.advance(7 * 86_400_000 + 1); await s.coordinator.reconcileDirectory('');
     assert.equal(s.port.records.has('b.jpg'), false); assert.ok(s.port.changes.some((v) => v.kind === 'removed'));
-  } finally { await s.coordinator.stop(); await rm(s.root, { recursive: true, force: true }); }
+  } finally { await s.coordinator.stop(); s.port.close(); await rm(s.root, { recursive: true, force: true }); }
 });
 
 test('新建多层目录立即扫描，目录改名只记录目录级移动并保留子文件 ID', async () => {
@@ -124,7 +134,7 @@ test('新建多层目录立即扫描，目录改名只记录目录级移动并�
     await s.advance(2000); await s.advance(13000);
     assert.equal(s.port.records.get('vacay/a/b/pic.jpg')?.mediaId, id);
     assert.deepEqual(s.port.changes.filter((v) => v.kind === 'moved').map((v) => [v.fromPath, v.path, v.isDir]), [['album', 'vacay', true]]);
-  } finally { await s.coordinator.stop(); await rm(s.root, { recursive: true, force: true }); }
+  } finally { await s.coordinator.stop(); s.port.close(); await rm(s.root, { recursive: true, force: true }); }
 });
 
 test('目录消失进入宽限期后以新路径恢复，保留全部子孙的 ID', async () => {
@@ -138,7 +148,7 @@ test('目录消失进入宽限期后以新路径恢复，保留全部子孙的 I
     await rename(parked, path.join(s.root, 'restored')); await s.coordinator.reconcileDirectory(''); await s.advance(13000);
     assert.equal(s.port.records.get('restored/pic.jpg')?.mediaId, id);
     assert.ok(s.port.changes.some((v) => v.kind === 'restored' && v.path === 'restored' && v.isDir));
-  } finally { await s.coordinator.stop(); await rm(s.root, { recursive: true, force: true }); await rm(parked, { recursive: true, force: true }); }
+  } finally { await s.coordinator.stop(); s.port.close(); await rm(s.root, { recursive: true, force: true }); await rm(parked, { recursive: true, force: true }); }
 });
 
 test('等待配对期间根目录不可用时不标记缺失，恢复时请求全量对账', async () => {
@@ -149,23 +159,23 @@ test('等待配对期间根目录不可用时不标记缺失，恢复时请求�
     await rename(s.root, `${s.root}-away`); await s.advance(5000);
     assert.equal(s.port.records.get('a.jpg')?.missingAt, null);
     await rename(`${s.root}-away`, s.root); await s.coordinator.checkRoot(); assert.ok(s.port.requests.includes('root-recovered'));
-  } finally { await s.coordinator.stop(); await rm(s.root, { recursive: true, force: true }); await rm(`${s.root}-away`, { recursive: true, force: true }); }
+  } finally { await s.coordinator.stop(); s.port.close(); await rm(s.root, { recursive: true, force: true }); await rm(`${s.root}-away`, { recursive: true, force: true }); }
 });
 
 test('自动模式在网络文件系统按配置周期请求轮询，全程不启动监视器', async () => {
   const m = await import('../src/watch/coordinator.ts'); const root = await mkdtemp(path.join(tmpdir(), 'luvia-watch-poll-'));
-  const clock = new TestClock(); const watcher = new FakeWatcher(); const port = new MemoryIndex();
+  const clock = new TestClock(); const watcher = new FakeWatcher(); const port = makeIndex(root, clock);
   const coordinator = new m.WatchCoordinator({ libraryId: 'lib', root, exclude: [], watcher, port, clock, missingGraceDays: 7, fsType: 'cifs', pollIntervalSec: 60 });
   try {
     await coordinator.start(); assert.equal((await coordinator.status()).state, 'polling'); assert.ok(port.requests.includes('startup'));
     watcher.overflow(); await coordinator.idle(); assert.equal(port.requests.includes('overflow'), false);
     await clock.advance(60_000, () => coordinator.idle()); assert.ok(port.requests.includes('poll'));
-  } finally { await coordinator.stop(); await rm(root, { recursive: true, force: true }); }
+  } finally { await coordinator.stop(); port.close(); await rm(root, { recursive: true, force: true }); }
 });
 
 test('零天宽限期在标记缺失后的下一次对账清理', async () => {
   const m = await import('../src/watch/coordinator.ts'); const root = await mkdtemp(path.join(tmpdir(), 'luvia-watch-zero-'));
-  const clock = new TestClock(); const watcher = new FakeWatcher(); const port = new MemoryIndex();
+  const clock = new TestClock(); const watcher = new FakeWatcher(); const port = makeIndex(root, clock);
   const coordinator = new m.WatchCoordinator({ libraryId: 'lib', root, exclude: [], watcher, port, clock, missingGraceDays: 0 });
   const advance = (ms: number) => clock.advance(ms, () => coordinator.idle());
   try {
@@ -173,7 +183,7 @@ test('零天宽限期在标记缺失后的下一次对账清理', async () => {
     await rm(path.join(root, 'a.jpg')); await coordinator.reconcileDirectory(''); await advance(10000);
     assert.equal(typeof port.records.get('a.jpg')?.missingAt, 'number');
     await coordinator.reconcileDirectory(''); assert.equal(port.records.has('a.jpg'), false);
-  } finally { await coordinator.stop(); await rm(root, { recursive: true, force: true }); }
+  } finally { await coordinator.stop(); port.close(); await rm(root, { recursive: true, force: true }); }
 });
 
 test('排除目录不被递归索引；现有文件变更稳定后才更新', async () => {
@@ -187,7 +197,7 @@ test('排除目录不被递归索引；现有文件变更稳定后才更新', as
     assert.equal(s.port.changes.filter((c) => c.kind === 'updated').length, 0);
     await s.advance(1); assert.equal(s.port.changes.filter((c) => c.kind === 'updated').length, 1);
     assert.equal(s.port.records.get('a.jpg')?.size, 22);
-  } finally { await s.coordinator.stop(); await rm(s.root, { recursive: true, force: true }); }
+  } finally { await s.coordinator.stop(); s.port.close(); await rm(s.root, { recursive: true, force: true }); }
 });
 
 test('设备或 inode 改变时，协调器按已缓存头部哈希保留移动文件的 ID', async () => {
@@ -198,7 +208,7 @@ test('设备或 inode 改变时，协调器按已缓存头部哈希保留移动�
     await rename(path.join(s.root, 'a.jpg'), path.join(s.root, 'b.jpg')); await s.coordinator.reconcileDirectory(''); await s.advance(3000);
     assert.equal(s.port.records.get('b.jpg')?.mediaId, old.mediaId); assert.equal(s.port.records.has('a.jpg'), false);
     assert.ok(s.port.changes.some((c) => c.kind === 'moved' && c.fromPath === 'a.jpg' && c.path === 'b.jpg'));
-  } finally { await s.coordinator.stop(); await rm(s.root, { recursive: true, force: true }); }
+  } finally { await s.coordinator.stop(); s.port.close(); await rm(s.root, { recursive: true, force: true }); }
 });
 
 test('实时待配对 inode 命中优先于历史缺失文件的相同内容哈希', async () => {
@@ -210,7 +220,7 @@ test('实时待配对 inode 命中优先于历史缺失文件的相同内容哈�
     await rename(path.join(s.root, 'a.jpg'), path.join(s.root, 'c.jpg')); await s.coordinator.reconcileDirectory(''); await s.advance(3000);
     assert.equal(s.port.records.get('c.jpg')?.mediaId, original.mediaId);
     assert.equal(s.port.records.get('ghost.jpg')?.mediaId, 'other-media');
-  } finally { await s.coordinator.stop(); await rm(s.root, { recursive: true, force: true }); }
+  } finally { await s.coordinator.stop(); s.port.close(); await rm(s.root, { recursive: true, force: true }); }
 });
 
 test('缺失目录在原路径恢复时递归发现离线期间新增的文件', async () => {
@@ -225,7 +235,7 @@ test('缺失目录在原路径恢复时递归发现离线期间新增的文件',
     assert.equal(typeof s.port.records.get('album/nested/old.jpg')?.missingAt, 'number');
     await s.advance(3000); assert.equal(s.port.records.get('album/nested/old.jpg')?.missingAt, null); await s.advance(10000);
     assert.equal(s.port.records.get('album/nested/old.jpg')?.mediaId, id); assert.ok(s.port.records.get('album/nested/new.jpg')?.mediaId);
-  } finally { await s.coordinator.stop(); await rm(s.root, { recursive: true, force: true }); await rm(parked, { recursive: true, force: true }); }
+  } finally { await s.coordinator.stop(); s.port.close(); await rm(s.root, { recursive: true, force: true }); await rm(parked, { recursive: true, force: true }); }
 });
 
 test('新增候选等待期间出现持久化缺失记录时，释放前仍能恢复原媒体 ID', async () => {
@@ -238,5 +248,5 @@ test('新增候选等待期间出现持久化缺失记录时，释放前仍能�
     await s.advance(10000);
     assert.equal(s.port.records.get('new.jpg')?.mediaId, 'prior-id'); assert.equal(s.port.records.has('old.jpg'), false);
     assert.ok(s.port.changes.some((change) => change.kind === 'restored' && change.path === 'new.jpg'));
-  } finally { await s.coordinator.stop(); await rm(s.root, { recursive: true, force: true }); }
+  } finally { await s.coordinator.stop(); s.port.close(); await rm(s.root, { recursive: true, force: true }); }
 });

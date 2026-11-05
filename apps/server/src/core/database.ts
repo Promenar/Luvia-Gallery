@@ -287,6 +287,133 @@ const schemaV22 = `
     ON CONFLICT(key) DO UPDATE SET value='true';
 `;
 
+const schemaV23 = `
+  ALTER TABLE files ADD COLUMN missing_at_ms INTEGER;
+  ALTER TABLE files ADD COLUMN dev TEXT;
+  ALTER TABLE files ADD COLUMN ino TEXT;
+  ALTER TABLE files ADD COLUMN mtime_ms REAL;
+  ALTER TABLE files ADD COLUMN head_hash TEXT;
+  ALTER TABLE folders ADD COLUMN missing_at_ms INTEGER;
+  ALTER TABLE folders ADD COLUMN dev TEXT;
+  ALTER TABLE folders ADD COLUMN ino TEXT;
+  ALTER TABLE folders ADD COLUMN mtime_ms REAL;
+  CREATE TABLE file_watch_index (file_id TEXT PRIMARY KEY,library_id TEXT NOT NULL,missing_at_ms INTEGER,
+    dev TEXT,ino TEXT,size INTEGER NOT NULL,mtime_ms REAL,head_hash TEXT);
+  CREATE INDEX files_missing ON file_watch_index(library_id,missing_at_ms) WHERE missing_at_ms IS NOT NULL;
+  CREATE INDEX files_identity ON file_watch_index(library_id,dev,ino) WHERE dev IS NOT NULL AND ino IS NOT NULL;
+  CREATE INDEX files_head ON file_watch_index(library_id,size,mtime_ms,head_hash) WHERE head_hash IS NOT NULL;
+  CREATE TABLE folder_watch_index (folder_path TEXT PRIMARY KEY,library_id TEXT NOT NULL,missing_at_ms INTEGER,dev TEXT,ino TEXT);
+  CREATE INDEX folders_missing ON folder_watch_index(library_id,missing_at_ms) WHERE missing_at_ms IS NOT NULL;
+  CREATE INDEX folders_identity ON folder_watch_index(library_id,dev,ino) WHERE dev IS NOT NULL AND ino IS NOT NULL;
+  CREATE TRIGGER files_watch_insert AFTER INSERT ON files WHEN new.missing_at_ms IS NOT NULL OR (new.dev IS NOT NULL AND new.ino IS NOT NULL) OR new.head_hash IS NOT NULL BEGIN
+    INSERT INTO file_watch_index VALUES(new.id,new.library_id,new.missing_at_ms,new.dev,new.ino,new.size,new.mtime_ms,new.head_hash);
+  END;
+  CREATE TRIGGER files_watch_update AFTER UPDATE OF id,library_id,missing_at_ms,dev,ino,size,mtime_ms,head_hash ON files BEGIN
+    DELETE FROM file_watch_index WHERE file_id=old.id;
+    INSERT INTO file_watch_index SELECT new.id,new.library_id,new.missing_at_ms,new.dev,new.ino,new.size,new.mtime_ms,new.head_hash
+      WHERE new.missing_at_ms IS NOT NULL OR (new.dev IS NOT NULL AND new.ino IS NOT NULL) OR new.head_hash IS NOT NULL;
+  END;
+  CREATE TRIGGER files_watch_delete AFTER DELETE ON files BEGIN DELETE FROM file_watch_index WHERE file_id=old.id; END;
+  CREATE TRIGGER folders_watch_insert AFTER INSERT ON folders WHEN new.missing_at_ms IS NOT NULL OR (new.dev IS NOT NULL AND new.ino IS NOT NULL) BEGIN
+    INSERT INTO folder_watch_index VALUES(new.path,new.library_id,new.missing_at_ms,new.dev,new.ino);
+  END;
+  CREATE TRIGGER folders_watch_update AFTER UPDATE OF path,library_id,missing_at_ms,dev,ino ON folders BEGIN
+    DELETE FROM folder_watch_index WHERE folder_path=old.path;
+    INSERT INTO folder_watch_index SELECT new.path,new.library_id,new.missing_at_ms,new.dev,new.ino
+      WHERE new.missing_at_ms IS NOT NULL OR (new.dev IS NOT NULL AND new.ino IS NOT NULL);
+  END;
+  CREATE TRIGGER folders_watch_delete AFTER DELETE ON folders BEGIN DELETE FROM folder_watch_index WHERE folder_path=old.path; END;
+`;
+const schemaV24 = `
+  CREATE TABLE library_changes (
+    id INTEGER PRIMARY KEY, library_id TEXT NOT NULL REFERENCES libraries(id) ON DELETE CASCADE,
+    ts INTEGER NOT NULL, kind TEXT NOT NULL, path TEXT NOT NULL, from_path TEXT,
+    is_dir INTEGER NOT NULL, media_id TEXT, source TEXT NOT NULL
+  );
+  CREATE INDEX library_changes_recent ON library_changes(library_id,ts DESC,id DESC);
+  CREATE INDEX library_changes_retention ON library_changes(ts);
+`;
+const schemaV25 = `
+  CREATE TABLE index_backfill (
+    id INTEGER PRIMARY KEY CHECK(id=1), last_rowid INTEGER NOT NULL DEFAULT 0,
+    processed INTEGER NOT NULL DEFAULT 0, errors INTEGER NOT NULL DEFAULT 0,
+    complete INTEGER NOT NULL DEFAULT 0, owner TEXT, lease_until_ms INTEGER NOT NULL DEFAULT 0
+  );
+  INSERT INTO index_backfill(id) VALUES (1);
+`;
+const schemaV26 = `
+  CREATE TABLE scan_conflicts (
+    library_id TEXT NOT NULL REFERENCES libraries(id) ON DELETE CASCADE, marker TEXT NOT NULL,
+    relative_path TEXT NOT NULL, size INTEGER NOT NULL, mtime INTEGER NOT NULL, mtime_ms REAL NOT NULL,
+    dev TEXT NOT NULL, ino TEXT NOT NULL, moved_id TEXT,
+    PRIMARY KEY(library_id,marker,relative_path)
+  );
+  CREATE INDEX scan_conflicts_identity ON scan_conflicts(library_id,marker,moved_id) WHERE moved_id IS NOT NULL;
+`;
+const schemaV27 = `
+  CREATE TABLE cache_gc (cache_key TEXT PRIMARY KEY,relative_path TEXT NOT NULL);
+  CREATE TABLE timeline_missing_counts(month TEXT PRIMARY KEY,count INTEGER NOT NULL);
+  CREATE TRIGGER missing_timeline_insert AFTER INSERT ON files WHEN new.missing_at_ms IS NOT NULL AND strftime('%Y-%m',new.taken_at,'unixepoch','localtime') IS NOT NULL BEGIN
+    INSERT INTO timeline_missing_counts(month,count) VALUES(strftime('%Y-%m',new.taken_at,'unixepoch','localtime'),1) ON CONFLICT(month) DO UPDATE SET count=count+1;
+  END;
+  CREATE TRIGGER missing_timeline_delete AFTER DELETE ON files WHEN old.missing_at_ms IS NOT NULL AND strftime('%Y-%m',old.taken_at,'unixepoch','localtime') IS NOT NULL BEGIN
+    UPDATE timeline_missing_counts SET count=count-1 WHERE month=strftime('%Y-%m',old.taken_at,'unixepoch','localtime'); DELETE FROM timeline_missing_counts WHERE count<=0;
+  END;
+  CREATE TRIGGER missing_timeline_update AFTER UPDATE OF missing_at_ms,taken_at ON files BEGIN
+    UPDATE timeline_missing_counts SET count=count-1 WHERE old.missing_at_ms IS NOT NULL AND month=strftime('%Y-%m',old.taken_at,'unixepoch','localtime');
+    DELETE FROM timeline_missing_counts WHERE count<=0;
+    INSERT INTO timeline_missing_counts(month,count) SELECT strftime('%Y-%m',new.taken_at,'unixepoch','localtime'),1
+      WHERE new.missing_at_ms IS NOT NULL AND strftime('%Y-%m',new.taken_at,'unixepoch','localtime') IS NOT NULL ON CONFLICT(month) DO UPDATE SET count=count+1;
+  END;
+`;
+const schemaV28 = `
+  DROP TRIGGER files_timeline_insert;
+  DROP TRIGGER files_timeline_delete;
+  DROP TRIGGER files_timeline_update;
+  CREATE TRIGGER files_timeline_insert AFTER INSERT ON files
+  WHEN new.missing_at_ms IS NULL AND strftime('%Y-%m',new.taken_at,'unixepoch','localtime') IS NOT NULL BEGIN
+    INSERT INTO timeline_counts(month,count) VALUES (strftime('%Y-%m',new.taken_at,'unixepoch','localtime'),1)
+      ON CONFLICT(month) DO UPDATE SET count=count+1;
+  END;
+  CREATE TRIGGER files_timeline_delete AFTER DELETE ON files
+  WHEN old.missing_at_ms IS NULL AND strftime('%Y-%m',old.taken_at,'unixepoch','localtime') IS NOT NULL BEGIN
+    UPDATE timeline_counts SET count=count-1 WHERE month=strftime('%Y-%m',old.taken_at,'unixepoch','localtime');
+    DELETE FROM timeline_counts WHERE count<=0;
+  END;
+  CREATE TRIGGER files_timeline_update AFTER UPDATE OF taken_at,missing_at_ms ON files BEGIN
+    UPDATE timeline_counts SET count=count-1 WHERE old.missing_at_ms IS NULL AND month=strftime('%Y-%m',old.taken_at,'unixepoch','localtime');
+    DELETE FROM timeline_counts WHERE count<=0;
+    INSERT INTO timeline_counts(month,count) SELECT strftime('%Y-%m',new.taken_at,'unixepoch','localtime'),1
+      WHERE new.missing_at_ms IS NULL AND strftime('%Y-%m',new.taken_at,'unixepoch','localtime') IS NOT NULL
+      ON CONFLICT(month) DO UPDATE SET count=count+1;
+  END;
+  CREATE TABLE timeline_rebuild_state(id INTEGER PRIMARY KEY CHECK(id=1),cursor INTEGER NOT NULL DEFAULT 0);
+  CREATE TABLE timeline_rebuild_counts(month TEXT PRIMARY KEY,count INTEGER NOT NULL);
+  CREATE TRIGGER timeline_rebuild_insert AFTER INSERT ON files WHEN new.missing_at_ms IS NULL AND EXISTS(SELECT 1 FROM timeline_rebuild_state WHERE id=1 AND cursor>=new.rowid) BEGIN
+    INSERT INTO timeline_rebuild_counts(month,count) SELECT strftime('%Y-%m',new.taken_at,'unixepoch','localtime'),1
+      WHERE strftime('%Y-%m',new.taken_at,'unixepoch','localtime') IS NOT NULL ON CONFLICT(month) DO UPDATE SET count=count+1;
+  END;
+  CREATE TRIGGER timeline_rebuild_delete AFTER DELETE ON files WHEN old.missing_at_ms IS NULL AND EXISTS(SELECT 1 FROM timeline_rebuild_state WHERE id=1 AND cursor>=old.rowid) BEGIN
+    UPDATE timeline_rebuild_counts SET count=count-1 WHERE month=strftime('%Y-%m',old.taken_at,'unixepoch','localtime'); DELETE FROM timeline_rebuild_counts WHERE count<=0;
+  END;
+  CREATE TRIGGER timeline_rebuild_update AFTER UPDATE OF taken_at,missing_at_ms ON files WHEN EXISTS(SELECT 1 FROM timeline_rebuild_state WHERE id=1 AND cursor>=old.rowid) BEGIN
+    UPDATE timeline_rebuild_counts SET count=count-1 WHERE old.missing_at_ms IS NULL AND month=strftime('%Y-%m',old.taken_at,'unixepoch','localtime');
+    DELETE FROM timeline_rebuild_counts WHERE count<=0;
+    INSERT INTO timeline_rebuild_counts(month,count) SELECT strftime('%Y-%m',new.taken_at,'unixepoch','localtime'),1
+      WHERE new.missing_at_ms IS NULL AND strftime('%Y-%m',new.taken_at,'unixepoch','localtime') IS NOT NULL ON CONFLICT(month) DO UPDATE SET count=count+1;
+  END;
+`;
+const schemaV29 = `
+  ALTER TABLE files ADD COLUMN cache_generation INTEGER NOT NULL DEFAULT 0;
+  CREATE TABLE scan_current_markers (library_id TEXT PRIMARY KEY REFERENCES libraries(id) ON DELETE CASCADE, marker TEXT NOT NULL);
+  CREATE TABLE scan_expiry_logged (library_id TEXT NOT NULL REFERENCES libraries(id) ON DELETE CASCADE, path TEXT NOT NULL, PRIMARY KEY(library_id,path));
+  CREATE TABLE scan_change_directories (
+    library_id TEXT NOT NULL REFERENCES libraries(id) ON DELETE CASCADE,
+    marker TEXT NOT NULL, relative_path TEXT NOT NULL,
+    PRIMARY KEY(library_id,marker,relative_path)
+  );
+`;
+
 export function openDatabase(filename: string, options: { readonly?: boolean; bootstrapLegacy?: boolean } = {}): Database.Database {
   const readonly = options.readonly ?? false;
   const db = new Database(filename, { readonly, fileMustExist: readonly });
@@ -300,7 +427,7 @@ export function openDatabase(filename: string, options: { readonly?: boolean; bo
       db.pragma('synchronous = NORMAL');
       db.transaction(() => {
         const version = db.pragma('user_version', { simple: true });
-        if (typeof version !== 'number' || version < 0 || version > 22) throw new Error(`不支持的数据库版本: ${version}`);
+        if (typeof version !== 'number' || version < 0 || version > 29) throw new Error(`不支持的数据库版本: ${version}`);
         if (version === 0) {
           db.exec(schemaV1);
           db.pragma('user_version = 1');
@@ -389,11 +516,46 @@ export function openDatabase(filename: string, options: { readonly?: boolean; bo
           db.exec(schemaV22);
           db.pragma('user_version = 22');
         }
+        if (version <= 22) {
+          db.exec(schemaV23);
+          db.pragma('user_version = 23');
+        }
+        if (version <= 23) {
+          db.exec(schemaV24);
+          db.pragma('user_version = 24');
+        }
+        if (version <= 24) {
+          db.exec(schemaV25);
+          db.pragma('user_version = 25');
+        }
+        if (version <= 25) {
+          db.exec(schemaV26);
+          db.pragma('user_version = 26');
+        }
+        if (version <= 26) {
+          db.exec(schemaV27);
+          db.pragma('user_version = 27');
+        }
+        if (version <= 27) {
+          const hasSummary = !!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='timeline_missing_counts'").get();
+          let rebuild = false;
+          if (hasSummary) {
+            db.exec(`UPDATE timeline_counts SET count=count-COALESCE((SELECT count FROM timeline_missing_counts m WHERE m.month=timeline_counts.month),0);
+              DELETE FROM timeline_counts WHERE count<=0; DROP TRIGGER missing_timeline_insert; DROP TRIGGER missing_timeline_delete;
+              DROP TRIGGER missing_timeline_update; DROP TABLE timeline_missing_counts`);
+          } else rebuild = true;
+          db.exec(schemaV28);
+          if (rebuild) db.prepare('INSERT INTO timeline_rebuild_state(id) VALUES (1)').run();
+          db.pragma('user_version = 28');
+        }
+        if (version <= 28) {
+          db.exec(schemaV29);
+          db.pragma('user_version = 29');
+        }
         const timezone = process.env.TZ ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
         const previous = db.prepare("SELECT value FROM settings WHERE key='timeline.timezone'").get() as { value: string } | undefined;
         if (previous && previous.value !== timezone) {
-          db.exec('DELETE FROM timeline_counts');
-          db.exec(rebuildTimeline);
+          db.exec('DELETE FROM timeline_rebuild_counts; INSERT INTO timeline_rebuild_state(id,cursor) VALUES(1,0) ON CONFLICT(id) DO UPDATE SET cursor=0');
         }
         db.prepare("INSERT INTO settings(key,value) VALUES('timeline.timezone',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(timezone);
         if (version === 0 && options.bootstrapLegacy) {
@@ -401,7 +563,7 @@ export function openDatabase(filename: string, options: { readonly?: boolean; bo
           db.prepare("INSERT INTO jobs(id,type,label,status,trigger,created_at) VALUES (?,'import_legacy','导入旧版数据','queued','system',unixepoch())").run(randomUUID());
         }
       }).immediate();
-    } else if (db.pragma('user_version', { simple: true }) !== 22) {
+    } else if (db.pragma('user_version', { simple: true }) !== 29) {
       throw new Error('数据库尚未就绪或版本不受支持');
     }
     return db;
