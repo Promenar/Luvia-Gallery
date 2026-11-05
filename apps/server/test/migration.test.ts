@@ -6,83 +6,77 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import Database from 'better-sqlite3';
 import { openDatabase } from '../src/core/database.ts';
-import { importLegacy } from '../src/worker/import-legacy.ts';
+import * as legacyImport from '../src/worker/import-legacy.ts';
+import { scanLibrary } from '../src/worker/scan.ts';
 import { verifyPassword } from '../src/core/password.ts';
 
 const sha = (text: string | Buffer) => createHash('sha256').update(text).digest('hex');
-test('导入 v1 用户、哈希、收藏和壁纸令牌，重跑幂等且不改源库', async () => {
+const { importLegacy } = legacyImport;
+
+test('旧库只导入用户数据，收藏在扫描后匹配，孤儿保留且重复导入幂等', async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'luvia-old-'));
-  const media = path.join(dir, 'media');
-  const legacy = path.join(dir, 'old');
-  await mkdir(media); await mkdir(legacy);
+  const media = path.join(dir, 'media'); const legacy = path.join(dir, 'old');
+  await mkdir(media); await mkdir(legacy); await mkdir(path.join(media, 'sub'));
+  const a = path.join(media, 'a.jpg'); const b = path.join(media, 'b.jpg'); const c = path.join(media, 'sub', 'c.jpg');
+  await writeFile(a, 'a'); await writeFile(b, 'bb'); await writeFile(c, 'ccc');
   const oldPath = path.join(legacy, 'lumina.db');
   const source = new Database(oldPath);
-  source.exec(`CREATE TABLE files (id TEXT PRIMARY KEY,path TEXT,name TEXT,folder_path TEXT,size INTEGER,type TEXT,media_type TEXT,last_modified INTEGER,source_id TEXT,thumb_width INTEGER,thumb_height INTEGER,thumb_aspect_ratio REAL);
+  source.exec(`CREATE TABLE files (id TEXT PRIMARY KEY,path TEXT UNIQUE,last_modified INTEGER);
     CREATE TABLE favorites (id INTEGER PRIMARY KEY,user_id TEXT,item_id TEXT,item_type TEXT,created_at INTEGER);`);
-  const full = path.join(media, '照片.jpg');
-  const oldId = Buffer.from(full).toString('base64');
+  source.prepare('INSERT INTO files VALUES (?,?,?)').run('old-opaque-id', a, 1700000000000);
+  source.prepare('INSERT INTO files VALUES (?,?,?)').run('old-b-id', b, 1);
+  const addFavorite = source.prepare("INSERT INTO favorites(user_id,item_id,item_type,created_at) VALUES ('alice',?,?,1700000000)");
+  addFavorite.run('old-opaque-id', 'file');
+  addFavorite.run(b, 'file');
+  addFavorite.run(Buffer.from(c).toString('base64'), 'file');
+  addFavorite.run(path.join(media, 'sub'), 'folder');
+  addFavorite.run(Buffer.from(path.join(media, 'missing.jpg')).toString('base64'), 'file');
+  addFavorite.run('orphan', 'file');
+  source.close();
   const salt = Buffer.alloc(16, 2);
   const password = `scrypt$${salt.toString('hex')}$${scryptSync('测试密码', salt, 64).toString('hex')}`;
-  source.prepare('INSERT INTO files VALUES (?,?,?,?,?,?,?,?,?,?,?,?)').run(oldId, full, '照片.jpg', media, 7, 'image/jpeg', 'image', 1700000000, 'local', 50, 100, .5);
-  source.prepare('INSERT INTO favorites (user_id,item_id,item_type,created_at) VALUES (?,?,?,?)').run('alice', oldId, 'file', 1700000000);
-  source.close();
   const token = 'fixture-wallpaper-token';
-  await writeFile(path.join(legacy, 'lumina-config.json'), JSON.stringify({ title: '家庭图库', libraryPaths: [media], users: [{ username: 'alice', password, isAdmin: true, wallpaperToken: token }] }));
+  await writeFile(path.join(legacy, 'lumina-config.json'), JSON.stringify({ title: '家庭图库', libraryPaths: [media, path.join(dir, 'missing')], users: [{ username: 'alice', password, isAdmin: true, wallpaperToken: token }] }));
   const before = sha(await readFile(oldPath));
   const db = openDatabase(':memory:');
   try {
-    await importLegacy(db, { legacyDir: legacy, mediaRoots: [media], batchSize: 1 });
-    await importLegacy(db, { legacyDir: legacy, mediaRoots: [media], batchSize: 1 });
-    assert.equal((db.prepare('SELECT count(*) AS n FROM files').get() as { n: number }).n, 1);
+    const initial = await importLegacy(db, { legacyDir: legacy, mediaRoots: [media], batchSize: 1 });
+    assert.deepEqual(initial, { imported: 0, pending: 5, unmatched: 1, unmappedRoots: 1 });
+    assert.equal((db.prepare('SELECT count(*) AS n FROM files').get() as { n: number }).n, 0);
     assert.equal((db.prepare('SELECT password_hash FROM users').get() as { password_hash: string }).password_hash, password);
-    assert.equal((db.prepare('SELECT token_hash FROM api_tokens').get() as { token_hash: string }).token_hash, sha(token));
-    assert.equal((db.prepare('SELECT count(*) AS n FROM favorites').get() as { n: number }).n, 1);
+    const tokenRow = db.prepare('SELECT token_hash,scope,wallpaper FROM api_tokens').get() as { token_hash: string; scope: string; wallpaper: string };
+    assert.equal(tokenRow.token_hash, sha(token));
+    assert.equal(tokenRow.scope, 'wallpaper');
+    assert.equal(JSON.parse(tokenRow.wallpaper).source, 'library');
     assert.equal(JSON.parse((db.prepare("SELECT value FROM settings WHERE key='siteName'").get() as { value: string }).value), '家庭图库');
+    const lib = db.prepare('SELECT id,root FROM libraries').get() as { id: string; root: string };
+    await scanLibrary(db, lib, { allowedRoots: [media] });
+    db.prepare('INSERT INTO folders(path,library_id,parent,name) VALUES (?,?,?,?)').run(`${lib.id}/sub`, lib.id, lib.id, 'sub');
+    const reconcileLegacyFavorites = Reflect.get(legacyImport, 'reconcileLegacyFavorites');
+    assert.equal(typeof reconcileLegacyFavorites, 'function');
+    const result = reconcileLegacyFavorites(db, { finalize: true });
+    assert.deepEqual(result, { imported: 4, pending: 0, unmatched: 2 });
+    assert.equal((db.prepare('SELECT count(*) AS n FROM favorites').get() as { n: number }).n, 4);
+    assert.deepEqual(await importLegacy(db, { legacyDir: legacy, mediaRoots: [media], batchSize: 1 }), { ...result, unmappedRoots: 1 });
+    assert.equal((db.prepare('SELECT count(*) AS n FROM favorites').get() as { n: number }).n, 4);
     assert.equal(sha(await readFile(oldPath)), before);
   } finally { db.close(); await rm(dir, { recursive: true, force: true }); }
 });
 
-test('旧版毫秒时间戳在导入时阻断，避免伪造修改时间', async () => {
-  const dir = await mkdtemp(path.join(tmpdir(), 'luvia-old-ms-'));
-  const oldPath = path.join(dir, 'lumina.db');
-  const media = path.join(dir, 'media');
-  await mkdir(media);
-  const source = new Database(oldPath);
-  source.exec(`CREATE TABLE files (id TEXT PRIMARY KEY,path TEXT,name TEXT,folder_path TEXT,size INTEGER,type TEXT,media_type TEXT,last_modified INTEGER,source_id TEXT,thumb_width INTEGER,thumb_height INTEGER,thumb_aspect_ratio REAL);
-    CREATE TABLE favorites (id INTEGER PRIMARY KEY,user_id TEXT,item_id TEXT,item_type TEXT,created_at INTEGER);`);
-  const file = path.join(media, 'renamed.jpg');
-  source.prepare('INSERT INTO files VALUES (?,?,?,?,?,?,?,?,?,?,?,?)').run(Buffer.from(file).toString('base64'), file, 'renamed.jpg', media, 7, 'image/jpeg', 'image', 1700000000000, 'local', null, null, null);
-  source.close();
+test('导入时转换明文口令并把越界、系统目录与缺失目录计为不可映射', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'luvia-old-root-'));
+  const allowed = path.join(dir, 'allowed'); const outside = path.join(dir, 'outside');
+  const system = path.join(allowed, 'data');
+  await mkdir(allowed); await mkdir(outside); await mkdir(system);
+  const link = path.join(allowed, 'link'); await symlink(outside, link);
+  await writeFile(path.join(dir, 'lumina-config.json'), JSON.stringify({ libraryPaths: [link, system, path.join(allowed, 'missing')], users: [{ username: 'old', password: 'fixture password', isAdmin: true }] }));
   const db = openDatabase(':memory:');
   try {
-    await assert.rejects(importLegacy(db, { legacyDir: dir, mediaRoots: [media] }), /时间戳/);
-    assert.equal((db.prepare('SELECT count(*) AS n FROM files').get() as { n: number }).n, 0);
-    assert.equal(db.prepare("SELECT value FROM settings WHERE key='legacy.files.rowid'").get(), undefined);
-  } finally { db.close(); await rm(dir, { recursive: true, force: true }); }
-});
-
-
-test('导入时立即转换旧版明文口令', async () => {
-  const dir = await mkdtemp(path.join(tmpdir(), 'luvia-old-plain-'));
-  await writeFile(path.join(dir, 'lumina-config.json'), JSON.stringify({ users: [{ username: 'old', password: 'fixture password', isAdmin: true }] }));
-  const db = openDatabase(':memory:');
-  try {
-    await importLegacy(db, { legacyDir: dir, mediaRoots: [] });
+    const result = await importLegacy(db, { legacyDir: dir, mediaRoots: [allowed], systemRoots: [system] });
+    assert.equal(result.unmappedRoots, 3);
+    assert.equal((db.prepare('SELECT count(*) AS n FROM libraries').get() as { n: number }).n, 0);
     const row = db.prepare("SELECT password_hash FROM users WHERE username='old'").get() as { password_hash: string };
     assert.match(row.password_hash, /^scrypt\$v2\$/);
     assert.equal((await verifyPassword('fixture password', row.password_hash)).valid, true);
-  } finally { db.close(); await rm(dir, { recursive: true, force: true }); }
-});
-
-test('旧版根目录为越过白名单的符号链接时拒绝导入', async () => {
-  const dir = await mkdtemp(path.join(tmpdir(), 'luvia-old-link-'));
-  const allowed = path.join(dir, 'allowed'); const outside = path.join(dir, 'outside');
-  await mkdir(allowed); await mkdir(outside);
-  const link = path.join(allowed, 'link'); await symlink(outside, link);
-  await writeFile(path.join(dir, 'lumina-config.json'), JSON.stringify({ libraryPaths: [link] }));
-  const db = openDatabase(':memory:');
-  try {
-    await assert.rejects(importLegacy(db, { legacyDir: dir, mediaRoots: [allowed] }), /挂载根/);
-    assert.equal((db.prepare('SELECT count(*) AS n FROM libraries').get() as { n: number }).n, 0);
   } finally { db.close(); await rm(dir, { recursive: true, force: true }); }
 });

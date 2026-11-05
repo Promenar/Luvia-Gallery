@@ -137,6 +137,17 @@ const schemaV4 = `
   CREATE INDEX scan_directories_pending ON scan_directories(job_id,done,relative_path);
 `;
 
+const schemaV5 = `
+  CREATE TABLE legacy_favorites_pending (
+    source_key TEXT PRIMARY KEY, username TEXT NOT NULL,
+    user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+    legacy_item TEXT NOT NULL, absolute_path TEXT,
+    item_type TEXT NOT NULL, created_at INTEGER NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('pending','matched','unmatched'))
+  );
+  CREATE INDEX legacy_favorites_status ON legacy_favorites_pending(status,source_key);
+`;
+
 export function openDatabase(filename: string, options: { readonly?: boolean } = {}): Database.Database {
   const readonly = options.readonly ?? false;
   const db = new Database(filename, { readonly, fileMustExist: readonly });
@@ -150,7 +161,7 @@ export function openDatabase(filename: string, options: { readonly?: boolean } =
       db.pragma('synchronous = NORMAL');
       db.transaction(() => {
         const version = db.pragma('user_version', { simple: true });
-        if (version !== 0 && version !== 1 && version !== 2 && version !== 3 && version !== 4) throw new Error(`不支持的数据库版本: ${version}`);
+        if (version !== 0 && version !== 1 && version !== 2 && version !== 3 && version !== 4 && version !== 5) throw new Error(`不支持的数据库版本: ${version}`);
         if (version === 0) {
           db.exec(schemaV1);
           db.pragma('user_version = 1');
@@ -167,8 +178,12 @@ export function openDatabase(filename: string, options: { readonly?: boolean } =
           db.exec(schemaV4);
           db.pragma('user_version = 4');
         }
+        if (version === 0 || version === 1 || version === 2 || version === 3 || version === 4) {
+          db.exec(schemaV5);
+          db.pragma('user_version = 5');
+        }
       }).immediate();
-    } else if (db.pragma('user_version', { simple: true }) !== 4) {
+    } else if (db.pragma('user_version', { simple: true }) !== 5) {
       throw new Error('数据库尚未就绪或版本不受支持');
     }
     return db;
