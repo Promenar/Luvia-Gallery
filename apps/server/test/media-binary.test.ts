@@ -35,6 +35,36 @@ test('新中图生成前可读取旧版缓存，后台作业完成后使用新�
     const fresh = await app.inject({ method: 'GET', url: `/api/v2/media/${id}/thumb?size=m`, headers });
     assert.equal(fresh.statusCode, 200); assert.equal((await sharp(fresh.rawPayload).metadata()).width, 120);
     assert.notDeepEqual(fresh.rawPayload, old);
+    const legacyId = encodeURIComponent(Buffer.from(source).toString('base64'));
+    const legacy = await app.inject({ method: 'GET', url: `/api/thumb/${legacyId}`, headers });
+    assert.equal(legacy.statusCode, 200); assert.deepEqual(legacy.rawPayload, fresh.rawPayload);
+  } finally { await app.close(); db.close(); await rm(root, { recursive: true, force: true }); await rm(cache, { recursive: true, force: true }); }
+});
+
+test('同一秒内比源文件更早的旧缩略图不作为回退', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'luvia-old-thumb-mtime-')); const cache = await mkdtemp(path.join(tmpdir(), 'luvia-old-thumb-mtime-cache-'));
+  const db = openDatabase(':memory:'); const app = await createApp({ db, legacyPending: false, cacheDir: cache });
+  try {
+    const source = path.join(root, 'photo.jpg');
+    await sharp({ create: { width: 120, height: 80, channels: 3, background: '#123456' } }).jpeg().toFile(source);
+    await utimes(source, 10.9, 10.9);
+    const old = await sharp({ create: { width: 16, height: 12, channels: 3, background: '#ff2211' } }).webp().toBuffer();
+    const hash = createHash('md5').update(Buffer.from(source).toString('base64')).digest('hex');
+    const dir = path.join(cache, hash.slice(0, 2), hash.slice(2, 4)); await mkdir(dir, { recursive: true });
+    const previous = path.join(dir, `${hash}.webp`); await writeFile(previous, old); await utimes(previous, 10.5, 10.5);
+    db.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib','照片',?)").run(root);
+    await scanLibrary(db, { id: 'lib', root }, { allowedRoots: [root] });
+    const { id } = db.prepare('SELECT id FROM files').get() as { id: string };
+    const setup = await app.inject({ method: 'POST', url: '/api/v2/auth/setup', payload: { username: 'admin', password: 'test password' } });
+    const headers = { cookie: (setup.headers['set-cookie'] as string).split(';')[0]! };
+    const request = app.inject({ method: 'GET', url: `/api/v2/media/${id}/thumb?size=m`, headers });
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if ((db.prepare("SELECT count(*) AS n FROM jobs WHERE type='thumbnails' AND status='queued'").get() as { n: number }).n) break;
+      await new Promise<void>((resolve) => setTimeout(resolve, 10));
+    }
+    await runNextJob(db, { owner: 'worker', allowedRoots: [root], legacyDir: root, systemRoots: [], cacheDir: cache });
+    const response = await request;
+    assert.equal(response.statusCode, 200); assert.equal((await sharp(response.rawPayload).metadata()).width, 120);
   } finally { await app.close(); db.close(); await rm(root, { recursive: true, force: true }); await rm(cache, { recursive: true, force: true }); }
 });
 

@@ -565,8 +565,8 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     const hash = createHash('md5').update(Buffer.from(source).toString('base64')).digest('hex');
     const filename = path.join(cacheDir, hash.slice(0, 2), hash.slice(2, 4), `${hash}.webp`);
     try {
-      const info = await lstat(filename);
-      if (!info.isFile() || info.isSymbolicLink() || info.size === 0 || info.mtimeMs < row.modified_at * 1000) return undefined;
+      const [info, sourceInfo] = await Promise.all([lstat(filename), secureMediaPath(row.root, row.relative_path).then((resolved) => stat(resolved))]);
+      if (!info.isFile() || info.isSymbolicLink() || info.size === 0 || info.mtimeMs < sourceInfo.mtimeMs || sourceInfo.size !== row.size || Math.floor(sourceInfo.mtimeMs / 1000) !== row.modified_at) return undefined;
       const [root, actual] = await Promise.all([realpath(cacheDir), realpath(filename)]);
       const relative = path.relative(root, actual);
       return relative && relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative) ? actual : undefined;
@@ -1168,9 +1168,6 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     const legacyId = (req.params as { id: string }).id;
     const id = legacyMediaId(legacyId) ?? fail(404, 'NOT_FOUND', '媒体不存在');
     const { row } = await binaryMedia(req, id);
-    const hash = createHash('md5').update(legacyId).digest('hex');
-    const previous = path.join(cacheDir, hash.slice(0, 2), hash.slice(2, 4), `${hash}.webp`);
-    if (await exists(previous)) return sendFile(req, reply, previous, { mime: 'image/webp', name: row.name, etagKey: hash, authorize: mediaAuthorization(req, row) });
     return cachedMedia(req, reply, row, { kind: 'thumb', size: 'm' }, true, mediaAuthorization(req, row));
   });
   type LibraryRow = { id: string; name: string; root: string; enabled: number; status: string; scanning: number; last_scan_at: number | null; host_root: string | null; host_root_source: 'auto' | 'manual' | null; exclude: string; media_count: number };
