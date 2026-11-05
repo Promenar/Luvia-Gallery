@@ -1,6 +1,6 @@
 import { monitorEventLoopDelay } from 'node:perf_hooks';
 import { createApp } from './app.ts';
-import { installFatalHandlers, openRuntime } from '../core/runtime.ts';
+import { installFatalHandlers, loadLegacyJwtSecret, openRuntime } from '../core/runtime.ts';
 
 installFatalHandlers('api');
 const runtime = await openRuntime();
@@ -9,7 +9,8 @@ loop.enable();
 let loopP99 = 0;
 const monitor = setInterval(() => { loopP99 = loop.percentile(99) / 1e6; loop.reset(); }, 5000);
 monitor.unref();
-const app = await createApp({ db: runtime.db, legacyPending: () => {
+const legacyJwtSecret = await loadLegacyJwtSecret(runtime.legacyDir, runtime.dataDir);
+const app = await createApp({ db: runtime.db, legacyJwtSecret, legacyPending: () => {
   const row = runtime.db.prepare("SELECT value FROM settings WHERE key='legacy.pending'").get() as { value: string } | undefined;
   return row?.value === 'true';
 } });

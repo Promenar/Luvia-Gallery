@@ -13,11 +13,11 @@
  *
  * - GET /api/scan/results?random=&limit=&offset=&recursive=&favorites=&folder=&mediaType=
  *       → { files: LegacyFile[], total, hasMore, totalExact, sources[] }
- *       LegacyFile = { id, url, thumbnailUrl, name, folderPath, size, type, lastModified, mediaType, sourceId, isFavorite, width, height, aspectRatio }
+ *       LegacyFile = { id, url, thumbnailUrl, name, path, folderPath, size, type, lastModified, mediaType, sourceId, isFavorite, width, height, aspectRatio }
  *       其中 id 为 v1 ID（绝对路径的 base64），url/thumbnailUrl 指向下列 v1 资源路径。
  * - GET /api/thumb/:legacyId   → 缩略图（WebP）
  * - GET /api/file/:legacyId    → 原文件（Range）
- * - GET /api/library/folders?path= → v1 目录列表结构
+ * - GET /api/library/folders?parentPath= 或 ?parent= → v1 目录列表结构
  * - POST /api/auth/login       → { token, user }（签发 v1 兼容 JWT，供尚未升级的客户端登录）
  */
 export const legacyPaths = ['/api/scan/results', '/api/thumb/', '/api/file/', '/api/library/folders', '/api/auth/login'] as const;
