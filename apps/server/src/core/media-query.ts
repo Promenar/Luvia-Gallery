@@ -21,10 +21,10 @@ function prefixClause(column: string, prefix: string, params: Params): string {
   params.push(prefix, `${prefix}/`, `${prefix}0`);
   return `(${column} = ? OR (${column} >= ? AND ${column} < ?))`;
 }
-function allowedClause(paths: string[] | null, params: Params): string {
+function allowedClause(paths: string[] | null, params: Params, column = 'f.folder'): string {
   if (paths === null) return '1';
   if (!paths.length) return '0';
-  return `(${paths.map((prefix) => prefixClause('f.folder', prefix, params)).join(' OR ')})`;
+  return `(${paths.map((prefix) => prefixClause(column, prefix, params)).join(' OR ')})`;
 }
 function where(filter: Partial<Query> | RandomFilter, context: Context, db: Database.Database): { sql: string; params: Params } {
   const params: Params = [];
@@ -176,6 +176,40 @@ export class MediaReader {
     const types = { image: 0, video: 0, audio: 0 };
     for (const row of counts) if (row.type in types) types[row.type] = row.count;
     return { cameras, years, types };
+  }
+
+  async memories(context: Context) {
+    const today = new Date();
+    const day = `${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+    const currentYear = today.getFullYear();
+    const filter = MediaListQuery.parse({});
+    const condition = where(filter, context, this.db);
+    const [groups, recent] = await this.executor.run([
+      { sql: `SELECT CAST(strftime('%Y',f.taken_at,'unixepoch','localtime') AS INTEGER) AS year,count(*) AS count FROM files f
+        WHERE ${condition.sql} AND strftime('%m-%d',f.taken_at,'unixepoch','localtime')=?
+        AND CAST(strftime('%Y',f.taken_at,'unixepoch','localtime') AS INTEGER)<? GROUP BY year ORDER BY year DESC`, params: [...condition.params, day, currentYear] },
+      { sql: `${selection} WHERE ${condition.sql} ORDER BY f.created_at DESC,f.id ASC LIMIT 12`, params: [context.id, ...condition.params] },
+    ]) as [{ year: number; count: number }[], FileRow[]];
+    const onThisDay = groups.map(({ year, count }) => {
+      const start = new Date(0); start.setFullYear(year, today.getMonth(), today.getDate()); start.setHours(0, 0, 0, 0);
+      const end = new Date(start); end.setDate(end.getDate() + 1);
+      const from = Math.floor(start.getTime() / 1000); const to = Math.floor(end.getTime() / 1000);
+      return { year, count, items: this.page(MediaListQuery.parse({ from, to, limit: 12 }), context).items };
+    });
+    return { onThisDay, recentlyAdded: recent.map(item), shuffle: this.random(RandomQuery.parse({ count: 12 }), context).items };
+  }
+
+  async suggest(query: string, context: Context) {
+    const escaped = query.replace(/[\\%_]/g, '\\$&');
+    const folderParams: Params = []; const fileParams: Params = [];
+    const foldersAllowed = allowedClause(context.allowedPaths, folderParams, 'f.path');
+    const filesAllowed = allowedClause(context.allowedPaths, fileParams);
+    const [folders, cameras] = await this.executor.run([
+      { sql: `SELECT f.path,f.name,f.media_count AS mediaCount FROM folders f JOIN libraries l ON l.id=f.library_id AND l.enabled=1
+        WHERE ${foldersAllowed} AND f.name LIKE ? ESCAPE '\\' ORDER BY f.name COLLATE NOCASE,f.path LIMIT 10`, params: [...folderParams, `%${escaped}%`] },
+      { sql: `SELECT DISTINCT f.model AS name FROM files f WHERE ${filesAllowed} AND f.model LIKE ? ESCAPE '\\' ORDER BY name COLLATE NOCASE LIMIT 10`, params: [...fileParams, `%${escaped}%`] },
+    ]) as [{ path: string; name: string; mediaCount: number }[], { name: string }[]];
+    return { folders, cameras: cameras.map((row) => row.name), media: this.page(MediaListQuery.parse({ q: query, limit: 10 }), context).items };
   }
 
   random(filter: RandomFilter, context: Context) {

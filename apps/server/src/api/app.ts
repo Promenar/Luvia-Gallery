@@ -471,6 +471,16 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
   });
   register('buckets', async (req) => media.buckets(endpoints.buckets.query.parse(req.query), mediaContext(req)));
   register('facets', async (req) => media.facets(endpoints.facets.query.parse(req.query), mediaContext(req)));
+  register('memories', async (req) => media.memories(mediaContext(req)));
+  register('suggest', async (req) => {
+    const { q } = endpoints.suggest.query.parse(req.query);
+    const context = mediaContext(req);
+    const escaped = q.replace(/[\\%_]/g, '\\$&');
+    const rows = db.prepare("SELECT * FROM albums WHERE user_id=? AND name LIKE ? ESCAPE '\\' ORDER BY updated_at DESC,id DESC LIMIT 10")
+      .all(context.id, `%${escaped}%`) as AlbumRow[];
+    const [suggestions, albums] = await Promise.all([media.suggest(q, context), Promise.all(rows.map((row) => albumOut(row, context)))]);
+    return { ...suggestions, albums: albums.map(({ id, name, count }) => ({ id, name, count })) };
+  });
   register('randomMedia', async (req) => {
     const query = endpoints.randomMedia.query.parse(req.query);
     if (query.exclude && query.exclude.length > 500) fail(400, 'VALIDATION', '排除的媒体不能超过 500 个');
