@@ -97,6 +97,8 @@ async function scanWithLock(db: Database.Database, library: { id: string; root: 
   let batch: Candidate[] = [];
   let pending: Promise<void>[] = [];
   const existing = db.prepare('SELECT id FROM files WHERE id=?');
+  const resetMetadata = ['orientation','duration_sec','codec','audio_codec','container','fps','bitrate','make','model','lens','f_number','exposure_time','iso','focal_length','focal_length35','software','latitude','longitude','altitude','playability']
+    .map((column) => `${column}=CASE WHEN files.size != excluded.size OR files.modified_at != excluded.modified_at THEN NULL ELSE files.${column} END`).join(',');
   const upsert = db.prepare(`INSERT INTO files
     (id,library_id,relative_path,folder,name,mime,media_type,size,modified_at,taken_at,taken_at_source,scan_marker)
     VALUES (@id,@library_id,@relative_path,@folder,@name,@mime,@media_type,@size,@mtime,@mtime,'mtime',@marker)
@@ -109,6 +111,7 @@ async function scanWithLock(db: Database.Database, library: { id: string; root: 
       thumbhash=CASE WHEN files.size != excluded.size OR files.modified_at != excluded.modified_at THEN NULL ELSE files.thumbhash END,
       width=CASE WHEN files.size != excluded.size OR files.modified_at != excluded.modified_at THEN NULL ELSE files.width END,
       height=CASE WHEN files.size != excluded.size OR files.modified_at != excluded.modified_at THEN NULL ELSE files.height END,
+      ${resetMetadata},
       has_preview=CASE WHEN files.size != excluded.size OR files.modified_at != excluded.modified_at THEN 0 ELSE files.has_preview END,
       size=excluded.size, modified_at=excluded.modified_at, scan_marker=excluded.scan_marker`);
   const flush = () => {

@@ -1,0 +1,176 @@
+import { execFile } from 'node:child_process';
+import { realpath, stat } from 'node:fs/promises';
+import path from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
+import { promisify } from 'node:util';
+import type Database from 'better-sqlite3';
+import exifr from 'exifr';
+import sharp from 'sharp';
+import { secureMediaPath } from '../core/paths.ts';
+import { readSettings } from '../core/settings.ts';
+import type { JobRow } from '../core/jobs.ts';
+
+type Source = { id: string; relative_path: string; name: string; media_type: string; size: number; modified_at: number; root: string };
+type Counts = { indexed: number; failed: number };
+type Metadata = {
+  takenAt: number; takenAtSource: 'metadata' | 'filename' | 'mtime'; width: number | null; height: number | null;
+  orientation: number | null; duration: number | null; codec: string | null; audioCodec: string | null; container: string | null;
+  fps: number | null; bitrate: number | null; make: string | null; model: string | null; lens: string | null;
+  fNumber: number | null; exposure: number | null; iso: number | null; focalLength: number | null; focalLength35: number | null;
+  software: string | null; latitude: number | null; longitude: number | null; altitude: number | null;
+  playability: 'direct' | 'transcode' | 'unsupported' | null;
+};
+const run = promisify(execFile);
+const now = () => Math.floor(Date.now() / 1000);
+const number = (v: unknown): number | null => typeof v === 'number' && Number.isFinite(v) ? v : null;
+const string = (v: unknown): string | null => typeof v === 'string' && v.length > 0 ? v.slice(0, 500) : null;
+const positive = (v: unknown): number | null => { const n = typeof v === 'string' ? Number(v) : number(v); return n !== null && Number.isFinite(n) && n > 0 ? n : null; };
+function within(root: string, target: string): boolean {
+  const relative = path.relative(root, target);
+  return relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+}
+function dateParts(year: number, month: number, day: number, hour: number, minute: number, second: number, offset?: string): number | null {
+  const utc = new Date(Date.UTC(year, month - 1, day, hour, minute, second));
+  if (utc.getUTCFullYear() !== year || utc.getUTCMonth() !== month - 1 || utc.getUTCDate() !== day || hour > 23 || minute > 59 || second > 59) return null;
+  if (offset !== undefined) {
+    const match = /^([+-])(\d{2}):(\d{2})$/.exec(offset);
+    if (!match || Number(match[2]) > 14 || Number(match[3]) > 59 || (Number(match[2]) === 14 && Number(match[3]) !== 0)) return null;
+    const minutes = (Number(match[2]) * 60 + Number(match[3])) * (match[1] === '+' ? 1 : -1);
+    return Math.floor(utc.getTime() / 1000) - minutes * 60;
+  }
+  const local = new Date(year, month - 1, day, hour, minute, second);
+  return Math.floor(local.getTime() / 1000);
+}
+function exifDate(value: unknown, offset: unknown): number | null {
+  if (typeof value !== 'string') return null;
+  const m = /^(\d{4}):(\d{2}):(\d{2}) (\d{2}):(\d{2}):(\d{2})$/.exec(value);
+  if (!m) return null;
+  return dateParts(...(m.slice(1).map(Number) as [number, number, number, number, number, number]), typeof offset === 'string' ? offset : undefined);
+}
+function filenameDate(name: string): number | null {
+  const m = /(?:^|\D)((?:19|20)\d{2})[-_:]?([01]\d)[-_:]?([0-3]\d)(?:[_ T-]?([0-2]\d)[-:]?([0-5]\d)[-:]?([0-5]\d))?(?!\d)/.exec(name);
+  if (!m) return null;
+  return dateParts(Number(m[1]), Number(m[2]), Number(m[3]), Number(m[4] ?? 0), Number(m[5] ?? 0), Number(m[6] ?? 0));
+}
+function base(source: Source): Metadata {
+  const filename = filenameDate(source.name);
+  return { takenAt: filename ?? source.modified_at, takenAtSource: filename === null ? 'mtime' : 'filename', width: null, height: null,
+    orientation: null, duration: null, codec: null, audioCodec: null, container: null, fps: null, bitrate: null,
+    make: null, model: null, lens: null, fNumber: null, exposure: null, iso: null, focalLength: null, focalLength35: null,
+    software: null, latitude: null, longitude: null, altitude: null, playability: null };
+}
+async function readImage(filename: string, source: Source): Promise<Metadata> {
+  const result = base(source);
+  const image = await sharp(filename).metadata();
+  if (!image.width || !image.height) throw new Error('图片尺寸不可用');
+  const flipped = image.orientation !== undefined && image.orientation >= 5 && image.orientation <= 8;
+  result.width = flipped ? image.height : image.width; result.height = flipped ? image.width : image.height;
+  result.orientation = image.orientation ?? null;
+  const tags = await exifr.parse(filename, { gps: true, exif: true, reviveValues: false, translateValues: false }).catch(() => undefined) as Record<string, unknown> | undefined;
+  if (!tags) return result;
+  const taken = exifDate(tags.DateTimeOriginal, tags.OffsetTimeOriginal);
+  if (taken !== null) { result.takenAt = taken; result.takenAtSource = 'metadata'; }
+  result.make = string(tags.Make); result.model = string(tags.Model); result.lens = string(tags.LensModel);
+  result.fNumber = number(tags.FNumber); result.exposure = number(tags.ExposureTime); result.iso = number(tags.ISO);
+  result.focalLength = number(tags.FocalLength); result.focalLength35 = number(tags.FocalLengthIn35mmFormat); result.software = string(tags.Software);
+  const lat = number(tags.latitude); const lon = number(tags.longitude);
+  if (lat !== null && lon !== null && Math.abs(lat) <= 90 && Math.abs(lon) <= 180) { result.latitude = lat; result.longitude = lon; }
+  const altitude = number(tags.GPSAltitude);
+  result.altitude = altitude === null ? null : tags.GPSAltitudeRef === 1 ? -altitude : altitude;
+  return result;
+}
+async function readAv(filename: string, source: Source, signal: AbortSignal | undefined, transcode: boolean): Promise<Metadata> {
+  const { stdout } = await run('ffprobe', ['-v', 'error', '-show_streams', '-show_format', '-of', 'json', filename], { encoding: 'utf8', timeout: 15000, maxBuffer: 2 * 1024 * 1024, signal });
+  const probe = JSON.parse(stdout) as { streams?: Record<string, any>[]; format?: Record<string, any> };
+  const streams = Array.isArray(probe.streams) ? probe.streams : [];
+  const video = streams.find((stream) => stream.codec_type === 'video');
+  const audio = streams.find((stream) => stream.codec_type === 'audio');
+  if (source.media_type === 'video' && !video || source.media_type === 'audio' && !audio) throw new Error('媒体流不可用');
+  const result = base(source);
+  result.codec = string(video?.codec_name); result.audioCodec = string(audio?.codec_name); result.container = string(probe.format?.format_name);
+  result.duration = positive(probe.format?.duration) ?? positive(video?.duration) ?? positive(audio?.duration);
+  result.bitrate = positive(probe.format?.bit_rate);
+  const frame = typeof video?.avg_frame_rate === 'string' ? /^(\d+)\/(\d+)$/.exec(video.avg_frame_rate) : null;
+  if (frame && Number(frame[2]) > 0) result.fps = Number(frame[1]) / Number(frame[2]);
+  const rotation = Number(video?.tags?.rotate ?? video?.side_data_list?.find((entry: Record<string, unknown>) => entry.rotation !== undefined)?.rotation ?? 0);
+  const swapped = Math.abs(rotation) % 180 === 90;
+  result.width = positive(swapped ? video?.height : video?.width); result.height = positive(swapped ? video?.width : video?.height);
+  const date = probe.format?.tags?.creation_time ?? video?.tags?.creation_time ?? audio?.tags?.creation_time;
+  const timestamp = typeof date === 'string' ? Date.parse(date) : NaN;
+  if (Number.isFinite(timestamp)) { result.takenAt = Math.floor(timestamp / 1000); result.takenAtSource = 'metadata'; }
+  if (source.media_type === 'video') {
+    const containers = result.container?.split(',') ?? [];
+    const direct = (containers.some((name) => name === 'mp4' || name === 'mov') && result.codec === 'h264' && (!result.audioCodec || result.audioCodec === 'aac')) ||
+      (containers.includes('webm') && ['vp8', 'vp9', 'av1'].includes(result.codec ?? '') && (!result.audioCodec || ['opus', 'vorbis'].includes(result.audioCodec)));
+    result.playability = direct ? 'direct' : transcode ? 'transcode' : 'unsupported';
+  }
+  return result;
+}
+
+export async function processMetadataBatch(db: Database.Database, job: JobRow, options: { owner: string; allowedRoots: string[]; libraryId?: string | null; assertLease: () => void; signal?: AbortSignal }): Promise<{ complete: boolean; counts: Counts }> {
+  const previous = job.checkpoint ? JSON.parse(job.checkpoint) as Partial<Counts> : {};
+  const counts: Counts = { indexed: previous.indexed ?? 0, failed: previous.failed ?? 0 };
+  const libraryClause = options.libraryId ? ' AND f.library_id=?' : '';
+  const libraryArgs = options.libraryId ? [options.libraryId] : [];
+  const allowed = await Promise.all(options.allowedRoots.map((root) => realpath(root).catch(() => '')));
+  for (let index = 0; index < 32; index++) {
+    options.signal?.throwIfAborted();
+    const source = db.transaction(() => {
+      options.assertLease();
+      db.prepare('DELETE FROM metadata_claims WHERE lease_expires_at<=?').run(now());
+      const row = db.prepare(`SELECT f.id,f.relative_path,f.name,f.media_type,f.size,f.modified_at,l.root FROM files f
+        JOIN libraries l ON l.id=f.library_id AND l.enabled=1 LEFT JOIN metadata_claims c ON c.file_id=f.id
+        WHERE f.metadata_status='pending' AND c.file_id IS NULL${libraryClause} ORDER BY f.id LIMIT 1`).get(...libraryArgs) as Source | undefined;
+      if (row) db.prepare('INSERT INTO metadata_claims(file_id,job_id,owner,lease_expires_at) VALUES (?,?,?,?)').run(row.id, job.id, options.owner, now() + 30);
+      return row;
+    }).immediate();
+    if (!source) break;
+    const local = new AbortController();
+    const signal = options.signal ? AbortSignal.any([options.signal, local.signal]) : local.signal;
+    const timer = setInterval(() => {
+      try {
+        options.assertLease();
+        if (!db.prepare('UPDATE metadata_claims SET lease_expires_at=? WHERE file_id=? AND job_id=? AND owner=? AND lease_expires_at>?').run(now() + 30, source.id, job.id, options.owner, now()).changes) local.abort();
+      } catch { local.abort(); }
+    }, 5000);
+    timer.unref();
+    let metadata: Metadata | null = null;
+    try {
+      const root = await realpath(source.root);
+      if (!allowed.some((candidate) => candidate && within(candidate, root))) throw new Error('媒体库不在挂载内');
+      const filename = await secureMediaPath(root, source.relative_path);
+      const before = await stat(filename);
+      if (before.size !== source.size || Math.floor(before.mtimeMs / 1000) !== source.modified_at) throw new Error('媒体已变化');
+      metadata = source.media_type === 'image' ? await readImage(filename, source) : await readAv(filename, source, signal, readSettings(db).transcode.enabled);
+      const after = await stat(filename);
+      if (after.size !== source.size || Math.floor(after.mtimeMs / 1000) !== source.modified_at) { metadata = null; throw new Error('媒体已变化'); }
+    } catch { /* 单个损坏文件计入失败；租约和取消在提交前检查。 */ }
+    finally { clearInterval(timer); }
+    signal.throwIfAborted();
+    db.transaction(() => {
+      options.assertLease();
+      if (!db.prepare('SELECT 1 FROM metadata_claims WHERE file_id=? AND job_id=? AND owner=? AND lease_expires_at>?').get(source.id, job.id, options.owner, now())) throw new Error('元数据租约已失效');
+      const current = db.prepare("SELECT 1 FROM files WHERE id=? AND size=? AND modified_at=? AND metadata_status='pending'").get(source.id, source.size, source.modified_at);
+      if (current) {
+        if (metadata) {
+          db.prepare(`UPDATE files SET taken_at=?,taken_at_source=?,width=?,height=?,orientation=?,duration_sec=?,codec=?,audio_codec=?,container=?,fps=?,bitrate=?,
+            make=?,model=?,lens=?,f_number=?,exposure_time=?,iso=?,focal_length=?,focal_length35=?,software=?,latitude=?,longitude=?,altitude=?,playability=?,metadata_status='done' WHERE id=?`)
+            .run(metadata.takenAt, metadata.takenAtSource, metadata.width, metadata.height, metadata.orientation, metadata.duration, metadata.codec, metadata.audioCodec,
+              metadata.container, metadata.fps, metadata.bitrate, metadata.make, metadata.model, metadata.lens, metadata.fNumber, metadata.exposure, metadata.iso,
+              metadata.focalLength, metadata.focalLength35, metadata.software, metadata.latitude, metadata.longitude, metadata.altitude, metadata.playability, source.id);
+          counts.indexed++;
+        } else {
+          db.prepare("UPDATE files SET metadata_status='failed',playability=CASE WHEN media_type='video' THEN 'unsupported' ELSE NULL END WHERE id=?").run(source.id);
+          counts.failed++;
+        }
+        db.prepare('UPDATE jobs SET checkpoint=?,progress_done=? WHERE id=?').run(JSON.stringify(counts), counts.indexed + counts.failed, job.id);
+      }
+      db.prepare('DELETE FROM metadata_claims WHERE file_id=? AND job_id=? AND owner=?').run(source.id, job.id, options.owner);
+    }).immediate();
+    await delay(10, undefined, { signal });
+  }
+  options.assertLease();
+  const pending = db.prepare(`SELECT 1 FROM files f JOIN libraries l ON l.id=f.library_id AND l.enabled=1 WHERE f.metadata_status='pending'${libraryClause} LIMIT 1`).get(...libraryArgs);
+  if (pending) await delay(50, undefined, { signal: options.signal });
+  return { complete: !pending, counts };
+}
