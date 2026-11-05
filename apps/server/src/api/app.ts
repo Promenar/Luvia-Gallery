@@ -364,6 +364,84 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     return { ok: true };
   });
   register('favoriteFolders', async (req) => folders.favorites(folderContext(req)));
+  type AlbumRow = { id: string; user_id: string; name: string; description: string | null; kind: 'manual' | 'smart'; filter: string | null; cover_id: string | null; created_at: number; updated_at: number };
+  const albumQuery = (id: string) => MediaListQuery.parse({ scope: 'album', albumId: id, limit: 1 });
+  function ownedAlbum(id: string, userId: string): AlbumRow {
+    return (db.prepare('SELECT * FROM albums WHERE id=? AND user_id=?').get(id, userId) as AlbumRow | undefined) ?? fail(404, 'NOT_FOUND', '相册不存在');
+  }
+  function albumOut(row: AlbumRow, context: { id: string; allowedPaths: string[] | null }) {
+    const query = albumQuery(row.id);
+    const summary = media.summary(query, context);
+    const cover = row.cover_id && media.contains(query, context, row.cover_id) ? media.one(row.cover_id, context) : media.page(query, context).items[0] ?? null;
+    return { id: row.id, name: row.name, description: row.description, kind: row.kind, filter: row.filter ? JSON.parse(row.filter) : null,
+      count: summary.count, cover, startAt: iso(summary.start), endAt: iso(summary.end), createdAt: iso(row.created_at)!, updatedAt: iso(row.updated_at)! };
+  }
+  function requireVisibleMedia(ids: string[], context: { id: string; allowedPaths: string[] | null }): void {
+    const find = db.prepare('SELECT folder FROM files WHERE id=?');
+    for (const id of ids) {
+      const row = find.get(id) as { folder: string } | undefined;
+      if (!row || !pathAllowed(row.folder, context.allowedPaths)) fail(403, 'FORBIDDEN', '媒体不可访问');
+    }
+  }
+  register('listAlbums', async (req) => {
+    const context = mediaContext(req);
+    const rows = db.prepare('SELECT * FROM albums WHERE user_id=? ORDER BY updated_at DESC,id DESC').all(context.id) as AlbumRow[];
+    return { albums: rows.map((row) => albumOut(row, context)) };
+  });
+  register('createAlbum', async (req, _reply, body) => {
+    const context = mediaContext(req);
+    const ids = [...new Set((body.ids ?? []) as string[])];
+    if (body.kind === 'smart' && ids.length) fail(400, 'VALIDATION', '智能相册不能手动加入媒体');
+    if (body.kind === 'manual' && body.filter != null) fail(400, 'VALIDATION', '手动相册不能设置筛选条件');
+    const id = randomUUID(); const timestamp = now();
+    db.transaction(() => {
+      requireVisibleMedia(ids, context);
+      db.prepare('INSERT INTO albums(id,user_id,name,description,kind,filter,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)')
+        .run(id, context.id, body.name, body.description ?? null, body.kind, body.filter == null ? null : JSON.stringify(body.filter), timestamp, timestamp);
+      const add = db.prepare('INSERT INTO album_items(album_id,file_id,created_at) VALUES (?,?,?)');
+      for (const mediaId of ids) add.run(id, mediaId, timestamp);
+    }).immediate();
+    return albumOut(ownedAlbum(id, context.id), context);
+  });
+  register('getAlbum', async (req) => {
+    const context = mediaContext(req); const { id } = req.params as { id: string };
+    return albumOut(ownedAlbum(id, context.id), context);
+  });
+  register('updateAlbum', async (req, _reply, body) => {
+    const context = mediaContext(req); const { id } = req.params as { id: string };
+    db.transaction(() => {
+      const row = ownedAlbum(id, context.id);
+      if (row.kind === 'manual' && body.filter != null) fail(400, 'VALIDATION', '手动相册不能设置筛选条件');
+      const filter = body.filter === undefined ? row.filter : body.filter === null ? null : JSON.stringify(body.filter);
+      db.prepare('UPDATE albums SET name=?,description=?,filter=?,updated_at=? WHERE id=? AND user_id=?')
+        .run(body.name ?? row.name, body.description === undefined ? row.description : body.description, filter, now(), id, context.id);
+      if (body.coverId !== undefined) {
+        if (body.coverId !== null && !media.contains(albumQuery(id), context, body.coverId)) fail(403, 'FORBIDDEN', '封面不属于可访问的相册');
+        db.prepare('UPDATE albums SET cover_id=? WHERE id=? AND user_id=?').run(body.coverId, id, context.id);
+      }
+    }).immediate();
+    return albumOut(ownedAlbum(id, context.id), context);
+  });
+  register('deleteAlbum', async (req) => {
+    const context = mediaContext(req); const { id } = req.params as { id: string };
+    if (!db.prepare('DELETE FROM albums WHERE id=? AND user_id=?').run(id, context.id).changes) fail(404, 'NOT_FOUND', '相册不存在');
+  });
+  function changeAlbumItems(req: FastifyRequest, ids: string[], add: boolean) {
+    const context = mediaContext(req); const { id } = req.params as { id: string };
+    return db.transaction(() => {
+      const album = ownedAlbum(id, context.id);
+      if (album.kind !== 'manual') fail(409, 'CONFLICT', '智能相册不能手动修改媒体');
+      const unique = [...new Set(ids)]; requireVisibleMedia(unique, context);
+      const change = db.prepare(add ? 'INSERT OR IGNORE INTO album_items(album_id,file_id,created_at) VALUES (?,?,?)' : 'DELETE FROM album_items WHERE album_id=? AND file_id=?');
+      let updated = 0;
+      for (const mediaId of unique) updated += Number((add ? change.run(id, mediaId, now()) : change.run(id, mediaId)).changes);
+      if (!add && album.cover_id && unique.includes(album.cover_id)) db.prepare('UPDATE albums SET cover_id=NULL WHERE id=?').run(id);
+      if (updated) db.prepare('UPDATE albums SET updated_at=? WHERE id=?').run(now(), id);
+      return { updated };
+    }).immediate();
+  }
+  register('addAlbumItems', async (req, _reply, body) => changeAlbumItems(req, body.ids, true));
+  register('removeAlbumItems', async (req, _reply, body) => changeAlbumItems(req, body.ids, false));
   register('setFavorite', async (req, _reply, body) => {
     const context = mediaContext(req);
     const ids = [...new Set(body.ids as string[])];
