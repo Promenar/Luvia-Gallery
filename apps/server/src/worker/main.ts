@@ -11,6 +11,7 @@ import { randomUUID } from 'node:crypto';
 import { readSettings } from '../core/settings.ts';
 import { publishJob } from '../core/job-view.ts';
 import { withFfmpegSlot } from './ffmpeg-slots.ts';
+import { scheduleScans } from './schedule.ts';
 
 installFatalHandlers('worker');
 const runtime = await openRuntime();
@@ -44,10 +45,13 @@ const schedulePrune = () => {
 };
 const pruneTimer = setInterval(schedulePrune, 60_000);
 pruneTimer.unref();
+const scanTimer = setInterval(() => { try { scheduleScans(runtime.db); } catch { process.stderr.write('扫描调度失败\n'); } }, 30_000);
+scanTimer.unref();
 let sampling: Promise<void> = Promise.resolve();
 try {
   schedulePrune();
   await discoverNewMounts(runtime.db, mounts, [runtime.dataDir, runtime.cacheDir]);
+  scheduleScans(runtime.db);
   sampling = sampleMounts(runtime.db, mounts, stopController.signal).catch(() => { process.stderr.write('挂载抽样失败\n'); });
   const ffmpeg = await withFfmpegSlot(runtime.db, owner, (signal) => probeFfmpeg('ffmpeg', signal), { signal: stopController.signal });
   runtime.db.prepare("INSERT INTO settings(key,value) VALUES('worker.ffmpeg',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(JSON.stringify(ffmpeg));
@@ -61,5 +65,5 @@ try {
 } finally {
   stopController.abort();
   await sampling;
-  clearInterval(heartbeatTimer); clearInterval(pruneTimer); loop.disable(); runtime.db.close();
+  clearInterval(heartbeatTimer); clearInterval(pruneTimer); clearInterval(scanTimer); loop.disable(); runtime.db.close();
 }
