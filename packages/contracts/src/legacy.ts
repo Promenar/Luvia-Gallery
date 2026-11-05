@@ -1,8 +1,8 @@
 /**
  * v1 兼容接口（仅为 macOS 小组件与 Wallpaper Engine 壁纸保留，WebUI 不使用）。
  * 响应结构必须与 v1（main 分支 server.js）逐字段一致，客户端无需改动即可继续工作。
- * 下列字段清单只是摘要；字段名、嵌套与取值以 main 分支 server.js 的实际实现为准（例如文件夹接口返回
- * parentPath / parent，文件对象另含 path），实现时须对照源码与合成夹具做逐字段比对测试。
+ * 下列字段清单只是摘要；字段名、嵌套与取值以 main 分支 server.js 的实际实现为准（例如文件夹接口的
+ * 查询参数为 parentPath / parent，响应为 folders 数组，文件对象包含 path），须使用合成夹具逐字段比对。
  * scope=wallpaper 的令牌调用 /api/scan/results?random=true 时，按令牌上的 WallpaperConfig 抽取内容。
  *
  * 鉴权：`Authorization: Bearer <t>` 或 `?token=<t>`，t 可以是：

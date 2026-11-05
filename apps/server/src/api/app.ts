@@ -15,10 +15,12 @@ import jwt from 'jsonwebtoken';
 import { ZipArchive } from 'archiver';
 import { ZodError } from 'zod';
 import { CSRF_HEADER, endpoints, JobAction, MediaListQuery, Preferences, RandomQuery, ShareTarget, WallpaperConfig, defaultPreferences } from '@luvia/contracts';
-import type { MediaItem, User } from '@luvia/contracts';
+import type { User } from '@luvia/contracts';
 import { hashPassword, verifyPassword } from '../core/password.ts';
 import { MediaReader } from '../core/media-query.ts';
 import { QueryExecutor } from '../core/query-executor.ts';
+import { legacyPage } from '../core/legacy-query.ts';
+import type { LegacyRow } from '../core/legacy-query.ts';
 import { Observability } from '../core/observability.ts';
 import { noteThumbnail } from '../core/folder-covers.ts';
 import { ensureHls, hlsCacheKey, hlsDirectory, hlsId } from '../core/hls.ts';
@@ -977,63 +979,106 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     const context = mediaContext(req);
     const wallpaper = identity.scope === 'wallpaper' ? WallpaperConfig.parse(identity.wallpaper ? JSON.parse(identity.wallpaper) : {}) : null;
     if (wallpaper?.source === 'folder' && !wallpaper.folder) return { files: [], total: 0, totalExact: true, hasMore: false, sources: [{ id: 'local', name: 'Local Storage', count: 0, countExact: true }] };
-    const requestedFolder = query.folder && !['/', 'root'].includes(query.folder) ? legacyVirtual(query.folder) : null;
-    if (query.folder && !['/', 'root'].includes(query.folder) && !requestedFolder) return { files: [], total: 0, totalExact: true, hasMore: false, sources: [{ id: 'local', name: 'Local Storage', count: 0, countExact: true }] };
-    const types = wallpaper ? (wallpaper.includeVideos ? ['image', 'video'] : ['image']) : query.mediaType ? query.mediaType.split(',') : undefined;
-    const common = { ...(types ? { types } : {}), ...(query.search ? { q: query.search } : {}) };
-    let items: MediaItem[];
+    const firstLibrary = query.folder !== undefined && ['', '/', 'root'].includes(query.folder)
+      ? db.prepare('SELECT id FROM libraries WHERE enabled=1 ORDER BY rowid LIMIT 1').get() as { id: string } | undefined : undefined;
+    const requestedFolder = query.folder === undefined ? null : firstLibrary?.id ?? legacyVirtual(query.folder);
+    if (query.folder !== undefined && !requestedFolder) return { files: [], total: 0, totalExact: true, hasMore: false, sources: [{ id: 'local', name: 'Local Storage', count: 0, countExact: true }] };
+    let from: number | undefined; let to: number | undefined;
+    if (query.from !== undefined || query.to !== undefined) {
+      from = Number(query.from); to = Number(query.to);
+      if (!Number.isSafeInteger(from) || !Number.isSafeInteger(to) || from >= to) return fail(400, 'VALIDATION', '时间范围无效');
+    }
+    let rows: LegacyRow[];
     let hasMore: boolean;
-    if (query.random === 'true') {
-      const randomQuery = RandomQuery.parse({ ...common, count: Math.min(100, limit + 1),
+    if (query.random === 'true' && wallpaper) {
+      const randomQuery = RandomQuery.parse({ types: wallpaper.includeVideos ? ['image', 'video'] : ['image'], ...(query.search ? { q: query.search } : {}), count: Math.min(100, limit + 1),
         ...(wallpaper?.source === 'favorites' || query.favorites === 'true' ? { favorite: true, favoriteFolders: !!wallpaper } : {}),
         ...(wallpaper?.source === 'folder' && wallpaper.folder ? { under: wallpaper.folder } : requestedFolder ? { under: requestedFolder } : {}),
         ...(wallpaper?.landscapeOnly ? { orientation: 'landscape' } : {}) });
       const sampled = media.random({ ...randomQuery, count: limit + 1 }, context).items;
-      hasMore = sampled.length > limit; items = sampled.slice(0, limit);
+      hasMore = sampled.length > limit;
+      rows = sampled.slice(0, limit).map((item) => {
+        const source = db.prepare('SELECT f.relative_path,l.root FROM files f JOIN libraries l ON l.id=f.library_id WHERE f.id=?').get(item.id) as { relative_path: string; root: string };
+        return { ...source, id: item.id, name: item.name, mime: item.mime, media_type: item.mediaType, size: item.size,
+          modified_at: item.modifiedAt, width: item.width, height: item.height, favorite: item.favorite ? 1 : 0 };
+      });
     } else {
-      const base = MediaListQuery.parse({ ...common, scope: requestedFolder ? 'folder' : query.favorites === 'true' ? 'favorites' : 'all',
-        ...(requestedFolder ? { folder: requestedFolder, recursive: query.recursive === 'true' } : {}), sort: 'modified_desc', limit: Math.min(limit, 500) });
-      let remaining = offset; let cursor: string | undefined; let exhausted = false;
-      while (remaining > 0) {
-        const skip = media.page({ ...base, limit: Math.min(remaining, 500), cursor }, context);
-        remaining -= skip.items.length;
-        if (!skip.nextCursor) { exhausted = true; break; }
-        cursor = skip.nextCursor;
-        await new Promise<void>((resolve) => setImmediate(resolve));
-      }
-      if (exhausted) { items = []; hasMore = false; }
-      else {
-        const page = media.page({ ...base, cursor }, context);
-        items = page.items; hasMore = page.nextCursor !== null;
-      }
+      const rawSeed = Number(query.seed);
+      const page = await legacyPage(db, queries, { userId: context.id, allowedPaths: context.allowedPaths, folder: requestedFolder,
+        recursive: query.recursive === 'true', favorite: query.favorites === 'true', search: query.search,
+        mediaType: query.mediaType, excludeMediaType: query.excludeMediaType, from, to, sort: query.sort,
+        random: query.random === 'true', seed: Number.isSafeInteger(rawSeed) && rawSeed >= 0 ? rawSeed : null, limit, offset });
+      rows = page.rows; hasMore = page.hasMore;
     }
-    const files = items.map((item) => {
-      const row = db.prepare('SELECT f.relative_path,l.root FROM files f JOIN libraries l ON l.id=f.library_id WHERE f.id=?').get(item.id) as { relative_path: string; root: string };
+    const files = rows.map((row) => {
       const absolute = path.join(row.root, row.relative_path);
       const legacyId = Buffer.from(absolute).toString('base64');
       return { id: legacyId, url: `/api/file/${encodeURIComponent(legacyId)}`, thumbnailUrl: `/api/thumb/${encodeURIComponent(legacyId)}`,
-        name: item.name, path: absolute, folderPath: path.dirname(absolute), size: item.size, type: item.mime, lastModified: item.modifiedAt,
-        mediaType: item.mediaType, sourceId: 'local', isFavorite: item.favorite, width: item.width, height: item.height,
-        aspectRatio: item.width && item.height ? item.width / item.height : null };
+        name: row.name, path: absolute, folderPath: path.dirname(absolute), size: row.size, type: row.mime, lastModified: row.modified_at,
+        mediaType: row.media_type, sourceId: 'local', isFavorite: !!row.favorite, width: row.width, height: row.height,
+        aspectRatio: row.width && row.height ? row.width / row.height : null };
     });
-    const unfiltered = identity.user.role === 'admin' && !wallpaper && !db.prepare('SELECT 1 FROM libraries WHERE enabled=0 LIMIT 1').get() && query.favorites !== 'true' && !query.folder && !query.search && !query.mediaType;
+    const unfiltered = identity.user.role === 'admin' && !wallpaper && !db.prepare('SELECT 1 FROM libraries WHERE enabled=0 LIMIT 1').get() && query.favorites !== 'true' && query.folder === undefined && !query.search && !query.mediaType && !query.excludeMediaType;
     const total = unfiltered ? (db.prepare('SELECT COALESCE(sum(count),0) AS n FROM timeline_counts').get() as { n: number }).n : offset + files.length + (hasMore ? 1 : 0);
     const totalExact = unfiltered || !hasMore;
     return { files, total, totalExact, hasMore, sources: [{ id: 'local', name: 'Local Storage', count: total, countExact: totalExact }] };
   });
   app.get('/api/library/folders', async (req) => {
     requireUser(req);
-    const query = req.query as { parentPath?: string; parent?: string };
+    const query = req.query as { parentPath?: string; parent?: string; favorites?: string; search?: string; limit?: string };
     const parent = query.parentPath ?? query.parent;
     const virtual = parent && !['/', 'root'].includes(parent) ? legacyVirtual(parent) : '';
     if (virtual === null) return { folders: [] };
-    const listing = folders.list(virtual, folderContext(req));
+    const context = folderContext(req);
+    if (virtual && !pathAllowed(virtual, context.allowedPaths)) return fail(403, 'FORBIDDEN', '文件夹不可访问');
+    const listing = folders.list(virtual, context);
     if (!listing) return fail(403, 'FORBIDDEN', '文件夹不可访问');
-    return { folders: listing.folders.map((folder) => {
+    const search = query.search?.trim() ?? '';
+    let selected = listing.folders;
+    if (search) {
+      const limit = query.limit === undefined || query.limit === '' ? 100 : Number(query.limit);
+      if (query.limit !== undefined && query.limit !== '' && (!/^\d+$/.test(query.limit) || !Number.isSafeInteger(limit) || limit < 1 || limit > 100)) return fail(400, 'VALIDATION', '搜索数量无效');
+      const conditions = ['l.enabled=1', 'f.media_count>0']; const params: (string | number)[] = [];
+      if (virtual) { conditions.push('f.path>=? AND f.path<?'); params.push(`${virtual}/`, `${virtual}0`); }
+      if (context.allowedPaths !== null) {
+        conditions.push(context.allowedPaths.length ? `(${context.allowedPaths.map(() => '(f.path=? OR (f.path>=? AND f.path<?))').join(' OR ')})` : '0');
+        for (const allowed of context.allowedPaths) params.push(allowed, `${allowed}/`, `${allowed}0`);
+      }
+      for (const term of search.split(/\s+/).filter(Boolean)) {
+        conditions.push("f.name LIKE ? ESCAPE '\\'"); params.push(`%${term.replace(/[\\%_]/g, '\\$&')}%`);
+      }
+      if (query.favorites === 'true') { conditions.push("EXISTS(SELECT 1 FROM favorites fv WHERE fv.user_id=? AND fv.item_type='folder' AND fv.item_id=f.path)"); params.push(context.id); }
+      const matches = (await queries.run([{ sql: `SELECT f.path FROM folders f JOIN libraries l ON l.id=f.library_id WHERE ${conditions.join(' AND ')} ORDER BY f.path COLLATE NOCASE LIMIT ?`, params: [...params, limit] }]))[0] as { path: string }[];
+      selected = matches.flatMap(({ path: folder }) => folders.get(folder, context) ?? []);
+    } else if (query.favorites === 'true') selected = folders.favorites(context).folders;
+    const aggregates = (await queries.run([{ sql: `SELECT folder,count(*) AS count,max(modified_at) AS latest FROM files
+      WHERE folder IN (SELECT value FROM json_each(?)) AND media_type IN ('image','video') GROUP BY folder`,
+      params: [JSON.stringify(selected.map((folder) => folder.path))] }]))[0] as { folder: string; count: number; latest: number }[];
+    const byPath = new Map(aggregates.map((entry) => [entry.folder, entry]));
+    const result = [];
+    for (const folder of selected) {
       const absolute = legacyAbsolute(folder.path)!;
-      const row = db.prepare('SELECT latest_at FROM folders WHERE path=?').get(folder.path) as { latest_at: number | null };
-      return { name: path.basename(absolute), path: absolute, mediaCount: folder.mediaCount, coverMedia: null, lastModified: row.latest_at ?? 0, isFavorite: folder.favorite };
-    }) };
+      let coverMedia = null;
+      if (folder.cover) {
+        const source = db.prepare(`SELECT f.relative_path,l.root,c.relative_path AS cache_path FROM files f JOIN libraries l ON l.id=f.library_id
+          JOIN cache_entries c ON c.media_id=f.id AND c.variant='thumb' AND c.source_size=f.size AND c.source_modified=f.modified_at
+          WHERE f.id=? ORDER BY c.last_access_at DESC LIMIT 1`).get(folder.cover.id) as { relative_path: string; root: string; cache_path: string } | undefined;
+        if (source) {
+          const cacheFile = path.resolve(cacheDir, source.cache_path);
+          if (within(cacheDir, cacheFile)) {
+            const info = await stat(cacheFile).catch(() => null);
+            if (info?.isFile() && info.size > 0) {
+              const coverPath = path.join(source.root, source.relative_path); const id = Buffer.from(coverPath).toString('base64');
+              coverMedia = { id, url: `/api/thumb/${encodeURIComponent(id)}?t=${info.mtimeMs}`, type: folder.cover.mime,
+                path: coverPath, mediaType: folder.cover.mediaType, name: folder.cover.name };
+            }
+          }
+        }
+      }
+      const aggregate = byPath.get(folder.path);
+      result.push({ name: path.basename(absolute), path: absolute, mediaCount: aggregate?.count ?? 0, coverMedia, lastModified: aggregate?.latest ?? 0, isFavorite: folder.favorite });
+    }
+    return { folders: result };
   });
   app.get('/api/file/*', async (req, reply) => {
     const legacyId = (req.params as { '*': string })['*'];
