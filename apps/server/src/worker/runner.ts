@@ -109,6 +109,15 @@ export async function runNextJob(db: Database.Database, options: WorkerOptions):
               db.prepare('UPDATE jobs SET result=? WHERE id=?').run(JSON.stringify({ ...JSON.parse(parent.result), ...finalCounts }), payload.legacyImportId);
               publishJob(db, payload.legacyImportId);
             }
+          } else {
+            const parent = db.prepare("SELECT id,result FROM jobs WHERE type='import_legacy' AND status='succeeded' ORDER BY created_at DESC,id DESC LIMIT 1").get() as { id: string; result: string | null } | undefined;
+            if (parent?.result) {
+              const previous = JSON.parse(parent.result) as Record<string, number>;
+              if (previous.imported !== reconciled.imported || previous.pending !== reconciled.pending || previous.unmatched !== reconciled.unmatched) {
+                db.prepare('UPDATE jobs SET result=? WHERE id=?').run(JSON.stringify({ ...previous, ...reconciled }), parent.id);
+                publishJob(db, parent.id);
+              }
+            }
           }
         }).immediate();
       }

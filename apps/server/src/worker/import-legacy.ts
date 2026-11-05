@@ -157,7 +157,8 @@ export function reconcileLegacyFavorites(db: DatabaseType.Database, options: { f
   const roots = db.prepare('SELECT id,root FROM libraries').all() as Root[];
   let cursor = '';
   while (true) {
-    const rows = db.prepare("SELECT source_key,user_id,absolute_path,item_type,created_at FROM legacy_favorites_pending WHERE status='pending' AND source_key>? ORDER BY source_key LIMIT 256").all(cursor) as Pending[];
+    const rows = db.prepare(`SELECT source_key,user_id,absolute_path,item_type,created_at FROM legacy_favorites_pending
+      WHERE status IN ('pending','unmatched') AND absolute_path IS NOT NULL AND user_id IS NOT NULL AND source_key>? ORDER BY source_key LIMIT 256`).all(cursor) as Pending[];
     if (!rows.length) break;
     db.transaction(() => {
       options.assertLease?.();
