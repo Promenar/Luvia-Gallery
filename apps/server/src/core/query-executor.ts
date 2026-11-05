@@ -1,5 +1,6 @@
 import { Worker } from 'node:worker_threads';
 import type Database from 'better-sqlite3';
+import { registerLegacyFunctions } from './legacy-functions.ts';
 
 export type Statement = { sql: string; params: (string | number)[] };
 type Task = { id: number; statements: Statement[]; resolve: (rows: unknown[][]) => void; reject: (error: Error) => void; timer?: NodeJS.Timeout };
@@ -11,7 +12,7 @@ export class QueryExecutor {
   private nextId = 0;
   private closed = false;
   private db: Database.Database;
-  constructor(db: Database.Database) { this.db = db; }
+  constructor(db: Database.Database) { this.db = db; registerLegacyFunctions(db); }
 
   run(statements: Statement[]): Promise<unknown[][]> {
     if (this.closed) return Promise.reject(new Error('查询服务已关闭'));

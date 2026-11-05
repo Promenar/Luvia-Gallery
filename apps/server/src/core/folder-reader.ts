@@ -70,6 +70,10 @@ export class FolderReader {
       hostPath: current ? this.host(current, context) : null, hostRoot: current && this.hostEnabled(context) ? current.host_root : null,
       favorite: !!current?.favorite };
   }
+  get(folder: string, context: Context) {
+    const row = this.row(folder, context);
+    return row && pathAllowed(folder, context.allowedPaths) ? this.output(row, context) : null;
+  }
   tree(folder: string, context: Context) {
     const listing = this.list(folder, context);
     if (!listing) return null;

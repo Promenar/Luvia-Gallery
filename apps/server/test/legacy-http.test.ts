@@ -45,7 +45,17 @@ test('v1 壁纸令牌、结果字段、文件和文件夹接口与旧客户端�
     assert.equal((await thumbRequest).statusCode, 200);
     const folders = await app.inject({ method: 'GET', url: `/api/library/folders?parentPath=${encodeURIComponent(root)}&token=${token}` });
     assert.equal(folders.statusCode, 200);
-    assert.deepEqual(folders.json().folders[0], { name: 'inside', path: path.join(root, 'inside'), mediaCount: 1, coverMedia: null, lastModified: Math.floor((await stat(filename)).mtimeMs / 1000), isFavorite: false });
+    const thumbnail = db.prepare("SELECT relative_path FROM cache_entries WHERE media_id=? AND variant='thumb'").get(file.id) as { relative_path: string };
+    const stamp = (await stat(path.join(cache, thumbnail.relative_path))).mtimeMs;
+    assert.deepEqual(folders.json().folders[0], { name: 'inside', path: path.join(root, 'inside'), mediaCount: 1,
+      coverMedia: { id, url: `/api/thumb/${encodeURIComponent(id)}?t=${stamp}`, type: file.mime, path: filename, mediaType: 'image', name: 'photo.jpg' },
+      lastModified: Math.floor((await stat(filename)).mtimeMs / 1000), isFavorite: false });
+    await app.inject({ method: 'PUT', url: '/api/v2/folders/favorite', headers: { cookie, 'x-luvia-request': '1' }, payload: { path: 'lib/inside', favorite: true } });
+    const favorites = await app.inject({ method: 'GET', url: '/api/library/folders?favorites=true', headers: { cookie } });
+    assert.deepEqual(favorites.json().folders.map((folder: { path: string }) => folder.path), [path.join(root, 'inside')]);
+    const search = await app.inject({ method: 'GET', url: `/api/library/folders?parent=${encodeURIComponent(root)}&search=inside&limit=1`, headers: { cookie } });
+    assert.deepEqual(search.json().folders.map((folder: { path: string }) => folder.path), [path.join(root, 'inside')]);
+    assert.equal((await app.inject({ method: 'GET', url: '/api/library/folders?search=inside&limit=0', headers: { cookie } })).statusCode, 400);
     const login = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { username: 'admin', password: 'test password' } });
     assert.equal(login.statusCode, 200); assert.ok(login.json().token); assert.equal(login.json().user.username, 'admin');
     assert.equal((await app.inject({ method: 'GET', url: '/api/scan/results?limit=1', headers: { authorization: `Bearer ${login.json().token}` } })).statusCode, 200);
@@ -85,4 +95,38 @@ test('壁纸配置控制收藏文件夹、横竖比例与视频范围', async ()
     await patch({ landscapeOnly: false });
     assert.deepEqual(await names(), ['a.jpg', 'b.mp4', 'c.jpg']);
   } finally { await app.close(); db.close(); }
+});
+
+test('v1 列表按旧版规则排序、筛选、时间分页和种子随机分页', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'luvia-v1-query-'));
+  const db = openDatabase(path.join(root, 'query.sqlite')); const app = await createApp({ db, legacyPending: false });
+  try {
+    const setup = await app.inject({ method: 'POST', url: '/api/v2/auth/setup', headers: { 'x-luvia-request': '1' }, payload: { username: 'admin', password: 'test password' } });
+    const cookie = (setup.headers['set-cookie'] as string).split(';')[0]!;
+    const user = setup.json().user.id as string;
+    db.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib','照片',?)").run(root);
+    const insert = db.prepare("INSERT INTO files(id,library_id,relative_path,folder,name,mime,media_type,size,modified_at,taken_at,taken_at_source) VALUES (?,'lib',?,?,?, ?,?,?,?,?,'mtime')");
+    insert.run('one', 'a.jpg', 'lib', 'a.jpg', 'image/jpeg', 'image', 20, 30, 300);
+    insert.run('two', 'B.mp4', 'lib', 'B.mp4', 'video/mp4', 'video', 10, 10, 200);
+    insert.run('three', 'sub/c.jpg', 'lib/sub', 'c.jpg', 'image/jpeg', 'image', 30, 20, 100);
+    db.prepare("INSERT INTO favorites(user_id,item_id,item_type) VALUES (?, 'one', 'file'), (?, 'lib/sub', 'folder')").run(user, user);
+    const fetch = async (query: string) => {
+      const response = await app.inject({ method: 'GET', url: `/api/scan/results?${query}`, headers: { cookie } });
+      assert.equal(response.statusCode, 200); return (response.json().files as { id: string; name: string }[]).map(({ id, name }) => ({ id, name }));
+    };
+    const names = async (query: string) => (await fetch(query)).map((file) => file.name);
+    assert.deepEqual(await names('sort=dateAsc'), ['B.mp4', 'c.jpg', 'a.jpg']);
+    assert.deepEqual(await names('sort=dateDesc&limit=1&offset=1'), ['c.jpg']);
+    assert.deepEqual(await names('sort=nameAsc'), ['a.jpg', 'B.mp4', 'c.jpg']);
+    assert.deepEqual(await names('sort=nameDesc'), ['c.jpg', 'B.mp4', 'a.jpg']);
+    assert.deepEqual(await names('sort=sizeDesc'), ['c.jpg', 'a.jpg', 'B.mp4']);
+    assert.deepEqual(await names('excludeMediaType=video&from=15&to=31&sort=dateAsc'), ['c.jpg', 'a.jpg']);
+    assert.deepEqual(await names('favorites=true'), ['a.jpg']);
+    assert.equal((await app.inject({ method: 'GET', url: '/api/scan/results?from=1', headers: { cookie } })).statusCode, 400);
+    const rank = (id: string) => { let hash = 2166136261; for (const character of `42:${id}`) { hash ^= character.charCodeAt(0); hash = Math.imul(hash, 16777619); } return hash >>> 0; };
+    const expected = ['a.jpg', 'B.mp4', 'sub/c.jpg'].map((relative) => ({ name: path.basename(relative), id: Buffer.from(path.join(root, relative)).toString('base64') }))
+      .sort((a, b) => rank(a.id) - rank(b.id) || a.id.localeCompare(b.id));
+    assert.deepEqual(await fetch('random=true&seed=42&limit=2&offset=0'), expected.slice(0, 2));
+    assert.deepEqual(await fetch('random=true&seed=42&limit=2&offset=2'), expected.slice(2));
+  } finally { await app.close(); db.close(); await rm(root, { recursive: true, force: true }); }
 });
