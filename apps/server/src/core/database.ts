@@ -171,6 +171,34 @@ const schemaV8 = `
   CREATE INDEX cache_lru ON cache_entries(last_access_at,cache_key);
 `;
 
+const rebuildTimeline = `
+  INSERT INTO timeline_counts(month,count)
+  SELECT strftime('%Y-%m',taken_at,'unixepoch','localtime'),count(*) FROM files
+  WHERE strftime('%Y-%m',taken_at,'unixepoch','localtime') IS NOT NULL GROUP BY 1;
+`;
+const schemaV9 = `
+  CREATE TABLE timeline_counts (month TEXT PRIMARY KEY, count INTEGER NOT NULL);
+  ${rebuildTimeline}
+  CREATE TRIGGER files_timeline_insert AFTER INSERT ON files
+  WHEN strftime('%Y-%m',new.taken_at,'unixepoch','localtime') IS NOT NULL BEGIN
+    INSERT INTO timeline_counts(month,count) VALUES (strftime('%Y-%m',new.taken_at,'unixepoch','localtime'),1)
+      ON CONFLICT(month) DO UPDATE SET count=count+1;
+  END;
+  CREATE TRIGGER files_timeline_delete AFTER DELETE ON files
+  WHEN strftime('%Y-%m',old.taken_at,'unixepoch','localtime') IS NOT NULL BEGIN
+    UPDATE timeline_counts SET count=count-1 WHERE month=strftime('%Y-%m',old.taken_at,'unixepoch','localtime');
+    DELETE FROM timeline_counts WHERE count<=0;
+  END;
+  CREATE TRIGGER files_timeline_update AFTER UPDATE OF taken_at ON files
+  WHEN strftime('%Y-%m',old.taken_at,'unixepoch','localtime') IS NOT strftime('%Y-%m',new.taken_at,'unixepoch','localtime') BEGIN
+    UPDATE timeline_counts SET count=count-1 WHERE month=strftime('%Y-%m',old.taken_at,'unixepoch','localtime');
+    DELETE FROM timeline_counts WHERE count<=0;
+    INSERT INTO timeline_counts(month,count) SELECT strftime('%Y-%m',new.taken_at,'unixepoch','localtime'),1
+      WHERE strftime('%Y-%m',new.taken_at,'unixepoch','localtime') IS NOT NULL
+      ON CONFLICT(month) DO UPDATE SET count=count+1;
+  END;
+`;
+
 export function openDatabase(filename: string, options: { readonly?: boolean; bootstrapLegacy?: boolean } = {}): Database.Database {
   const readonly = options.readonly ?? false;
   const db = new Database(filename, { readonly, fileMustExist: readonly });
@@ -184,7 +212,7 @@ export function openDatabase(filename: string, options: { readonly?: boolean; bo
       db.pragma('synchronous = NORMAL');
       db.transaction(() => {
         const version = db.pragma('user_version', { simple: true });
-        if (version !== 0 && version !== 1 && version !== 2 && version !== 3 && version !== 4 && version !== 5 && version !== 6 && version !== 7 && version !== 8) throw new Error(`不支持的数据库版本: ${version}`);
+        if (typeof version !== 'number' || version < 0 || version > 9) throw new Error(`不支持的数据库版本: ${version}`);
         if (version === 0) {
           db.exec(schemaV1);
           db.pragma('user_version = 1');
@@ -217,12 +245,23 @@ export function openDatabase(filename: string, options: { readonly?: boolean; bo
           db.exec(schemaV8);
           db.pragma('user_version = 8');
         }
+        if (version <= 8) {
+          db.exec(schemaV9);
+          db.pragma('user_version = 9');
+        }
+        const timezone = process.env.TZ ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
+        const previous = db.prepare("SELECT value FROM settings WHERE key='timeline.timezone'").get() as { value: string } | undefined;
+        if (previous && previous.value !== timezone) {
+          db.exec('DELETE FROM timeline_counts');
+          db.exec(rebuildTimeline);
+        }
+        db.prepare("INSERT INTO settings(key,value) VALUES('timeline.timezone',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(timezone);
         if (version === 0 && options.bootstrapLegacy) {
           db.prepare("INSERT INTO settings(key,value) VALUES('legacy.pending','true')").run();
           db.prepare("INSERT INTO jobs(id,type,label,status,trigger,created_at) VALUES (?,'import_legacy','导入旧版数据','queued','system',unixepoch())").run(randomUUID());
         }
       }).immediate();
-    } else if (db.pragma('user_version', { simple: true }) !== 8) {
+    } else if (db.pragma('user_version', { simple: true }) !== 9) {
       throw new Error('数据库尚未就绪或版本不受支持');
     }
     return db;

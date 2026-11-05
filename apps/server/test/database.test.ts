@@ -12,7 +12,7 @@ test('数据库迁移持久且可重复，支持只读连接', async () => {
   try {
     const db = openDatabase(filename);
     assert.equal(db.pragma('journal_mode', { simple: true }), 'wal');
-    assert.equal(db.pragma('user_version', { simple: true }), 8);
+    assert.equal(db.pragma('user_version', { simple: true }), 9);
     db.prepare("INSERT INTO libraries (id, name, root) VALUES ('lib1', '测试', '/test')").run();
     db.close();
     const writable = openDatabase(filename);
@@ -55,16 +55,35 @@ test('trigram 索引能查找中文中间子串并在修改后同步', () => {
   } finally { db.close(); }
 });
 
+test('物化月份统计随文件新增、拍摄时间变更和删除保持一致', () => {
+  const db = openDatabase(':memory:');
+  try {
+    const exists = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='timeline_counts'").get();
+    assert.ok(exists, '缺少物化时间分桶');
+    db.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib','照片','/fixture')").run();
+    const insert = db.prepare("INSERT INTO files(id,library_id,relative_path,folder,name,mime,media_type,size,modified_at,taken_at,taken_at_source) VALUES (?,'lib',?,'lib',?,'image/jpeg','image',1,?,?, 'mtime')");
+    const january = Date.UTC(2024, 0, 15) / 1000; const february = Date.UTC(2024, 1, 15) / 1000;
+    insert.run('a', 'a.jpg', 'a.jpg', january, january);
+    insert.run('b', 'b.jpg', 'b.jpg', february, february);
+    const counts = () => db.prepare('SELECT month,count FROM timeline_counts WHERE count>0 ORDER BY month').all();
+    assert.deepEqual(counts(), [{ month: '2024-01', count: 1 }, { month: '2024-02', count: 1 }]);
+    db.prepare("UPDATE files SET taken_at=? WHERE id='a'").run(february);
+    assert.deepEqual(counts(), [{ month: '2024-02', count: 2 }]);
+    db.prepare("DELETE FROM files WHERE id='b'").run();
+    assert.deepEqual(counts(), [{ month: '2024-02', count: 1 }]);
+  } finally { db.close(); }
+});
+
 
 test('已有版本 1 数据库升级时保留数据并创建扫描锁表', async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'luvia-upgrade-'));
   const filename = path.join(dir, 'luvia.db');
   const old = new Database(filename);
-  old.exec("CREATE TABLE libraries (id TEXT PRIMARY KEY, name TEXT NOT NULL); CREATE TABLE folders (path TEXT PRIMARY KEY, library_id TEXT NOT NULL); CREATE TABLE api_tokens (id TEXT PRIMARY KEY); CREATE TABLE jobs (id TEXT PRIMARY KEY, status TEXT NOT NULL); INSERT INTO libraries VALUES ('lib1','测试'); PRAGMA user_version=1");
+  old.exec("CREATE TABLE libraries (id TEXT PRIMARY KEY, name TEXT NOT NULL); CREATE TABLE folders (path TEXT PRIMARY KEY, library_id TEXT NOT NULL); CREATE TABLE api_tokens (id TEXT PRIMARY KEY); CREATE TABLE jobs (id TEXT PRIMARY KEY, status TEXT NOT NULL); CREATE TABLE files (id TEXT PRIMARY KEY,taken_at INTEGER NOT NULL); CREATE TABLE settings (key TEXT PRIMARY KEY,value TEXT NOT NULL); INSERT INTO libraries VALUES ('lib1','测试'); PRAGMA user_version=1");
   old.close();
   try {
     const db = openDatabase(filename);
-    assert.equal(db.pragma('user_version', { simple: true }), 8);
+    assert.equal(db.pragma('user_version', { simple: true }), 9);
     assert.equal((db.prepare('SELECT count(*) AS n FROM libraries').get() as { n: number }).n, 1);
     db.prepare("INSERT INTO scan_locks(library_id,owner,acquired_at) VALUES ('lib1','owner',1)").run();
     db.close();

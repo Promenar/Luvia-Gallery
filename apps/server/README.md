@@ -17,7 +17,10 @@
 ```sh
 npx -y -p node@24 -- pnpm --filter @luvia/server test
 npx -y -p node@24 -- pnpm --filter @luvia/server typecheck
+npx -y -p node@24 -- pnpm --filter @luvia/server bench
 ```
+
+基准默认生成一百万条合成媒体，并在独立进程持续扫描合成文件时测量默认读取路径；临时数据库在结束时删除。无筛选时间线使用物化月份统计，筛选查询与真实 NAS I/O 仍需另行测量。
 
 使用 Node 24 启动本地双进程：
 

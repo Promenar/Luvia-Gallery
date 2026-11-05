@@ -10,6 +10,7 @@
     "dev": "node src/dev.ts",
     "start:api": "node src/api/main.ts",
     "start:worker": "node src/worker/main.ts",
+    "bench": "node scripts/seed-bench.ts",
     "test": "node --test test/*.test.ts",
     "typecheck": "tsc -p tsconfig.json"
   },
