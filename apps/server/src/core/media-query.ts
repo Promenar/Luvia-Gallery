@@ -6,7 +6,7 @@ import { QueryExecutor } from './query-executor.ts';
 
 type Query = z.output<typeof MediaListQuery>;
 type RandomFilter = z.output<typeof RandomQuery>;
-type Context = { id: string; allowedPaths: string[] | null };
+type Context = { id: string; allowedPaths: string[] | null; ids?: string[] };
 type Params = (string | number)[];
 type FileRow = {
   rowid: number; id: string; folder: string; name: string; media_type: 'image' | 'video' | 'audio';
@@ -28,7 +28,8 @@ function allowedClause(paths: string[] | null, params: Params, column = 'f.folde
 }
 function where(filter: Partial<Query> | RandomFilter, context: Context, db: Database.Database): { sql: string; params: Params } {
   const params: Params = [];
-  const clauses = [allowedClause(context.allowedPaths, params)];
+  const clauses = [allowedClause(context.allowedPaths, params), 'EXISTS(SELECT 1 FROM libraries library WHERE library.id=f.library_id AND library.enabled=1)'];
+  if (context.ids) { clauses.push('f.id IN (SELECT value FROM json_each(?))'); params.push(JSON.stringify(context.ids)); }
   if (filter.q) {
     if ([...filter.q].length < 3) {
       clauses.push("f.name LIKE ? ESCAPE '\\'");
@@ -111,9 +112,10 @@ export class MediaReader {
   private executor: QueryExecutor;
 
   one(id: string, context: Context) {
+    if (context.ids && !context.ids.includes(id)) return null;
     const params: Params = [];
     const allowed = allowedClause(context.allowedPaths, params);
-    const row = this.db.prepare(`${selection} WHERE f.id=? AND ${allowed}`).get(context.id, id, ...params) as FileRow | undefined;
+    const row = this.db.prepare(`${selection} WHERE f.id=? AND ${allowed} AND EXISTS(SELECT 1 FROM libraries library WHERE library.id=f.library_id AND library.enabled=1)`).get(context.id, id, ...params) as FileRow | undefined;
     return row ? item(row) : null;
   }
 
@@ -146,7 +148,7 @@ export class MediaReader {
     const cached = this.cache.get(key);
     if (cached && cached.version === version && cached.expires > Date.now()) return cached.value;
     const condition = where(filter, context, this.db);
-    const unfiltered = context.allowedPaths === null && filter.scope === 'all' && !filter.q && !filter.types?.length &&
+    const unfiltered = context.allowedPaths === null && !context.ids && !this.db.prepare('SELECT 1 FROM libraries WHERE enabled=0 LIMIT 1').get() && filter.scope === 'all' && !filter.q && !filter.types?.length &&
       filter.from === undefined && filter.to === undefined && !filter.cameras?.length && !filter.orientation &&
       filter.hasLocation === undefined && filter.favorite === undefined && !filter.under;
     const rows = (unfiltered
@@ -207,7 +209,7 @@ export class MediaReader {
     const [folders, cameras] = await this.executor.run([
       { sql: `SELECT f.path,f.name,f.media_count AS mediaCount FROM folders f JOIN libraries l ON l.id=f.library_id AND l.enabled=1
         WHERE ${foldersAllowed} AND f.name LIKE ? ESCAPE '\\' ORDER BY f.name COLLATE NOCASE,f.path LIMIT 10`, params: [...folderParams, `%${escaped}%`] },
-      { sql: `SELECT DISTINCT f.model AS name FROM files f WHERE ${filesAllowed} AND f.model LIKE ? ESCAPE '\\' ORDER BY name COLLATE NOCASE LIMIT 10`, params: [...fileParams, `%${escaped}%`] },
+      { sql: `SELECT DISTINCT f.model AS name FROM files f WHERE ${filesAllowed} AND EXISTS(SELECT 1 FROM libraries l WHERE l.id=f.library_id AND l.enabled=1) AND f.model LIKE ? ESCAPE '\\' ORDER BY name COLLATE NOCASE LIMIT 10`, params: [...fileParams, `%${escaped}%`] },
     ]) as [{ path: string; name: string; mediaCount: number }[], { name: string }[]];
     return { folders, cameras: cameras.map((row) => row.name), media: this.page(MediaListQuery.parse({ q: query, limit: 10 }), context).items };
   }

@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 import sharp from 'sharp';
 import jwt from 'jsonwebtoken';
 import { ZodError } from 'zod';
-import { CSRF_HEADER, endpoints, JobAction, MediaListQuery, Preferences, RandomQuery, WallpaperConfig, defaultPreferences } from '@luvia/contracts';
+import { CSRF_HEADER, endpoints, JobAction, MediaListQuery, Preferences, RandomQuery, ShareTarget, WallpaperConfig, defaultPreferences } from '@luvia/contracts';
 import type { MediaItem, User } from '@luvia/contracts';
 import { hashPassword, verifyPassword } from '../core/password.ts';
 import { MediaReader } from '../core/media-query.ts';
@@ -380,7 +380,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
       count: summary.count, cover, startAt: iso(summary.start), endAt: iso(summary.end), createdAt: iso(row.created_at)!, updatedAt: iso(row.updated_at)! };
   }
   function requireVisibleMedia(ids: string[], context: { id: string; allowedPaths: string[] | null }): void {
-    const find = db.prepare('SELECT folder FROM files WHERE id=?');
+    const find = db.prepare('SELECT f.folder FROM files f JOIN libraries l ON l.id=f.library_id AND l.enabled=1 WHERE f.id=?');
     for (const id of ids) {
       const row = find.get(id) as { folder: string } | undefined;
       if (!row || !pathAllowed(row.folder, context.allowedPaths)) fail(403, 'FORBIDDEN', '媒体不可访问');
@@ -450,7 +450,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
   register('setFavorite', async (req, _reply, body) => {
     const context = mediaContext(req);
     const ids = [...new Set(body.ids as string[])];
-    const find = db.prepare('SELECT folder FROM files WHERE id=?');
+    const find = db.prepare('SELECT f.folder FROM files f JOIN libraries l ON l.id=f.library_id AND l.enabled=1 WHERE f.id=?');
     const add = db.prepare("INSERT OR IGNORE INTO favorites (user_id,item_id,item_type) VALUES (?,?,'file')");
     const remove = db.prepare("DELETE FROM favorites WHERE user_id=? AND item_id=? AND item_type='file'");
     const updated = db.transaction(() => {
@@ -507,20 +507,19 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     };
   });
   type BinaryRow = { id: string; name: string; relative_path: string; folder: string; mime: string; media_type: string; root: string; size: number; modified_at: number; width: number | null; height: number | null };
-  async function binaryMedia(req: FastifyRequest, id: string): Promise<{ row: BinaryRow; filename: string }> {
-    const identity = requireUser(req);
+  async function binaryMediaFor(context: { id: string; allowedPaths: string[] | null; ids?: string[] }, id: string): Promise<{ row: BinaryRow; filename: string }> {
     const row = db.prepare(`SELECT f.id,f.name,f.relative_path,f.folder,f.mime,f.media_type,f.size,f.modified_at,f.width,f.height,l.root FROM files f
       JOIN libraries l ON l.id=f.library_id WHERE f.id=? AND l.enabled=1`).get(id) as BinaryRow | undefined;
-    const allowed = userOut(identity.user).allowedPaths;
-    if (!row || !pathAllowed(row.folder, allowed)) return fail(404, 'NOT_FOUND', '媒体不存在或不可访问');
+    if (!row || !pathAllowed(row.folder, context.allowedPaths) || context.ids && !context.ids.includes(id)) return fail(404, 'NOT_FOUND', '媒体不存在或不可访问');
     let filename: string;
     try { filename = await secureMediaPath(row.root, row.relative_path); }
     catch { return fail(404, 'NOT_FOUND', '媒体不可访问'); }
     return { row, filename };
   }
+  async function binaryMedia(req: FastifyRequest, id: string) { return binaryMediaFor(mediaContext(req), id); }
   const cacheDir = options.cacheDir ?? path.resolve(process.env.CACHE_DIR ?? 'cache');
   const exists = async (filename: string) => { try { await access(filename); return true; } catch { return false; } };
-  async function cachedMedia(req: FastifyRequest, reply: FastifyReply, row: BinaryRow, variant: Variant, wait: boolean) {
+  async function cachedMedia(req: FastifyRequest, reply: FastifyReply, row: BinaryRow, variant: Variant, wait: boolean, authorize?: () => unknown) {
     const filename = cachePath(cacheDir, row, variant);
     if (!await exists(filename)) {
       const jobId = enqueueMediaTask(db, row, variant);
@@ -533,8 +532,9 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
           if (!job || job.status === 'failed' || job.status === 'cancelled') return fail(404, 'NOT_FOUND', '媒体缓存生成失败');
         }
       }
-      if (!await exists(filename)) return reply.header('Retry-After', '1').code(202).send({ status: 'pending' });
+      if (!await exists(filename)) { authorize?.(); return reply.header('Retry-After', '1').code(202).send({ status: 'pending' }); }
     }
+    authorize?.();
     const touched = Date.now();
     db.prepare('UPDATE cache_entries SET last_access_at=? WHERE cache_key=? AND last_access_at<?')
       .run(touched, cacheKey(row, variant), touched - 60_000);
@@ -596,6 +596,140 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     const scale = 2 ** (maxLevel - level);
     if (col * 256 >= Math.ceil(row.width / scale) || tileRow * 256 >= Math.ceil(row.height / scale)) return fail(404, 'NOT_FOUND', '瓦片不存在');
     return cachedMedia(req, reply, row, { kind: 'tile', level, col, row: tileRow }, false);
+  });
+  type ShareRow = { id: string; user_id: string; token: string; title: string; target: string; password_hash: string | null; allow_download: number; expires_at: number | null; created_at: number; view_count: number };
+  type ShareTargetValue = ReturnType<typeof ShareTarget.parse>;
+  function shareByToken(token: string): ShareRow {
+    return (db.prepare('SELECT * FROM shares WHERE token=? AND (expires_at IS NULL OR expires_at>?)').get(token, now()) as ShareRow | undefined)
+      ?? fail(404, 'NOT_FOUND', '分享不存在或已过期');
+  }
+  function shareScope(row: ShareRow) {
+    const owner = (db.prepare('SELECT * FROM users WHERE id=?').get(row.user_id) as UserRow | undefined) ?? fail(404, 'NOT_FOUND', '分享不存在');
+    const ownerInfo = userOut(owner); const target = ShareTarget.parse(JSON.parse(row.target));
+    const context = { id: owner.id, allowedPaths: ownerInfo.allowedPaths, ...(target.type === 'media' ? { ids: target.ids } : {}) };
+    const query = MediaListQuery.parse(target.type === 'album' ? { scope: 'album', albumId: target.albumId, limit: 1 }
+      : target.type === 'folder' ? { scope: 'folder', folder: target.path, recursive: true, limit: 1 } : { limit: 1 });
+    return { owner, target, context, query };
+  }
+  async function shareOut(row: ShareRow) {
+    const { owner, target, context, query } = shareScope(row);
+    const summary = await media.summary(query, context);
+    const cover = media.page(query, context).items[0] ?? null;
+    return { id: row.id, token: row.token, title: row.title, target, ownerUsername: owner.username, hasPassword: !!row.password_hash,
+      allowDownload: !!row.allow_download, expiresAt: iso(row.expires_at), createdAt: iso(row.created_at)!, viewCount: row.view_count,
+      mediaCount: summary.count, cover };
+  }
+  function shareCookie(row: ShareRow) { return `luvia_share_${row.id.replaceAll('-', '')}`; }
+  function shareUnlocked(req: FastifyRequest, row: ShareRow): boolean {
+    if (!row.password_hash) return true;
+    const value = req.cookies[shareCookie(row)];
+    return !!value && value.length <= 256 && !!db.prepare('SELECT 1 FROM share_sessions WHERE token_hash=? AND share_id=? AND expires_at>?')
+      .get(digest(value), row.id, now());
+  }
+  function currentSessionUser(identity: Identity): UserRow {
+    if (identity.kind !== 'session' || !identity.sessionHash) return fail(403, 'FORBIDDEN', '需要会话验证');
+    return (db.prepare(`SELECT u.* FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.expires_at>?`)
+      .get(identity.sessionHash, now()) as UserRow | undefined) ?? fail(401, 'UNAUTHORIZED', '会话已失效');
+  }
+  function validateShareTarget(target: ShareTargetValue, owner: UserRow): void {
+    const info = userOut(owner); const context = { id: owner.id, allowedPaths: info.allowedPaths };
+    if (target.type === 'media') requireVisibleMedia(target.ids, context);
+    else if (target.type === 'album') ownedAlbum(target.albumId, owner.id);
+    else if (!folders.canFavorite(target.path, { ...context, isAdmin: owner.role === 'admin' })) fail(403, 'FORBIDDEN', '文件夹不可访问');
+  }
+  register('listShares', async (req) => {
+    const identity = requireUser(req); const query = endpoints.listShares.query.parse(req.query);
+    const all = query.all === '1' && identity.kind === 'session' && identity.user.role === 'admin';
+    const rows = (all ? db.prepare('SELECT * FROM shares ORDER BY created_at DESC,id DESC').all()
+      : db.prepare('SELECT * FROM shares WHERE user_id=? ORDER BY created_at DESC,id DESC').all(identity.user.id)) as ShareRow[];
+    const shares = [];
+    for (let index = 0; index < rows.length; index += 32) shares.push(...await Promise.all(rows.slice(index, index + 32).map(shareOut)));
+    return { shares };
+  });
+  register('createShare', async (req, _reply, body) => {
+    const identity = requireUser(req);
+    const expires = body.expiresAt == null ? null : Math.floor(Date.parse(body.expiresAt) / 1000);
+    if (expires !== null && (!Number.isFinite(expires) || expires <= now())) fail(400, 'VALIDATION', '分享过期时间无效');
+    const passwordHash = body.password ? await hashPassword(body.password) : null;
+    const id = randomUUID(); const token = secret();
+    db.transaction(() => {
+      const owner = currentSessionUser(identity);
+      validateShareTarget(body.target, owner);
+      db.prepare(`INSERT INTO shares(id,user_id,token,title,target,password_hash,allow_download,expires_at,created_at)
+        VALUES (?,?,?,?,?,?,?,?,?)`).run(id, owner.id, token, body.title ?? '分享的媒体', JSON.stringify(body.target), passwordHash, body.allowDownload ? 1 : 0, expires, now());
+    }).immediate();
+    return shareOut(shareByToken(token));
+  });
+  register('deleteShare', async (req) => {
+    const identity = requireUser(req); const { id } = req.params as { id: string };
+    const user = currentSessionUser(identity);
+    const result = user.role === 'admin' ? db.prepare('DELETE FROM shares WHERE id=?').run(id)
+      : db.prepare('DELETE FROM shares WHERE id=? AND user_id=?').run(id, user.id);
+    if (!result.changes) fail(404, 'NOT_FOUND', '分享不存在');
+  });
+  register('publicShare', async (req) => {
+    const { token } = req.params as { token: string }; const row = shareByToken(token);
+    const unlocked = shareUnlocked(req, row); const owner = (db.prepare('SELECT username FROM users WHERE id=?').get(row.user_id) as { username: string } | undefined) ?? fail(404, 'NOT_FOUND', '分享不存在');
+    if (!unlocked) return { title: row.title, ownerUsername: owner.username, requiresPassword: true, unlocked: false, allowDownload: !!row.allow_download, expiresAt: iso(row.expires_at), mediaCount: null, cover: null };
+    db.prepare('UPDATE shares SET view_count=view_count+1 WHERE id=?').run(row.id);
+    const before = shareScope(row).context;
+    const output = await shareOut(row);
+    const current = shareByToken(token);
+    if (!shareUnlocked(req, current) || current.target !== row.target || JSON.stringify(shareScope(current).context) !== JSON.stringify(before)) fail(409, 'CONFLICT', '分享权限已经变化，请重试');
+    return { title: row.title, ownerUsername: owner.username, requiresPassword: !!row.password_hash, unlocked: true, allowDownload: !!row.allow_download,
+      expiresAt: iso(row.expires_at), mediaCount: output.mediaCount, cover: output.cover ? { ...output.cover, favorite: false } : null };
+  });
+  register('unlockShare', async (req, reply, body) => {
+    const { token } = req.params as { token: string }; const row = shareByToken(token);
+    if (!row.password_hash) return;
+    limitLogin(req.ip);
+    if (!(await verifyPassword(body.password, row.password_hash)).valid) return fail(401, 'UNAUTHORIZED', '分享密码错误');
+    const value = secret(); const expires = Math.min(row.expires_at ?? now() + 7 * 86400, now() + 7 * 86400);
+    db.transaction(() => {
+      const current = shareByToken(token);
+      if (current.password_hash !== row.password_hash) fail(409, 'CONFLICT', '分享状态已经变化');
+      db.prepare('INSERT INTO share_sessions(token_hash,share_id,expires_at) VALUES (?,?,?)').run(digest(value), row.id, expires);
+    }).immediate();
+    reply.setCookie(shareCookie(row), value, { httpOnly: true, sameSite: 'lax', secure, path: `/api/v2/public/shares/${row.token}`, maxAge: Math.max(0, expires - now()) });
+  });
+  register('publicShareMedia', async (req) => {
+    const { token } = req.params as { token: string }; const row = shareByToken(token);
+    if (!shareUnlocked(req, row)) fail(403, 'FORBIDDEN', '请先解锁分享');
+    const query = endpoints.publicShareMedia.query.parse(req.query); const scope = shareScope(row);
+    try {
+      const page = media.page({ ...scope.query, limit: query.limit, cursor: query.cursor }, scope.context);
+      return { ...page, items: page.items.map((entry) => ({ ...entry, favorite: false })) };
+    } catch (err) { if (err instanceof Error && err.message === '无效游标') fail(400, 'VALIDATION', '无效游标'); throw err; }
+  });
+  app.get('/api/v2/public/shares/:token/media/:id/:resource', async (req, reply) => {
+    const { token, id, resource } = req.params as { token: string; id: string; resource: string };
+    if (!['thumb', 'original', 'preview'].includes(resource)) return fail(404, 'NOT_FOUND', '媒体资源不存在');
+    const authorize = () => {
+      const share = shareByToken(token);
+      if (!shareUnlocked(req, share)) return fail(403, 'FORBIDDEN', '请先解锁分享');
+      const scope = shareScope(share);
+      if (!media.contains(scope.query, scope.context, id)) return fail(404, 'NOT_FOUND', '媒体不属于分享');
+      if (resource === 'original' && !share.allow_download) return fail(403, 'FORBIDDEN', '分享未允许下载原文件');
+      return scope;
+    };
+    const scope = authorize();
+    const { row, filename } = await binaryMediaFor(scope.context, id);
+    authorize();
+    if (resource === 'thumb') {
+      const size = (req.query as { size?: string }).size ?? 'm';
+      if (size !== 's' && size !== 'm' && size !== 'l') return fail(400, 'VALIDATION', '缩略图尺寸无效');
+      return cachedMedia(req, reply, row, { kind: 'thumb', size }, true, authorize);
+    }
+    if (resource === 'preview') {
+      if (row.media_type !== 'video') return fail(404, 'NOT_FOUND', '视频预览不存在');
+      const variant: Variant = { kind: 'preview' }; const filename = cachePath(cacheDir, row, variant);
+      if (!await exists(filename)) return fail(404, 'NOT_FOUND', '视频预览不存在');
+      authorize();
+      const touched = Date.now();
+      db.prepare('UPDATE cache_entries SET last_access_at=? WHERE cache_key=? AND last_access_at<?').run(touched, cacheKey(row, variant), touched - 60_000);
+      return sendFile(req, reply, filename, { mime: 'video/mp4', name: row.name, etagKey: cacheKey(row, variant) });
+    }
+    return sendFile(req, reply, filename, { mime: row.mime, name: row.name, download: (req.query as { download?: string }).download === '1', etagKey: row.id });
   });
   function legacyVirtual(absolute: string): string | null {
     if (!path.isAbsolute(absolute)) return null;
@@ -694,7 +828,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
         mediaType: item.mediaType, sourceId: 'local', isFavorite: item.favorite, width: item.width, height: item.height,
         aspectRatio: item.width && item.height ? item.width / item.height : null };
     });
-    const unfiltered = identity.user.role === 'admin' && !wallpaper && query.favorites !== 'true' && !query.folder && !query.search && !query.mediaType;
+    const unfiltered = identity.user.role === 'admin' && !wallpaper && !db.prepare('SELECT 1 FROM libraries WHERE enabled=0 LIMIT 1').get() && query.favorites !== 'true' && !query.folder && !query.search && !query.mediaType;
     const total = unfiltered ? (db.prepare('SELECT COALESCE(sum(count),0) AS n FROM timeline_counts').get() as { n: number }).n : offset + files.length + (hasMore ? 1 : 0);
     const totalExact = unfiltered || !hasMore;
     return { files, total, totalExact, hasMore, sources: [{ id: 'local', name: 'Local Storage', count: total, countExact: totalExact }] };

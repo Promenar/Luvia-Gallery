@@ -78,3 +78,21 @@ test('随机查询区分直接文件夹、收藏文件夹和排除列表', async
     assert.equal(rejected.statusCode, 400);
   } finally { await app.close(); db.close(); }
 });
+
+test('禁用媒体库后列表、分桶、随机和媒体写入都不再包含其文件', async () => {
+  const db = openDatabase(':memory:'); const app = await createApp({ db, legacyPending: false });
+  try {
+    const setup = await app.inject({ method: 'POST', url: '/api/v2/auth/setup', headers: { 'x-luvia-request': '1' }, payload: { username: 'admin', password: 'test password' } });
+    const cookie = (setup.headers['set-cookie'] as string).split(';')[0]!;
+    db.prepare("INSERT INTO libraries(id,name,root,enabled) VALUES ('live','启用','/a',1),('off','禁用','/b',0)").run();
+    const add = db.prepare("INSERT INTO files(id,library_id,relative_path,folder,name,mime,media_type,size,modified_at,taken_at,taken_at_source) VALUES (?,?,?,?,?,'image/jpeg','image',1,1,1,'mtime')");
+    add.run('visible', 'live', 'a.jpg', 'live', 'a.jpg'); add.run('hidden', 'off', 'b.jpg', 'off', 'b.jpg');
+    const page = await app.inject({ method: 'GET', url: '/api/v2/media', headers: { cookie } });
+    assert.deepEqual(MediaPage.parse(page.json()).items.map((item) => item.id), ['visible']);
+    const buckets = await app.inject({ method: 'GET', url: '/api/v2/media/buckets', headers: { cookie } });
+    assert.equal(TimelineBuckets.parse(buckets.json()).total, 1);
+    const random = await app.inject({ method: 'GET', url: '/api/v2/media/random?count=10', headers: { cookie } });
+    assert.deepEqual(MediaItems.parse(random.json()).items.map((item) => item.id), ['visible']);
+    assert.equal((await app.inject({ method: 'PUT', url: '/api/v2/media/favorite', headers: { cookie, 'x-luvia-request': '1' }, payload: { ids: ['hidden'], favorite: true } })).statusCode, 403);
+  } finally { await app.close(); db.close(); }
+});
