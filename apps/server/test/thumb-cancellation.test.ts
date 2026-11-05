@@ -77,3 +77,26 @@ test('批量作业保留共享缩略图；过期的孤立等待租约可回收',
     assert.equal((db.prepare('SELECT status FROM jobs WHERE id=?').get(lone) as { status: string }).status, 'cancelled');
   } finally { db.close(); }
 });
+
+test('同一缓存键的旧生成尚未退出时，新生成必须等待', async () => {
+  const module = await import('../src/worker/media-lock.ts').catch(() => null);
+  assert.ok(module, '媒体缓存键租约尚未实现');
+  const data = await mkdtemp(path.join(tmpdir(), 'luvia-media-lock-'));
+  const db = openDatabase(path.join(data, 'test.sqlite')); const otherDb = openDatabase(path.join(data, 'test.sqlite')); let release!: () => void;
+  const blocked = new Promise<void>((resolve) => { release = resolve; });
+  let enteredFirst!: () => void; const started = new Promise<void>((resolve) => { enteredFirst = resolve; });
+  let active = 0; let peak = 0; let secondStarted = false; const abort = new AbortController();
+  try {
+    const first = module.withMediaGenerationLock(db, 'worker', 'media:same', async () => { active++; peak = Math.max(peak, active); enteredFirst(); await blocked; active--; }, { signal: abort.signal });
+    const firstStopped = assert.rejects(first);
+    await started; abort.abort();
+    const second = module.withMediaGenerationLock(otherDb, 'worker', 'media:same', async () => { secondStarted = true; active++; peak = Math.max(peak, active); active--; });
+    await module.withMediaGenerationLock(otherDb, 'other', 'media:different', async () => {});
+    await delay(120); assert.equal(secondStarted, false);
+    release(); await Promise.all([firstStopped, second]);
+    assert.equal(secondStarted, true); assert.equal(peak, 1);
+    db.prepare("INSERT INTO media_generation_locks(cache_key,owner,lease_token,lease_expires_at) VALUES ('stale','dead','old',0)").run();
+    await module.withMediaGenerationLock(otherDb, 'worker', 'stale', async () => {});
+    assert.equal((db.prepare('SELECT count(*) AS n FROM media_generation_locks').get() as { n: number }).n, 0);
+  } finally { release(); otherDb.close(); db.close(); await rm(data, { recursive: true, force: true }); }
+});

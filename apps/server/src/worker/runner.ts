@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3';
 import { createHash, randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
+import { lstat } from 'node:fs/promises';
 import { JobQueue } from '../core/jobs.ts';
 import { publishJob } from '../core/job-view.ts';
 import { scanLibrary } from './scan.ts';
@@ -10,13 +11,14 @@ import path from 'node:path';
 import { pruneCache } from './cache-prune.ts';
 import { readSettings } from '../core/settings.ts';
 import { processMetadataBatch } from './metadata.ts';
-import { cacheKey, cancelUnobservedMediaTask, enqueueMediaTask } from '../core/media-cache.ts';
+import { cacheKey, cachePath, cancelUnobservedMediaTask, enqueueMediaTask } from '../core/media-cache.ts';
 import type { Variant } from '../core/media-cache.ts';
 import { generateHls } from './hls.ts';
 import { withThumbnailSlot } from './ffmpeg-slots.ts';
+import { withMediaGenerationLock } from './media-lock.ts';
 
 export type WorkerOptions = { owner: string; allowedRoots: string[]; legacyDir: string; systemRoots: string[]; configuredMediaRoots?: string[]; cacheDir?: string; signal?: AbortSignal; hlsIdleMs?: number; log?: (level: 'info' | 'warn', message: string, ctx: Record<string, string>) => void };
-type Payload = { libraryId?: string | null; legacyImportId?: string; mediaId?: string; hlsSessionId?: string };
+type Payload = { libraryId?: string | null; legacyImportId?: string; mediaId?: string; hlsSessionId?: string; sourceSize?: number; sourceModified?: number; variant?: Variant };
 const now = () => Math.floor(Date.now() / 1000);
 const childId = (parent: string, library: string) => `scan_${createHash('sha256').update(parent).update('\0').update(library).digest('base64url').slice(0, 24)}`;
 function enqueueScan(db: Database.Database, id: string, libraryId: string, legacyImportId?: string) {
@@ -173,12 +175,25 @@ export async function runNextJob(db: Database.Database, options: WorkerOptions):
           if (!queue.finish(job.id, { queued })) throw new Error('作业租约已失效');
         } else if (!queue.release(job.id)) throw new Error('作业租约已失效');
       }
-    } else if (job.type === 'thumbnails') {
-      await withThumbnailSlot(db, options.owner, (signal) => generateMediaCache(db, payload, { owner: options.owner, cacheDir: options.cacheDir ?? path.resolve(process.env.CACHE_DIR ?? 'cache'), allowedRoots: options.allowedRoots, assertLease, signal }), { signal: controller.signal, assertLease });
-      if (!queue.finish(job.id, { generated: 1 })) throw new Error('作业租约已失效');
-    } else if (job.type === 'previews') {
-      await generateMediaCache(db, payload, { owner: options.owner, cacheDir: options.cacheDir ?? path.resolve(process.env.CACHE_DIR ?? 'cache'), allowedRoots: options.allowedRoots, assertLease, signal: controller.signal });
-      if (!queue.finish(job.id, { generated: 1 })) throw new Error('作业租约已失效');
+    } else if (job.type === 'thumbnails' || job.type === 'previews') {
+      const key = (db.prepare('SELECT dedupe_key FROM jobs WHERE id=?').get(job.id) as { dedupe_key: string | null }).dedupe_key ?? `job:${job.id}`;
+      const cacheDir = options.cacheDir ?? path.resolve(process.env.CACHE_DIR ?? 'cache');
+      const generated = await withMediaGenerationLock(db, options.owner, key, async (signal) => {
+        if (payload.mediaId && payload.sourceSize !== undefined && payload.sourceModified !== undefined && payload.variant) {
+          const source = { id: payload.mediaId, size: payload.sourceSize, modified_at: payload.sourceModified };
+          const cached = db.prepare(`SELECT 1 FROM cache_entries c JOIN files f ON f.id=c.media_id JOIN libraries l ON l.id=f.library_id AND l.enabled=1
+            WHERE c.cache_key=? AND f.size=? AND f.modified_at=?`).get(cacheKey(source, payload.variant), source.size, source.modified_at);
+          if (cached) {
+            const info = await lstat(cachePath(cacheDir, source, payload.variant)).catch(() => null);
+            if (info?.isFile() && !info.isSymbolicLink()) return false;
+          }
+        }
+        const generate = (inner: AbortSignal) => generateMediaCache(db, payload, { owner: options.owner, cacheDir, allowedRoots: options.allowedRoots, assertLease, signal: inner });
+        if (job.type === 'thumbnails') await withThumbnailSlot(db, options.owner, generate, { signal, assertLease });
+        else await generate(signal);
+        return true;
+      }, { signal: controller.signal, assertLease });
+      if (!queue.finish(job.id, { generated: generated ? 1 : 0 })) throw new Error('作业租约已失效');
     } else if (job.type === 'cache_prune') {
       const result = await pruneCache(db, options.cacheDir ?? path.resolve(process.env.CACHE_DIR ?? 'cache'), readSettings(db).cache.limitGB * 1024 ** 3, assertLease);
       if (!queue.finish(job.id, result)) throw new Error('作业租约已失效');
