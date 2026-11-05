@@ -18,7 +18,7 @@ import { withThumbnailSlot } from './ffmpeg-slots.ts';
 import { withMediaGenerationLock } from './media-lock.ts';
 
 export type WorkerOptions = { owner: string; allowedRoots: string[]; legacyDir: string; systemRoots: string[]; configuredMediaRoots?: string[]; cacheDir?: string; signal?: AbortSignal; hlsIdleMs?: number; log?: (level: 'info' | 'warn', message: string, ctx: Record<string, string>) => void };
-type Payload = { libraryId?: string | null; legacyImportId?: string; mediaId?: string; hlsSessionId?: string; sourceSize?: number; sourceModified?: number; variant?: Variant };
+type Payload = { libraryId?: string | null; legacyImportId?: string; mediaId?: string; hlsSessionId?: string; sourceSize?: number; sourceModified?: number; sourceGeneration?: number; variant?: Variant };
 const now = () => Math.floor(Date.now() / 1000);
 const childId = (parent: string, library: string) => `scan_${createHash('sha256').update(parent).update('\0').update(library).digest('base64url').slice(0, 24)}`;
 function enqueueScan(db: Database.Database, id: string, libraryId: string, legacyImportId?: string) {
@@ -150,9 +150,9 @@ export async function runNextJob(db: Database.Database, options: WorkerOptions):
       } else {
         const checkpoint = job.checkpoint ? JSON.parse(job.checkpoint) as { lastId?: string; queued?: number } : {};
         let lastId = checkpoint.lastId ?? ''; let queued = checkpoint.queued ?? 0;
-        const rows = db.prepare(`SELECT f.id,f.size,f.modified_at FROM files f JOIN libraries l ON l.id=f.library_id AND l.enabled=1
+        const rows = db.prepare(`SELECT f.id,f.size,f.modified_at,f.cache_generation FROM files f JOIN libraries l ON l.id=f.library_id AND l.enabled=1
           WHERE ${job.type === 'previews' ? "f.media_type='video' AND f.has_preview=0" : "f.media_type IN ('image','video')"} AND f.missing_at_ms IS NULL AND f.id>?
-          ${payload.libraryId ? 'AND f.library_id=?' : ''} ORDER BY f.id LIMIT 32`).all(...(payload.libraryId ? [lastId, payload.libraryId] : [lastId])) as { id: string; size: number; modified_at: number }[];
+          ${payload.libraryId ? 'AND f.library_id=?' : ''} ORDER BY f.id LIMIT 32`).all(...(payload.libraryId ? [lastId, payload.libraryId] : [lastId])) as { id: string; size: number; modified_at: number; cache_generation: number }[];
         for (const row of rows) {
           controller.signal.throwIfAborted();
           db.transaction(() => {
@@ -180,9 +180,9 @@ export async function runNextJob(db: Database.Database, options: WorkerOptions):
       const cacheDir = options.cacheDir ?? path.resolve(process.env.CACHE_DIR ?? 'cache');
       const generated = await withMediaGenerationLock(db, options.owner, key, async (signal) => {
         if (payload.mediaId && payload.sourceSize !== undefined && payload.sourceModified !== undefined && payload.variant) {
-          const source = { id: payload.mediaId, size: payload.sourceSize, modified_at: payload.sourceModified };
+          const source = { id: payload.mediaId, size: payload.sourceSize, modified_at: payload.sourceModified, cache_generation: payload.sourceGeneration ?? 0 };
           const cached = db.prepare(`SELECT 1 FROM cache_entries c JOIN files f ON f.id=c.media_id JOIN libraries l ON l.id=f.library_id AND l.enabled=1
-            WHERE c.cache_key=? AND f.size=? AND f.modified_at=? AND f.missing_at_ms IS NULL`).get(cacheKey(source, payload.variant), source.size, source.modified_at);
+            WHERE c.cache_key=? AND f.size=? AND f.modified_at=? AND f.cache_generation=? AND f.missing_at_ms IS NULL`).get(cacheKey(source, payload.variant), source.size, source.modified_at, source.cache_generation);
           if (cached) {
             const info = await lstat(cachePath(cacheDir, source, payload.variant)).catch(() => null);
             if (info?.isFile() && !info.isSymbolicLink()) return false;

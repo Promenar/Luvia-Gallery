@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { lstat, mkdir, opendir, readdir, realpath, rm, rmdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import type Database from 'better-sqlite3';
-import { hlsCacheKey, hlsDirectory } from '../core/hls.ts';
+import { hlsCacheKey, hlsDirectory, hlsId } from '../core/hls.ts';
 import type { HlsSession } from '../core/hls.ts';
 import { secureMediaPath } from '../core/paths.ts';
 import { publishJob } from '../core/job-view.ts';
@@ -13,18 +13,19 @@ function within(root: string, target: string): boolean {
   const relative = path.relative(root, target);
   return relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
 }
-async function account(db: Database.Database, cacheDir: string, session: HlsSession, generation: string, assertLease: () => void): Promise<void> {
+async function account(db: Database.Database, cacheDir: string, session: HlsSession, generation: string, assertLease: () => void, checkSource: () => Promise<void>, assertSource: () => void): Promise<void> {
   const directory = hlsDirectory(cacheDir, session.id, generation);
   let files: string[];
   try { files = await readdir(directory); } catch { return; }
   for (const name of files) {
     if (name !== 'index.m3u8' && !/^seg-\d{6}\.ts$/.test(name)) continue;
+    await checkSource();
     const filename = path.join(directory, name);
     let info;
     try { info = await lstat(filename); } catch { continue; }
     if (!info.isFile() || info.isSymbolicLink()) continue;
     db.transaction(() => {
-      assertLease();
+      assertLease(); assertSource();
       const active = db.prepare('SELECT last_access_at FROM hls_sessions WHERE id=? AND job_id=? AND generation=?')
         .get(session.id, session.job_id, generation) as { last_access_at: number } | undefined;
       if (!active) throw new Error('HLS 会话已经变化');
@@ -39,15 +40,22 @@ async function account(db: Database.Database, cacheDir: string, session: HlsSess
 export async function generateHls(db: Database.Database, sessionId: string, jobId: string, options: { owner: string; cacheDir: string; allowedRoots: string[]; assertLease: () => void; signal?: AbortSignal; idleMs?: number }): Promise<{ idle: number }> {
   const session = db.prepare('SELECT * FROM hls_sessions WHERE id=? AND job_id=?').get(sessionId, jobId) as HlsSession | undefined;
   if (!session) throw new Error('HLS 会话不存在');
-  const source = db.prepare(`SELECT f.id,f.relative_path,f.size,f.modified_at,f.playability,l.root FROM files f JOIN libraries l ON l.id=f.library_id
-    WHERE f.id=? AND f.media_type='video' AND f.missing_at_ms IS NULL AND l.enabled=1`).get(session.media_id) as { id: string; relative_path: string; size: number; modified_at: number; playability: string | null; root: string } | undefined;
-  if (!source || source.playability !== 'transcode' || source.size !== session.source_size || source.modified_at !== session.source_modified || !readSettings(db).transcode.enabled) throw new Error('视频不可转码');
+  const source = db.prepare(`SELECT f.id,f.relative_path,f.size,f.modified_at,f.cache_generation,f.mtime_ms,f.playability,l.root FROM files f JOIN libraries l ON l.id=f.library_id
+    WHERE f.id=? AND f.media_type='video' AND f.missing_at_ms IS NULL AND l.enabled=1`).get(session.media_id) as { id: string; relative_path: string; size: number; modified_at: number; cache_generation: number; mtime_ms: number | null; playability: string | null; root: string } | undefined;
+  if (!source || source.playability !== 'transcode' || source.size !== session.source_size || source.modified_at !== session.source_modified || hlsId(source, session.principal_hash) !== session.id || !readSettings(db).transcode.enabled) throw new Error('视频不可转码');
   const root = await realpath(source.root);
   const allowed = await Promise.all(options.allowedRoots.map((candidate) => realpath(candidate).catch(() => '')));
   if (!allowed.some((candidate) => candidate && within(candidate, root))) throw new Error('媒体库不在挂载内');
   const filename = await secureMediaPath(root, source.relative_path);
-  const before = await stat(filename);
-  if (before.size !== source.size || Math.floor(before.mtimeMs / 1000) !== source.modified_at) throw new Error('视频已变化');
+  const assertSource = () => {
+    if (!db.prepare('SELECT 1 FROM files WHERE id=? AND size=? AND modified_at=? AND cache_generation=? AND missing_at_ms IS NULL').get(source.id, source.size, source.modified_at, source.cache_generation)) throw new Error('视频已变化');
+  };
+  const checkSource = async () => {
+    const info = await stat(filename);
+    if (info.size !== source.size || Math.floor(info.mtimeMs / 1000) !== source.modified_at || (source.mtime_ms !== null && info.mtimeMs !== source.mtime_ms)) throw new Error('视频已变化');
+    assertSource();
+  };
+  await checkSource();
   let generation = '';
   const startGeneration = async () => {
     generation = randomUUID().replaceAll('-', '');
@@ -81,7 +89,7 @@ export async function generateHls(db: Database.Database, sessionId: string, jobI
       if (!tracking) {
         tracking = true;
         const trackedGeneration = generation;
-        pending = account(db, options.cacheDir, session, trackedGeneration, options.assertLease).catch(() => { if (generation === trackedGeneration) local.abort(); }).finally(() => { tracking = false; });
+        pending = account(db, options.cacheDir, session, trackedGeneration, options.assertLease, checkSource, assertSource).catch(() => { if (generation === trackedGeneration) local.abort(); }).finally(() => { tracking = false; });
       }
     } catch { local.abort(); }
   }, 1000);
@@ -105,12 +113,11 @@ export async function generateHls(db: Database.Database, sessionId: string, jobI
       }
     } else await encode(false);
     signal.throwIfAborted();
-    const after = await stat(filename);
-    if (after.size !== source.size || Math.floor(after.mtimeMs / 1000) !== source.modified_at) throw new Error('视频已变化');
+    await checkSource();
     clearInterval(timer); await pending;
-    await account(db, options.cacheDir, session, generation, options.assertLease);
+    await account(db, options.cacheDir, session, generation, options.assertLease, checkSource, assertSource);
     db.transaction(() => {
-      options.assertLease();
+      options.assertLease(); assertSource();
       if (!db.prepare("UPDATE hls_sessions SET state='ready' WHERE id=? AND job_id=? AND generation=?").run(session.id, jobId, generation).changes) throw new Error('HLS 会话已经变化');
     }).immediate();
     return { idle: 0 };
@@ -118,7 +125,7 @@ export async function generateHls(db: Database.Database, sessionId: string, jobI
     clearInterval(timer); await pending;
     if (idle && !options.signal?.aborted) {
       options.assertLease();
-      await account(db, options.cacheDir, session, generation, options.assertLease);
+      await account(db, options.cacheDir, session, generation, options.assertLease, checkSource, assertSource);
       db.prepare("UPDATE hls_sessions SET state='idle' WHERE id=? AND job_id=? AND generation=?").run(session.id, jobId, generation);
       return { idle: 1 };
     }

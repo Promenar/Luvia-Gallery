@@ -310,3 +310,23 @@ test('视频缩略图经 FFmpeg 抽帧与 sharp 生成，并发请求合并', as
     assert.ok((db.prepare('SELECT thumbhash FROM files WHERE id=?').get(id) as { thumbhash: string | null }).thumbhash);
   } finally { await app.close(); db.close(); await rm(root, { recursive: true, force: true }); await rm(cache, { recursive: true, force: true }); }
 });
+
+
+test('同秒同大小覆盖后视频预览不返回旧缓存', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'luvia-cache-version-')); const cache = await mkdtemp(path.join(tmpdir(), 'luvia-cache-version-cache-'));
+  const db = openDatabase(':memory:'); const app = await createApp({ db, legacyPending: false, cacheDir: cache });
+  try {
+    const source = path.join(root, 'a.mp4'); await writeFile(source, 'first'); await utimes(source, 1700000000.1, 1700000000.1);
+    db.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib','照片',?)").run(root);
+    await scanLibrary(db, { id: 'lib', root }, { allowedRoots: [root] });
+    const row = db.prepare('SELECT * FROM files').get() as { id: string; size: number; modified_at: number };
+    const { cachePath } = await import('../src/core/media-cache.ts'); const old = cachePath(cache, row, { kind: 'preview' });
+    await mkdir(path.dirname(old), { recursive: true }); await writeFile(old, 'old preview');
+    const setup = await app.inject({ method: 'POST', url: '/api/v2/auth/setup', payload: { username: 'admin', password: 'test password' } });
+    const headers = { cookie: (setup.headers['set-cookie'] as string).split(';')[0]! };
+    assert.equal((await app.inject({ url: `/api/v2/media/${row.id}/preview`, headers })).statusCode, 200);
+    await writeFile(source, 'other'); await utimes(source, 1700000000.9, 1700000000.9);
+    await scanLibrary(db, { id: 'lib', root }, { allowedRoots: [root] });
+    assert.equal((await app.inject({ url: `/api/v2/media/${row.id}/preview`, headers })).statusCode, 404);
+  } finally { await app.close(); db.close(); await rm(root, { recursive: true, force: true }); await rm(cache, { recursive: true, force: true }); }
+});

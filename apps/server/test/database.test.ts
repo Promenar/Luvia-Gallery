@@ -14,7 +14,7 @@ test('版本 22 升级保留媒体及关联数据并提供持久身份字段', a
     await copyFile(new URL('./fixtures/watch-v22.sqlite', import.meta.url), filename);
     const db = openDatabase(filename);
     try {
-      assert.equal(db.pragma('user_version', { simple: true }), 28);
+      assert.equal(db.pragma('user_version', { simple: true }), 29);
       assert.deepEqual(db.prepare("SELECT id,missing_at_ms,dev,ino,mtime_ms,head_hash FROM files WHERE id='f'").get(),
         { id: 'f', missing_at_ms: null, dev: null, ino: null, mtime_ms: null, head_hash: null });
       db.prepare("UPDATE files SET dev=?,ino=?,mtime_ms=?,head_hash=? WHERE id='f'").run('18446744073709551615', '18446744073709551614', 1234.5, 'abc');
@@ -37,7 +37,7 @@ test('数据库迁移持久且可重复，支持只读连接', async () => {
   try {
     const db = openDatabase(filename);
     assert.equal(db.pragma('journal_mode', { simple: true }), 'wal');
-    assert.equal(db.pragma('user_version', { simple: true }), 28);
+    assert.equal(db.pragma('user_version', { simple: true }), 29);
     db.prepare("INSERT INTO libraries (id, name, root) VALUES ('lib1', '测试', '/test')").run();
     db.close();
     const writable = openDatabase(filename);
@@ -146,7 +146,7 @@ test('已有版本 1 数据库升级时保留数据并创建扫描锁表', async
   old.close();
   try {
     const db = openDatabase(filename);
-    assert.equal(db.pragma('user_version', { simple: true }), 28);
+    assert.equal(db.pragma('user_version', { simple: true }), 29);
     assert.equal((db.prepare('SELECT count(*) AS n FROM libraries').get() as { n: number }).n, 1);
     db.prepare("INSERT INTO scan_locks(library_id,owner,acquired_at) VALUES ('lib1','owner',1)").run();
     db.close();
