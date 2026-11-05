@@ -982,7 +982,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
         WHERE f.id=? AND f.size=? AND f.modified_at=? AND f.playability='transcode'`).get(id, row.size, row.modified_at) || !readSettings(db).transcode.enabled) fail(404, 'NOT_FOUND', '媒体不可访问');
     };
     check();
-    const principal = digest('share:media');
+    const principal = `share:${digest(initial.share.id)}`;
     return hlsResponse(req, reply, row, principal, resource, check);
   });
   type DownloadTarget = ReturnType<typeof endpoints.createDownload.body.parse>;
