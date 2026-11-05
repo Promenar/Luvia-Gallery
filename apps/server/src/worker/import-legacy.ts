@@ -5,7 +5,7 @@ import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import jwt from 'jsonwebtoken';
 import { defaultPreferences, WallpaperConfig } from '@luvia/contracts';
-import { mediaId, virtualPath } from '../core/paths.ts';
+import { mediaId, pathAllowed, virtualPath } from '../core/paths.ts';
 import { hashPassword } from '../core/password.ts';
 
 type LegacyUser = { username: string; password: string; isAdmin?: boolean; allowedPaths?: string[]; wallpaperToken?: string; wallpaperConfig?: { interval?: unknown; showVideos?: unknown } | null };
@@ -189,15 +189,25 @@ export function reconcileLegacyFavorites(db: DatabaseType.Database, options: { f
     db.transaction(() => {
       options.assertLease?.();
       for (const pending of rows) {
+        const user = db.prepare('SELECT role,allowed_paths FROM users WHERE id=?').get(pending.user_id) as { role: string; allowed_paths: string | null } | undefined;
+        if (!user) continue;
+        let allowed: string[] | null = null;
+        if (user.role !== 'admin' && user.allowed_paths !== null) {
+          try {
+            const parsed: unknown = JSON.parse(user.allowed_paths);
+            allowed = Array.isArray(parsed) && parsed.every((value) => typeof value === 'string') ? parsed : [];
+          } catch { allowed = []; }
+        }
         let itemId: string | undefined;
         for (const root of roots) {
           const match = pending.absolute_path ? mappedPath(pending.absolute_path, [root]) : undefined;
           if (match && pending.item_type === 'file' && match.relative) {
             const id = mediaId(match.root.id, match.relative);
-            if (db.prepare('SELECT 1 FROM files WHERE id=?').get(id)) itemId = id;
+            const file = db.prepare('SELECT folder FROM files WHERE id=?').get(id) as { folder: string } | undefined;
+            if (file && pathAllowed(file.folder, allowed)) itemId = id;
           } else if (match && pending.item_type === 'folder') {
             const folder = virtualPath(match.root.id, match.relative);
-            if (db.prepare('SELECT 1 FROM folders WHERE path=?').get(folder)) itemId = folder;
+            if (pathAllowed(folder, allowed) && db.prepare('SELECT 1 FROM folders WHERE path=?').get(folder)) itemId = folder;
           }
           if (itemId) break;
         }

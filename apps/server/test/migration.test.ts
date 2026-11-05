@@ -173,3 +173,26 @@ test('嵌套媒体库的旧收藏优先匹配已启用且实际收录媒体的�
     assert.deepEqual(paths.map((row) => row.library_id), ['child', 'parent']);
   } finally { db.close(); await rm(dir, { recursive: true, force: true }); }
 });
+
+test('嵌套媒体库的旧收藏只匹配用户有权访问的目录', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'luvia-old-nested-permission-')); const child = path.join(dir, 'sub');
+  await mkdir(child); await writeFile(path.join(child, 'a.jpg'), 'synthetic image');
+  const db = openDatabase(':memory:');
+  try {
+    db.prepare("INSERT INTO users(id,username,password_hash,role,allowed_paths,preferences,created_at) VALUES ('u','user','hash','user',?,'{}',1)").run(JSON.stringify(['parent']));
+    db.prepare("INSERT INTO libraries(id,name,root,enabled) VALUES ('parent','父库',?,1),('child','子库',?,1)").run(dir, child);
+    await scanLibrary(db, { id: 'parent', root: dir }, { allowedRoots: [dir] });
+    await scanLibrary(db, { id: 'child', root: child }, { allowedRoots: [dir] });
+    const addPending = (key: string) => db.prepare("INSERT INTO legacy_favorites_pending(source_key,username,user_id,legacy_item,absolute_path,item_type,created_at,status) VALUES (?,'user','u','old',?,'file',1,'unmatched')").run(key, path.join(child, 'a.jpg'));
+    addPending('one');
+    assert.deepEqual(legacyImport.reconcileLegacyFavorites(db, { finalize: true }), { imported: 1, pending: 0, unmatched: 0 });
+    const first = db.prepare("SELECT f.library_id FROM favorites v JOIN files f ON f.id=v.item_id WHERE v.user_id='u'").get() as { library_id: string };
+    assert.equal(first.library_id, 'parent');
+    db.prepare("UPDATE users SET allowed_paths='[]' WHERE id='u'").run(); addPending('two');
+    assert.deepEqual(legacyImport.reconcileLegacyFavorites(db, { finalize: true }), { imported: 1, pending: 0, unmatched: 1 });
+    db.prepare("UPDATE users SET allowed_paths=? WHERE id='u'").run(JSON.stringify(['child']));
+    assert.deepEqual(legacyImport.reconcileLegacyFavorites(db, { finalize: true }), { imported: 2, pending: 0, unmatched: 0 });
+    const libraries = db.prepare("SELECT f.library_id FROM favorites v JOIN files f ON f.id=v.item_id WHERE v.user_id='u' ORDER BY f.library_id").all() as { library_id: string }[];
+    assert.deepEqual(libraries.map((row) => row.library_id), ['child', 'parent']);
+  } finally { db.close(); await rm(dir, { recursive: true, force: true }); }
+});
