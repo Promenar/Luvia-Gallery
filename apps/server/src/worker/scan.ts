@@ -8,10 +8,13 @@ import { statFields } from '../watch/file-info.ts';
 import { readSettings } from '../core/settings.ts';
 import { cleanupDeletedMediaCache } from './cache-prune.ts';
 import { moveDirectoryPaths } from '../core/directory-move.ts';
+import { confirmLibraryMount } from '../watch/root-guard.ts';
+import { publishScanChanges } from './watch-events.ts';
 
 type Options = {
   allowedRoots: string[]; openDir?: typeof opendir; signal?: AbortSignal;
   batchSize?: number; statConcurrency?: number; owner?: string; jobId?: string; jobLeaseToken?: string; clock?: () => number; cacheDir?: string;
+  mount?: (root: string) => Promise<string | null>;
 };
 type Candidate = { relative: string; size: number; mtime: number; mtimeMs: number; dev: string; ino: string; movedId: string | null; fromPath?: string };
 type ScanResult = { added: number; removed: number; errors: number };
@@ -77,6 +80,16 @@ async function scanWithLock(db: Database.Database, library: { id: string; root: 
   const concurrency = Math.max(1, Math.min(32, options.statConcurrency ?? 8));
   const root = await realpath(library.root);
   const rootIdentity = await stat(root, { bigint: true });
+  const initialMount = await confirmLibraryMount(db, library, { ...options, assertLease });
+  if (!initialMount.available) {
+    db.prepare('INSERT OR IGNORE INTO library_watch_state(library_id) VALUES (?)').run(library.id);
+    db.prepare("UPDATE library_watch_state SET state='degraded',degraded_reason=? WHERE library_id=?").run(initialMount.reason, library.id);
+    throw new Error(initialMount.reason ?? '媒体库挂载身份未确认');
+  }
+  const checkMount = async () => {
+    const current = await confirmLibraryMount(db, library, { ...options, allowChange: false });
+    return current.available && current.identity === initialMount.identity;
+  };
   const allowedRoots = await Promise.all(options.allowedRoots.map((allowed) => realpath(allowed)));
   if (!allowedRoots.some((allowed) => within(allowed, root))) throw new Error('扫描路径不在允许的挂载根目录内');
   const libraryRow = db.prepare('SELECT name,exclude FROM libraries WHERE id=?').get(library.id) as { name: string; exclude: string } | undefined;
@@ -92,6 +105,7 @@ async function scanWithLock(db: Database.Database, library: { id: string; root: 
       let previous = db.prepare('SELECT * FROM scan_runs WHERE job_id=?').get(jobId) as ScanRun | undefined;
       const active = db.prepare('SELECT marker FROM scan_current_markers WHERE library_id=?').get(library.id) as { marker: string } | undefined;
       if (previous && (!active || previous.marker !== active.marker) && !previous.complete) {
+        publishScanChanges(db, jobId, library.id, false);
         db.prepare('DELETE FROM scan_runs WHERE job_id=?').run(jobId); previous = undefined;
       }
       if (previous) {
@@ -109,6 +123,9 @@ async function scanWithLock(db: Database.Database, library: { id: string; root: 
   }
   db.transaction(() => {
     assertLease();
+    const prior = db.prepare(`SELECT r.job_id FROM scan_current_markers c JOIN scan_runs r ON r.library_id=c.library_id AND r.marker=c.marker
+      WHERE c.library_id=? AND c.marker<>?`).all(library.id, marker) as { job_id: string }[];
+    for (const run of prior) publishScanChanges(db, run.job_id, library.id, false);
     db.prepare('INSERT INTO scan_current_markers(library_id,marker) VALUES (?,?) ON CONFLICT(library_id) DO UPDATE SET marker=excluded.marker').run(library.id, marker);
     db.prepare('DELETE FROM scan_conflicts WHERE library_id=? AND marker<>?').run(library.id, marker);
     db.prepare('DELETE FROM scan_change_directories WHERE library_id=? AND marker<>?').run(library.id, marker);
@@ -129,8 +146,19 @@ async function scanWithLock(db: Database.Database, library: { id: string; root: 
   const grace = readSettings(db).libraries.missingGraceDays * 86_400_000;
   const scanNow = () => options.clock ? options.clock() * 1000 : Date.now();
   const insertChange = db.prepare('INSERT INTO library_changes(library_id,ts,kind,path,from_path,is_dir,media_id,source) VALUES (?,?,?,?,?,?,?,\'scan\')');
+  const eventCount = jobId ? db.prepare(`INSERT INTO scan_event_counts(job_id,added,removed,updated,moved) VALUES (?,?,?,?,?)
+    ON CONFLICT(job_id) DO UPDATE SET added=added+excluded.added,removed=removed+excluded.removed,updated=updated+excluded.updated,moved=moved+excluded.moved`) : null;
+  const eventFolder = jobId ? db.prepare('INSERT OR IGNORE INTO scan_event_folders(job_id,path) VALUES (?,?)') : null;
+  const countChange = (kind: 'added' | 'updated' | 'moved' | 'missing' | 'restored' | 'removed', relative: string, from: string | null, isDir: boolean) => {
+    if (!jobId) return;
+    eventFolder!.run(jobId, virtualPath(library.id, isDir ? relative : parentOfDirectory(relative)));
+    if (from !== null) eventFolder!.run(jobId, virtualPath(library.id, isDir ? from : parentOfDirectory(from)));
+    if (isDir) return;
+    eventCount!.run(jobId, Number(kind === 'added' || kind === 'restored'), Number(kind === 'missing'), Number(kind === 'updated'), Number(kind === 'moved'));
+  };
   const logChange = (kind: 'added' | 'updated' | 'moved' | 'missing' | 'restored' | 'removed', relative: string, from: string | null, isDir: boolean, id: string | null) => {
     insertChange.run(library.id, scanNow(), kind, relative, from, isDir ? 1 : 0, id);
+    countChange(kind, relative, from, isDir);
   };
   const changedDirectory = db.prepare('SELECT 1 FROM scan_change_directories WHERE library_id=? AND marker=? AND relative_path=?');
   const hasChangedAncestor = (relative: string): boolean => {
@@ -141,6 +169,8 @@ async function scanWithLock(db: Database.Database, library: { id: string; root: 
     }
     return false;
   };
+  const pendingMove = db.prepare('SELECT 1 FROM scan_pending_media_moves WHERE file_id=?');
+  const clearPendingMove = db.prepare('DELETE FROM scan_pending_media_moves WHERE file_id=?');
   const missingFolder = db.prepare('SELECT 1 FROM folders WHERE path=? AND missing_at_ms IS NOT NULL');
   const removeFile = (id: string) => {
     db.prepare("DELETE FROM favorites WHERE item_type='file' AND item_id=?").run(id);
@@ -209,19 +239,30 @@ async function scanWithLock(db: Database.Database, library: { id: string; root: 
         const id = byPath?.id ?? moved?.id ?? (existing.get(preferred) ? randomUUID() : preferred);
         const kind = typeOf(file.relative)!;
         const dirname = path.posix.dirname(file.relative);
-        const before = db.prepare('SELECT relative_path,size,modified_at,mtime_ms,missing_at_ms FROM files WHERE id=?').get(id) as { relative_path: string; size: number; modified_at: number; mtime_ms: number | null; missing_at_ms: number | null } | undefined;
+        const before = db.prepare('SELECT relative_path,size,modified_at,mtime_ms,missing_at_ms,dev,ino FROM files WHERE id=?').get(id) as { relative_path: string; size: number; modified_at: number; mtime_ms: number | null; missing_at_ms: number | null; dev: string | null; ino: string | null } | undefined;
         if (!before) result.added++;
         upsert.run({ id, library_id: library.id, relative_path: file.relative, folder: virtualPath(library.id, dirname === '.' ? '' : dirname),
           name: path.posix.basename(file.relative), mime: lookup(file.relative) || 'application/octet-stream', media_type: kind,
           size: file.size, mtime: file.mtime, marker, dev: file.dev, ino: file.ino, mtime_ms: file.mtimeMs });
-        if (!hasChangedAncestor(parentOfDirectory(file.relative))) {
+        {
+          const suppressed = hasChangedAncestor(parentOfDirectory(file.relative));
+          const emit = (kind: 'added' | 'updated' | 'moved' | 'restored', from: string | null) => {
+            if (suppressed) countChange(kind, file.relative, from, false);
+            else logChange(kind, file.relative, from, false, id);
+          };
           const oldPath = file.fromPath ?? before?.relative_path;
-          if (!before) logChange('added', file.relative, null, false, id);
+          if (!before) emit('added', null);
           else {
-            if (before.missing_at_ms !== null) logChange('restored', file.relative, null, false, id);
-            if (oldPath !== file.relative) logChange('moved', file.relative, oldPath ?? null, false, id);
-            else if (before.missing_at_ms === null && (before.size !== file.size || before.modified_at !== file.mtime || before.mtime_ms !== null && before.mtime_ms !== file.mtimeMs)) logChange('updated', file.relative, null, false, id);
+            if (before.missing_at_ms !== null) emit('restored', null);
+            if (oldPath !== file.relative) emit('moved', oldPath ?? null);
+            else {
+              if (pendingMove.get(id) &&
+                ((before.dev && before.ino && before.dev === file.dev && before.ino === file.ino) ||
+                  (!before.dev || !before.ino) && before.size === file.size && before.mtime_ms === file.mtimeMs)) countChange('moved', file.relative, null, false);
+              if (before.missing_at_ms === null && (before.size !== file.size || before.modified_at !== file.mtime || before.mtime_ms !== null && before.mtime_ms !== file.mtimeMs)) emit('updated', null);
+            }
           }
+          if (jobId) clearPendingMove.run(id);
         }
         if (!allowDefer) db.prepare('DELETE FROM scan_conflicts WHERE library_id=? AND marker=? AND relative_path=?').run(library.id, marker, file.relative);
       }
@@ -258,6 +299,14 @@ async function scanWithLock(db: Database.Database, library: { id: string; root: 
             assertLease();
             const current = db.prepare('SELECT dev,ino,missing_at_ms FROM folders WHERE path=? AND library_id=?').get(previous.path, library.id) as { dev: string | null; ino: string | null; missing_at_ms: number | null } | undefined;
             if (!current || current.dev !== dirInfo!.dev || current.ino !== dirInfo!.ino || current.missing_at_ms !== previous.missing_at_ms || db.prepare('SELECT 1 FROM folders WHERE path=?').get(target)) throw new Error('目录索引已变化');
+            if (jobId) {
+              db.prepare(`INSERT OR IGNORE INTO scan_event_folders(job_id,path) SELECT ?,path FROM folders
+                WHERE library_id=? AND (path=? OR (path>=? AND path<?))`).run(jobId, library.id, previous.path, `${previous.path}/`, `${previous.path}0`);
+              db.prepare(`INSERT OR IGNORE INTO scan_event_folders(job_id,path) SELECT ?,? || substr(path,length(?)+1) FROM folders
+                WHERE library_id=? AND (path=? OR (path>=? AND path<?))`).run(jobId, target, previous.path, library.id, previous.path, `${previous.path}/`, `${previous.path}0`);
+            }
+            db.prepare('INSERT OR IGNORE INTO scan_pending_media_moves(file_id) SELECT id FROM files WHERE library_id=? AND relative_path>=? AND relative_path<?')
+              .run(library.id, `${oldRelative}/`, `${oldRelative}0`);
             moveDirectoryPaths(db, library.id, oldRelative, relativeDir, virtualPath(library.id, parentOfDirectory(relativeDir)));
             if (!hasChangedAncestor(parentOfDirectory(relativeDir))) {
               if (previous.missing_at_ms !== null) logChange('restored', relativeDir, null, true, null);
@@ -347,7 +396,7 @@ async function scanWithLock(db: Database.Database, library: { id: string; root: 
   const rootAvailable = async () => {
     try {
       const finalRoot = await realpath(library.root); const finalIdentity = await stat(finalRoot, { bigint: true });
-      return finalRoot === root && finalIdentity.dev === rootIdentity.dev && finalIdentity.ino === rootIdentity.ino;
+      return finalRoot === root && finalIdentity.dev === rootIdentity.dev && finalIdentity.ino === rootIdentity.ino && await checkMount();
     } catch { return false; }
   };
   if (result.errors === 0 && !(await rootAvailable())) result.errors++;
@@ -446,7 +495,9 @@ async function scanWithLock(db: Database.Database, library: { id: string; root: 
         assertLease(); const rows = markFiles.all(library.id, marker) as { id: string; relative_path: string; folder: string }[];
         for (const row of rows) {
           if (!missingFolder.get(row.folder)) logChange('missing', row.relative_path, null, false, row.id);
+          else countChange('missing', row.relative_path, null, false);
           db.prepare('UPDATE files SET missing_at_ms=? WHERE id=? AND missing_at_ms IS NULL').run(nowMs, row.id);
+          clearPendingMove.run(row.id);
         }
         return rows.length;
       }).immediate();
@@ -486,7 +537,10 @@ async function materializeFolders(db: Database.Database, libraryId: string, asse
     if (!parent) continue;
     parent.total += folder.total;
     if (folder.latest !== null && (parent.latest === null || folder.latest > parent.latest)) parent.latest = folder.latest;
-    if (folder.coverAt !== null && (parent.coverAt === null || folder.coverAt > parent.coverAt)) { parent.cover = folder.cover; parent.coverAt = folder.coverAt; }
+    if (folder.coverAt !== null && (parent.coverAt === null || folder.coverAt > parent.coverAt ||
+      (folder.coverAt === parent.coverAt && folder.cover !== null && (parent.cover === null || folder.cover < parent.cover)))) {
+      parent.cover = folder.cover; parent.coverAt = folder.coverAt;
+    }
   }
   const update = db.prepare('UPDATE folders SET direct_media_count=?,media_count=?,child_count=?,cover_file_id=?,latest_at=? WHERE path=?');
   for (let offset = 0; offset < folders.length; offset += 256) {

@@ -59,3 +59,38 @@ test('管理设置深度合并并提供安全默认值', async () => {
     assert.deepEqual(updated.scan, initial.scan);
   } finally { await app.close(); db.close(); }
 });
+
+test('媒体库监控设置持久保存并在接口返回', async () => {
+  const base = await mkdtemp(path.join(tmpdir(), 'luvia-watch-settings-'));
+  const db = openDatabase(':memory:');
+  const app = await createApp({ db, legacyPending: false, mounts: async () => [{ containerPath: base, hostPath: null, kind: 'candidate', libraryId: null, readOnly: true, mediaEstimate: null }], systemRoots: [] });
+  try {
+    const setup = await app.inject({ method: 'POST', url: '/api/v2/auth/setup', headers: { 'x-luvia-request': '1' }, payload: { username: 'admin', password: 'test password' } });
+    const cookie = (setup.headers['set-cookie'] as string).split(';')[0]!; const headers = { cookie, 'x-luvia-request': '1' };
+    const response = await app.inject({ method: 'POST', url: '/api/v2/admin/libraries', headers, payload: { name: '照片', root: base, watch: { mode: 'poll', pollIntervalSec: 90 } } });
+    assert.equal(response.statusCode, 200); const created = Library.parse(response.json());
+    assert.equal(created.watch.mode, 'poll'); assert.equal(created.watch.pollIntervalSec, 90);
+    const updated = await app.inject({ method: 'PATCH', url: `/api/v2/admin/libraries/${created.id}`, headers, payload: { watch: { mode: 'off' } } });
+    assert.equal(updated.statusCode, 200); assert.equal(Library.parse(updated.json()).watch.mode, 'off');
+    const list = await app.inject({ method: 'GET', url: '/api/v2/admin/libraries', headers });
+    assert.equal(Library.parse(list.json().libraries[0]).watch.pollIntervalSec, 90);
+  } finally { await app.close(); db.close(); await rm(base, { recursive: true, force: true }); }
+});
+
+test('媒体库接口返回持有租约的运行状态及成功对账时间', async () => {
+  const db = openDatabase(':memory:'); const app = await createApp({ db, legacyPending: false });
+  try {
+    db.prepare("INSERT INTO libraries(id,name,root,last_scan_at,watch_mode) VALUES ('lib','照片','/lib',1700000000,'watch')").run();
+    db.prepare("INSERT INTO library_watch_state(library_id,state,watched_dirs,last_event_at,degraded_reason) VALUES ('lib','watching',12,'2026-01-01T00:00:00.000Z',NULL)").run();
+    db.prepare("INSERT INTO watch_leases VALUES ('lib','worker','token',unixepoch()+30)").run();
+    const setup = await app.inject({ method: 'POST', url: '/api/v2/auth/setup', headers: { 'x-luvia-request': '1' }, payload: { username: 'admin', password: 'test password' } });
+    const cookie = (setup.headers['set-cookie'] as string).split(';')[0]!;
+    const res = await app.inject({ method: 'GET', url: '/api/v2/admin/libraries', headers: { cookie } });
+    const watch = Library.parse(res.json().libraries[0]).watch;
+    assert.equal(watch.state, 'watching'); assert.equal(watch.watchedDirs, 12); assert.equal(watch.lastEventAt, '2026-01-01T00:00:00.000Z');
+    assert.equal(watch.lastReconcileAt, new Date(1700000000 * 1000).toISOString());
+    db.prepare("UPDATE watch_leases SET lease_expires_at=0 WHERE library_id='lib'").run();
+    const stale = await app.inject({ method: 'GET', url: '/api/v2/admin/libraries', headers: { cookie } });
+    assert.equal(Library.parse(stale.json().libraries[0]).watch.state, 'starting');
+  } finally { await app.close(); db.close(); }
+});

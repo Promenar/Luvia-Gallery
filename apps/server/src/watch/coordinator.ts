@@ -21,20 +21,22 @@ import type { FileSnapshot } from './stability.ts';
 import { ChangeThrottle } from './throttle.ts';
 import { NodeFsWatcher } from './watcher.ts';
 import type { PathEvent, Watcher } from './watcher.ts';
+import { ScanLockedError } from './scan-lock-error.ts';
 
 export interface IndexedRecord extends MoveCandidate { missingAt: number | null }
 export interface LibraryIndexPort {
   /** 路径均为媒体库内相对路径；目录读取包含缺失记录。 */
   readDirectory(directory: string): Promise<IndexedRecord[]>;
+  readSubdirectories(directory: string): Promise<string[]>;
   findMissingCandidates(candidate: MoveCandidate): Promise<IndexedRecord[]>;
   writeAdded(entry: MoveCandidate): Promise<string | null>;
   writeUpdated(old: IndexedRecord, entry: MoveCandidate): Promise<void>;
   /** 目录移动须原子改写子孙路径并保留各自缺失状态。 */
-  writeMoved(old: IndexedRecord, entry: MoveCandidate): Promise<void>;
+  writeMoved(old: IndexedRecord, entry: MoveCandidate): Promise<number>;
   /** 目录缺失须使所有子孙进入不可见的缺失状态。 */
-  writeMissing(old: IndexedRecord, at: number): Promise<void>;
+  writeMissing(old: IndexedRecord, at: number): Promise<number>;
   /** 目录恢复时保留子孙缺失状态，直至各子项重新被对账确认。 */
-  writeRestored(old: IndexedRecord, entry: MoveCandidate): Promise<void>;
+  writeRestored(old: IndexedRecord, entry: MoveCandidate): Promise<number>;
   /** 目录清理须同时清理其仍缺失的子孙。 */
   writeRemoved(old: IndexedRecord): Promise<void>;
   appendChange(change: WatchLibraryChange): Promise<void>;
@@ -47,6 +49,7 @@ type Candidate = MoveCandidate & { source: Source };
 type Options = {
   libraryId: string; root: string; exclude: string[]; port: LibraryIndexPort; missingGraceDays: number;
   requested?: LibraryWatch['mode']; fsType?: string | null; dirCount?: number; quota?: number | null; pollIntervalSec?: number;
+  currentFsType?: () => string | null;
   clock?: Clock; watcher?: Watcher; guard?: RootGuard; onError?: (error: unknown) => void;
 };
 const extensions = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.avif', '.heic', '.heif', '.tif', '.tiff', '.bmp', '.mp4', '.m4v', '.mkv', '.mov', '.webm', '.avi', '.wmv', '.mpeg', '.mpg', '.mp3', '.wav', '.flac', '.m4a', '.aac', '.ogg', '.wma', '.opus']);
@@ -64,17 +67,24 @@ export class WatchCoordinator {
   private readonly matcher: MoveMatcher;
   private readonly throttle: ChangeThrottle;
   private tail: Promise<void> = Promise.resolve();
+  private diskTail: Promise<void> = Promise.resolve();
   private started = false;
   private stopping = false;
   private pollTimer: unknown = null;
   private state: LibraryWatch['state'] = 'starting';
+  private selectedState: LibraryWatch['state'] = 'starting';
+  private selectedReason: string | null = null;
+  private fsType: string | null;
+  private rootUnavailable = false;
+  private watcherActive = false;
   private degradedReason: string | null = null;
   private lastEventAt: string | null = null;
   private lastReconcileAt: string | null = null;
   private readonly pendingSources = new Map<string, Source>();
+  private readonly provisionalRetries = new Set<string>();
 
   constructor(options: Options) {
-    this.options = options; this.clock = options.clock ?? systemClock;
+    this.options = options; this.clock = options.clock ?? systemClock; this.fsType = options.fsType ?? null;
     this.watcher = options.watcher ?? new NodeFsWatcher(options.root);
     this.guard = options.guard ?? new RootGuard({ root: options.root });
     this.dirty = new DirtyQueue({ exclude: options.exclude, clock: this.clock, onReady: (dirs) => {
@@ -82,14 +92,14 @@ export class WatchCoordinator {
     } });
     this.stable = new StabilityTracker({ clock: this.clock,
       stat: async (relative) => { const item = await this.statEntry(relative); return item && !item.isDir ? item : null; },
-      onStable: (relative, snapshot) => { void this.run(() => this.onStable(relative, snapshot)).catch(() => {}); },
-      onDropped: (relative) => this.pendingSources.delete(relative),
+      onStable: (relative, snapshot) => { void this.run(() => this.onStable(relative, snapshot), [parentOf(relative)]).catch(() => {}); },
+      onDropped: (relative) => { this.pendingSources.delete(relative); this.provisionalRetries.delete(relative); },
       onError: (error) => this.options.onError?.(error),
     });
     this.matcher = new MoveMatcher({ clock: this.clock,
-      onMoved: (from, to) => { void this.run(() => this.applyMoved(from as Candidate, to as Candidate)).catch(() => {}); },
-      onMissing: (item) => { void this.run(() => this.applyMissing(item as Candidate)).catch(() => {}); },
-      onAdded: (item) => { void this.run(() => this.applyAdded(item as Candidate)).catch(() => {}); },
+      onMoved: (from, to) => { void this.run(() => this.applyMoved(from as Candidate, to as Candidate), [parentOf(from.path), parentOf(to.path)]).catch(() => {}); },
+      onMissing: (item) => { void this.run(() => this.applyMissing(item as Candidate), [parentOf(item.path)]).catch(() => {}); },
+      onAdded: (item) => { void this.run(() => item.mediaId === null ? this.applyAdded(item as Candidate) : this.finalizeAdded(item as Candidate), [parentOf(item.path)]).catch(() => {}); },
     });
     this.throttle = new ChangeThrottle({ libraryId: options.libraryId, clock: this.clock,
       publish: (event) => { void this.run(() => this.options.port.publishEvent(event)).catch(() => {}); },
@@ -101,24 +111,22 @@ export class WatchCoordinator {
     this.started = true; this.stopping = false;
     const decision = decideWatchMode({ requested: this.options.requested ?? 'auto', fsType: this.options.fsType ?? null,
       dirCount: this.options.dirCount ?? 0, quota: this.options.quota ?? null, pollIntervalSec: this.options.pollIntervalSec });
-    this.state = decision.state; this.degradedReason = decision.degradedReason;
+    this.state = decision.state; this.degradedReason = decision.degradedReason; this.selectedState = decision.state; this.selectedReason = decision.degradedReason;
     if (!(await this.checkRoot())) {
-      if (this.state !== 'off') { this.state = (this.options.requested === 'watch') ? 'degraded' : 'polling'; this.degradedReason = '媒体库根目录不可用，等待恢复后全量对账'; this.schedulePoll(); }
+      if (this.selectedState !== 'off') this.schedulePoll();
       return;
     }
     if (this.state !== 'off') await this.options.port.requestFullReconcile('startup');
     if (this.state === 'watching') {
-      try {
-        this.watcher.start({ onEvent: (event) => { void this.run(() => this.onEvent(event)).catch(() => {}); },
-          onError: (error) => { void this.run(() => this.watchError(error)).catch(() => {}); },
-          onOverflow: () => { void this.run(() => this.options.port.requestFullReconcile('overflow')).catch(() => {}); } });
-      } catch (error) { await this.run(() => this.watchError(error)); }
+      await this.startWatcher();
     } else if (this.state === 'polling' || this.state === 'degraded') this.schedulePoll();
   }
   async stop(): Promise<void> {
-    this.stopping = true; this.watcher.stop(); this.dirty.stop(); this.stable.stop(); this.matcher.stop(); this.throttle.stop();
+    this.stopping = true; this.watcher.stop(); this.watcherActive = false;
+    await this.idle();
+    this.dirty.stop(); this.stable.stop(); this.matcher.stop(); this.throttle.stop();
     if (this.pollTimer !== null) this.clock.clearTimeout(this.pollTimer); this.pollTimer = null;
-    await this.idle(); this.pendingSources.clear(); this.started = false;
+    this.pendingSources.clear(); this.provisionalRetries.clear(); this.started = false;
   }
   async idle(): Promise<void> {
     while (true) { await this.stable.idle(); const current = this.tail; await current; await this.stable.idle(); if (this.tail === current) return; }
@@ -130,38 +138,86 @@ export class WatchCoordinator {
   }
   async checkRoot(): Promise<boolean> {
     const status = await this.guard.check();
+    if (this.stopping) return false;
+    if (status.state === 'unavailable') {
+      this.rootUnavailable = true; this.state = 'degraded'; this.degradedReason = '媒体库根目录不可用或挂载身份不符，等待恢复';
+      if (this.watcherActive) { this.watcher.stop(); this.watcherActive = false; }
+      return false;
+    }
+    const fsType = this.options.currentFsType?.() ?? this.fsType;
+    if (fsType !== this.fsType) {
+      this.fsType = fsType;
+      const decision = decideWatchMode({ requested: this.options.requested ?? 'auto', fsType,
+        dirCount: this.options.dirCount ?? 0, quota: this.options.quota ?? null, pollIntervalSec: this.options.pollIntervalSec });
+      this.selectedState = decision.state; this.selectedReason = decision.degradedReason;
+      if (this.watcherActive && decision.state !== 'watching') { this.watcher.stop(); this.watcherActive = false; }
+      this.rootUnavailable = true;
+    }
+    if (this.rootUnavailable) {
+      this.rootUnavailable = false; this.state = this.selectedState; this.degradedReason = this.selectedReason;
+      if (this.state === 'watching') {
+        if (this.pollTimer !== null) this.clock.clearTimeout(this.pollTimer);
+        this.pollTimer = null;
+        if (this.started && !this.stopping) await this.startWatcher();
+      } else if (this.started && !this.stopping && this.state !== 'off') this.schedulePoll();
+    }
     if (status.needsFullReconcile) await this.options.port.requestFullReconcile('root-recovered');
     return status.state === 'available';
+  }
+  private async startWatcher(): Promise<void> {
+    if (this.watcherActive) return;
+    try {
+      this.watcherActive = true;
+      this.watcher.start({ onEvent: (event) => { const relative = event.path === null ? null : normalizeRelative(event.path);
+        void this.run(() => this.onEvent(event), relative === null ? [] : [parentOf(relative)]).catch(() => {}); },
+        onError: (error) => { void this.run(() => this.watchError(error)).catch(() => {}); },
+        onOverflow: () => { void this.run(() => this.options.port.requestFullReconcile('overflow')).catch(() => {}); } });
+    } catch (error) { this.watcherActive = false; await this.watchError(error); }
   }
   reconcileDirectory(directory: string, source: Source = 'watch'): Promise<void> {
     const relative = normalizeRelative(directory);
     if (relative === null || excluded(relative, this.options.exclude, true)) return Promise.reject(new Error('无效的对账目录'));
-    return this.run(() => this.reconcile(relative, source));
+    return this.run(() => this.reconcile(relative, source), [relative]);
   }
-  private run(work: () => Promise<void>): Promise<void> {
+  private run(work: () => Promise<void>, dirtyDirectories: string[] = []): Promise<void> {
     const task = this.tail.then(async () => { if (!this.stopping) await work(); });
-    this.tail = task.catch(async (error: unknown) => { this.options.onError?.(error); if (!this.stopping) await this.options.port.requestFullReconcile('reconcile-error').catch(() => {}); });
+    this.tail = task.catch(async (error: unknown) => {
+      if (this.stopping) return;
+      if (dirtyDirectories.length) {
+        for (const directory of dirtyDirectories) this.dirty.add(directory, true);
+        if (!(error instanceof ScanLockedError)) this.options.onError?.(error);
+        return;
+      }
+      this.options.onError?.(error);
+    });
     return task;
   }
   private schedulePoll(): void {
     if (this.pollTimer !== null || this.stopping) return;
     this.pollTimer = this.clock.setTimeout(() => {
       this.pollTimer = null;
-      void this.run(async () => { if (await this.checkRoot()) await this.options.port.requestFullReconcile('poll'); this.schedulePoll(); }).catch(() => {});
+      void this.run(async () => {
+        const available = await this.checkRoot();
+        if (this.state !== 'watching' && this.state !== 'off') {
+          if (available) await this.options.port.requestFullReconcile('poll');
+          this.schedulePoll();
+        }
+      }).catch(() => {});
     }, (this.options.pollIntervalSec ?? 300) * 1000);
   }
   private async watchError(error: unknown): Promise<void> {
-    this.options.onError?.(error); this.watcher.stop();
+    this.options.onError?.(error); this.watcher.stop(); this.watcherActive = false;
     this.state = this.options.requested === 'watch' ? 'degraded' : 'polling';
     this.degradedReason = '实时监视发生错误，已改为轮询并请求全量对账';
+    this.selectedState = this.state; this.selectedReason = this.degradedReason;
     this.schedulePoll(); await this.options.port.requestFullReconcile('watch-error');
   }
   private async onEvent(event: PathEvent): Promise<void> {
     this.lastEventAt = new Date(this.clock.now()).toISOString();
     if (!(await this.checkRoot())) return;
-    if (event.path === null) { await this.options.port.requestFullReconcile('unknown-event'); return; }
+    if (event.path === null) { await this.options.port.requestFullReconcile('overflow'); return; }
     const relative = normalizeRelative(event.path);
-    if (relative === null) { await this.options.port.requestFullReconcile('unknown-event'); return; }
+    if (relative === null) { await this.options.port.requestFullReconcile('overflow'); return; }
     const stat = await this.statEntry(relative);
     if (stat?.isDir) { this.dirty.add(relative, true); if (relative) this.dirty.add(relative, false); }
     else this.dirty.add(relative, false);
@@ -172,14 +228,20 @@ export class WatchCoordinator {
     if (!inside(root, actual)) throw new Error('路径越出媒体库根目录');
     return full;
   }
+  private disk<T>(work: () => Promise<T>): Promise<T> {
+    const task = this.diskTail.then(() => { if (this.stopping) throw new Error('实时监控已停止'); return work(); });
+    this.diskTail = task.then(() => {}, () => {});
+    return task;
+  }
   private async statEntry(relative: string): Promise<MoveCandidate | null> {
-    try {
+    return this.disk(async () => { try {
       const full = await this.checkedPath(relative); const info = await lstat(full, { bigint: true });
       if (info.isSymbolicLink() || (!info.isDirectory() && !info.isFile())) return null;
       return { path: relative, isDir: info.isDirectory(), ...statFields(info), mediaId: null, headHash: null };
-    } catch (error) { if (missingError(error)) return null; throw error; }
+    } catch (error) { if (missingError(error)) return null; throw error; } });
   }
   private async readDisk(directory: string): Promise<DirectoryEntry[]> {
+    return this.disk(async () => {
     const full = await realpath(await this.checkedPath(directory)); const entries = await readdir(full, { withFileTypes: true }); const result: DirectoryEntry[] = [];
     for (const entry of entries) {
       if (entry.isSymbolicLink()) continue;
@@ -192,11 +254,34 @@ export class WatchCoordinator {
       result.push({ name: entry.name, isDir, ...statFields(info) });
     }
     return result;
+    });
   }
   private async hashHead(relative: string): Promise<string> {
+    return this.disk(async () => {
     const full = await this.checkedPath(relative); const file = await open(full, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
     try { const buffer = Buffer.alloc(65_536); const { bytesRead } = await file.read(buffer, 0, buffer.length, 0); return createHash('sha256').update(buffer.subarray(0, bytesRead)).digest('hex'); }
     finally { await file.close(); }
+    });
+  }
+  private async countDirectoryMoved(from: string, to: string): Promise<number> {
+    const pending = [{ from, to }]; let count = 0;
+    for (let offset = 0; offset < pending.length; offset++) {
+      if (this.stopping) throw new Error('实时监控已停止');
+      const current = pending[offset]!;
+      const [entries, indexed] = await Promise.all([this.readDisk(current.to), this.options.port.readDirectory(current.from)]);
+      const byName = new Map(indexed.map((item) => [path.posix.basename(item.path), item]));
+      for (const entry of entries) {
+        const old = byName.get(entry.name); if (!old || old.isDir !== entry.isDir) continue;
+        if (entry.isDir) {
+          pending.push({ from: `${current.from}/${entry.name}`, to: `${current.to}/${entry.name}` });
+        } else {
+          const hasIdentity = old.dev !== null && old.ino !== null && String(old.dev) !== '0' && String(old.ino) !== '0';
+          if (hasIdentity ? String(old.dev) === String(entry.dev) && String(old.ino) === String(entry.ino)
+            : old.size === entry.size && old.mtimeMs === entry.mtimeMs) count++;
+        }
+      }
+    }
+    return count;
   }
   private async reconcile(directory: string, source: Source, recursive = false): Promise<void> {
     const directories = [{ path: directory, recursive }];
@@ -223,7 +308,7 @@ export class WatchCoordinator {
           }
           continue;
         }
-        this.stable.cancel(old.path); this.matcher.cancelAdded(old.path); this.pendingSources.delete(old.path);
+        this.stable.cancel(old.path); this.matcher.cancelAdded(old.path); this.pendingSources.delete(old.path); this.provisionalRetries.delete(old.path);
         if (!this.matcher.hasVanished(old.path)) { const vanished: Candidate = { ...old, source }; this.matcher.vanished(vanished); }
       }
       for (const entry of entries) {
@@ -235,9 +320,11 @@ export class WatchCoordinator {
           else if (!old || !old.isDir) {
             const restored = await this.findMissingMatch(observed);
             if (restored) {
+              const movedMedia = restored.path !== relative ? await this.countDirectoryMoved(restored.path, relative) : 0;
+              if (!(await this.checkRoot())) return;
               await this.options.port.writeRestored(restored, observed);
               await this.record('restored', relative, null, true, restored.mediaId, source);
-              if (restored.path !== relative) await this.record('moved', relative, restored.path, true, restored.mediaId, source, false);
+              if (restored.path !== relative) await this.record('moved', relative, restored.path, true, restored.mediaId, source, true, 0, 0, movedMedia);
             } else if (!this.matcher.hasAdded(relative)) this.matcher.appeared(observed);
             directories.push({ path: relative, recursive: true });
           } else if (scanChildren) directories.push({ path: relative, recursive: true });
@@ -263,21 +350,32 @@ export class WatchCoordinator {
     if (existing && existing.isDir === candidate.isDir) {
       if (existing.missingAt !== null) { await this.restorePresent(existing, candidate); return; }
       this.matcher.cancelVanished(relative);
-      if (existing.size !== candidate.size || existing.mtimeMs !== candidate.mtimeMs || existing.dev !== candidate.dev || existing.ino !== candidate.ino) {
+      if (existing.size !== candidate.size || existing.mtimeMs !== candidate.mtimeMs || existing.dev !== candidate.dev || existing.ino !== candidate.ino ||
+        (existing.headHash !== null && existing.headHash !== candidate.headHash)) {
         await this.options.port.writeUpdated(existing, candidate); await this.record('updated', relative, null, false, existing.mediaId, source);
       }
+      const refreshed: Candidate = { ...candidate, mediaId: existing.mediaId };
+      if (!this.matcher.refreshAdded(refreshed) && this.provisionalRetries.delete(relative)) this.matcher.appeared(refreshed);
       return;
     }
     const pendingKind = this.matcher.pendingMatchForAdded(candidate);
     const match = await this.findMissingMatch(candidate);
-    if (pendingKind === 'inode' || pendingKind === 'ambiguous' || (pendingKind === 'hash' && (!match || matchKind(match, candidate) !== 'inode'))) {
+    if (pendingKind === 'ambiguous') {
+      await this.applyAdded(candidate);
+      if (candidate.mediaId !== null) this.matcher.appeared(candidate);
+      return;
+    }
+    if (pendingKind === 'inode' || (pendingKind === 'hash' && (!match || matchKind(match, candidate) !== 'inode'))) {
       this.matcher.appeared(candidate); return;
     }
     if (match) { await this.options.port.writeRestored(match, candidate); await this.record('restored', relative, null, false, match.mediaId, source);
       if (match.path !== relative) await this.record('moved', relative, match.path, false, match.mediaId, source, false);
       return;
     }
-    if (!this.matcher.hasAdded(relative)) this.matcher.appeared(candidate);
+    if (!this.matcher.hasAdded(relative)) {
+      await this.applyAdded(candidate);
+      if (candidate.mediaId !== null) this.matcher.appeared(candidate);
+    }
   }
   private async findMissingMatch(candidate: Candidate): Promise<IndexedRecord | undefined> {
     const missing = await this.options.port.findMissingCandidates(candidate);
@@ -301,14 +399,26 @@ export class WatchCoordinator {
     if (!(await this.checkRoot())) return;
     const old = (await this.options.port.readDirectory(parentOf(from.path))).find((item) => item.path === from.path);
     const target = await this.statEntry(to.path); const source = await this.statEntry(from.path);
-    if (!old || !target || source || target.isDir !== to.isDir) { await this.options.port.requestFullReconcile('move-race'); return; }
+    if (!old || !target || source || target.isDir !== to.isDir) {
+      this.dirty.add(parentOf(from.path), true); this.dirty.add(parentOf(to.path), true); return;
+    }
     if (target.dev !== to.dev || target.ino !== to.ino || (!target.isDir && (target.size !== to.size || target.mtimeMs !== to.mtimeMs))) {
-      this.matcher.vanished(from); if (!target.isDir) { this.pendingSources.set(to.path, to.source); this.stable.track(to.path, target); }
-      else await this.options.port.requestFullReconcile('move-race');
+      this.matcher.vanished(from); if (!target.isDir) {
+        if (to.mediaId !== null) this.provisionalRetries.add(to.path);
+        this.pendingSources.set(to.path, to.source); this.stable.track(to.path, target);
+      }
+      else { this.dirty.add(parentOf(from.path), true); this.dirty.add(parentOf(to.path), true); }
       return;
     }
-    if (old.missingAt !== null) await this.options.port.writeRestored(old, to); else await this.options.port.writeMoved(old, to);
-    await this.record('moved', to.path, from.path, to.isDir, old.mediaId, to.source);
+    const movedMedia = to.isDir ? await this.countDirectoryMoved(from.path, to.path) : 1;
+    if (!(await this.checkRoot())) return;
+    let removedProvisional = 0;
+    if (old.missingAt !== null) {
+      removedProvisional = await this.options.port.writeRestored(old, to);
+      await this.record('restored', to.path, null, to.isDir, old.mediaId, to.source, to.mediaId === null);
+    } else removedProvisional = await this.options.port.writeMoved(old, to);
+    const removed = to.isDir ? removedProvisional : to.mediaId !== null && old.missingAt === null ? 1 : 0;
+    await this.record('moved', to.path, from.path, to.isDir, old.mediaId, to.source, true, removed, 0, movedMedia);
     if (to.isDir) await this.reconcile(to.path, to.source, true);
   }
   private async applyMissing(item: Candidate): Promise<void> {
@@ -317,7 +427,12 @@ export class WatchCoordinator {
     const old = (await this.options.port.readDirectory(parentOf(item.path))).find((value) => value.path === item.path);
     if (!old || old.missingAt !== null) return;
     if (!(await this.checkRoot())) return;
-    await this.options.port.writeMissing(old, this.clock.now()); await this.record('missing', old.path, null, old.isDir, old.mediaId, item.source);
+    const missingMedia = await this.options.port.writeMissing(old, this.clock.now());
+    await this.record('missing', old.path, null, old.isDir, old.mediaId, item.source, true, 0, missingMedia);
+  }
+  private async finalizeAdded(item: Candidate): Promise<void> {
+    const match = await this.findMissingMatch(item);
+    if (match) await this.applyMoved({ ...match, source: item.source }, item);
   }
   private async applyAdded(item: Candidate): Promise<void> {
     if (!(await this.checkRoot())) return;
@@ -335,13 +450,20 @@ export class WatchCoordinator {
       if (item.isDir) await this.reconcile(item.path, item.source, true);
       return;
     }
-    const mediaId = await this.options.port.writeAdded(item); await this.record('added', item.path, null, item.isDir, mediaId, item.source);
+    const mediaId = await this.options.port.writeAdded(item); item.mediaId = mediaId;
+    await this.record('added', item.path, null, item.isDir, mediaId, item.source);
   }
-  private async record(kind: WatchLibraryChange['kind'], relative: string, fromPath: string | null, isDir: boolean, mediaId: string | null, source: Source, notify = true): Promise<void> {
+  private async record(kind: WatchLibraryChange['kind'], relative: string, fromPath: string | null, isDir: boolean, mediaId: string | null, source: Source, notify = true, removeProvisional = 0, missingMedia = 0, movedMedia = 0): Promise<void> {
     await this.options.port.appendChange({ ts: new Date(this.clock.now()).toISOString(), kind, path: relative, fromPath, isDir, mediaId, source });
     if (!notify || kind === 'removed') return;
-    const folders = [parentOf(relative), ...(fromPath === null ? [] : [parentOf(fromPath)])].map((dir) => dir ? `${this.options.libraryId}/${dir}` : this.options.libraryId);
-    this.throttle.add({ source, folders, added: kind === 'added' || kind === 'restored' ? 1 : 0,
-      updated: kind === 'updated' ? 1 : 0, moved: kind === 'moved' ? 1 : 0, removed: kind === 'missing' ? 1 : 0 });
+    const paths = [parentOf(relative), ...(fromPath === null ? [] : [parentOf(fromPath)])];
+    if (isDir) {
+      const affected = await this.options.port.readSubdirectories(relative);
+      paths.push(relative, ...affected);
+      if (fromPath !== null) paths.push(fromPath, ...affected.map((dir) => fromPath + dir.slice(relative.length)));
+    }
+    const folders = paths.map((dir) => dir ? `${this.options.libraryId}/${dir}` : this.options.libraryId);
+    this.throttle.add({ source, folders, added: !isDir && (kind === 'added' || kind === 'restored') ? 1 : 0,
+      updated: !isDir && kind === 'updated' ? 1 : 0, moved: kind === 'moved' ? (isDir ? movedMedia : 1) : 0, removed: kind === 'missing' ? missingMedia : removeProvisional });
   }
 }

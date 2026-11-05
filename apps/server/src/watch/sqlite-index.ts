@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
+import { lstat } from 'node:fs/promises';
 import { lookup } from 'mime-types';
 import type { LibraryChangedEvent } from '@luvia/contracts';
 import { mediaId, virtualPath } from '../core/paths.ts';
@@ -8,12 +9,15 @@ import { appendLibraryChange } from '../core/library-changes.ts';
 import { moveDirectoryPaths } from '../core/directory-move.ts';
 import type { IndexedRecord, LibraryIndexPort, WatchLibraryChange } from './coordinator.ts';
 import type { MoveCandidate } from './move-matcher.ts';
+import { statFields } from './file-info.ts';
+import { ScanLockedError } from './scan-lock-error.ts';
 
 type Options = {
   libraryId: string;
   requestFullReconcile: (reason: string) => Promise<void>;
   publishEvent: (event: LibraryChangedEvent) => Promise<void>;
   now?: () => number;
+  assertLease?: () => void;
 };
 type FileRow = { id: string; relative_path: string; size: number; modified_at: number; mtime_ms: number | null; dev: string | null; ino: string | null; head_hash: string | null; missing_at_ms: number | null };
 type FolderRow = { path: string; mtime_ms: number | null; dev: string | null; ino: string | null; missing_at_ms: number | null };
@@ -62,6 +66,11 @@ export class SqliteLibraryIndex implements LibraryIndexPort {
     const files = this.db.prepare('SELECT id,relative_path,size,modified_at,mtime_ms,dev,ino,head_hash,missing_at_ms FROM files WHERE library_id=? AND folder=?').all(this.libraryId, parent) as FileRow[];
     return [...folders.map((row) => this.folder(row)), ...files.map((row) => this.file(row))];
   }
+  async readSubdirectories(directory: string): Promise<string[]> {
+    const virtual = virtualPath(this.libraryId, directory);
+    return (this.db.prepare('SELECT path FROM folders WHERE library_id=? AND path>=? AND path<?').all(this.libraryId, `${virtual}/`, `${virtual}0`) as {path:string}[])
+      .map((row) => row.path.slice(this.libraryId.length + 1));
+  }
   async findMissingCandidates(candidate: MoveCandidate): Promise<IndexedRecord[]> {
     const values = new Map<string, IndexedRecord>();
     const dev = identity(candidate.dev); const ino = identity(candidate.ino);
@@ -95,7 +104,8 @@ export class SqliteLibraryIndex implements LibraryIndexPort {
     this.duplicate = null;
     this.db.exec('BEGIN IMMEDIATE');
     try {
-      if (this.db.prepare('SELECT 1 FROM scan_locks WHERE library_id=? AND lease_expires_at>unixepoch()').get(this.libraryId)) throw new Error('媒体库正在全量扫描');
+      this.options.assertLease?.();
+      if (this.db.prepare('SELECT 1 FROM scan_locks WHERE library_id=? AND lease_expires_at>unixepoch()').get(this.libraryId)) throw new ScanLockedError();
       work(); this.pending = pending;
     }
     catch (error) { this.db.exec('ROLLBACK'); throw error; }
@@ -135,10 +145,26 @@ export class SqliteLibraryIndex implements LibraryIndexPort {
   }
   async writeAdded(entry: MoveCandidate): Promise<string | null> {
     const virtual = virtualPath(this.libraryId, entry.path); const parent = virtualPath(this.libraryId, parentOf(entry.path));
+    const missingParents: { relative: string; dev: string; ino: string; mtimeMs: number }[] = [];
+    if (!entry.isDir) {
+      const root = (this.db.prepare('SELECT root FROM libraries WHERE id=?').get(this.libraryId) as { root: string }).root;
+      let relative = parentOf(entry.path);
+      while (relative && !this.db.prepare('SELECT 1 FROM folders WHERE path=?').get(virtualPath(this.libraryId, relative))) {
+        const info = await lstat(path.join(root, relative), { bigint: true });
+        if (!info.isDirectory() || info.isSymbolicLink()) throw new Error('媒体父目录不可用');
+        const fields = statFields(info); missingParents.push({ relative, dev: fields.dev, ino: fields.ino, mtimeMs: fields.mtimeMs });
+        relative = parentOf(relative);
+      }
+    }
     const preferred = entry.isDir ? null : mediaId(this.libraryId, entry.path);
     let id = preferred;
     const pending: Pending = { kinds: ['added'], oldPath: null, path: entry.path, isDir: entry.isDir, mediaId: id };
     this.begin(pending, () => {
+      for (const directory of missingParents.reverse()) {
+        this.db.prepare('INSERT OR IGNORE INTO folders(path,library_id,parent,name,dev,ino,mtime_ms) VALUES (?,?,?,?,?,?,?)')
+          .run(virtualPath(this.libraryId, directory.relative), this.libraryId, virtualPath(this.libraryId, parentOf(directory.relative)),
+            path.posix.basename(directory.relative), directory.dev, directory.ino, directory.mtimeMs);
+      }
       while (id && this.db.prepare('SELECT 1 FROM files WHERE id=?').get(id)) id = randomUUID();
       pending.mediaId = id;
       if (entry.isDir) {
@@ -174,16 +200,19 @@ export class SqliteLibraryIndex implements LibraryIndexPort {
       if (!updated.changes) throw new Error('媒体索引已变化'); this.refresh([parent]);
     });
   }
-  private relocate(old: IndexedRecord, entry: MoveCandidate): void {
+  private relocate(old: IndexedRecord, entry: MoveCandidate): number {
     const target = virtualPath(this.libraryId, entry.path);
     const fromParent = virtualPath(this.libraryId, parentOf(old.path)); const toParent = virtualPath(this.libraryId, parentOf(entry.path));
+    let removedProvisional = 0;
     if (old.isDir) {
       if (old.path !== entry.path) {
+        removedProvisional = this.mergeProvisionalDirectory(old.path, entry.path);
         moveDirectoryPaths(this.db, this.libraryId, old.path, entry.path, toParent);
       }
       if (!this.db.prepare('UPDATE folders SET name=?,parent=?,missing_at_ms=NULL,dev=?,ino=?,mtime_ms=? WHERE path=? AND library_id=?')
         .run(path.posix.basename(entry.path), toParent, identity(entry.dev), identity(entry.ino), entry.mtimeMs, target, this.libraryId).changes) throw new Error('目录索引已变化');
-      this.refresh([target, fromParent, toParent]);
+      const descendants = this.db.prepare('SELECT path FROM folders WHERE library_id=? AND path>=? AND path<?').all(this.libraryId, `${target}/`, `${target}0`) as { path: string }[];
+      this.refresh([target, fromParent, toParent, ...descendants.map((folder) => folder.path)]);
     } else {
       if (!old.mediaId) throw new Error('媒体缺少 ID');
       const changed = this.db.prepare(`UPDATE files SET relative_path=?,folder=?,name=?,mime=?,media_type=?,missing_at_ms=NULL,dev=?,ino=?,mtime_ms=?,head_hash=?,size=?,modified_at=?
@@ -197,27 +226,80 @@ export class SqliteLibraryIndex implements LibraryIndexPort {
         latitude=NULL,longitude=NULL,altitude=NULL,playability=NULL WHERE id=?`).run(Math.floor(entry.mtimeMs / 1000), old.mediaId);
       this.refresh([fromParent, toParent]);
     }
+    return removedProvisional;
   }
-  async writeMoved(old: IndexedRecord, entry: MoveCandidate): Promise<void> {
-    this.begin({ kinds: ['moved'], oldPath: old.path, path: entry.path, isDir: old.isDir, mediaId: old.mediaId }, () => { this.verify(old); this.relocate(old, entry); });
+  private mergeProvisionalDirectory(from: string, to: string): number {
+    const source = virtualPath(this.libraryId, from); const target = virtualPath(this.libraryId, to);
+    let removed = 0;
+    const files = this.db.prepare(`SELECT id,relative_path,dev,ino FROM files WHERE library_id=? AND (folder=? OR (folder>=? AND folder<?))`)
+      .all(this.libraryId, source, `${source}/`, `${source}0`) as { id: string; relative_path: string; dev: string | null; ino: string | null }[];
+    for (const file of files) {
+      const relative = to + file.relative_path.slice(from.length);
+      const provisional = this.db.prepare('SELECT id,dev,ino,missing_at_ms FROM files WHERE library_id=? AND relative_path=?').get(this.libraryId, relative) as { id: string; dev: string | null; ino: string | null; missing_at_ms: number | null } | undefined;
+      if (!provisional) continue;
+      if (!file.dev || !file.ino || file.dev !== provisional.dev || file.ino !== provisional.ino) throw new Error('目录移动的目标媒体身份冲突');
+      this.db.prepare("INSERT OR IGNORE INTO favorites(user_id,item_id,item_type,created_at) SELECT user_id,?,'file',created_at FROM favorites WHERE item_type='file' AND item_id=?").run(file.id, provisional.id);
+      this.db.prepare('INSERT OR IGNORE INTO album_items(album_id,file_id,created_at) SELECT album_id,?,created_at FROM album_items WHERE file_id=?').run(file.id, provisional.id);
+      this.db.prepare('UPDATE albums SET cover_id=? WHERE cover_id=?').run(file.id, provisional.id);
+      if (provisional.missing_at_ms === null) removed++;
+      this.removeFile(provisional.id);
+    }
+    const folders = this.db.prepare('SELECT path,dev,ino FROM folders WHERE library_id=? AND (path=? OR (path>=? AND path<?)) ORDER BY length(path) DESC')
+      .all(this.libraryId, source, `${source}/`, `${source}0`) as { path: string; dev: string | null; ino: string | null }[];
+    for (const folder of folders) {
+      const destination = target + folder.path.slice(source.length);
+      const provisional = this.db.prepare('SELECT dev,ino FROM folders WHERE library_id=? AND path=?').get(this.libraryId, destination) as { dev: string | null; ino: string | null } | undefined;
+      if (provisional && (!folder.dev || !folder.ino || folder.dev !== provisional.dev || folder.ino !== provisional.ino)) throw new Error('目录移动的目标目录身份冲突');
+      this.db.prepare('DELETE FROM folders WHERE library_id=? AND path=?').run(this.libraryId, destination);
+    }
+    return removed;
   }
-  async writeRestored(old: IndexedRecord, entry: MoveCandidate): Promise<void> {
-    this.begin({ kinds: ['restored', 'moved'], oldPath: old.path, path: entry.path, isDir: old.isDir, mediaId: old.mediaId }, () => { this.verify(old); this.relocate(old, entry); });
+  async writeMoved(old: IndexedRecord, entry: MoveCandidate): Promise<number> {
+    let removed = 0;
+    this.begin({ kinds: ['moved'], oldPath: old.path, path: entry.path, isDir: old.isDir, mediaId: old.mediaId }, () => {
+      this.verify(old);
+      this.removeProvisional(old, entry);
+      removed = this.relocate(old, entry);
+    });
+    return removed;
   }
-  async writeMissing(old: IndexedRecord, at: number): Promise<void> {
+  private removeProvisional(old: IndexedRecord, entry: MoveCandidate): void {
+      if (entry.mediaId !== null && entry.mediaId !== old.mediaId) {
+        if (old.isDir || !old.mediaId) throw new Error('临时媒体身份无效');
+        const provisional = this.db.prepare('SELECT id,relative_path,size,modified_at,mtime_ms,dev,ino,head_hash,missing_at_ms FROM files WHERE id=? AND library_id=? AND relative_path=?')
+          .get(entry.mediaId, this.libraryId, entry.path) as FileRow | undefined;
+        if (!provisional || provisional.missing_at_ms !== null || provisional.size !== entry.size || provisional.mtime_ms !== entry.mtimeMs ||
+          identity(provisional.dev) !== identity(entry.dev) || identity(provisional.ino) !== identity(entry.ino) || provisional.head_hash !== entry.headHash) throw new Error('临时媒体索引已变化');
+        this.db.prepare("INSERT OR IGNORE INTO favorites(user_id,item_id,item_type,created_at) SELECT user_id,?,'file',created_at FROM favorites WHERE item_type='file' AND item_id=?").run(old.mediaId, entry.mediaId);
+        this.db.prepare('INSERT OR IGNORE INTO album_items(album_id,file_id,created_at) SELECT album_id,?,created_at FROM album_items WHERE file_id=?').run(old.mediaId, entry.mediaId);
+        this.db.prepare('UPDATE albums SET cover_id=? WHERE cover_id=?').run(old.mediaId, entry.mediaId);
+        this.removeFile(entry.mediaId);
+      }
+  }
+  async writeRestored(old: IndexedRecord, entry: MoveCandidate): Promise<number> {
+    let removed = 0;
+    this.begin({ kinds: ['restored', 'moved'], oldPath: old.path, path: entry.path, isDir: old.isDir, mediaId: old.mediaId }, () => { this.verify(old); this.removeProvisional(old, entry); removed = this.relocate(old, entry); });
+    return removed;
+  }
+  async writeMissing(old: IndexedRecord, at: number): Promise<number> {
     const virtual = virtualPath(this.libraryId, old.path); const parent = virtualPath(this.libraryId, parentOf(old.path));
+    let missingMedia = 0;
     this.begin({ kinds: ['missing'], oldPath: null, path: old.path, isDir: old.isDir, mediaId: old.mediaId }, () => {
       this.verify(old);
       if (old.isDir) {
-        this.db.prepare('UPDATE files SET missing_at_ms=COALESCE(missing_at_ms,?) WHERE library_id=? AND (folder=? OR (folder>=? AND folder<?))')
-          .run(at, this.libraryId, virtual, `${virtual}/`, `${virtual}0`);
+        missingMedia = this.db.prepare('UPDATE files SET missing_at_ms=? WHERE library_id=? AND missing_at_ms IS NULL AND (folder=? OR (folder>=? AND folder<?))')
+          .run(at, this.libraryId, virtual, `${virtual}/`, `${virtual}0`).changes;
         const changed = this.db.prepare('UPDATE folders SET missing_at_ms=COALESCE(missing_at_ms,?) WHERE library_id=? AND (path=? OR (path>=? AND path<?))')
           .run(at, this.libraryId, virtual, `${virtual}/`, `${virtual}0`);
         if (!changed.changes) throw new Error('目录索引已变化');
-      } else if (!this.db.prepare('UPDATE files SET missing_at_ms=COALESCE(missing_at_ms,?) WHERE id=? AND library_id=? AND relative_path=?')
-        .run(at, old.mediaId, this.libraryId, old.path).changes) throw new Error('媒体索引已变化');
+      } else {
+        missingMedia = this.db.prepare('UPDATE files SET missing_at_ms=COALESCE(missing_at_ms,?) WHERE id=? AND library_id=? AND relative_path=?')
+          .run(at, old.mediaId, this.libraryId, old.path).changes;
+        if (!missingMedia) throw new Error('媒体索引已变化');
+      }
       this.refresh([parent]);
     });
+    return missingMedia;
   }
   private removeFile(id: string): void {
     this.db.prepare("DELETE FROM favorites WHERE item_type='file' AND item_id=?").run(id);
@@ -248,7 +330,9 @@ export class SqliteLibraryIndex implements LibraryIndexPort {
   async appendChange(change: WatchLibraryChange): Promise<void> {
     if (!this.pending) {
       if (this.duplicate && change.kind === this.duplicate.kind && change.path === this.duplicate.path && change.fromPath === this.duplicate.fromPath && change.source === this.duplicate.source) { this.duplicate = null; return; }
-      this.duplicate = null; appendLibraryChange(this.db, this.libraryId, change, this.options.now?.() ?? Date.now()); return;
+      this.duplicate = null;
+      this.db.transaction(() => { this.options.assertLease?.(); appendLibraryChange(this.db, this.libraryId, change, this.options.now?.() ?? Date.now()); }).immediate();
+      return;
     }
     const pending = this.pending;
     try {

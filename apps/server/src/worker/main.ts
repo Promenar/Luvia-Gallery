@@ -19,6 +19,10 @@ import { runSqliteMaintenance } from './sqlite-maintenance.ts';
 import { runIndexBackfill } from './index-backfill.ts';
 import { cleanupDeletedMediaCache } from './cache-prune.ts';
 import { runTimelineRebuild } from './timeline-rebuild.ts';
+import { flushWatchReconciles } from './watch-reconcile-queue.ts';
+import { WatchRuntime } from './watch-runtime.ts';
+import { startWatchLoop } from './watch-loop.ts';
+import { flushLibraryEvents } from './watch-events.ts';
 
 installFatalHandlers('worker');
 const runtime = await openRuntime();
@@ -26,8 +30,20 @@ const logger = createWorkerLogger(runtime.db);
 logger.info('工作进程已启动');
 const owner = newWorkerOwner();
 const stopController = new AbortController();
-process.on('SIGINT', () => stopController.abort());
-process.on('SIGTERM', () => stopController.abort());
+let stopWatch: (() => void) | undefined;
+let shutdownDeadline: NodeJS.Timeout | undefined;
+const requestStop = () => {
+  stopController.abort(); stopWatch?.();
+  if (!shutdownDeadline) {
+    shutdownDeadline = setTimeout(() => {
+      try { runtime.db.prepare('DELETE FROM watch_leases WHERE owner=?').run(owner); } catch { /* 已失效的租约会按期限释放。 */ }
+      process.exit(1);
+    }, 12_000);
+    shutdownDeadline.unref();
+  }
+};
+process.on('SIGINT', requestStop);
+process.on('SIGTERM', requestStop);
 const mounts = process.platform === 'darwin'
   ? runtime.mediaRoots.map((containerPath): Mount => ({ containerPath, hostPath: null, kind: 'candidate', libraryId: null, readOnly: true, mediaEstimate: null }))
   : await detectMounts({ mediaRoots: runtime.mediaRoots, systemRoots: [runtime.dataDir, runtime.cacheDir], hostPaths: process.env.LUVIA_HOST_PATHS });
@@ -56,6 +72,10 @@ const pruneTimer = setInterval(schedulePrune, 60_000);
 pruneTimer.unref();
 const scanTimer = setInterval(() => { try { scheduleScans(runtime.db); } catch { logger.warn('扫描调度失败'); } }, 30_000);
 scanTimer.unref();
+const reconcileTimer = setInterval(() => { try { flushWatchReconciles(runtime.db); } catch { logger.warn('监控对账排队失败'); } }, 5000);
+reconcileTimer.unref();
+const eventTimer = setInterval(() => { try { flushLibraryEvents(runtime.db); } catch { logger.warn('媒体库事件发送失败'); } }, 250);
+eventTimer.unref();
 const folderTimer = setInterval(() => { try { flushMetadataFolders(runtime.db); } catch { logger.warn('目录统计恢复失败'); } }, 5000);
 folderTimer.unref();
 let maintaining = false; let maintenance: Promise<void> = Promise.resolve();
@@ -78,12 +98,18 @@ let sampling: Promise<void> = Promise.resolve();
 let backfill: Promise<void> = Promise.resolve();
 let cacheCleanup: Promise<void> = Promise.resolve();
 let timelineRebuild: Promise<void> = Promise.resolve();
+const watchLoop = startWatchLoop(new WatchRuntime(runtime.db, { owner, allowedRoots }), { onError: () => logger.warn('实时监控检查失败') });
+stopWatch = () => { void watchLoop.stop(); };
+if (stopController.signal.aborted) stopWatch();
 try {
+  void watchLoop.ready.catch(() => { logger.warn('实时监控启动失败，将重试'); });
   schedulePrune();
   flushMetadataFolders(runtime.db);
   scheduleHlsCleanup();
   await discoverNewMounts(runtime.db, mounts, [runtime.dataDir, runtime.cacheDir]);
   scheduleScans(runtime.db);
+  flushWatchReconciles(runtime.db);
+  flushLibraryEvents(runtime.db);
   backfill = runIndexBackfill(runtime.db, { allowedRoots, signal: stopController.signal }).catch(() => { if (!stopController.signal.aborted) logger.warn('媒体索引回填失败'); });
   cacheCleanup = cleanupDeletedMediaCache(runtime.db, runtime.cacheDir, { owner, signal: stopController.signal }).catch(() => { if (!stopController.signal.aborted) logger.warn('媒体缓存回收失败'); });
   timelineRebuild = runTimelineRebuild(runtime.db, stopController.signal).catch(() => { if (!stopController.signal.aborted) logger.warn('时间分桶恢复失败'); });
@@ -95,7 +121,9 @@ try {
     log: (level, message, ctx) => logger[level]({ ctx }, message) });
 } finally {
   stopController.abort();
+  await watchLoop.stop();
   await Promise.all([sampling, backfill, cacheCleanup, timelineRebuild]);
-  clearInterval(heartbeatTimer); clearInterval(pruneTimer); clearInterval(scanTimer); clearInterval(folderTimer); clearInterval(hlsTimer); clearInterval(maintenanceTimer);
+  clearInterval(heartbeatTimer); clearInterval(pruneTimer); clearInterval(scanTimer); clearInterval(reconcileTimer); clearInterval(eventTimer); clearInterval(folderTimer); clearInterval(hlsTimer); clearInterval(maintenanceTimer);
   await Promise.all([hlsCleanup, maintenance]); loop.disable(); runtime.db.close();
+  if (shutdownDeadline) clearTimeout(shutdownDeadline);
 }

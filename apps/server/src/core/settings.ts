@@ -6,8 +6,7 @@ type Settings = z.output<typeof AdminSettings>;
 const defaults: Settings = {
   siteName: 'Luvia Gallery', publicUrl: null,
   libraries: { autoEnableNewMounts: false, missingGraceDays: 7 }, folders: { exposeHostPaths: false },
-  // 契约默认 daily；worker 的 daily 调度在监控集成时实现，届时再切换默认值
-  scan: { mode: 'manual', intervalMinutes: 60, dailyAt: '04:00' },
+  scan: { mode: 'daily', intervalMinutes: 60, dailyAt: '04:00' },
   workers: { thumbnailConcurrency: 4, ffmpegConcurrency: 2 },
   transcode: { enabled: true, hwaccel: 'auto' }, previews: { enabled: true }, cache: { limitGB: 20 },
 };

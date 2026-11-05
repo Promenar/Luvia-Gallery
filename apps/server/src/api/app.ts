@@ -35,6 +35,7 @@ import type { Mount } from '../core/mounts.ts';
 import { readSettings, writeSettings } from '../core/settings.ts';
 import { cacheKey, cachePath, enqueueMediaTask, releaseMediaWaiter } from '../core/media-cache.ts';
 import { listLibraryChanges } from '../core/library-changes.ts';
+import { readInotifyQuota } from '../watch/mode.ts';
 import type { Variant } from '../core/media-cache.ts';
 
 type UserRow = {
@@ -1250,13 +1251,20 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     const { row } = await binaryMedia(req, id);
     return cachedMedia(req, reply, row, { kind: 'thumb', size: 'm' }, true, mediaAuthorization(req, row));
   });
-  type LibraryRow = { id: string; name: string; root: string; enabled: number; status: string; scanning: number; last_scan_at: number | null; host_root: string | null; host_root_source: 'auto' | 'manual' | null; exclude: string; media_count: number };
-  const librarySql = "SELECT l.*,COALESCE(f.media_count,0) AS media_count,EXISTS(SELECT 1 FROM scan_locks sl WHERE sl.library_id=l.id AND sl.lease_expires_at>unixepoch()) AS scanning FROM libraries l LEFT JOIN folders f ON f.path=l.id";
+  type LibraryRow = { id: string; name: string; root: string; enabled: number; status: string; scanning: number; last_scan_at: number | null; host_root: string | null; host_root_source: 'auto' | 'manual' | null; exclude: string; media_count: number; watch_mode: 'auto' | 'watch' | 'poll' | 'off'; watch_poll_interval_sec: number; watch_state: 'starting' | 'watching' | 'polling' | 'degraded' | 'off' | null; watched_dirs: number | null; last_event_at: string | null; degraded_reason: string | null; watch_owned: number };
+  const librarySql = `SELECT l.*,COALESCE(f.media_count,0) AS media_count,
+    EXISTS(SELECT 1 FROM scan_locks sl WHERE sl.library_id=l.id AND sl.lease_expires_at>unixepoch()) AS scanning,
+    s.state AS watch_state,s.watched_dirs,s.last_event_at,s.degraded_reason,
+    EXISTS(SELECT 1 FROM watch_leases w WHERE w.library_id=l.id AND w.lease_expires_at>unixepoch()) AS watch_owned
+    FROM libraries l LEFT JOIN folders f ON f.path=l.id LEFT JOIN library_watch_state s ON s.library_id=l.id`;
   const libraryOut = (row: LibraryRow) => ({ id: row.id, name: row.name, root: row.root, enabled: !!row.enabled,
     status: row.scanning ? 'scanning' : row.status, lastScanAt: iso(row.last_scan_at), hostRoot: row.host_root, hostRootSource: row.host_root_source,
     exclude: JSON.parse(row.exclude), mediaCount: row.media_count,
-    // 实时监控尚未接入：如实报告为关闭，接入后由监控模块提供真实状态
-    watch: { mode: 'off' as const, pollIntervalSec: 300, state: 'off' as const, watchedDirs: null, lastEventAt: null, lastReconcileAt: null, degradedReason: null } });
+    watch: { mode: row.watch_mode, pollIntervalSec: row.watch_poll_interval_sec,
+      state: !row.enabled || row.watch_mode === 'off' ? 'off' as const : row.watch_owned ? row.watch_state ?? 'starting' : 'starting' as const,
+      watchedDirs: row.watch_owned && row.enabled && row.watch_mode !== 'off' ? row.watched_dirs : null,
+      lastEventAt: row.last_event_at, lastReconcileAt: iso(row.last_scan_at),
+      degradedReason: row.watch_owned && row.enabled && row.watch_mode !== 'off' ? row.degraded_reason : null } });
   register('listLibraries', async () => ({ libraries: (db.prepare(`${librarySql} ORDER BY l.name COLLATE NOCASE,l.id`).all() as LibraryRow[]).map(libraryOut) }));
   register('libraryChanges', async (req) => {
     const { id } = req.params as { id: string };
@@ -1269,9 +1277,9 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     if (db.prepare('SELECT 1 FROM libraries WHERE root=?').get(resolved.root)) fail(409, 'CONFLICT', '媒体库已经存在');
     const id = randomUUID();
     const manual = typeof body.hostRoot === 'string';
-    db.prepare('INSERT INTO libraries(id,name,root,enabled,host_root,host_root_source,exclude) VALUES (?,?,?,?,?,?,?)')
+    db.prepare('INSERT INTO libraries(id,name,root,enabled,host_root,host_root_source,exclude,watch_mode,watch_poll_interval_sec) VALUES (?,?,?,?,?,?,?,?,?)')
       .run(id, body.name, resolved.root, body.enabled ? 1 : 0, manual ? body.hostRoot : resolved.hostRoot,
-        manual ? 'manual' : resolved.hostRoot ? 'auto' : null, JSON.stringify(body.exclude ?? ['@eaDir', '#recycle', '.*', '.thumbnails']));
+        manual ? 'manual' : resolved.hostRoot ? 'auto' : null, JSON.stringify(body.exclude ?? ['@eaDir', '#recycle', '.*', '.thumbnails']), body.watch?.mode ?? 'auto', body.watch?.pollIntervalSec ?? 300);
     return libraryOut(db.prepare(`${librarySql} WHERE l.id=?`).get(id) as LibraryRow);
   });
   register('updateLibrary', async (req, _reply, body) => {
@@ -1284,9 +1292,9 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
         source = hostRoot ? 'auto' : null;
       } else { hostRoot = body.hostRoot; source = 'manual'; }
     }
-    db.prepare('UPDATE libraries SET name=?,enabled=?,host_root=?,host_root_source=?,exclude=? WHERE id=?')
+    db.prepare('UPDATE libraries SET name=?,enabled=?,host_root=?,host_root_source=?,exclude=?,watch_mode=?,watch_poll_interval_sec=? WHERE id=?')
       .run(body.name ?? row.name, body.enabled === undefined ? row.enabled : body.enabled ? 1 : 0, hostRoot, source,
-        body.exclude === undefined ? row.exclude : JSON.stringify(body.exclude), id);
+        body.exclude === undefined ? row.exclude : JSON.stringify(body.exclude), body.watch?.mode ?? row.watch_mode, body.watch?.pollIntervalSec ?? row.watch_poll_interval_sec, id);
     return libraryOut(db.prepare(`${librarySql} WHERE l.id=?`).get(id) as LibraryRow);
   });
   register('deleteLibrary', async (req) => {
@@ -1391,11 +1399,12 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     const row = db.prepare("SELECT value FROM settings WHERE key='worker.ffmpeg'").get() as { value: string } | undefined;
     const ffmpeg = row ? JSON.parse(row.value) : { available: false, version: null, hwaccels: [] };
     const sqlite = db.prepare('SELECT sqlite_version() AS version').get() as { version: string };
+    const maxUserWatches = await readInotifyQuota();
+    const used = (db.prepare('SELECT COALESCE(sum(watched_count),0) n FROM watch_worker_usage WHERE lease_expires_at>unixepoch()').get() as {n:number}).n;
     return { version: '2.0.0-alpha.0', commit: null, node: process.version, platform: `${process.platform}-${process.arch}`, sqlite: sqlite.version,
       ffmpeg, sharp: { version: sharp.versions.sharp, heif: sharp.format.heif?.input?.fileSuffix?.includes('.heic') ?? false },
       dataDir: path.resolve(process.env.DATA_DIR ?? 'data'), cacheDir: path.resolve(process.env.CACHE_DIR ?? 'cache'),
-      // inotify 用量由监控模块提供；未接入时为 null（契约语义：不可用）
-      inotify: null };
+      inotify: maxUserWatches === null ? null : { maxUserWatches, used } };
   });
   app.get('/api/v2/events', async (req, reply) => {
     const identity = requireUser(req);
@@ -1429,11 +1438,14 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
           cursor = record.id;
           if (record.event_type === 'job' && (current.kind !== 'session' || current.user.role !== 'admin')) continue;
           if (record.event_type === 'library') {
-            const event = JSON.parse(record.payload) as { folders: string[]; added: number; removed: number; updated: number };
+            const event = JSON.parse(record.payload) as { folders: string[]; added: number; removed: number; updated: number; moved: number };
             const allowed = userOut(current.user).allowedPaths;
             if (allowed !== null) {
-              event.folders = event.folders.filter((folder) => pathAllowed(folder, allowed));
-              if (!event.folders.length) continue;
+              const visible = event.folders.filter((folder) => pathAllowed(folder, allowed));
+              if (!visible.length) continue;
+              // 计数是整条事件的汇总，无法按目录拆分；含无权目录时只发失效通知，避免泄露其它目录的活动量。
+              if (visible.length < event.folders.length) Object.assign(event, { added: 0, removed: 0, updated: 0, moved: 0 });
+              event.folders = visible;
             }
             send(`id: ${record.id}\nevent: library\ndata: ${JSON.stringify(event)}\n\n`);
           } else if (record.event_type === 'job') send(`id: ${record.id}\nevent: job\ndata: ${record.payload}\n\n`);
