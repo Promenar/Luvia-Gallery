@@ -1,7 +1,7 @@
 import type Database from 'better-sqlite3';
 import { randomInt } from 'node:crypto';
 import type { z } from 'zod';
-import { MediaListQuery, RandomQuery, MediaItem } from '@luvia/contracts';
+import { MediaFilter, MediaListQuery, RandomQuery, MediaItem } from '@luvia/contracts';
 
 type Query = z.output<typeof MediaListQuery>;
 type RandomFilter = z.output<typeof RandomQuery>;
@@ -25,7 +25,7 @@ function allowedClause(paths: string[] | null, params: Params): string {
   if (!paths.length) return '0';
   return `(${paths.map((prefix) => prefixClause('f.folder', prefix, params)).join(' OR ')})`;
 }
-function where(filter: Partial<Query> | RandomFilter, context: Context): { sql: string; params: Params } {
+function where(filter: Partial<Query> | RandomFilter, context: Context, db: Database.Database): { sql: string; params: Params } {
   const params: Params = [];
   const clauses = [allowedClause(context.allowedPaths, params)];
   if (filter.q) {
@@ -63,7 +63,17 @@ function where(filter: Partial<Query> | RandomFilter, context: Context): { sql: 
   }
   if ('scope' in filter && filter.scope === 'album') {
     if (!filter.albumId) clauses.push('0');
-    else { clauses.push('EXISTS (SELECT 1 FROM album_items ai JOIN albums a ON a.id=ai.album_id WHERE ai.file_id=f.id AND a.id=? AND a.user_id=?)'); params.push(filter.albumId, context.id); }
+    else {
+      const album = db.prepare('SELECT kind,filter FROM albums WHERE id=? AND user_id=?').get(filter.albumId, context.id) as { kind: string; filter: string | null } | undefined;
+      if (!album) clauses.push('0');
+      else if (album.kind === 'manual') {
+        clauses.push('f.id IN (SELECT ai.file_id FROM album_items ai WHERE ai.album_id=?)'); params.push(filter.albumId);
+      } else {
+        const saved = MediaFilter.parse(album.filter ? JSON.parse(album.filter) : {});
+        const smart = where(saved, context, db);
+        clauses.push(`(${smart.sql})`); params.push(...smart.params);
+      }
+    }
   }
   return { sql: clauses.join(' AND '), params };
 }
@@ -106,7 +116,7 @@ export class MediaReader {
   }
 
   page(filter: Query, context: Context) {
-    const condition = where(filter, context);
+    const condition = where(filter, context, this.db);
     const order = sorts[filter.sort];
     const params: Params = [context.id, ...condition.params];
     let sql = `${selection} WHERE ${condition.sql}`;
@@ -133,7 +143,7 @@ export class MediaReader {
     const version = `${this.db.pragma('data_version', { simple: true })}:${changes.n}`;
     const cached = this.cache.get(key);
     if (cached && cached.version === version && cached.expires > Date.now()) return cached.value;
-    const condition = where(filter, context);
+    const condition = where(filter, context, this.db);
     const unfiltered = context.allowedPaths === null && filter.scope === 'all' && !filter.q && !filter.types?.length &&
       filter.from === undefined && filter.to === undefined && !filter.cameras?.length && !filter.orientation &&
       filter.hasLocation === undefined && filter.favorite === undefined && !filter.under;
@@ -152,7 +162,7 @@ export class MediaReader {
   }
 
   random(filter: RandomFilter, context: Context) {
-    const condition = where(filter, context);
+    const condition = where(filter, context, this.db);
     const range = this.db.prepare('SELECT min(rowid) AS min, max(rowid) AS max FROM files').get() as { min: number | null; max: number | null };
     if (range.min === null || range.max === null) return { items: [] };
     const start = range.max <= 2 ** 48 ? randomInt(range.min, range.max + 1) : range.min;
@@ -161,5 +171,16 @@ export class MediaReader {
     const rows = get('>=', filter.count);
     if (rows.length < filter.count) rows.push(...get('<', filter.count - rows.length));
     return { items: rows.map(item) };
+  }
+
+  summary(filter: Query, context: Context) {
+    const condition = where(filter, context, this.db);
+    return this.db.prepare(`SELECT count(*) AS count,min(f.taken_at) AS start,max(f.taken_at) AS end FROM files f WHERE ${condition.sql}`)
+      .get(...condition.params) as { count: number; start: number | null; end: number | null };
+  }
+
+  contains(filter: Query, context: Context, id: string): boolean {
+    const condition = where(filter, context, this.db);
+    return !!this.db.prepare(`SELECT 1 FROM files f WHERE ${condition.sql} AND f.id=?`).get(...condition.params, id);
   }
 }
