@@ -42,3 +42,16 @@ test('取消 FFmpeg 执行会停止进程并释放共享槽位', async () => {
     assert.equal((db.prepare('SELECT count(*) AS n FROM ffmpeg_slots').get() as { n: number }).n, 0);
   } finally { db.close(); }
 });
+
+test('缩略图槽位按设置限制多个 worker 的并发', async () => {
+  const { withThumbnailSlot } = await import('../src/worker/ffmpeg-slots.ts');
+  const db = openDatabase(':memory:');
+  try {
+    writeSettings(db, { workers: { thumbnailConcurrency: 1, ffmpegConcurrency: 2 } });
+    let active = 0; let peak = 0;
+    const run = () => withThumbnailSlot(db, 'worker', async () => { active++; peak = Math.max(peak, active); await delay(60); active--; });
+    await Promise.all([run(), run(), run()]);
+    assert.equal(peak, 1);
+    assert.equal((db.prepare("SELECT count(*) AS n FROM ffmpeg_slots WHERE kind='thumbnail'").get() as { n: number }).n, 0);
+  } finally { db.close(); }
+});

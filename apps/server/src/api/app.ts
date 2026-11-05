@@ -21,6 +21,8 @@ import { MediaReader } from '../core/media-query.ts';
 import { QueryExecutor } from '../core/query-executor.ts';
 import { Observability } from '../core/observability.ts';
 import { noteThumbnail } from '../core/folder-covers.ts';
+import { ensureHls, hlsCacheKey, hlsDirectory, hlsId } from '../core/hls.ts';
+import type { HlsSession } from '../core/hls.ts';
 import { FolderReader } from '../core/folder-reader.ts';
 import { mediaId, pathAllowed, secureMediaPath, virtualPath } from '../core/paths.ts';
 import { sendFile } from './binary.ts';
@@ -40,7 +42,7 @@ type TokenRow = {
   id: string; name: string; scope: 'read' | 'wallpaper'; prefix: string;
   created_at: number; last_used_at: number | null; expires_at: number | null; wallpaper: string | null;
 };
-type Identity = { user: UserRow; kind: 'session' | 'token' | 'legacy'; scope?: string; sessionHash?: string; wallpaper?: string | null };
+type Identity = { user: UserRow; kind: 'session' | 'token' | 'legacy'; scope?: string; sessionHash?: string; tokenHash?: string; wallpaper?: string | null };
 type Options = { db: Database.Database; legacyPending: boolean | (() => boolean); secureCookies?: boolean; mounts?: () => Promise<Mount[]>; systemRoots?: string[]; cacheDir?: string; staticDir?: string; legacyJwtSecret?: string };
 class HttpError extends Error { constructor(publicStatus: number, code: string, message: string) { super(message); this.statusCode = publicStatus; this.code = code; } statusCode: number; code: string; }
 const fail = (status: number, code: string, message: string): never => { throw new HttpError(status, code, message); };
@@ -116,7 +118,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     if (!value || value.length > 4096) return undefined;
     const row = db.prepare(`SELECT u.*, t.scope AS token_scope, t.wallpaper AS token_wallpaper FROM api_tokens t JOIN users u ON u.id=t.user_id
       WHERE t.token_hash=? AND (t.expires_at IS NULL OR t.expires_at>?)`).get(digest(value), now()) as (UserRow & { token_scope: string; token_wallpaper: string | null }) | undefined;
-    if (row) return { user: row, kind: 'token', scope: row.token_scope, wallpaper: row.token_wallpaper };
+    if (row) return { user: row, kind: 'token', scope: row.token_scope, tokenHash: digest(value), wallpaper: row.token_wallpaper };
     if (legacy && options.legacyJwtSecret) {
       try {
         const decoded = jwt.verify(value, options.legacyJwtSecret, { algorithms: ['HS256'] });
@@ -565,6 +567,60 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     }).immediate();
     return sendFile(req, reply, filename, { mime: 'image/webp', name: row.name, etagKey: key });
   }
+  function identityPrincipal(identity: Identity): string {
+    const key = identity.kind === 'session' ? identity.sessionHash : identity.kind === 'token' ? identity.tokenHash : undefined;
+    if (!key) return fail(401, 'UNAUTHORIZED', '需要有效会话或令牌');
+    return digest(`${identity.kind}:${key}`);
+  }
+  async function hlsResponse(req: FastifyRequest, reply: FastifyReply, row: BinaryRow, principal: string, resource: string, authorize: () => unknown) {
+    if (resource !== 'index.m3u8' && !/^seg-\d{6}\.ts$/.test(resource)) return fail(404, 'NOT_FOUND', 'HLS 资源不存在');
+    const current = db.prepare('SELECT playability FROM files WHERE id=?').get(row.id) as { playability: string | null } | undefined;
+    if (row.media_type !== 'video' || current?.playability !== 'transcode' || !readSettings(db).transcode.enabled) return fail(404, 'NOT_FOUND', '视频不需要转码或转码已关闭');
+    const id = hlsId(row, principal);
+    let session = resource === 'index.m3u8' ? ensureHls(db, row, principal)
+      : db.prepare('SELECT * FROM hls_sessions WHERE id=? AND principal_hash=?').get(id, principal) as HlsSession | undefined;
+    if (!session) return fail(404, 'NOT_FOUND', 'HLS 会话不存在');
+    db.prepare('UPDATE hls_sessions SET last_access_at=? WHERE id=? AND principal_hash=?').run(Date.now(), id, principal);
+    if (!session.generation) return resource === 'index.m3u8' ? reply.header('Retry-After', '1').code(202).send({ status: 'pending' }) : fail(404, 'NOT_FOUND', 'HLS 分片尚未就绪');
+    const filename = path.join(hlsDirectory(cacheDir, id, session.generation), resource);
+    let info;
+    try { info = await lstat(filename); } catch {
+      authorize();
+      if (resource !== 'index.m3u8') return fail(404, 'NOT_FOUND', 'HLS 分片尚未就绪');
+      if (session.state === 'ready') {
+        db.prepare("UPDATE hls_sessions SET state='failed' WHERE id=? AND state='ready' AND generation=?").run(id, session.generation);
+        session = ensureHls(db, row, principal);
+      }
+      return reply.header('Retry-After', '1').code(202).send({ status: 'pending' });
+    }
+    if (!info.isFile() || info.isSymbolicLink()) return fail(404, 'NOT_FOUND', 'HLS 资源不可访问');
+    authorize();
+    const generation = session.generation;
+    db.transaction(() => {
+      const active = db.prepare('SELECT 1 FROM hls_sessions WHERE id=? AND principal_hash=? AND generation=?').get(id, principal, generation);
+      if (!active) fail(404, 'NOT_FOUND', 'HLS 会话已经变化');
+      const touched = Date.now();
+      db.prepare('UPDATE hls_sessions SET last_access_at=? WHERE id=? AND principal_hash=?').run(touched, id, principal);
+      db.prepare(`INSERT INTO cache_entries(cache_key,relative_path,bytes,last_access_at,media_id,variant,source_size,source_modified,hls_session_id)
+        VALUES (?,?,?,?,?,'hls',?,?,?) ON CONFLICT(cache_key) DO UPDATE SET bytes=excluded.bytes,last_access_at=excluded.last_access_at`)
+        .run(hlsCacheKey(id, generation, resource), path.relative(path.resolve(cacheDir), filename), info.size, touched, row.id, row.size, row.modified_at, id);
+    }).immediate();
+    return sendFile(req, reply, filename, { mime: resource === 'index.m3u8' ? 'application/vnd.apple.mpegurl' : 'video/mp2t', name: resource,
+      etagKey: hlsCacheKey(id, generation, resource) });
+  }
+  app.get('/api/v2/media/:id/hls/:resource', async (req, reply) => {
+    const { id, resource } = req.params as { id: string; resource: string };
+    const identity = requireUser(req); const principal = identityPrincipal(identity);
+    const { row } = await binaryMedia(req, id);
+    const authorize = () => {
+      const current = authenticate(req) ?? fail(401, 'UNAUTHORIZED', '会话已失效');
+      if (identityPrincipal(current) !== principal || !pathAllowed(row.folder, userOut(current.user).allowedPaths)) fail(404, 'NOT_FOUND', '媒体不可访问');
+      if (!db.prepare(`SELECT 1 FROM files f JOIN libraries l ON l.id=f.library_id AND l.enabled=1
+        WHERE f.id=? AND f.size=? AND f.modified_at=? AND f.playability='transcode'`).get(id, row.size, row.modified_at) || !readSettings(db).transcode.enabled) fail(404, 'NOT_FOUND', '媒体不可访问');
+    };
+    authorize();
+    return hlsResponse(req, reply, row, principal, resource, authorize);
+  });
   app.get('/api/v2/media/:id/:resource', async (req, reply) => {
     const { id, resource } = req.params as { id: string; resource: string };
     if (!['original', 'display', 'thumb', 'preview', 'tiles.dzi'].includes(resource)) return fail(404, 'NOT_FOUND', '媒体资源不存在');
@@ -755,6 +811,33 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
       return sendFile(req, reply, filename, { mime: 'video/mp4', name: row.name, etagKey: cacheKey(row, variant) });
     }
     return sendFile(req, reply, filename, { mime: row.mime, name: row.name, download: (req.query as { download?: string }).download === '1', etagKey: row.id });
+  });
+  app.get('/api/v2/public/shares/:token/media/:id/hls/:resource', async (req, reply) => {
+    const { token, id, resource } = req.params as { token: string; id: string; resource: string };
+    const authorize = () => {
+      const share = shareByToken(token);
+      if (!shareUnlocked(req, share)) return fail(403, 'FORBIDDEN', '请先解锁分享');
+      const scope = shareScope(share);
+      if (!media.contains(scope.query, scope.context, id)) return fail(404, 'NOT_FOUND', '媒体不属于分享');
+      return { share, scope };
+    };
+    const initial = authorize();
+    const { row } = await binaryMediaFor(initial.scope.context, id);
+    const check = () => {
+      authorize();
+      if (!db.prepare(`SELECT 1 FROM files f JOIN libraries l ON l.id=f.library_id AND l.enabled=1
+        WHERE f.id=? AND f.size=? AND f.modified_at=? AND f.playability='transcode'`).get(id, row.size, row.modified_at) || !readSettings(db).transcode.enabled) fail(404, 'NOT_FOUND', '媒体不可访问');
+    };
+    check();
+    const cookieName = `luvia_hls_${initial.share.id.replaceAll('-', '')}`;
+    let visitor = req.cookies[cookieName];
+    if (!visitor || !/^[A-Za-z0-9_-]{32,128}$/.test(visitor)) {
+      if (resource !== 'index.m3u8') return fail(404, 'NOT_FOUND', 'HLS 会话不存在');
+      visitor = secret();
+      reply.setCookie(cookieName, visitor, { httpOnly: true, sameSite: 'lax', secure, path: `/api/v2/public/shares/${initial.share.token}`, maxAge: 7200 });
+    }
+    const principal = digest(`share:${initial.share.id}:${digest(visitor)}`);
+    return hlsResponse(req, reply, row, principal, resource, check);
   });
   type DownloadTarget = ReturnType<typeof endpoints.createDownload.body.parse>;
   function validateDownload(target: DownloadTarget, owner: UserRow): void {

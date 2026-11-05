@@ -1,9 +1,8 @@
 import { monitorEventLoopDelay } from 'node:perf_hooks';
-import { setTimeout as delay } from 'node:timers/promises';
 import { detectMounts } from '../core/mounts.ts';
 import { installFatalHandlers, openRuntime } from '../core/runtime.ts';
 import { probeFfmpeg } from './ffmpeg.ts';
-import { newWorkerOwner, runNextJob } from './runner.ts';
+import { newWorkerOwner } from './runner.ts';
 import { discoverNewMounts } from './discover.ts';
 import type { Mount } from '../core/mounts.ts';
 import { sampleMounts } from './mount-estimate.ts';
@@ -13,6 +12,8 @@ import { publishJob } from '../core/job-view.ts';
 import { withFfmpegSlot } from './ffmpeg-slots.ts';
 import { scheduleScans } from './schedule.ts';
 import { createWorkerLogger } from '../core/observability.ts';
+import { cleanupHls } from './hls.ts';
+import { runWorkerPool } from './pool.ts';
 
 installFatalHandlers('worker');
 const runtime = await openRuntime();
@@ -50,24 +51,28 @@ const pruneTimer = setInterval(schedulePrune, 60_000);
 pruneTimer.unref();
 const scanTimer = setInterval(() => { try { scheduleScans(runtime.db); } catch { logger.warn('扫描调度失败'); } }, 30_000);
 scanTimer.unref();
+let cleaning = false; let hlsCleanup: Promise<void> = Promise.resolve();
+const scheduleHlsCleanup = () => {
+  if (cleaning) return;
+  cleaning = true;
+  hlsCleanup = cleanupHls(runtime.db, runtime.cacheDir).then(() => {}).catch(() => { logger.warn('HLS 缓存回收失败'); }).finally(() => { cleaning = false; });
+};
+const hlsTimer = setInterval(scheduleHlsCleanup, 30_000); hlsTimer.unref();
 let sampling: Promise<void> = Promise.resolve();
 try {
   schedulePrune();
+  scheduleHlsCleanup();
   await discoverNewMounts(runtime.db, mounts, [runtime.dataDir, runtime.cacheDir]);
   scheduleScans(runtime.db);
   sampling = sampleMounts(runtime.db, mounts, stopController.signal).catch(() => { logger.warn('挂载抽样失败'); });
   const ffmpeg = await withFfmpegSlot(runtime.db, owner, (signal) => probeFfmpeg('ffmpeg', signal), { signal: stopController.signal });
   runtime.db.prepare("INSERT INTO settings(key,value) VALUES('worker.ffmpeg',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(JSON.stringify(ffmpeg));
   logger.info({ ctx: { type: ffmpeg.encoder } }, '视频编码器已选择');
-  while (!stopController.signal.aborted) {
-    const worked = await runNextJob(runtime.db, { owner, allowedRoots, legacyDir: runtime.legacyDir, systemRoots: [runtime.dataDir, runtime.cacheDir], cacheDir: runtime.cacheDir, signal: stopController.signal,
-      log: (level, message, ctx) => logger[level]({ ctx }, message) });
-    if (!worked) {
-      try { await delay(500, undefined, { signal: stopController.signal }); } catch { if (!stopController.signal.aborted) throw new Error('worker 等待失败'); }
-    }
-  }
+  await runWorkerPool(runtime.db, { owner, allowedRoots, legacyDir: runtime.legacyDir, systemRoots: [runtime.dataDir, runtime.cacheDir], cacheDir: runtime.cacheDir, signal: stopController.signal,
+    log: (level, message, ctx) => logger[level]({ ctx }, message) });
 } finally {
   stopController.abort();
   await sampling;
-  clearInterval(heartbeatTimer); clearInterval(pruneTimer); clearInterval(scanTimer); loop.disable(); runtime.db.close();
+  clearInterval(heartbeatTimer); clearInterval(pruneTimer); clearInterval(scanTimer); clearInterval(hlsTimer);
+  await hlsCleanup; loop.disable(); runtime.db.close();
 }

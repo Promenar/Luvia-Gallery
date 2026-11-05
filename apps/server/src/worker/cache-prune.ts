@@ -17,8 +17,9 @@ export async function pruneCache(db: Database.Database, cacheDir: string, limitB
   try { actualRoot = await realpath(root); } catch { actualRoot = root; }
   while (total > limitBytes) {
     assertLease();
-    const entries = db.prepare(`SELECT * FROM cache_entries WHERE last_access_at>? OR (last_access_at=? AND cache_key>?)
-      ORDER BY last_access_at,cache_key LIMIT 256`).all(lastAccess, lastAccess, lastKey) as Entry[];
+    const entries = db.prepare(`SELECT * FROM cache_entries WHERE (last_access_at>? OR (last_access_at=? AND cache_key>?))
+      AND (variant IS NULL OR variant<>'hls' OR NOT EXISTS(SELECT 1 FROM hls_sessions h WHERE h.id=cache_entries.hls_session_id AND h.last_access_at>?))
+      ORDER BY last_access_at,cache_key LIMIT 256`).all(lastAccess, lastAccess, lastKey, Date.now() - 60_000) as Entry[];
     if (!entries.length) break;
     for (const entry of entries) {
       if (total <= limitBytes) break;

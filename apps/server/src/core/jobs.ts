@@ -19,7 +19,7 @@ export class JobQueue {
     return this.db.transaction(() => {
       this.db.prepare(`UPDATE jobs SET status='queued', owner=NULL, heartbeat_at=NULL, lease_expires_at=NULL
         WHERE status='running' AND COALESCE(lease_expires_at,0)<=?`).run(at);
-      const job = this.db.prepare("SELECT id,type,checkpoint,payload FROM jobs WHERE status='queued' ORDER BY CASE WHEN dedupe_key LIKE 'media:%' THEN 0 WHEN type IN ('metadata','previews') THEN 2 ELSE 1 END,created_at,id LIMIT 1").get() as JobRow | undefined;
+      const job = this.db.prepare("SELECT id,type,checkpoint,payload FROM jobs WHERE status='queued' ORDER BY CASE WHEN dedupe_key LIKE 'media:%' OR dedupe_key LIKE 'hls:%' THEN 0 WHEN type IN ('metadata','previews') THEN 2 ELSE 1 END,created_at,id LIMIT 1").get() as JobRow | undefined;
       if (!job) return null;
       const changed = this.db.prepare(`UPDATE jobs SET status='running', owner=?, heartbeat_at=?, lease_expires_at=?,
         started_at=COALESCE(started_at,?) WHERE id=? AND status='queued'`).run(this.owner, at, at + leaseSeconds, at, job.id);
