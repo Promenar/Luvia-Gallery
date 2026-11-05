@@ -4,7 +4,8 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import type Database from 'better-sqlite3';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import path from 'node:path';
-import { realpath, stat, readdir } from 'node:fs/promises';
+import { access, realpath, stat, readdir } from 'node:fs/promises';
+import { setTimeout as delay } from 'node:timers/promises';
 import sharp from 'sharp';
 import { ZodError } from 'zod';
 import { CSRF_HEADER, endpoints, JobAction, Preferences, WallpaperConfig, defaultPreferences } from '@luvia/contracts';
@@ -12,12 +13,15 @@ import type { User } from '@luvia/contracts';
 import { hashPassword, verifyPassword } from '../core/password.ts';
 import { MediaReader } from '../core/media-query.ts';
 import { FolderReader } from '../core/folder-reader.ts';
-import { pathAllowed } from '../core/paths.ts';
+import { pathAllowed, secureMediaPath } from '../core/paths.ts';
+import { sendFile } from './binary.ts';
 import { jobView, publishJob } from '../core/job-view.ts';
 import type { JobRecord } from '../core/job-view.ts';
 import { detectMounts } from '../core/mounts.ts';
 import type { Mount } from '../core/mounts.ts';
 import { readSettings, writeSettings } from '../core/settings.ts';
+import { cacheKey, cachePath, enqueueMediaTask } from '../core/media-cache.ts';
+import type { Variant } from '../core/media-cache.ts';
 
 type UserRow = {
   id: string; username: string; password_hash: string; role: 'admin' | 'user';
@@ -28,7 +32,7 @@ type TokenRow = {
   created_at: number; last_used_at: number | null; expires_at: number | null; wallpaper: string | null;
 };
 type Identity = { user: UserRow; kind: 'session' | 'token'; scope?: string; sessionHash?: string };
-type Options = { db: Database.Database; legacyPending: boolean | (() => boolean); secureCookies?: boolean; mounts?: () => Promise<Mount[]>; systemRoots?: string[] };
+type Options = { db: Database.Database; legacyPending: boolean | (() => boolean); secureCookies?: boolean; mounts?: () => Promise<Mount[]>; systemRoots?: string[]; cacheDir?: string };
 class HttpError extends Error { constructor(publicStatus: number, code: string, message: string) { super(message); this.statusCode = publicStatus; this.code = code; } statusCode: number; code: string; }
 const fail = (status: number, code: string, message: string): never => { throw new HttpError(status, code, message); };
 const digest = (s: string) => createHash('sha256').update(s).digest('hex');
@@ -306,6 +310,84 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     if (query.exclude && query.exclude.length > 500) fail(400, 'VALIDATION', '排除的媒体不能超过 500 个');
     return media.random(query, mediaContext(req));
   });
+  type BinaryRow = { id: string; name: string; relative_path: string; folder: string; mime: string; media_type: string; root: string; size: number; modified_at: number; width: number | null; height: number | null };
+  async function binaryMedia(req: FastifyRequest, id: string): Promise<{ row: BinaryRow; filename: string }> {
+    const identity = requireUser(req);
+    const row = db.prepare(`SELECT f.id,f.name,f.relative_path,f.folder,f.mime,f.media_type,f.size,f.modified_at,f.width,f.height,l.root FROM files f
+      JOIN libraries l ON l.id=f.library_id WHERE f.id=? AND l.enabled=1`).get(id) as BinaryRow | undefined;
+    const allowed = userOut(identity.user).allowedPaths;
+    if (!row || !pathAllowed(row.folder, allowed)) return fail(404, 'NOT_FOUND', '媒体不存在或不可访问');
+    let filename: string;
+    try { filename = await secureMediaPath(row.root, row.relative_path); }
+    catch { return fail(404, 'NOT_FOUND', '媒体不可访问'); }
+    return { row, filename };
+  }
+  const cacheDir = options.cacheDir ?? path.resolve(process.env.CACHE_DIR ?? 'cache');
+  const exists = async (filename: string) => { try { await access(filename); return true; } catch { return false; } };
+  async function cachedMedia(req: FastifyRequest, reply: FastifyReply, row: BinaryRow, variant: Variant, wait: boolean) {
+    const filename = cachePath(cacheDir, row, variant);
+    if (!await exists(filename)) {
+      const jobId = enqueueMediaTask(db, row, variant);
+      if (wait) {
+        const deadline = Date.now() + 5000;
+        while (Date.now() < deadline && !req.raw.aborted) {
+          await delay(50);
+          if (await exists(filename)) break;
+          const job = db.prepare('SELECT status FROM jobs WHERE id=?').get(jobId) as { status: string } | undefined;
+          if (!job || job.status === 'failed' || job.status === 'cancelled') return fail(404, 'NOT_FOUND', '媒体缓存生成失败');
+        }
+      }
+      if (!await exists(filename)) return reply.header('Retry-After', '1').code(202).send({ status: 'pending' });
+    }
+    const touched = Date.now();
+    db.prepare('UPDATE cache_entries SET last_access_at=? WHERE cache_key=? AND last_access_at<?')
+      .run(touched, cacheKey(row, variant), touched - 60_000);
+    return sendFile(req, reply, filename, { mime: 'image/webp', name: row.name, etagKey: cacheKey(row, variant) });
+  }
+  app.get('/api/v2/media/:id/:resource', async (req, reply) => {
+    const { id, resource } = req.params as { id: string; resource: string };
+    if (!['original', 'display', 'thumb', 'tiles.dzi'].includes(resource)) return fail(404, 'NOT_FOUND', '媒体资源不存在');
+    const { row, filename } = await binaryMedia(req, id);
+    if (resource === 'thumb') {
+      const parsed = (req.query as { size?: string }).size ?? 'm';
+      if (parsed !== 's' && parsed !== 'm' && parsed !== 'l') return fail(400, 'VALIDATION', '缩略图尺寸无效');
+      return cachedMedia(req, reply, row, { kind: 'thumb', size: parsed }, true);
+    }
+    if (resource === 'tiles.dzi') {
+      if (row.media_type !== 'image') return fail(404, 'NOT_FOUND', '媒体不支持深度缩放');
+      if (!row.width || !row.height) {
+        enqueueMediaTask(db, row, { kind: 'dimensions' });
+        return reply.header('Retry-After', '1').code(202).send({ status: 'pending' });
+      }
+      if (Math.max(row.width, row.height) <= 8192) return fail(404, 'NOT_FOUND', '媒体不支持深度缩放');
+      return reply.type('application/xml; charset=utf-8').send(`<?xml version="1.0" encoding="UTF-8"?><Image TileSize="256" Overlap="0" Format="webp" Url="/api/v2/media/${encodeURIComponent(id)}/tiles/" xmlns="http://schemas.microsoft.com/deepzoom/2008"><Size Width="${row.width}" Height="${row.height}"/></Image>`);
+    }
+    if (resource === 'display') {
+      if (row.media_type !== 'image') return fail(404, 'NOT_FOUND', '媒体不支持图像显示');
+      if (!['image/jpeg', 'image/png', 'image/webp', 'image/avif', 'image/gif'].includes(row.mime))
+        return cachedMedia(req, reply, row, { kind: 'display' }, false);
+    }
+    const download = resource === 'original' && (req.query as { download?: string }).download === '1';
+    return sendFile(req, reply, filename, { mime: row.mime, name: row.name, download, etagKey: row.id });
+  });
+  app.get('/api/v2/media/:id/tiles/:level/:tile', async (req, reply) => {
+    const { id, level: rawLevel, tile } = req.params as { id: string; level: string; tile: string };
+    const match = /^(\d+)_(\d+)\.webp$/.exec(tile);
+    if (!match || !/^\d+$/.test(rawLevel)) return fail(404, 'NOT_FOUND', '瓦片不存在');
+    const level = Number(rawLevel); const col = Number(match[1]); const tileRow = Number(match[2]);
+    const { row } = await binaryMedia(req, id);
+    if (row.media_type === 'image' && (!row.width || !row.height)) {
+      enqueueMediaTask(db, row, { kind: 'dimensions' });
+      return reply.header('Retry-After', '1').code(202).send({ status: 'pending' });
+    }
+    if (!row.width || !row.height || Math.max(row.width, row.height) <= 8192 || !Number.isSafeInteger(level) || !Number.isSafeInteger(col) || !Number.isSafeInteger(tileRow))
+      return fail(404, 'NOT_FOUND', '瓦片不存在');
+    const maxLevel = Math.ceil(Math.log2(Math.max(row.width, row.height)));
+    if (level > maxLevel) return fail(404, 'NOT_FOUND', '瓦片不存在');
+    const scale = 2 ** (maxLevel - level);
+    if (col * 256 >= Math.ceil(row.width / scale) || tileRow * 256 >= Math.ceil(row.height / scale)) return fail(404, 'NOT_FOUND', '瓦片不存在');
+    return cachedMedia(req, reply, row, { kind: 'tile', level, col, row: tileRow }, false);
+  });
   type LibraryRow = { id: string; name: string; root: string; enabled: number; status: string; last_scan_at: number | null; host_root: string | null; host_root_source: 'auto' | 'manual' | null; exclude: string; media_count: number };
   const librarySql = 'SELECT l.*,COALESCE(f.media_count,0) AS media_count FROM libraries l LEFT JOIN folders f ON f.path=l.id';
   const libraryOut = (row: LibraryRow) => ({ id: row.id, name: row.name, root: row.root, enabled: !!row.enabled,
@@ -376,8 +458,9 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     const labels: Record<string, string> = { scan: '扫描媒体库', metadata: '提取元数据', thumbnails: '生成缩略图', previews: '生成预览', health_check: '健康检查', cache_prune: '清理缓存', import_legacy: '导入旧版数据' };
     const id = randomUUID();
     return db.transaction(() => {
-      db.prepare("INSERT INTO jobs(id,type,label,status,trigger,payload,created_at) VALUES (?,?,?,'queued','manual',?,?)")
-        .run(id, body.type, labels[body.type], JSON.stringify({ libraryId: body.libraryId ?? null }), now());
+      const inserted = db.prepare("INSERT OR IGNORE INTO jobs(id,type,label,status,trigger,payload,created_at,dedupe_key) VALUES (?,?,?,'queued','manual',?,?,?)")
+        .run(id, body.type, labels[body.type], JSON.stringify({ libraryId: body.libraryId ?? null }), now(), body.type === 'cache_prune' ? 'system:cache-prune' : null);
+      if (!inserted.changes) fail(409, 'CONFLICT', '相同作业已在队列中');
       publishJob(db, id);
       return jobView(db.prepare('SELECT * FROM jobs WHERE id=?').get(id) as JobRecord);
     }).immediate();

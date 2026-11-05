@@ -4,8 +4,12 @@ import { JobQueue } from '../core/jobs.ts';
 import { publishJob } from '../core/job-view.ts';
 import { scanLibrary } from './scan.ts';
 import { importLegacy, reconcileLegacyFavorites } from './import-legacy.ts';
+import { generateMediaCache } from './media-cache.ts';
+import path from 'node:path';
+import { pruneCache } from './cache-prune.ts';
+import { readSettings } from '../core/settings.ts';
 
-type Options = { owner: string; allowedRoots: string[]; legacyDir: string; systemRoots: string[]; signal?: AbortSignal };
+type Options = { owner: string; allowedRoots: string[]; legacyDir: string; systemRoots: string[]; cacheDir?: string; signal?: AbortSignal };
 type Payload = { libraryId?: string | null; legacyImportId?: string };
 const now = () => Math.floor(Date.now() / 1000);
 const childId = (parent: string, library: string) => `scan_${createHash('sha256').update(parent).update('\0').update(library).digest('base64url').slice(0, 24)}`;
@@ -71,6 +75,12 @@ export async function runNextJob(db: Database.Database, options: Options): Promi
         db.prepare("INSERT INTO settings(key,value) VALUES('legacy.pending','false') ON CONFLICT(key) DO UPDATE SET value=excluded.value").run();
         if (!queue.finish(job.id, finalCounts)) throw new Error('作业租约已失效');
       }).immediate();
+    } else if (job.type === 'thumbnails') {
+      await generateMediaCache(db, payload, { cacheDir: options.cacheDir ?? path.resolve(process.env.CACHE_DIR ?? 'cache'), allowedRoots: options.allowedRoots, assertLease, signal: controller.signal });
+      if (!queue.finish(job.id, { generated: 1 })) throw new Error('作业租约已失效');
+    } else if (job.type === 'cache_prune') {
+      const result = await pruneCache(db, options.cacheDir ?? path.resolve(process.env.CACHE_DIR ?? 'cache'), readSettings(db).cache.limitGB * 1024 ** 3, assertLease);
+      if (!queue.finish(job.id, result)) throw new Error('作业租约已失效');
     } else if (job.type === 'health_check') {
       if (!queue.finish(job.id, { checked: 1 })) throw new Error('作业租约已失效');
     } else {

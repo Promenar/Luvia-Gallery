@@ -7,6 +7,9 @@ import { newWorkerOwner, runNextJob } from './runner.ts';
 import { discoverNewMounts } from './discover.ts';
 import type { Mount } from '../core/mounts.ts';
 import { sampleMounts } from './mount-estimate.ts';
+import { randomUUID } from 'node:crypto';
+import { readSettings } from '../core/settings.ts';
+import { publishJob } from '../core/job-view.ts';
 
 installFatalHandlers('worker');
 const runtime = await openRuntime();
@@ -29,15 +32,27 @@ const heartbeat = () => {
 heartbeat();
 const heartbeatTimer = setInterval(heartbeat, 5000);
 heartbeatTimer.unref();
+const schedulePrune = () => {
+  const used = (runtime.db.prepare('SELECT COALESCE(sum(bytes),0) AS n FROM cache_entries').get() as { n: number }).n;
+  if (used <= readSettings(runtime.db).cache.limitGB * 1024 ** 3) return;
+  runtime.db.transaction(() => {
+    const id = randomUUID();
+    const result = runtime.db.prepare("INSERT OR IGNORE INTO jobs(id,type,label,status,trigger,created_at,dedupe_key) VALUES (?,'cache_prune','清理缓存','queued','system',unixepoch(),'system:cache-prune')").run(id);
+    if (result.changes) publishJob(runtime.db, id);
+  }).immediate();
+};
+const pruneTimer = setInterval(schedulePrune, 60_000);
+pruneTimer.unref();
 let sampling: Promise<void> = Promise.resolve();
 try {
+  schedulePrune();
   await discoverNewMounts(runtime.db, mounts, [runtime.dataDir, runtime.cacheDir]);
   sampling = sampleMounts(runtime.db, mounts, stopController.signal).catch(() => { process.stderr.write('挂载抽样失败\n'); });
   const ffmpeg = await probeFfmpeg();
   runtime.db.prepare("INSERT INTO settings(key,value) VALUES('worker.ffmpeg',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(JSON.stringify(ffmpeg));
   process.stdout.write(`worker 编码器: ${ffmpeg.encoder}\n`);
   while (!stopController.signal.aborted) {
-    const worked = await runNextJob(runtime.db, { owner, allowedRoots, legacyDir: runtime.legacyDir, systemRoots: [runtime.dataDir, runtime.cacheDir], signal: stopController.signal });
+    const worked = await runNextJob(runtime.db, { owner, allowedRoots, legacyDir: runtime.legacyDir, systemRoots: [runtime.dataDir, runtime.cacheDir], cacheDir: runtime.cacheDir, signal: stopController.signal });
     if (!worked) {
       try { await delay(500, undefined, { signal: stopController.signal }); } catch { if (!stopController.signal.aborted) throw new Error('worker 等待失败'); }
     }
@@ -45,5 +60,5 @@ try {
 } finally {
   stopController.abort();
   await sampling;
-  clearInterval(heartbeatTimer); loop.disable(); runtime.db.close();
+  clearInterval(heartbeatTimer); clearInterval(pruneTimer); loop.disable(); runtime.db.close();
 }

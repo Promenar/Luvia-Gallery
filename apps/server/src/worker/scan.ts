@@ -105,6 +105,10 @@ async function scanWithLock(db: Database.Database, library: { id: string; root: 
       taken_at=CASE WHEN files.size != excluded.size OR files.modified_at != excluded.modified_at THEN excluded.modified_at ELSE files.taken_at END,
       taken_at_source=CASE WHEN files.size != excluded.size OR files.modified_at != excluded.modified_at THEN 'mtime' ELSE files.taken_at_source END,
       metadata_status=CASE WHEN files.size != excluded.size OR files.modified_at != excluded.modified_at THEN 'pending' ELSE files.metadata_status END,
+      thumb_version=CASE WHEN files.size != excluded.size OR files.modified_at != excluded.modified_at THEN files.thumb_version + 1 ELSE files.thumb_version END,
+      thumbhash=CASE WHEN files.size != excluded.size OR files.modified_at != excluded.modified_at THEN NULL ELSE files.thumbhash END,
+      width=CASE WHEN files.size != excluded.size OR files.modified_at != excluded.modified_at THEN NULL ELSE files.width END,
+      height=CASE WHEN files.size != excluded.size OR files.modified_at != excluded.modified_at THEN NULL ELSE files.height END,
       has_preview=CASE WHEN files.size != excluded.size OR files.modified_at != excluded.modified_at THEN 0 ELSE files.has_preview END,
       size=excluded.size, modified_at=excluded.modified_at, scan_marker=excluded.scan_marker`);
   const flush = () => {
