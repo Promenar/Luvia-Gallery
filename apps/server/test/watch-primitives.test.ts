@@ -77,15 +77,15 @@ test('目录差异识别变更、消失和新子目录', async () => {
 
 test('文件每次变化后重新等待三秒，待定期间消失时不产出', async () => {
   const m = await import('../src/watch/stability.ts'); assert.ok(m, '稳定性模块尚未实现');
-  const clock = new TestClock(); const stable: string[] = [];
+  const clock = new TestClock(); const stable: string[] = []; const dropped: string[] = [];
   const files = new Map([['a.jpg', { size: 1, mtimeMs: 10 }], ['gone.jpg', { size: 1, mtimeMs: 10 }]]);
-  const tracker = new m.StabilityTracker({ clock, stat: async (p) => files.get(p) ?? null, onStable: (p) => { stable.push(p); } });
+  const tracker = new m.StabilityTracker({ clock, stat: async (p) => files.get(p) ?? null, onStable: (p) => { stable.push(p); }, onDropped: (p) => { dropped.push(p); } });
   tracker.track('a.jpg', files.get('a.jpg')!); tracker.track('gone.jpg', files.get('gone.jpg')!);
   await clock.advance(2000); assert.deepEqual(stable, []);
   files.set('a.jpg', { size: 2, mtimeMs: 11 }); files.delete('gone.jpg');
   await clock.advance(1000); assert.deepEqual(stable, []);
   await clock.advance(2999); assert.deepEqual(stable, []);
-  await clock.advance(1); assert.deepEqual(stable, ['a.jpg']);
+  await clock.advance(1); assert.deepEqual(stable, ['a.jpg']); assert.deepEqual(dropped, ['gone.jpg']);
 });
 
 test('宽限期支持恢复、到期移除以及零天时下一次对账清理', async () => {
@@ -124,4 +124,20 @@ test('变更通知按媒体库节流并压缩完整路径段前缀', async () =>
   assert.deepEqual(events, [{ libraryId: 'lib', source: 'watch', folders: ['lib/a', 'lib/abc'], added: 1, removed: 0, updated: 0, moved: 1 }]);
   t.add({ source: 'watch', folders: ['lib/a'], updated: 2 }); await clock.advance(1999); assert.equal(events.length, 1);
   await clock.advance(1); assert.equal(events.length, 2);
+});
+
+test('启动时实际挂载不符合已知挂载标识，应保持不可用直到挂载恢复', async () => {
+  const { RootGuard } = await import('../src/watch/root-guard.ts'); let mount = 'fallback';
+  const guard = new RootGuard({ root: '/media/lib', expectedMountIdentity: 'expected', probe: async () => true, mount: async () => mount });
+  assert.equal((await guard.check()).state, 'unavailable'); mount = 'expected';
+  assert.deepEqual(await guard.check(), { state: 'available', needsFullReconcile: true });
+});
+
+test('较早目录已释放后，强制期限从仍待处理的首个事件计算', async () => {
+  const { DirtyQueue } = await import('../src/watch/dirty-queue.ts'); const clock = new TestClock(); const released: string[] = [];
+  const queue = new DirtyQueue({ exclude: [], clock, onReady: (dirs) => released.push(...dirs) });
+  queue.add('a/file.jpg', false); await clock.advance(1000); queue.add('b/file.jpg', false);
+  for (let i = 0; i < 9; i++) { await clock.advance(1000); queue.add('b/file.jpg', false); }
+  assert.deepEqual(released, ['a']); await clock.advance(999); assert.deepEqual(released, ['a']);
+  await clock.advance(1); assert.deepEqual(released, ['a', 'b']);
 });
