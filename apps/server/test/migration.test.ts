@@ -151,3 +151,25 @@ test('后续扫描发现原先未匹配媒体时恢复旧收藏', async () => {
     assert.equal((db.prepare('SELECT count(*) AS n FROM favorites').get() as { n: number }).n, 1);
   } finally { db.close(); await rm(dir, { recursive: true, force: true }); }
 });
+
+test('嵌套媒体库的旧收藏优先匹配已启用且实际收录媒体的最深目录', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'luvia-old-nested-')); const child = path.join(dir, 'sub');
+  await mkdir(child); await writeFile(path.join(child, 'a.jpg'), 'synthetic image');
+  const db = openDatabase(':memory:');
+  try {
+    db.prepare("INSERT INTO users(id,username,password_hash,role,preferences,created_at) VALUES ('u','user','hash','user','{}',1)").run();
+    db.prepare("INSERT INTO libraries(id,name,root,enabled) VALUES ('parent','父库',?,1),('child','子库',?,0)").run(dir, child);
+    await scanLibrary(db, { id: 'parent', root: dir }, { allowedRoots: [dir] });
+    const addPending = (key: string) => db.prepare("INSERT INTO legacy_favorites_pending(source_key,username,user_id,legacy_item,absolute_path,item_type,created_at,status) VALUES (?,'user','u','old',?,'file',1,'unmatched')").run(key, path.join(child, 'a.jpg'));
+    addPending('one');
+    assert.deepEqual(legacyImport.reconcileLegacyFavorites(db, { finalize: true }), { imported: 1, pending: 0, unmatched: 0 });
+    db.prepare("UPDATE libraries SET enabled=1 WHERE id='child'").run();
+    addPending('two');
+    assert.deepEqual(legacyImport.reconcileLegacyFavorites(db, { finalize: true }), { imported: 2, pending: 0, unmatched: 0 });
+    await scanLibrary(db, { id: 'child', root: child }, { allowedRoots: [dir] });
+    addPending('three');
+    assert.deepEqual(legacyImport.reconcileLegacyFavorites(db, { finalize: true }), { imported: 3, pending: 0, unmatched: 0 });
+    const paths = db.prepare("SELECT f.library_id FROM favorites v JOIN files f ON f.id=v.item_id WHERE v.user_id='u' ORDER BY f.library_id").all() as { library_id: string }[];
+    assert.deepEqual(paths.map((row) => row.library_id), ['child', 'parent']);
+  } finally { db.close(); await rm(dir, { recursive: true, force: true }); }
+});

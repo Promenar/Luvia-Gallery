@@ -174,7 +174,7 @@ export async function importLegacy(db: DatabaseType.Database, options: { legacyD
 }
 
 export function reconcileLegacyFavorites(db: DatabaseType.Database, options: { finalize: boolean; assertLease?: () => void }): Counts {
-  const roots = db.prepare('SELECT id,root FROM libraries').all() as Root[];
+  const roots = db.prepare('SELECT id,root FROM libraries WHERE enabled=1 ORDER BY length(root) DESC,id ASC').all() as Root[];
   let cursor = '';
   while (true) {
     const rows = db.prepare(`SELECT source_key,user_id,absolute_path,item_type,created_at FROM legacy_favorites_pending
@@ -183,14 +183,17 @@ export function reconcileLegacyFavorites(db: DatabaseType.Database, options: { f
     db.transaction(() => {
       options.assertLease?.();
       for (const pending of rows) {
-        const match = pending.absolute_path ? mappedPath(pending.absolute_path, roots) : undefined;
         let itemId: string | undefined;
-        if (match && pending.item_type === 'file' && match.relative) {
-          const id = mediaId(match.root.id, match.relative);
-          if (db.prepare('SELECT 1 FROM files WHERE id=?').get(id)) itemId = id;
-        } else if (match && pending.item_type === 'folder') {
-          const folder = virtualPath(match.root.id, match.relative);
-          if (db.prepare('SELECT 1 FROM folders WHERE path=?').get(folder)) itemId = folder;
+        for (const root of roots) {
+          const match = pending.absolute_path ? mappedPath(pending.absolute_path, [root]) : undefined;
+          if (match && pending.item_type === 'file' && match.relative) {
+            const id = mediaId(match.root.id, match.relative);
+            if (db.prepare('SELECT 1 FROM files WHERE id=?').get(id)) itemId = id;
+          } else if (match && pending.item_type === 'folder') {
+            const folder = virtualPath(match.root.id, match.relative);
+            if (db.prepare('SELECT 1 FROM folders WHERE path=?').get(folder)) itemId = folder;
+          }
+          if (itemId) break;
         }
         if (itemId && pending.user_id) {
           db.prepare('INSERT OR IGNORE INTO favorites(user_id,item_id,item_type,created_at) VALUES (?,?,?,?)').run(pending.user_id, itemId, pending.item_type, pending.created_at);
