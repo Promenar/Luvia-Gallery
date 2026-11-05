@@ -1,0 +1,12 @@
+/* 首页（回忆）专用动画：大图缓慢推近与分段进度条。减少动态时组件不挂载这些动画。 */
+@keyframes luvia-hero-kb {
+  from { transform: scale(1.02) translate(0, 0); }
+  to { transform: scale(1.12) translate(-2%, -1.5%); }
+}
+@keyframes luvia-hero-seg {
+  from { width: 0; }
+  to { width: 100%; }
+}
+.luvia-hero-kb { animation: luvia-hero-kb 9s linear forwards; }
+.luvia-hero-seg { animation: luvia-hero-seg var(--seg-ms, 7000ms) linear forwards; }
+.luvia-hero-paused .luvia-hero-seg { animation-play-state: paused; }

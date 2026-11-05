@@ -21,7 +21,7 @@ type Def = {
   /** 204 无响应体时为 null。 */
   response: z.ZodType | null;
 };
-const d = <T extends Def>(def: T) => def;
+const d = <const T extends Def>(def: T) => def;
 
 export const endpoints = {
   // 认证与个人
