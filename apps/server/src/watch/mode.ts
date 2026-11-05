@@ -10,7 +10,7 @@ export function decideWatchMode(options: { requested: LibraryWatch['mode']; fsTy
   const interval = options.pollIntervalSec ?? 300;
   const intervalText = interval % 60 === 0 ? `${interval / 60} 分钟` : `${interval} 秒`;
   let reason: string | null = null;
-  if (['nfs', 'nfs4', 'cifs', 'smb3', '9p', 'fuse'].includes(fsType) || fsType.startsWith('fuse.')) {
+  if (requested === 'auto' && (['nfs', 'nfs4', 'cifs', 'smb3', '9p', 'fuse'].includes(fsType) || fsType.startsWith('fuse.'))) {
     reason = `网络文件系统 ${fsType} 不支持实时事件，已改为每 ${intervalText}对账`;
   } else if (quota !== null && dirCount > Math.max(0, quota) * 0.8) {
     reason = `目录数 ${dirCount} 超过剩余监视额度的 80%，已改为轮询；可调高 fs.inotify.max_user_watches`;

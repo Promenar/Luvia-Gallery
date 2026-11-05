@@ -6,6 +6,19 @@ export interface PathEvent { eventType: 'rename' | 'change'; path: string | null
 export interface WatchHandlers { onEvent(event: PathEvent): void; onError(error: Error): void; onOverflow(): void }
 export interface Watcher { start(handlers: WatchHandlers): void; stop(): void; watchedCount(): Promise<number | null> }
 
+/** libuv 可能在同一进程内复用 inotify 描述符，按进程读取一次避免重复计数。 */
+export async function readProcessWatchCount(): Promise<number | null> {
+  if (process.platform !== 'linux') return null;
+  try {
+    const names = await readdir('/proc/self/fdinfo');
+    const values = await Promise.all(names.map(async (name) => {
+      try { const text = await readFile(`/proc/self/fdinfo/${name}`, 'utf8'); return text.split('\n').filter((line) => line.startsWith('inotify wd:')).length; }
+      catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 0; throw error; }
+    }));
+    return values.reduce((sum, value) => sum + value, 0);
+  } catch { return null; }
+}
+
 export class NodeFsWatcher implements Watcher {
   private watcher: FSWatcher | null = null;
   private readonly root: string;
@@ -25,15 +38,7 @@ export class NodeFsWatcher implements Watcher {
   }
   stop(): void { this.watcher?.close(); this.watcher = null; }
   async watchedCount(): Promise<number | null> {
-    if (process.platform !== 'linux' || !this.watcher) return null;
-    try {
-      const names = await readdir('/proc/self/fdinfo');
-      const values = await Promise.all(names.map(async (name) => {
-        try { const text = await readFile(`/proc/self/fdinfo/${name}`, 'utf8'); return text.split('\n').filter((line) => line.startsWith('inotify wd:')).length; }
-        catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 0; throw error; }
-      }));
-      return values.reduce((sum, value) => sum + value, 0);
-    } catch { return null; }
+    return this.watcher ? readProcessWatchCount() : null;
   }
 }
 

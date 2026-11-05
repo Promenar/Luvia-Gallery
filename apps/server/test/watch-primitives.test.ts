@@ -29,6 +29,7 @@ test('模式根据网络文件系统和剩余额度选择轮询，保留中文�
   assert.deepEqual(m.decideWatchMode({ requested: 'auto', fsType: 'cifs', dirCount: 10, quota: 100 }),
     { state: 'polling', degradedReason: '网络文件系统 cifs 不支持实时事件，已改为每 5 分钟对账' });
   assert.equal(m.decideWatchMode({ requested: 'auto', fsType: 'fuse.sshfs', dirCount: 1, quota: 100 }).state, 'polling');
+  assert.equal(m.decideWatchMode({ requested: 'watch', fsType: 'cifs', dirCount: 1, quota: 100 }).state, 'watching');
   assert.equal(m.decideWatchMode({ requested: 'auto', fsType: 'zfs', dirCount: 80, quota: 100 }).state, 'watching');
   const low = m.decideWatchMode({ requested: 'watch', fsType: 'btrfs', dirCount: 81, quota: 100 });
   assert.equal(low.state, 'degraded'); assert.match(low.degradedReason!, /80%/); assert.match(low.degradedReason!, /fs\.inotify\.max_user_watches/);
