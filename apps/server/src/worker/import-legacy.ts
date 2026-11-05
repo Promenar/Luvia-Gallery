@@ -2,7 +2,7 @@ import Database from 'better-sqlite3';
 import type DatabaseType from 'better-sqlite3';
 import { readFile, access, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { defaultPreferences, WallpaperConfig } from '@luvia/contracts';
 import { mediaId, virtualPath } from '../core/paths.ts';
 import { hashPassword } from '../core/password.ts';
@@ -108,9 +108,11 @@ export async function importLegacy(db: DatabaseType.Database, options: { legacyD
         if (match) return [virtualPath(match.root.id, match.relative)];
         return roots.filter((r) => isWithin(absolute, r.root)).map((r) => r.id);
       });
-      db.prepare(`INSERT OR IGNORE INTO users (id,username,password_hash,role,allowed_paths,preferences,created_at)
-        VALUES (?,?,?,?,?,?,?)`).run(idFor('usr', user.username), user.username, user.password, user.isAdmin ? 'admin' : 'user', user.isAdmin ? null : JSON.stringify(mapped), JSON.stringify(defaultPreferences()), now);
+      const inserted = db.prepare(`INSERT OR IGNORE INTO users (id,username,password_hash,role,allowed_paths,preferences,created_at)
+        VALUES (?,?,?,?,?,?,?)`).run(randomUUID(), user.username, user.password, user.isAdmin ? 'admin' : 'user', user.isAdmin ? null : JSON.stringify(mapped), JSON.stringify(defaultPreferences()), now);
       const actual = db.prepare('SELECT id FROM users WHERE username=?').get(user.username) as { id: string };
+      if (inserted.changes) db.prepare(`INSERT OR IGNORE INTO legacy_jwt_users(user_id) SELECT ? WHERE NOT EXISTS
+        (SELECT 1 FROM legacy_jwt_revoked_users WHERE username=?)`).run(actual.id, user.username);
       if (user.wallpaperToken) db.prepare(`INSERT OR IGNORE INTO api_tokens (id,user_id,token_hash,name,scope,prefix,created_at,wallpaper)
         VALUES (?,?,?,?,?,?,?,?)`).run(idFor('tok', user.wallpaperToken), actual.id, digest(user.wallpaperToken), '旧版壁纸令牌', 'wallpaper', user.wallpaperToken.slice(0, 8), now, JSON.stringify(WallpaperConfig.parse({ source: 'library' })));
     }
