@@ -1,6 +1,7 @@
 import { randomInt } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import type { QueryExecutor } from './query-executor.ts';
+import { rowIdRange } from './rowid-range.ts';
 
 type Value = string | number;
 export type LegacyRow = { id: string; relative_path: string; root: string; name: string; mime: string; media_type: string; size: number;
@@ -38,7 +39,7 @@ export async function legacyPage(db: Database.Database, executor: QueryExecutor,
   const baseParameters = [options.userId, ...parameters];
   let rows: LegacyRow[];
   if (options.random && options.seed === null) {
-    const range = db.prepare('SELECT min(rowid) AS min,max(rowid) AS max FROM files').get() as { min: number | null; max: number | null };
+    const range = rowIdRange(db);
     if (range.min === null || range.max === null) return { rows: [], hasMore: false };
     const start = range.max < 2 ** 48 ? randomInt(range.min, range.max + 1) : range.min;
     const firstCount = options.offset ? Number(((await executor.run([{ sql: `SELECT count(*) AS n ${from} AND f.rowid>=?`, params: [...parameters, start] }]))[0]![0] as { n: number }).n) : 0;
