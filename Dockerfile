@@ -1,5 +1,7 @@
 FROM node:24-trixie-slim AS dependencies
 WORKDIR /app
+# 构建无终端：前端阶段在生产依赖之上补装开发依赖时，pnpm 需要非交互模式才会直接重建依赖目录
+ENV CI=true
 RUN apt-get update \
     && apt-get install -y --no-install-recommends python3 make g++ \
     && rm -rf /var/lib/apt/lists/* \
