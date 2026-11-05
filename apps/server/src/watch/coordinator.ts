@@ -89,7 +89,7 @@ export class WatchCoordinator {
     this.matcher = new MoveMatcher({ clock: this.clock,
       onMoved: (from, to) => { void this.run(() => this.applyMoved(from as Candidate, to as Candidate)).catch(() => {}); },
       onMissing: (item) => { void this.run(() => this.applyMissing(item as Candidate)).catch(() => {}); },
-      onAdded: (item) => { void this.run(() => this.applyAdded(item as Candidate)).catch(() => {}); },
+      onAdded: (item) => { void this.run(() => item.mediaId === null ? this.applyAdded(item as Candidate) : this.finalizeAdded(item as Candidate)).catch(() => {}); },
     });
     this.throttle = new ChangeThrottle({ libraryId: options.libraryId, clock: this.clock,
       publish: (event) => { void this.run(() => this.options.port.publishEvent(event)).catch(() => {}); },
@@ -270,14 +270,22 @@ export class WatchCoordinator {
     }
     const pendingKind = this.matcher.pendingMatchForAdded(candidate);
     const match = await this.findMissingMatch(candidate);
-    if (pendingKind === 'inode' || pendingKind === 'ambiguous' || (pendingKind === 'hash' && (!match || matchKind(match, candidate) !== 'inode'))) {
+    if (pendingKind === 'ambiguous') {
+      await this.applyAdded(candidate);
+      if (candidate.mediaId !== null) this.matcher.appeared(candidate);
+      return;
+    }
+    if (pendingKind === 'inode' || (pendingKind === 'hash' && (!match || matchKind(match, candidate) !== 'inode'))) {
       this.matcher.appeared(candidate); return;
     }
     if (match) { await this.options.port.writeRestored(match, candidate); await this.record('restored', relative, null, false, match.mediaId, source);
       if (match.path !== relative) await this.record('moved', relative, match.path, false, match.mediaId, source, false);
       return;
     }
-    if (!this.matcher.hasAdded(relative)) this.matcher.appeared(candidate);
+    if (!this.matcher.hasAdded(relative)) {
+      await this.applyAdded(candidate);
+      if (candidate.mediaId !== null) this.matcher.appeared(candidate);
+    }
   }
   private async findMissingMatch(candidate: Candidate): Promise<IndexedRecord | undefined> {
     const missing = await this.options.port.findMissingCandidates(candidate);
@@ -307,8 +315,11 @@ export class WatchCoordinator {
       else await this.options.port.requestFullReconcile('move-race');
       return;
     }
-    if (old.missingAt !== null) await this.options.port.writeRestored(old, to); else await this.options.port.writeMoved(old, to);
-    await this.record('moved', to.path, from.path, to.isDir, old.mediaId, to.source);
+    if (old.missingAt !== null) {
+      await this.options.port.writeRestored(old, to);
+      if (to.mediaId !== null) await this.record('restored', to.path, null, to.isDir, old.mediaId, to.source, false);
+    } else await this.options.port.writeMoved(old, to);
+    await this.record('moved', to.path, from.path, to.isDir, old.mediaId, to.source, true, to.mediaId !== null);
     if (to.isDir) await this.reconcile(to.path, to.source, true);
   }
   private async applyMissing(item: Candidate): Promise<void> {
@@ -318,6 +329,10 @@ export class WatchCoordinator {
     if (!old || old.missingAt !== null) return;
     if (!(await this.checkRoot())) return;
     await this.options.port.writeMissing(old, this.clock.now()); await this.record('missing', old.path, null, old.isDir, old.mediaId, item.source);
+  }
+  private async finalizeAdded(item: Candidate): Promise<void> {
+    const match = await this.findMissingMatch(item);
+    if (match) await this.applyMoved({ ...match, source: item.source }, item);
   }
   private async applyAdded(item: Candidate): Promise<void> {
     if (!(await this.checkRoot())) return;
@@ -335,13 +350,14 @@ export class WatchCoordinator {
       if (item.isDir) await this.reconcile(item.path, item.source, true);
       return;
     }
-    const mediaId = await this.options.port.writeAdded(item); await this.record('added', item.path, null, item.isDir, mediaId, item.source);
+    const mediaId = await this.options.port.writeAdded(item); item.mediaId = mediaId;
+    await this.record('added', item.path, null, item.isDir, mediaId, item.source);
   }
-  private async record(kind: WatchLibraryChange['kind'], relative: string, fromPath: string | null, isDir: boolean, mediaId: string | null, source: Source, notify = true): Promise<void> {
+  private async record(kind: WatchLibraryChange['kind'], relative: string, fromPath: string | null, isDir: boolean, mediaId: string | null, source: Source, notify = true, compensateAdded = false): Promise<void> {
     await this.options.port.appendChange({ ts: new Date(this.clock.now()).toISOString(), kind, path: relative, fromPath, isDir, mediaId, source });
     if (!notify || kind === 'removed') return;
     const folders = [parentOf(relative), ...(fromPath === null ? [] : [parentOf(fromPath)])].map((dir) => dir ? `${this.options.libraryId}/${dir}` : this.options.libraryId);
-    this.throttle.add({ source, folders, added: kind === 'added' || kind === 'restored' ? 1 : 0,
+    this.throttle.add({ source, folders, added: compensateAdded ? -1 : kind === 'added' || kind === 'restored' ? 1 : 0,
       updated: kind === 'updated' ? 1 : 0, moved: kind === 'moved' ? 1 : 0, removed: kind === 'missing' ? 1 : 0 });
   }
 }

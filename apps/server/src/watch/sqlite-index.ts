@@ -199,10 +199,27 @@ export class SqliteLibraryIndex implements LibraryIndexPort {
     }
   }
   async writeMoved(old: IndexedRecord, entry: MoveCandidate): Promise<void> {
-    this.begin({ kinds: ['moved'], oldPath: old.path, path: entry.path, isDir: old.isDir, mediaId: old.mediaId }, () => { this.verify(old); this.relocate(old, entry); });
+    this.begin({ kinds: ['moved'], oldPath: old.path, path: entry.path, isDir: old.isDir, mediaId: old.mediaId }, () => {
+      this.verify(old);
+      this.removeProvisional(old, entry);
+      this.relocate(old, entry);
+    });
+  }
+  private removeProvisional(old: IndexedRecord, entry: MoveCandidate): void {
+      if (entry.mediaId !== null && entry.mediaId !== old.mediaId) {
+        if (old.isDir || !old.mediaId) throw new Error('临时媒体身份无效');
+        const provisional = this.db.prepare('SELECT id,relative_path,size,modified_at,mtime_ms,dev,ino,head_hash,missing_at_ms FROM files WHERE id=? AND library_id=? AND relative_path=?')
+          .get(entry.mediaId, this.libraryId, entry.path) as FileRow | undefined;
+        if (!provisional || provisional.missing_at_ms !== null || provisional.size !== entry.size || provisional.mtime_ms !== entry.mtimeMs ||
+          identity(provisional.dev) !== identity(entry.dev) || identity(provisional.ino) !== identity(entry.ino) || provisional.head_hash !== entry.headHash) throw new Error('临时媒体索引已变化');
+        this.db.prepare("INSERT OR IGNORE INTO favorites(user_id,item_id,item_type,created_at) SELECT user_id,?,'file',created_at FROM favorites WHERE item_type='file' AND item_id=?").run(old.mediaId, entry.mediaId);
+        this.db.prepare('INSERT OR IGNORE INTO album_items(album_id,file_id,created_at) SELECT album_id,?,created_at FROM album_items WHERE file_id=?').run(old.mediaId, entry.mediaId);
+        this.db.prepare('UPDATE albums SET cover_id=? WHERE cover_id=?').run(old.mediaId, entry.mediaId);
+        this.removeFile(entry.mediaId);
+      }
   }
   async writeRestored(old: IndexedRecord, entry: MoveCandidate): Promise<void> {
-    this.begin({ kinds: ['restored', 'moved'], oldPath: old.path, path: entry.path, isDir: old.isDir, mediaId: old.mediaId }, () => { this.verify(old); this.relocate(old, entry); });
+    this.begin({ kinds: ['restored', 'moved'], oldPath: old.path, path: entry.path, isDir: old.isDir, mediaId: old.mediaId }, () => { this.verify(old); this.removeProvisional(old, entry); this.relocate(old, entry); });
   }
   async writeMissing(old: IndexedRecord, at: number): Promise<void> {
     const virtual = virtualPath(this.libraryId, old.path); const parent = virtualPath(this.libraryId, parentOf(old.path));

@@ -40,7 +40,7 @@ export function sqliteHarness(root: string, clock: { now(): number }) {
     }
   }
   class Harness extends SqliteLibraryIndex {
-    records = new Records(); events = events; requests = requests;
+    records = new Records(); events = events; requests = requests; testDb = db;
     get changes(): WatchLibraryChange[] {
       const rows = db.prepare('SELECT ts,kind,path,from_path,is_dir,media_id,source FROM library_changes ORDER BY id').all() as { ts: number; kind: WatchLibraryChange['kind']; path: string; from_path: string | null; is_dir: number; media_id: string | null; source: WatchLibraryChange['source'] }[];
       return rows.map((row) => ({ ts: new Date(row.ts).toISOString(), kind: row.kind, path: row.path, fromPath: row.from_path, isDir: !!row.is_dir, mediaId: row.media_id, source: row.source }));

@@ -119,11 +119,12 @@ test('变更通知按媒体库节流并压缩完整路径段前缀', async () =>
   const clock = new TestClock(); const events: unknown[] = [];
   const t = new m.ChangeThrottle({ libraryId: 'lib', clock, publish: (event) => events.push(event) });
   t.add({ source: 'watch', folders: ['lib/a/b', 'lib/a', 'lib/abc'], added: 1 });
+  assert.deepEqual(events, [{ libraryId: 'lib', source: 'watch', folders: ['lib/a', 'lib/abc'], added: 1, removed: 0, updated: 0, moved: 0 }]);
   t.add({ source: 'watch', folders: ['lib/a/c'], moved: 1 });
-  await clock.advance(1999); assert.deepEqual(events, []); await clock.advance(1);
-  assert.deepEqual(events, [{ libraryId: 'lib', source: 'watch', folders: ['lib/a', 'lib/abc'], added: 1, removed: 0, updated: 0, moved: 1 }]);
-  t.add({ source: 'watch', folders: ['lib/a'], updated: 2 }); await clock.advance(1999); assert.equal(events.length, 1);
-  await clock.advance(1); assert.equal(events.length, 2);
+  await clock.advance(1999); assert.equal(events.length, 1); await clock.advance(1);
+  assert.deepEqual(events[1], { libraryId: 'lib', source: 'watch', folders: ['lib/a/c'], added: 0, removed: 0, updated: 0, moved: 1 });
+  t.add({ source: 'watch', folders: ['lib/a'], updated: 2 }); await clock.advance(1999); assert.equal(events.length, 2);
+  await clock.advance(1); assert.equal(events.length, 3);
 });
 
 test('启动时实际挂载不符合已知挂载标识，应保持不可用直到挂载恢复', async () => {
