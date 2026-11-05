@@ -1438,11 +1438,14 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
           cursor = record.id;
           if (record.event_type === 'job' && (current.kind !== 'session' || current.user.role !== 'admin')) continue;
           if (record.event_type === 'library') {
-            const event = JSON.parse(record.payload) as { folders: string[]; added: number; removed: number; updated: number };
+            const event = JSON.parse(record.payload) as { folders: string[]; added: number; removed: number; updated: number; moved: number };
             const allowed = userOut(current.user).allowedPaths;
             if (allowed !== null) {
-              event.folders = event.folders.filter((folder) => pathAllowed(folder, allowed));
-              if (!event.folders.length) continue;
+              const visible = event.folders.filter((folder) => pathAllowed(folder, allowed));
+              if (!visible.length) continue;
+              // 计数是整条事件的汇总，无法按目录拆分；含无权目录时只发失效通知，避免泄露其它目录的活动量。
+              if (visible.length < event.folders.length) Object.assign(event, { added: 0, removed: 0, updated: 0, moved: 0 });
+              event.folders = visible;
             }
             send(`id: ${record.id}\nevent: library\ndata: ${JSON.stringify(event)}\n\n`);
           } else if (record.event_type === 'job') send(`id: ${record.id}\nevent: job\ndata: ${record.payload}\n\n`);

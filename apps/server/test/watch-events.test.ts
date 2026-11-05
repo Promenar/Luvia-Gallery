@@ -79,6 +79,9 @@ test('事件合并时保留受限子目录，SSE 向有权用户发送变化', a
     timer = setTimeout(() => db.prepare('DELETE FROM sessions').run(), 800);
     const response = await app.inject({ method: 'GET', url: '/api/v2/events', headers: { cookie, 'last-event-id': '0' } });
     const match = response.body.match(/event: library\ndata: (.+)/); assert.ok(match);
-    assert.deepEqual(LibraryChangedEvent.parse(JSON.parse(match[1]!)).folders, ['lib/allowed']);
+    const received = LibraryChangedEvent.parse(JSON.parse(match[1]!));
+    assert.deepEqual(received.folders, ['lib/allowed']);
+    // 合并事件含无权目录时，汇总计数无法按目录拆分，受限用户只收到失效通知，不泄露其它目录的活动量。
+    assert.deepEqual([received.added, received.removed, received.updated, received.moved], [0, 0, 0, 0]);
   } finally { if (timer) clearTimeout(timer); await app.close(); db.close(); }
 });

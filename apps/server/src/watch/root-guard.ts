@@ -81,8 +81,8 @@ export async function confirmLibraryMount(db: Database.Database, library: { id: 
     const changed = saved.mount_root !== library.root || saved.mount_identity !== identity;
     if (changed) {
       if (options.allowChange === false) return unavailable('扫描期间媒体库挂载身份发生变化');
-      const sample = db.prepare('SELECT relative_path,size,mtime_ms FROM files WHERE library_id=? AND missing_at_ms IS NULL ORDER BY random() LIMIT 200')
-        .all(library.id) as { relative_path: string; size: number; mtime_ms: number | null }[];
+      const sample = db.prepare('SELECT relative_path,size,mtime_ms,modified_at FROM files WHERE library_id=? AND missing_at_ms IS NULL ORDER BY random() LIMIT 200')
+        .all(library.id) as { relative_path: string; size: number; mtime_ms: number | null; modified_at: number }[];
       let matches = 0;
       for (const file of sample) {
         options.signal?.throwIfAborted();
@@ -90,7 +90,9 @@ export async function confirmLibraryMount(db: Database.Database, library: { id: 
           const full = await realpath(path.join(actual, file.relative_path));
           if (!inside(actual, full)) continue;
           const info = await stat(full);
-          if (info.isFile() && info.size === file.size && file.mtime_ms !== null && Math.abs(info.mtimeMs - file.mtime_ms) < 0.001) matches++;
+          // 升级前或尚未回填的索引没有毫秒时间，退回秒级修改时间比对，避免升级后长期拒绝扫描。
+          const sameTime = file.mtime_ms !== null ? Math.abs(info.mtimeMs - file.mtime_ms) < 0.001 : Math.floor(info.mtimeMs / 1000) === file.modified_at;
+          if (info.isFile() && info.size === file.size && sameTime) matches++;
         } catch { /* 无法读取的样本不计为匹配。 */ }
       }
       if (sample.length && matches / sample.length < 0.9) return unavailable('媒体库挂载内容抽样不符，等待恢复');

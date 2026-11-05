@@ -36,6 +36,23 @@ test('挂载来源改变但文件内容一致时自动接纳新身份', async ()
   } finally { db.close(); await rm(dir, { recursive: true, force: true }); }
 });
 
+test('升级前索引缺少毫秒修改时间时，首次确认按秒级修改时间接纳挂载且不阻塞扫描', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'luvia-legacy-mount-')); const root = path.join(dir, 'media'); await mkdir(root);
+  const db = openDatabase(path.join(dir, 'db.sqlite'));
+  try {
+    for (const name of ['a.jpg', 'b.jpg', 'c.jpg']) await writeFile(path.join(root, name), name);
+    db.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib','照片',?)").run(root);
+    await scanLibrary(db, { id: 'lib', root }, { allowedRoots: [root], mount: async () => 'nas' });
+    const before = db.prepare('SELECT id FROM files ORDER BY id').all();
+    // 模拟升级前的库：尚未回填毫秒时间，也没有记录挂载身份。
+    db.prepare('UPDATE files SET mtime_ms=NULL').run();
+    db.prepare("DELETE FROM library_watch_state WHERE library_id='lib'").run();
+    await scanLibrary(db, { id: 'lib', root }, { allowedRoots: [root], mount: async () => 'nas' });
+    assert.equal((db.prepare('SELECT mount_identity FROM library_watch_state').get() as { mount_identity: string }).mount_identity, 'nas');
+    assert.deepEqual(db.prepare('SELECT id FROM files WHERE missing_at_ms IS NULL ORDER BY id').all(), before);
+  } finally { db.close(); await rm(dir, { recursive: true, force: true }); }
+});
+
 test('监控关闭的已有库在挂载点为空时拒绝扫描，恢复后保留媒体身份', async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'luvia-off-mount-')); const root = path.join(dir, 'media'); await mkdir(root);
   const db = openDatabase(path.join(dir, 'db.sqlite'));
