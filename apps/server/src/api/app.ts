@@ -213,6 +213,11 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
   app.setErrorHandler((err, _req, reply) => {
     if (err instanceof ZodError) return reply.code(400).send({ error: { code: 'VALIDATION', message: '请求参数无效' } });
     if (err instanceof HttpError) return reply.code(err.statusCode).send({ error: { code: err.code, message: err.message } });
+    const status = (err as { statusCode?: unknown } | null)?.statusCode;
+    if (typeof status === 'number' && Number.isInteger(status) && status >= 100 && status < 500) {
+      const messages: Record<number, string> = { 400: '请求参数无效', 413: '请求体过大', 415: '不支持的媒体类型' };
+      return reply.code(status).send({ error: { code: 'VALIDATION', message: messages[status] ?? '请求无法处理' } });
+    }
     return reply.code(500).send({ error: { code: 'INTERNAL', message: '服务器内部错误' } });
   });
   app.addHook('onRequest', async (req) => {
