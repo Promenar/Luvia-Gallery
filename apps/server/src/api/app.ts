@@ -560,9 +560,29 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
   }
   const cacheDir = options.cacheDir ?? path.resolve(process.env.CACHE_DIR ?? 'cache');
   const exists = async (filename: string) => { try { await access(filename); return true; } catch { return false; } };
+  async function legacyThumbnail(row: BinaryRow): Promise<string | undefined> {
+    const source = path.join(row.root, row.relative_path);
+    const hash = createHash('md5').update(Buffer.from(source).toString('base64')).digest('hex');
+    const filename = path.join(cacheDir, hash.slice(0, 2), hash.slice(2, 4), `${hash}.webp`);
+    try {
+      const info = await lstat(filename);
+      if (!info.isFile() || info.isSymbolicLink() || info.size === 0 || info.mtimeMs < row.modified_at * 1000) return undefined;
+      const [root, actual] = await Promise.all([realpath(cacheDir), realpath(filename)]);
+      const relative = path.relative(root, actual);
+      return relative && relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative) ? actual : undefined;
+    } catch { return undefined; }
+  }
   async function cachedMedia(req: FastifyRequest, reply: FastifyReply, row: BinaryRow, variant: Variant, wait: boolean, authorize?: () => unknown) {
     const filename = cachePath(cacheDir, row, variant);
     if (!await exists(filename)) {
+      if (variant.kind === 'thumb' && variant.size === 'm') {
+        const previous = await legacyThumbnail(row);
+        if (previous) {
+          authorize?.();
+          enqueueMediaTask(db, row, variant);
+          return sendFile(req, reply, previous, { mime: 'image/webp', name: row.name, etagKey: `legacy:${cacheKey(row, variant)}`, authorize });
+        }
+      }
       const waiter = wait ? randomUUID() : undefined;
       const jobId = enqueueMediaTask(db, row, variant, { waiter });
       if (wait) {

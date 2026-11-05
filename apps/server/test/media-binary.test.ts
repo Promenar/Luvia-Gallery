@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { appendFile, copyFile, mkdtemp, rm, symlink } from 'node:fs/promises';
+import { appendFile, copyFile, mkdir, mkdtemp, rm, symlink, utimes, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import sharp from 'sharp';
@@ -8,6 +9,67 @@ import { openDatabase } from '../src/core/database.ts';
 import { createApp } from '../src/api/app.ts';
 import { scanLibrary } from '../src/worker/scan.ts';
 import { runNextJob } from '../src/worker/runner.ts';
+
+test('新中图生成前可读取旧版缓存，后台作业完成后使用新图', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'luvia-old-thumb-')); const cache = await mkdtemp(path.join(tmpdir(), 'luvia-old-thumb-cache-'));
+  const db = openDatabase(':memory:'); const app = await createApp({ db, legacyPending: false, cacheDir: cache });
+  try {
+    const source = path.join(root, 'photo.jpg');
+    await sharp({ create: { width: 120, height: 80, channels: 3, background: '#123456' } }).jpeg().toFile(source);
+    const old = await sharp({ create: { width: 16, height: 12, channels: 3, background: '#ff2211' } }).webp().toBuffer();
+    const hash = createHash('md5').update(Buffer.from(source).toString('base64')).digest('hex');
+    const dir = path.join(cache, hash.slice(0, 2), hash.slice(2, 4)); await mkdir(dir, { recursive: true }); await writeFile(path.join(dir, `${hash}.webp`), old);
+    db.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib','照片',?)").run(root);
+    await scanLibrary(db, { id: 'lib', root }, { allowedRoots: [root] });
+    const { id } = db.prepare('SELECT id FROM files').get() as { id: string };
+    const setup = await app.inject({ method: 'POST', url: '/api/v2/auth/setup', payload: { username: 'admin', password: 'test password' } });
+    const headers = { cookie: (setup.headers['set-cookie'] as string).split(';')[0]! };
+    assert.equal((await app.inject({ method: 'GET', url: `/api/v2/media/${id}/thumb?size=m` })).statusCode, 401);
+    const pending = app.inject({ method: 'GET', url: `/api/v2/media/${id}/thumb?size=m`, headers });
+    const early = await Promise.race([pending.then((response) => response), new Promise<null>((resolve) => setTimeout(() => resolve(null), 500))]);
+    if (!early) await runNextJob(db, { owner: 'worker', allowedRoots: [root], legacyDir: root, systemRoots: [], cacheDir: cache });
+    const response = early ?? await pending;
+    assert.equal(response.statusCode, 200); assert.deepEqual(response.rawPayload, old);
+    assert.equal((db.prepare("SELECT count(*) AS n FROM jobs WHERE type='thumbnails' AND status='queued'").get() as { n: number }).n, 1);
+    await runNextJob(db, { owner: 'worker', allowedRoots: [root], legacyDir: root, systemRoots: [], cacheDir: cache });
+    const fresh = await app.inject({ method: 'GET', url: `/api/v2/media/${id}/thumb?size=m`, headers });
+    assert.equal(fresh.statusCode, 200); assert.equal((await sharp(fresh.rawPayload).metadata()).width, 120);
+    assert.notDeepEqual(fresh.rawPayload, old);
+  } finally { await app.close(); db.close(); await rm(root, { recursive: true, force: true }); await rm(cache, { recursive: true, force: true }); }
+});
+
+test('旧缩略图已过期或指向缓存外时使用新生成的图像', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'luvia-old-thumb-invalid-')); const cache = await mkdtemp(path.join(tmpdir(), 'luvia-old-thumb-invalid-cache-'));
+  const db = openDatabase(':memory:'); const app = await createApp({ db, legacyPending: false, cacheDir: cache });
+  try {
+    const old = await sharp({ create: { width: 16, height: 12, channels: 3, background: '#ff2211' } }).webp().toBuffer();
+    const outside = path.join(root, 'outside.webp'); await writeFile(outside, old);
+    for (const kind of ['stale', 'link']) {
+      const source = path.join(root, `${kind}.jpg`);
+      await sharp({ create: { width: 120, height: 80, channels: 3, background: '#123456' } }).jpeg().toFile(source);
+      const hash = createHash('md5').update(Buffer.from(source).toString('base64')).digest('hex');
+      const dir = path.join(cache, hash.slice(0, 2), hash.slice(2, 4)); await mkdir(dir, { recursive: true });
+      const previous = path.join(dir, `${hash}.webp`);
+      if (kind === 'link') await symlink(outside, previous);
+      else { await writeFile(previous, old); await utimes(previous, 1, 1); }
+    }
+    db.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib','照片',?)").run(root);
+    await scanLibrary(db, { id: 'lib', root }, { allowedRoots: [root] });
+    const setup = await app.inject({ method: 'POST', url: '/api/v2/auth/setup', payload: { username: 'admin', password: 'test password' } });
+    const headers = { cookie: (setup.headers['set-cookie'] as string).split(';')[0]! };
+    for (const kind of ['stale', 'link']) {
+      const { id } = db.prepare('SELECT id FROM files WHERE name=?').get(`${kind}.jpg`) as { id: string };
+      const pending = app.inject({ method: 'GET', url: `/api/v2/media/${id}/thumb?size=m`, headers });
+      for (let attempt = 0; attempt < 100; attempt++) {
+        if ((db.prepare("SELECT count(*) AS n FROM jobs WHERE type='thumbnails' AND status='queued'").get() as { n: number }).n) break;
+        await new Promise<void>((resolve) => setTimeout(resolve, 10));
+      }
+      await runNextJob(db, { owner: 'worker', allowedRoots: [root], legacyDir: root, systemRoots: [], cacheDir: cache });
+      const response = await pending;
+      assert.equal(response.statusCode, 200); assert.equal((await sharp(response.rawPayload).metadata()).width, 120);
+    }
+  } finally { await app.close(); db.close(); await rm(root, { recursive: true, force: true }); await rm(cache, { recursive: true, force: true }); }
+});
 
 test('原文件和浏览器可解码 display 支持 Range 与 ETag，逐次检查访问权限', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'luvia-binary-'));
