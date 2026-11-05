@@ -69,6 +69,7 @@ DATA_DIR=./data CACHE_DIR=./cache MEDIA_ROOT=/path/to/fixture npx -y -p node@24 
 ```
 
 `/healthz` 检查 API 事件循环，`/readyz` 还要求 worker 心跳正常。worker 启动时探测 FFmpeg 和 NVENC 单帧编码能力；探测结果可从管理员系统接口读取。在 macOS 开发环境中，`MEDIA_ROOT` 指定本地合成媒体目录；Linux 环境以 mountinfo 中检测到的候选挂载限制扫描范围。
+worker 每 15 分钟在独立线程执行 SQLite 检查点截断与 `PRAGMA optimize`；有活跃读取者时不等待锁，并在下次维护时重试。
 
 多个 worker 通过共享数据库中的租约限制 FFmpeg 和缩略图并发，长视频转码期间仍可处理其他作业。相同缩略图请求共享作业；最后一个等待客户端断开时取消按需作业和 FFmpeg，批量任务依赖的作业继续执行。已进入 sharp 的操作在完成后检查取消状态，同一缓存键的新生成会等待旧操作退出。HLS 按访问会话隔离，分片生成后即可播放；30 秒无访问时停止转码，闲置 60 秒后回收会话缓存。活跃播放的分片暂不参与缓存淘汰。支持探测 NVENC 并在不可用时回退 CPU；其他硬件编码路径尚未验证。
 

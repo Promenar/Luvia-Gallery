@@ -15,6 +15,7 @@ import { createWorkerLogger } from '../core/observability.ts';
 import { cleanupHls } from './hls.ts';
 import { runWorkerPool } from './pool.ts';
 import { flushMetadataFolders } from './metadata.ts';
+import { runSqliteMaintenance } from './sqlite-maintenance.ts';
 
 installFatalHandlers('worker');
 const runtime = await openRuntime();
@@ -54,6 +55,15 @@ const scanTimer = setInterval(() => { try { scheduleScans(runtime.db); } catch {
 scanTimer.unref();
 const folderTimer = setInterval(() => { try { flushMetadataFolders(runtime.db); } catch { logger.warn('目录统计恢复失败'); } }, 5000);
 folderTimer.unref();
+let maintaining = false; let maintenance: Promise<void> = Promise.resolve();
+const maintenanceTimer = setInterval(() => {
+  if (maintaining) return;
+  maintaining = true;
+  maintenance = runSqliteMaintenance(runtime.db.name).then((result) => {
+    if (result.busy) logger.info('数据库检查点暂不可截断，将在下次维护时重试');
+  }).catch(() => { logger.warn('数据库维护失败'); }).finally(() => { maintaining = false; });
+}, 15 * 60_000);
+maintenanceTimer.unref();
 let cleaning = false; let hlsCleanup: Promise<void> = Promise.resolve();
 const scheduleHlsCleanup = () => {
   if (cleaning) return;
@@ -77,6 +87,6 @@ try {
 } finally {
   stopController.abort();
   await sampling;
-  clearInterval(heartbeatTimer); clearInterval(pruneTimer); clearInterval(scanTimer); clearInterval(folderTimer); clearInterval(hlsTimer);
-  await hlsCleanup; loop.disable(); runtime.db.close();
+  clearInterval(heartbeatTimer); clearInterval(pruneTimer); clearInterval(scanTimer); clearInterval(folderTimer); clearInterval(hlsTimer); clearInterval(maintenanceTimer);
+  await Promise.all([hlsCleanup, maintenance]); loop.disable(); runtime.db.close();
 }
