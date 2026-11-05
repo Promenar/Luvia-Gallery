@@ -9,6 +9,7 @@ import { openDatabase } from '../src/core/database.ts';
 import * as legacyImport from '../src/worker/import-legacy.ts';
 import { scanLibrary } from '../src/worker/scan.ts';
 import { runNextJob } from '../src/worker/runner.ts';
+import { createApp } from '../src/api/app.ts';
 import { verifyPassword } from '../src/core/password.ts';
 
 const sha = (text: string | Buffer) => createHash('sha256').update(text).digest('hex');
@@ -49,6 +50,8 @@ test('旧库只导入用户数据，收藏在扫描后匹配，孤儿保留且�
     assert.equal(tokenRow.token_hash, sha(token));
     assert.equal(tokenRow.scope, 'wallpaper');
     assert.equal(JSON.parse(tokenRow.wallpaper).source, 'library');
+    assert.equal(JSON.parse(tokenRow.wallpaper).landscapeOnly, false);
+    assert.equal(JSON.parse(tokenRow.wallpaper).includeVideos, true);
     assert.equal(JSON.parse((db.prepare("SELECT value FROM settings WHERE key='siteName'").get() as { value: string }).value), '家庭图库');
     const lib = db.prepare('SELECT id,root FROM libraries').get() as { id: string; root: string };
     await scanLibrary(db, lib, { allowedRoots: [media] });
@@ -61,6 +64,29 @@ test('旧库只导入用户数据，收藏在扫描后匹配，孤儿保留且�
     assert.equal((db.prepare('SELECT count(*) AS n FROM favorites').get() as { n: number }).n, 4);
     assert.equal(sha(await readFile(oldPath)), before);
   } finally { db.close(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('旧壁纸默认保留竖图、未知尺寸与视频，并迁移兼容设置', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'luvia-old-wallpaper-')); const media = path.join(dir, 'media'); const legacy = path.join(dir, 'legacy');
+  await mkdir(media); await mkdir(legacy);
+  await writeFile(path.join(legacy, 'lumina-config.json'), JSON.stringify({ libraryPaths: [media], users: [
+    { username: 'alice', password: 'synthetic password', isAdmin: true, wallpaperToken: 'synthetic-wallpaper' },
+    { username: 'bob', password: 'synthetic password', wallpaperToken: 'synthetic-no-video', wallpaperConfig: { interval: 45, showVideos: false } },
+  ] }));
+  const db = openDatabase(':memory:'); const app = await createApp({ db, legacyPending: false });
+  try {
+    await importLegacy(db, { legacyDir: legacy, mediaRoots: [media] });
+    const library = (db.prepare('SELECT id FROM libraries').get() as { id: string }).id;
+    const add = db.prepare("INSERT INTO files(id,library_id,relative_path,folder,name,mime,media_type,size,modified_at,taken_at,taken_at_source,width,height) VALUES (?,?,?,?,?,?,?,?,?,?,'mtime',?,?)");
+    add.run('portrait', library, 'portrait.jpg', library, 'portrait.jpg', 'image/jpeg', 'image', 1, 1, 1, 100, 200);
+    add.run('unknown', library, 'unknown.jpg', library, 'unknown.jpg', 'image/jpeg', 'image', 1, 1, 1, null, null);
+    add.run('video', library, 'video.mp4', library, 'video.mp4', 'video/mp4', 'video', 1, 1, 1, null, null);
+    const response = await app.inject({ method: 'GET', url: '/api/scan/results?random=true&token=synthetic-wallpaper' });
+    assert.equal(response.statusCode, 200);
+    assert.deepEqual(response.json().files.map((item: { name: string }) => item.name).sort(), ['portrait.jpg', 'unknown.jpg', 'video.mp4']);
+    const config = db.prepare("SELECT wallpaper FROM api_tokens WHERE name='旧版壁纸令牌' AND token_hash=?").get(sha('synthetic-no-video')) as { wallpaper: string };
+    assert.deepEqual(JSON.parse(config.wallpaper), { source: 'library', folder: null, intervalSec: 45, landscapeOnly: false, includeVideos: false });
+  } finally { await app.close(); db.close(); await rm(dir, { recursive: true, force: true }); }
 });
 
 test('导入时转换明文口令并把越界、系统目录与缺失目录计为不可映射', async () => {

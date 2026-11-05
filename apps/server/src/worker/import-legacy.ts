@@ -7,7 +7,7 @@ import { defaultPreferences, WallpaperConfig } from '@luvia/contracts';
 import { mediaId, virtualPath } from '../core/paths.ts';
 import { hashPassword } from '../core/password.ts';
 
-type LegacyUser = { username: string; password: string; isAdmin?: boolean; allowedPaths?: string[]; wallpaperToken?: string };
+type LegacyUser = { username: string; password: string; isAdmin?: boolean; allowedPaths?: string[]; wallpaperToken?: string; wallpaperConfig?: { interval?: unknown; showVideos?: unknown } | null };
 type LegacyConfig = { title?: string; libraryPaths?: string[]; users?: LegacyUser[] };
 type LegacyFavorite = { source_rowid: number; user_id: string; item_id: string; item_type: string; created_at: number | null };
 type Root = { id: string; root: string };
@@ -113,8 +113,13 @@ export async function importLegacy(db: DatabaseType.Database, options: { legacyD
       const actual = db.prepare('SELECT id FROM users WHERE username=?').get(user.username) as { id: string };
       if (inserted.changes) db.prepare(`INSERT OR IGNORE INTO legacy_jwt_users(user_id) SELECT ? WHERE NOT EXISTS
         (SELECT 1 FROM legacy_jwt_revoked_users WHERE username=?)`).run(actual.id, user.username);
-      if (user.wallpaperToken) db.prepare(`INSERT OR IGNORE INTO api_tokens (id,user_id,token_hash,name,scope,prefix,created_at,wallpaper)
-        VALUES (?,?,?,?,?,?,?,?)`).run(idFor('tok', user.wallpaperToken), actual.id, digest(user.wallpaperToken), '旧版壁纸令牌', 'wallpaper', user.wallpaperToken.slice(0, 8), now, JSON.stringify(WallpaperConfig.parse({ source: 'library' })));
+      if (user.wallpaperToken) {
+        const interval = user.wallpaperConfig?.interval;
+        const intervalSec = typeof interval === 'number' && Number.isInteger(interval) && interval >= 5 && interval <= 3600 ? interval : 30;
+        const wallpaper = WallpaperConfig.parse({ source: 'library', intervalSec, landscapeOnly: false, includeVideos: user.wallpaperConfig?.showVideos !== false });
+        db.prepare(`INSERT OR IGNORE INTO api_tokens (id,user_id,token_hash,name,scope,prefix,created_at,wallpaper)
+          VALUES (?,?,?,?,?,?,?,?)`).run(idFor('tok', user.wallpaperToken), actual.id, digest(user.wallpaperToken), '旧版壁纸令牌', 'wallpaper', user.wallpaperToken.slice(0, 8), now, JSON.stringify(wallpaper));
+      }
     }
   }).immediate();
   if (!hasDb) return { ...counts(db), unmappedRoots };
