@@ -72,7 +72,7 @@ try {
   const ffmpeg = await withFfmpegSlot(runtime.db, owner, (signal) => probeFfmpeg('ffmpeg', signal), { signal: stopController.signal });
   runtime.db.prepare("INSERT INTO settings(key,value) VALUES('worker.ffmpeg',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(JSON.stringify(ffmpeg));
   logger.info({ ctx: { type: ffmpeg.encoder } }, '视频编码器已选择');
-  await runWorkerPool(runtime.db, { owner, allowedRoots, legacyDir: runtime.legacyDir, systemRoots: [runtime.dataDir, runtime.cacheDir], cacheDir: runtime.cacheDir, signal: stopController.signal,
+  await runWorkerPool(runtime.db, { owner, allowedRoots, legacyDir: runtime.legacyDir, systemRoots: [runtime.dataDir, runtime.cacheDir], configuredMediaRoots: runtime.mediaRoots, cacheDir: runtime.cacheDir, signal: stopController.signal,
     log: (level, message, ctx) => logger[level]({ ctx }, message) });
 } finally {
   stopController.abort();

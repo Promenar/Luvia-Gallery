@@ -14,7 +14,7 @@ import type { Variant } from '../core/media-cache.ts';
 import { generateHls } from './hls.ts';
 import { withThumbnailSlot } from './ffmpeg-slots.ts';
 
-export type WorkerOptions = { owner: string; allowedRoots: string[]; legacyDir: string; systemRoots: string[]; cacheDir?: string; signal?: AbortSignal; hlsIdleMs?: number; log?: (level: 'info' | 'warn', message: string, ctx: Record<string, string>) => void };
+export type WorkerOptions = { owner: string; allowedRoots: string[]; legacyDir: string; systemRoots: string[]; configuredMediaRoots?: string[]; cacheDir?: string; signal?: AbortSignal; hlsIdleMs?: number; log?: (level: 'info' | 'warn', message: string, ctx: Record<string, string>) => void };
 type Payload = { libraryId?: string | null; legacyImportId?: string; mediaId?: string; hlsSessionId?: string };
 const now = () => Math.floor(Date.now() / 1000);
 const childId = (parent: string, library: string) => `scan_${createHash('sha256').update(parent).update('\0').update(library).digest('base64url').slice(0, 24)}`;
@@ -103,7 +103,7 @@ export async function runNextJob(db: Database.Database, options: WorkerOptions):
         }).immediate();
       }
     } else if (job.type === 'import_legacy') {
-      const result = await importLegacy(db, { legacyDir: options.legacyDir, mediaRoots: options.allowedRoots, systemRoots: options.systemRoots, assertLease });
+      const result = await importLegacy(db, { legacyDir: options.legacyDir, mediaRoots: options.allowedRoots, fallbackRoots: options.configuredMediaRoots, systemRoots: options.systemRoots, assertLease });
       db.transaction(() => {
         assertLease();
         const libraries = db.prepare('SELECT id FROM libraries WHERE enabled=1').all() as { id: string }[];
