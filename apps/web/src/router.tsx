@@ -30,7 +30,8 @@ const appRoute = createRoute({
 });
 
 const indexRoute = createRoute({ getParentRoute: () => appRoute, path: '/', component: MemoriesPage });
-export const photosSearch = z.object({ q: z.string().optional() });
+/** q 为搜索关键词；type 限定媒体类型（省略为全部），写进地址以便刷新、返回与分享时保留筛选。 */
+export const photosSearch = z.object({ q: z.string().optional(), type: z.enum(['image', 'video']).optional() });
 const photosRoute = createRoute({ getParentRoute: () => appRoute, path: '/photos', validateSearch: photosSearch, component: PhotosPage });
 /** path 为虚拟文件夹路径（`<libraryId>/<相对目录>`）；省略时列出各媒体库根。 */
 export const foldersSearch = z.object({ path: z.string().optional() });

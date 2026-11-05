@@ -1,7 +1,7 @@
 import { delay } from 'msw';
 import { http, HttpResponse } from 'msw/http';
 import type { AuthState, FolderListing, MediaDetail, TimelineBucket } from '@luvia/contracts';
-import { childrenOf, db, folderOf, hostPathOf, isUnder, libraryOf, LIBRARIES, nameOf, pub, rng, svgFor, type MockMedia } from '../db';
+import { cameraOf, childrenOf, db, folderOf, hostPathOf, isUnder, libraryOf, LIBRARIES, nameOf, pub, rng, svgFor, type MockMedia } from '../db';
 
 const err = (status: number, code: string, message: string) => HttpResponse.json({ error: { code, message } }, { status });
 const authState = (): AuthState => ({ initialized: db.initialized, user: db.loggedIn ? db.user : null, siteName: db.siteName, version: '2.0.0-mock' });
@@ -12,6 +12,7 @@ export function filterMedia(sp: URLSearchParams): MockMedia[] {
   const scope = sp.get('scope') ?? 'all';
   const q = sp.get('q')?.toLowerCase();
   const types = sp.get('types')?.split(',');
+  const cameras = sp.get('cameras')?.split(',').filter(Boolean);
   const from = sp.get('from'), to = sp.get('to');
   const fav = sp.get('favorite');
   const favFolders = sp.get('favoriteFolders') === 'true' || sp.get('favoriteFolders') === '1';
@@ -29,6 +30,10 @@ export function filterMedia(sp: URLSearchParams): MockMedia[] {
     }
     if (q && !(m.name.toLowerCase().includes(q) || m.folder.toLowerCase().includes(q))) return false;
     if (types && !types.includes(m.mediaType)) return false;
+    if (cameras?.length) {
+      const c = cameraOf(m);
+      if (!c || !cameras.includes(c.name)) return false;
+    }
     if (from && sec(m.takenAt) < Number(from)) return false;
     if (to && sec(m.takenAt) >= Number(to)) return false;
     if (under && !isUnder(m.folder, under)) return false;
@@ -116,7 +121,11 @@ export const coreHandlers = [
     const years = new Map<number, number>();
     list.forEach((m) => years.set(Number(m.takenAt.slice(0, 4)), (years.get(Number(m.takenAt.slice(0, 4))) ?? 0) + 1));
     return HttpResponse.json({
-      cameras: [{ name: 'FUJIFILM X-T5', count: Math.floor(list.length * 0.4) }, { name: 'iPhone 16 Pro', count: Math.floor(list.length * 0.5) }],
+      cameras: (() => {
+        const counts = new Map<string, number>();
+        list.forEach((m) => { const c = cameraOf(m); if (c) counts.set(c.name, (counts.get(c.name) ?? 0) + 1); });
+        return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([name, count]) => ({ name, count }));
+      })(),
       years: [...years.entries()].sort((a, b) => b[0] - a[0]).map(([year, count]) => ({ year, count })),
       types: { image: list.filter((m) => m.mediaType === 'image').length, video: list.filter((m) => m.mediaType === 'video').length, audio: 0 },
     });
@@ -164,12 +173,18 @@ export const coreHandlers = [
     if (!m) return err(404, 'NOT_FOUND', '媒体不存在');
     const detail: MediaDetail = {
       ...pub(m),
-      exif: m.mediaType === 'image' ? { make: 'FUJIFILM', model: 'X-T5', lens: 'XF23mmF1.4 R LM WR', fNumber: 2.8, exposureTime: 1 / 250, iso: 400, focalLength: 23, focalLength35: 35, software: null } : null,
+      exif: (() => {
+        const c = cameraOf(m);
+        if (!c) return null;
+        return c.make === 'FUJIFILM'
+          ? { make: c.make, model: c.model, lens: 'XF23mmF1.4 R LM WR', fNumber: 2.8, exposureTime: 1 / 250, iso: 400, focalLength: 23, focalLength35: 35, software: null }
+          : { make: c.make, model: c.model, lens: 'iPhone 16 Pro back triple camera 6.765mm f/1.78', fNumber: 1.78, exposureTime: 1 / 120, iso: 64, focalLength: 6.765, focalLength35: 24, software: '18.1' };
+      })(),
       location: m.hasLocation ? { lat: 30.25, lon: 120.16, altitude: null } : null,
       video: m.mediaType === 'video' ? { codec: 'h264', audioCodec: 'aac', container: 'mp4', fps: 30, bitrate: 8e6 } : null,
       libraryName: libraryOf(m.folder).name,
       breadcrumbs: breadcrumbs(m.folder),
-      albumIds: [],
+      albumIds: db.albumIdsOf(m.id),
     };
     return HttpResponse.json(detail);
   }),
