@@ -278,6 +278,68 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     const { id } = req.params as { id: string };
     if (!db.prepare('DELETE FROM api_tokens WHERE id=? AND user_id=?').run(id, identity.user.id).changes) fail(404, 'NOT_FOUND', '令牌不存在');
   });
+  function requireCurrentAdmin(identity: Identity): void {
+    if (identity.kind !== 'session' || !identity.sessionHash || !db.prepare(`SELECT 1 FROM sessions s JOIN users u ON u.id=s.user_id
+      WHERE s.token_hash=? AND s.expires_at>? AND u.role='admin'`).get(identity.sessionHash, now())) {
+      fail(403, 'FORBIDDEN', '需要管理员会话');
+    }
+  }
+  function checkedAllowedPaths(paths: string[] | null): string | null {
+    if (paths === null) return null;
+    if (paths.some((value) => !pathAllowed(value, null))) return fail(400, 'VALIDATION', '目录权限路径无效');
+    return JSON.stringify([...new Set(paths)]);
+  }
+  register('listUsers', async () => ({
+    users: (db.prepare('SELECT * FROM users ORDER BY created_at, username').all() as UserRow[]).map(userOut),
+  }));
+  register('createUser', async (req, _reply, body) => {
+    const identity = requireUser(req);
+    const allowedPaths = checkedAllowedPaths(body.allowedPaths);
+    const passwordHash = await hashPassword(body.password);
+    const user: UserRow = {
+      id: randomUUID(), username: body.username, password_hash: passwordHash, role: body.role,
+      allowed_paths: body.role === 'admin' ? null : allowedPaths,
+      preferences: JSON.stringify(defaultPreferences()), created_at: now(), last_login_at: null,
+    };
+    db.transaction(() => {
+      requireCurrentAdmin(identity);
+      if (findUser.get(user.username)) fail(409, 'CONFLICT', '用户名已经存在');
+      db.prepare('INSERT INTO users (id,username,password_hash,role,allowed_paths,preferences,created_at,last_login_at) VALUES (@id,@username,@password_hash,@role,@allowed_paths,@preferences,@created_at,@last_login_at)').run(user);
+    }).immediate();
+    return userOut(user);
+  });
+  register('updateUser', async (req, _reply, body) => {
+    const identity = requireUser(req);
+    const { id } = req.params as { id: string };
+    const allowedPaths = body.allowedPaths === undefined ? undefined : checkedAllowedPaths(body.allowedPaths);
+    const passwordHash = body.password === undefined ? undefined : await hashPassword(body.password);
+    return db.transaction(() => {
+      requireCurrentAdmin(identity);
+      const user = (db.prepare('SELECT * FROM users WHERE id=?').get(id) as UserRow | undefined) ?? fail(404, 'NOT_FOUND', '用户不存在');
+      const role = body.role ?? user.role;
+      if (user.role === 'admin' && role !== 'admin' && (db.prepare("SELECT count(*) AS n FROM users WHERE role='admin'").get() as { n: number }).n <= 1) {
+        fail(409, 'CONFLICT', '必须保留至少一名管理员');
+      }
+      user.role = role;
+      user.allowed_paths = role === 'admin' ? null : (allowedPaths === undefined ? user.allowed_paths : allowedPaths);
+      user.password_hash = passwordHash ?? user.password_hash;
+      db.prepare('UPDATE users SET role=?, allowed_paths=?, password_hash=? WHERE id=?').run(user.role, user.allowed_paths, user.password_hash, id);
+      if (passwordHash !== undefined) db.prepare('DELETE FROM sessions WHERE user_id=?').run(id);
+      return userOut(user);
+    }).immediate();
+  });
+  register('deleteUser', async (req) => {
+    const identity = requireUser(req);
+    const { id } = req.params as { id: string };
+    db.transaction(() => {
+      requireCurrentAdmin(identity);
+      const user = (db.prepare('SELECT * FROM users WHERE id=?').get(id) as UserRow | undefined) ?? fail(404, 'NOT_FOUND', '用户不存在');
+      if (user.role === 'admin' && (db.prepare("SELECT count(*) AS n FROM users WHERE role='admin'").get() as { n: number }).n <= 1) {
+        fail(409, 'CONFLICT', '必须保留至少一名管理员');
+      }
+      db.prepare('DELETE FROM users WHERE id=?').run(id);
+    }).immediate();
+  });
   function mediaContext(req: FastifyRequest) {
     const u = userOut(requireUser(req).user);
     return { id: u.id, allowedPaths: u.allowedPaths };
