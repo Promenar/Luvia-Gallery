@@ -173,6 +173,21 @@ test('自动模式在网络文件系统按配置周期请求轮询，全程不�
   } finally { await coordinator.stop(); port.close(); await rm(root, { recursive: true, force: true }); }
 });
 
+test('启动时根目录不可用，恢复监视后不再周期请求全量扫描', async () => {
+  const { WatchCoordinator } = await import('../src/watch/coordinator.ts');
+  const { RootGuard } = await import('../src/watch/root-guard.ts');
+  const root = await mkdtemp(path.join(tmpdir(), 'luvia-poll-recovery-')); const clock = new TestClock();
+  const watcher = new FakeWatcher(); const port = makeIndex(root, clock); let available = false;
+  const guard = new RootGuard({ root, probe: async () => available, mount: async () => null });
+  const coordinator = new WatchCoordinator({ libraryId: 'lib', root, exclude: [], watcher, port, clock, guard, missingGraceDays: 7, pollIntervalSec: 60 });
+  try {
+    await coordinator.start(); available = true; await coordinator.checkRoot();
+    assert.equal((await coordinator.status()).state, 'watching');
+    await clock.advance(120_000, () => coordinator.idle());
+    assert.equal(port.requests.includes('poll'), false);
+  } finally { await coordinator.stop(); port.close(); await rm(root, { recursive: true, force: true }); }
+});
+
 test('零天宽限期在标记缺失后的下一次对账清理', async () => {
   const m = await import('../src/watch/coordinator.ts'); const root = await mkdtemp(path.join(tmpdir(), 'luvia-watch-zero-'));
   const clock = new TestClock(); const watcher = new FakeWatcher(); const port = makeIndex(root, clock);
