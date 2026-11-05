@@ -54,3 +54,7 @@ ssh/
 
 # ZCode video-agent 插件产物
 .video_agent/
+
+# v2 工作区产物
+apps/*/dist/
+apps/server/.dev-data/
