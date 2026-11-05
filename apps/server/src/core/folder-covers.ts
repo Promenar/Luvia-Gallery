@@ -1,10 +1,10 @@
 import type Database from 'better-sqlite3';
 
 export function noteThumbnail(db: Database.Database, id: string): void {
-  const candidate = db.prepare('SELECT folder,taken_at FROM files WHERE id=? AND thumb_ready=1').get(id) as { folder: string; taken_at: number } | undefined;
+  const candidate = db.prepare('SELECT folder,taken_at FROM files WHERE id=? AND thumb_ready=1 AND missing_at_ms IS NULL').get(id) as { folder: string; taken_at: number } | undefined;
   if (!candidate) return;
-  const folder = db.prepare('SELECT parent,cover_file_id FROM folders WHERE path=?');
-  const file = db.prepare('SELECT id,taken_at,thumb_ready FROM files WHERE id=?');
+  const folder = db.prepare('SELECT parent,cover_file_id FROM folders WHERE path=? AND missing_at_ms IS NULL');
+  const file = db.prepare('SELECT id,taken_at,thumb_ready FROM files WHERE id=? AND missing_at_ms IS NULL');
   const update = db.prepare('UPDATE folders SET cover_file_id=? WHERE path=?');
   const seen = new Set<string>(); let current: string | null = candidate.folder;
   while (current && !seen.has(current)) {
@@ -19,7 +19,7 @@ export function noteThumbnail(db: Database.Database, id: string): void {
 
 export function replaceEvictedThumbnailCovers(db: Database.Database, id: string): void {
   const affected = db.prepare('SELECT path FROM folders WHERE cover_file_id=?').all(id) as { path: string }[];
-  const best = db.prepare(`SELECT id FROM files WHERE thumb_ready=1 AND (folder=? OR (folder>=? AND folder<?)) ORDER BY taken_at DESC,id ASC LIMIT 1`);
+  const best = db.prepare(`SELECT id FROM files WHERE thumb_ready=1 AND missing_at_ms IS NULL AND (folder=? OR (folder>=? AND folder<?)) ORDER BY taken_at DESC,id ASC LIMIT 1`);
   const update = db.prepare('UPDATE folders SET cover_file_id=? WHERE path=? AND cover_file_id=?');
   for (const folder of affected) {
     const next = best.get(folder.path, `${folder.path}/`, `${folder.path}0`) as { id: string } | undefined;

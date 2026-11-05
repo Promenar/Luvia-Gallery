@@ -151,7 +151,7 @@ export async function runNextJob(db: Database.Database, options: WorkerOptions):
         const checkpoint = job.checkpoint ? JSON.parse(job.checkpoint) as { lastId?: string; queued?: number } : {};
         let lastId = checkpoint.lastId ?? ''; let queued = checkpoint.queued ?? 0;
         const rows = db.prepare(`SELECT f.id,f.size,f.modified_at FROM files f JOIN libraries l ON l.id=f.library_id AND l.enabled=1
-          WHERE ${job.type === 'previews' ? "f.media_type='video' AND f.has_preview=0" : "f.media_type IN ('image','video')"} AND f.id>?
+          WHERE ${job.type === 'previews' ? "f.media_type='video' AND f.has_preview=0" : "f.media_type IN ('image','video')"} AND f.missing_at_ms IS NULL AND f.id>?
           ${payload.libraryId ? 'AND f.library_id=?' : ''} ORDER BY f.id LIMIT 32`).all(...(payload.libraryId ? [lastId, payload.libraryId] : [lastId])) as { id: string; size: number; modified_at: number }[];
         for (const row of rows) {
           controller.signal.throwIfAborted();
@@ -182,7 +182,7 @@ export async function runNextJob(db: Database.Database, options: WorkerOptions):
         if (payload.mediaId && payload.sourceSize !== undefined && payload.sourceModified !== undefined && payload.variant) {
           const source = { id: payload.mediaId, size: payload.sourceSize, modified_at: payload.sourceModified };
           const cached = db.prepare(`SELECT 1 FROM cache_entries c JOIN files f ON f.id=c.media_id JOIN libraries l ON l.id=f.library_id AND l.enabled=1
-            WHERE c.cache_key=? AND f.size=? AND f.modified_at=?`).get(cacheKey(source, payload.variant), source.size, source.modified_at);
+            WHERE c.cache_key=? AND f.size=? AND f.modified_at=? AND f.missing_at_ms IS NULL`).get(cacheKey(source, payload.variant), source.size, source.modified_at);
           if (cached) {
             const info = await lstat(cachePath(cacheDir, source, payload.variant)).catch(() => null);
             if (info?.isFile() && !info.isSymbolicLink()) return false;

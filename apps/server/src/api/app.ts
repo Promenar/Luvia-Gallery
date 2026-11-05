@@ -26,7 +26,7 @@ import { noteThumbnail } from '../core/folder-covers.ts';
 import { ensureHls, hlsCacheKey, hlsDirectory, hlsId } from '../core/hls.ts';
 import type { HlsSession } from '../core/hls.ts';
 import { FolderReader } from '../core/folder-reader.ts';
-import { mediaId, pathAllowed, secureMediaPath, virtualPath } from '../core/paths.ts';
+import { pathAllowed, secureMediaPath, virtualPath } from '../core/paths.ts';
 import { sendFile } from './binary.ts';
 import { jobView, publishJob } from '../core/job-view.ts';
 import type { JobRecord } from '../core/job-view.ts';
@@ -478,7 +478,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
       count: summary.count, cover, startAt: iso(summary.start), endAt: iso(summary.end), createdAt: iso(row.created_at)!, updatedAt: iso(row.updated_at)! };
   }
   function requireVisibleMedia(ids: string[], context: { id: string; allowedPaths: string[] | null }): void {
-    const find = db.prepare('SELECT f.folder FROM files f JOIN libraries l ON l.id=f.library_id AND l.enabled=1 WHERE f.id=?');
+    const find = db.prepare('SELECT f.folder FROM files f JOIN libraries l ON l.id=f.library_id AND l.enabled=1 WHERE f.id=? AND f.missing_at_ms IS NULL');
     for (const id of ids) {
       const row = find.get(id) as { folder: string } | undefined;
       if (!row || !pathAllowed(row.folder, context.allowedPaths)) fail(403, 'FORBIDDEN', '媒体不可访问');
@@ -548,7 +548,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
   register('setFavorite', async (req, _reply, body) => {
     const context = mediaContext(req);
     const ids = [...new Set(body.ids as string[])];
-    const find = db.prepare('SELECT f.folder FROM files f JOIN libraries l ON l.id=f.library_id AND l.enabled=1 WHERE f.id=?');
+    const find = db.prepare('SELECT f.folder FROM files f JOIN libraries l ON l.id=f.library_id AND l.enabled=1 WHERE f.id=? AND f.missing_at_ms IS NULL');
     const add = db.prepare("INSERT OR IGNORE INTO favorites (user_id,item_id,item_type) VALUES (?,?,'file')");
     const remove = db.prepare("DELETE FROM favorites WHERE user_id=? AND item_id=? AND item_type='file'");
     const updated = db.transaction(() => {
@@ -589,7 +589,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     const context = mediaContext(req); const { id } = req.params as { id: string };
     const item = media.one(id, context) ?? fail(404, 'NOT_FOUND', '媒体不存在或不可访问');
     const row = db.prepare(`SELECT f.*,l.name AS library_name FROM files f JOIN libraries l ON l.id=f.library_id
-      WHERE f.id=? AND l.enabled=1`).get(id) as Record<string, any> | undefined;
+      WHERE f.id=? AND l.enabled=1 AND f.missing_at_ms IS NULL`).get(id) as Record<string, any> | undefined;
     if (!row) return fail(404, 'NOT_FOUND', '媒体不存在或不可访问');
     const exif = { make: row.make, model: row.model, lens: row.lens, fNumber: row.f_number, exposureTime: row.exposure_time,
       iso: row.iso, focalLength: row.focal_length, focalLength35: row.focal_length35, software: row.software };
@@ -608,7 +608,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
   type BinaryRow = { id: string; name: string; relative_path: string; folder: string; mime: string; media_type: string; root: string; size: number; modified_at: number; width: number | null; height: number | null };
   async function binaryMediaFor(context: { id: string; allowedPaths: string[] | null; ids?: string[] }, id: string): Promise<{ row: BinaryRow; filename: string }> {
     const row = db.prepare(`SELECT f.id,f.name,f.relative_path,f.folder,f.mime,f.media_type,f.size,f.modified_at,f.width,f.height,l.root FROM files f
-      JOIN libraries l ON l.id=f.library_id WHERE f.id=? AND l.enabled=1`).get(id) as BinaryRow | undefined;
+      JOIN libraries l ON l.id=f.library_id WHERE f.id=? AND l.enabled=1 AND f.missing_at_ms IS NULL`).get(id) as BinaryRow | undefined;
     if (!row || !pathAllowed(row.folder, context.allowedPaths) || context.ids && !context.ids.includes(id)) return fail(404, 'NOT_FOUND', '媒体不存在或不可访问');
     let filename: string;
     try { filename = await secureMediaPath(row.root, row.relative_path); }
@@ -718,7 +718,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
       const current = authenticateRequest(req) ?? fail(401, 'UNAUTHORIZED', '会话已失效');
       if (identityPrincipal(current) !== principal || !pathAllowed(row.folder, userOut(current.user).allowedPaths) ||
         !db.prepare(`SELECT 1 FROM files f JOIN libraries l ON l.id=f.library_id AND l.enabled=1
-          WHERE f.id=? AND f.folder=? AND f.size=? AND f.modified_at=?`).get(row.id, row.folder, row.size, row.modified_at)) {
+          WHERE f.id=? AND f.folder=? AND f.size=? AND f.modified_at=? AND f.missing_at_ms IS NULL`).get(row.id, row.folder, row.size, row.modified_at)) {
         fail(404, 'NOT_FOUND', '媒体不可访问');
       }
       requireWallpaperMedia(current, row.id);
@@ -769,7 +769,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
       const current = authenticate(req) ?? fail(401, 'UNAUTHORIZED', '会话已失效');
       if (identityPrincipal(current) !== principal || !pathAllowed(row.folder, userOut(current.user).allowedPaths)) fail(404, 'NOT_FOUND', '媒体不可访问');
       if (!db.prepare(`SELECT 1 FROM files f JOIN libraries l ON l.id=f.library_id AND l.enabled=1
-        WHERE f.id=? AND f.size=? AND f.modified_at=? AND f.playability='transcode'`).get(id, row.size, row.modified_at) || !readSettings(db).transcode.enabled) fail(404, 'NOT_FOUND', '媒体不可访问');
+        WHERE f.id=? AND f.size=? AND f.modified_at=? AND f.playability='transcode' AND f.missing_at_ms IS NULL`).get(id, row.size, row.modified_at) || !readSettings(db).transcode.enabled) fail(404, 'NOT_FOUND', '媒体不可访问');
       requireWallpaperMedia(current, id);
     };
     authorize();
@@ -980,7 +980,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     const check = () => {
       authorize();
       if (!db.prepare(`SELECT 1 FROM files f JOIN libraries l ON l.id=f.library_id AND l.enabled=1
-        WHERE f.id=? AND f.size=? AND f.modified_at=? AND f.playability='transcode'`).get(id, row.size, row.modified_at) || !readSettings(db).transcode.enabled) fail(404, 'NOT_FOUND', '媒体不可访问');
+        WHERE f.id=? AND f.size=? AND f.modified_at=? AND f.playability='transcode' AND f.missing_at_ms IS NULL`).get(id, row.size, row.modified_at) || !readSettings(db).transcode.enabled) fail(404, 'NOT_FOUND', '媒体不可访问');
     };
     check();
     const principal = digest('share:media');
@@ -1042,7 +1042,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
           if (stopped) return;
           let current = downloadScope(target, currentSessionUser(identity));
           if (!media.contains(current.query, current.context, item.id)) throw new Error('下载权限已经变化');
-          const row = db.prepare(`SELECT f.library_id,f.relative_path,l.root FROM files f JOIN libraries l ON l.id=f.library_id AND l.enabled=1 WHERE f.id=?`)
+          const row = db.prepare(`SELECT f.library_id,f.relative_path,l.root FROM files f JOIN libraries l ON l.id=f.library_id AND l.enabled=1 WHERE f.id=? AND f.missing_at_ms IS NULL`)
             .get(item.id) as { library_id: string; relative_path: string; root: string } | undefined;
           if (!row) throw new Error('下载媒体不可用');
           const archiveName = virtualPath(row.library_id, row.relative_path);
@@ -1083,7 +1083,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     return library ? path.join(library.root, ...parts) : null;
   }
   function legacyMediaId(value: string): string | null {
-    const direct = db.prepare('SELECT id FROM files WHERE legacy_id=?').get(value) as { id: string } | undefined;
+    const direct = db.prepare('SELECT id FROM files WHERE legacy_id=? AND missing_at_ms IS NULL').get(value) as { id: string } | undefined;
     if (direct) return direct.id;
     if (!/^[A-Za-z0-9+/_-]+={0,2}$/.test(value)) return null;
     const bytes = Buffer.from(value, 'base64');
@@ -1095,7 +1095,8 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     const slash = folder.indexOf('/');
     const libraryId = slash < 0 ? folder : folder.slice(0, slash);
     const relativeDir = slash < 0 ? '' : folder.slice(slash + 1);
-    return mediaId(libraryId, relativeDir ? `${relativeDir}/${path.basename(absolute)}` : path.basename(absolute));
+    const relative = relativeDir ? `${relativeDir}/${path.basename(absolute)}` : path.basename(absolute);
+    return (db.prepare('SELECT id FROM files WHERE library_id=? AND relative_path=? AND missing_at_ms IS NULL').get(libraryId, relative) as { id: string } | undefined)?.id ?? null;
   }
   app.post('/api/auth/login', async (req) => {
     const body = endpoints.login.body.parse(req.body);
@@ -1165,7 +1166,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
         mediaType: row.media_type, sourceId: 'local', isFavorite: !!row.favorite, width: row.width, height: row.height,
         aspectRatio: row.width && row.height ? row.width / row.height : null };
     });
-    const unfiltered = identity.user.role === 'admin' && !wallpaper && !db.prepare('SELECT 1 FROM libraries WHERE enabled=0 LIMIT 1').get() && query.favorites !== 'true' && query.folder === undefined && !query.search && !query.mediaType && !query.excludeMediaType;
+    const unfiltered = identity.user.role === 'admin' && !wallpaper && !db.prepare('SELECT 1 FROM timeline_rebuild_state WHERE id=1').get() && !db.prepare('SELECT 1 FROM libraries WHERE enabled=0 LIMIT 1').get() && query.favorites !== 'true' && query.folder === undefined && !query.search && !query.mediaType && !query.excludeMediaType;
     const total = unfiltered ? (db.prepare('SELECT COALESCE(sum(count),0) AS n FROM timeline_counts').get() as { n: number }).n : offset + files.length + (hasMore ? 1 : 0);
     const totalExact = unfiltered || !hasMore;
     return { files, total, totalExact, hasMore, sources: [{ id: 'local', name: 'Local Storage', count: total, countExact: totalExact }] };
@@ -1185,7 +1186,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     if (search) {
       const limit = query.limit === undefined || query.limit === '' ? 100 : Number(query.limit);
       if (query.limit !== undefined && query.limit !== '' && (!/^\d+$/.test(query.limit) || !Number.isSafeInteger(limit) || limit < 1 || limit > 100)) return fail(400, 'VALIDATION', '搜索数量无效');
-      const conditions = ['l.enabled=1', 'f.media_count>0']; const params: (string | number)[] = [];
+      const conditions = ['l.enabled=1', 'f.missing_at_ms IS NULL', 'f.media_count>0']; const params: (string | number)[] = [];
       if (virtual) { conditions.push('f.path>=? AND f.path<?'); params.push(`${virtual}/`, `${virtual}0`); }
       if (context.allowedPaths !== null) {
         conditions.push(context.allowedPaths.length ? `(${context.allowedPaths.map(() => '(f.path=? OR (f.path>=? AND f.path<?))').join(' OR ')})` : '0');
@@ -1199,7 +1200,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
       selected = matches.flatMap(({ path: folder }) => folders.get(folder, context) ?? []);
     } else if (query.favorites === 'true') selected = folders.favorites(context).folders;
     const aggregates = (await queries.run([{ sql: `SELECT folder,count(*) AS count,max(modified_at) AS latest FROM files
-      WHERE folder IN (SELECT value FROM json_each(?)) AND media_type IN ('image','video') GROUP BY folder`,
+      WHERE folder IN (SELECT value FROM json_each(?)) AND missing_at_ms IS NULL AND media_type IN ('image','video') GROUP BY folder`,
       params: [JSON.stringify(selected.filter((folder) => pathAllowed(folder.path, context.allowedPaths)).map((folder) => folder.path))] }]))[0] as { folder: string; count: number; latest: number }[];
     const byPath = new Map(aggregates.map((entry) => [entry.folder, entry]));
     const result = [];
@@ -1209,7 +1210,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
       if (folder.cover) {
         const source = db.prepare(`SELECT f.relative_path,l.root,c.relative_path AS cache_path FROM files f JOIN libraries l ON l.id=f.library_id
           JOIN cache_entries c ON c.media_id=f.id AND c.variant='thumb' AND c.source_size=f.size AND c.source_modified=f.modified_at
-          WHERE f.id=? ORDER BY c.last_access_at DESC LIMIT 1`).get(folder.cover.id) as { relative_path: string; root: string; cache_path: string } | undefined;
+          WHERE f.id=? AND f.missing_at_ms IS NULL ORDER BY c.last_access_at DESC LIMIT 1`).get(folder.cover.id) as { relative_path: string; root: string; cache_path: string } | undefined;
         if (source) {
           const cacheFile = path.resolve(cacheDir, source.cache_path);
           if (within(cacheDir, cacheFile)) {
@@ -1348,16 +1349,18 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     }).immediate();
   });
   register('adminOverview', async () => {
+    const missingGraceDays = readSettings(db).libraries.missingGraceDays;
     const result = await queries.run([
-      { sql: `SELECT count(*) AS total,COALESCE(sum(f.media_type='image'),0) AS images,COALESCE(sum(f.media_type='video'),0) AS videos,
-        COALESCE(sum(f.media_type='audio'),0) AS audio,COALESCE(sum(f.thumb_ready=1),0) AS thumbs,
-        COALESCE(sum(f.metadata_status='done'),0) AS indexed,COALESCE(sum(f.media_type='video' AND f.has_preview=1),0) AS previews
-        FROM files f JOIN libraries l ON l.id=f.library_id AND l.enabled=1`, params: [] },
+      { sql: `SELECT count(*) FILTER (WHERE f.missing_at_ms IS NULL) AS total,count(*) FILTER (WHERE f.missing_at_ms IS NOT NULL AND (?=0 OR f.missing_at_ms>=?)) AS missing,
+        count(*) FILTER (WHERE f.missing_at_ms IS NULL AND f.media_type='image') AS images,count(*) FILTER (WHERE f.missing_at_ms IS NULL AND f.media_type='video') AS videos,
+        count(*) FILTER (WHERE f.missing_at_ms IS NULL AND f.media_type='audio') AS audio,count(*) FILTER (WHERE f.missing_at_ms IS NULL AND f.thumb_ready=1) AS thumbs,
+        count(*) FILTER (WHERE f.missing_at_ms IS NULL AND f.metadata_status='done') AS indexed,count(*) FILTER (WHERE f.missing_at_ms IS NULL AND f.media_type='video' AND f.has_preview=1) AS previews
+        FROM files f JOIN libraries l ON l.id=f.library_id AND l.enabled=1`, params: [missingGraceDays, Date.now() - missingGraceDays * 86_400_000] },
       { sql: 'SELECT COALESCE(sum(bytes),0) AS bytes FROM cache_entries', params: [] },
       { sql: "SELECT COALESCE(sum(status='running'),0) AS active,COALESCE(sum(status='queued'),0) AS queued FROM jobs", params: [] },
       { sql: 'SELECT max(last_scan_at) AS last FROM libraries WHERE enabled=1', params: [] },
     ]);
-    const counts = result[0]![0] as { total: number; images: number; videos: number; audio: number; thumbs: number; indexed: number; previews: number };
+    const counts = result[0]![0] as { total: number; missing: number; images: number; videos: number; audio: number; thumbs: number; indexed: number; previews: number };
     const cache = result[1]![0] as { bytes: number }; const jobs = result[2]![0] as { active: number; queued: number };
     const last = result[3]![0] as { last: number | null };
     let databaseBytes = 0;
@@ -1365,8 +1368,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
       for (const filename of [db.name, `${db.name}-wal`]) { try { databaseBytes += (await stat(filename)).size; } catch { /* 可选 WAL 不存在时计零。 */ } }
     }
     return { version: '2.0.0-alpha.0', uptimeSec: Math.floor(process.uptime()),
-      // 删除宽限期尚未接入，暂无“已消失”媒体
-      media: { total: counts.total, images: counts.images, videos: counts.videos, audio: counts.audio, missing: 0 },
+      media: { total: counts.total, images: counts.images, videos: counts.videos, audio: counts.audio, missing: counts.missing },
       thumbnails: { coverage: counts.total ? counts.thumbs / counts.total : 0, missing: counts.total - counts.thumbs },
       metadata: { indexed: counts.indexed, total: counts.total }, previews: { ready: counts.previews, total: counts.videos },
       cache: { bytes: cache.bytes, limitBytes: readSettings(db).cache.limitGB * 1024 ** 3 }, database: { bytes: databaseBytes },
