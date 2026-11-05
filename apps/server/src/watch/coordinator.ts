@@ -68,6 +68,10 @@ export class WatchCoordinator {
   private stopping = false;
   private pollTimer: unknown = null;
   private state: LibraryWatch['state'] = 'starting';
+  private selectedState: LibraryWatch['state'] = 'starting';
+  private selectedReason: string | null = null;
+  private rootUnavailable = false;
+  private watcherActive = false;
   private degradedReason: string | null = null;
   private lastEventAt: string | null = null;
   private lastReconcileAt: string | null = null;
@@ -101,22 +105,18 @@ export class WatchCoordinator {
     this.started = true; this.stopping = false;
     const decision = decideWatchMode({ requested: this.options.requested ?? 'auto', fsType: this.options.fsType ?? null,
       dirCount: this.options.dirCount ?? 0, quota: this.options.quota ?? null, pollIntervalSec: this.options.pollIntervalSec });
-    this.state = decision.state; this.degradedReason = decision.degradedReason;
+    this.state = decision.state; this.degradedReason = decision.degradedReason; this.selectedState = decision.state; this.selectedReason = decision.degradedReason;
     if (!(await this.checkRoot())) {
-      if (this.state !== 'off') { this.state = (this.options.requested === 'watch') ? 'degraded' : 'polling'; this.degradedReason = '媒体库根目录不可用，等待恢复后全量对账'; this.schedulePoll(); }
+      if (this.selectedState !== 'off') this.schedulePoll();
       return;
     }
     if (this.state !== 'off') await this.options.port.requestFullReconcile('startup');
     if (this.state === 'watching') {
-      try {
-        this.watcher.start({ onEvent: (event) => { void this.run(() => this.onEvent(event)).catch(() => {}); },
-          onError: (error) => { void this.run(() => this.watchError(error)).catch(() => {}); },
-          onOverflow: () => { void this.run(() => this.options.port.requestFullReconcile('overflow')).catch(() => {}); } });
-      } catch (error) { await this.run(() => this.watchError(error)); }
+      await this.startWatcher();
     } else if (this.state === 'polling' || this.state === 'degraded') this.schedulePoll();
   }
   async stop(): Promise<void> {
-    this.stopping = true; this.watcher.stop(); this.dirty.stop(); this.stable.stop(); this.matcher.stop(); this.throttle.stop();
+    this.stopping = true; this.watcher.stop(); this.watcherActive = false; this.dirty.stop(); this.stable.stop(); this.matcher.stop(); this.throttle.stop();
     if (this.pollTimer !== null) this.clock.clearTimeout(this.pollTimer); this.pollTimer = null;
     await this.idle(); this.pendingSources.clear(); this.started = false;
   }
@@ -130,8 +130,26 @@ export class WatchCoordinator {
   }
   async checkRoot(): Promise<boolean> {
     const status = await this.guard.check();
+    if (status.state === 'unavailable') {
+      this.rootUnavailable = true; this.state = 'degraded'; this.degradedReason = '媒体库根目录不可用或挂载身份不符，等待恢复';
+      if (this.watcherActive) { this.watcher.stop(); this.watcherActive = false; }
+      return false;
+    }
+    if (this.rootUnavailable) {
+      this.rootUnavailable = false; this.state = this.selectedState; this.degradedReason = this.selectedReason;
+      if (this.started && !this.stopping && this.state === 'watching') await this.startWatcher();
+    }
     if (status.needsFullReconcile) await this.options.port.requestFullReconcile('root-recovered');
     return status.state === 'available';
+  }
+  private async startWatcher(): Promise<void> {
+    if (this.watcherActive) return;
+    try {
+      this.watcherActive = true;
+      this.watcher.start({ onEvent: (event) => { void this.run(() => this.onEvent(event)).catch(() => {}); },
+        onError: (error) => { void this.run(() => this.watchError(error)).catch(() => {}); },
+        onOverflow: () => { void this.run(() => this.options.port.requestFullReconcile('overflow')).catch(() => {}); } });
+    } catch (error) { this.watcherActive = false; await this.watchError(error); }
   }
   reconcileDirectory(directory: string, source: Source = 'watch'): Promise<void> {
     const relative = normalizeRelative(directory);
@@ -151,9 +169,10 @@ export class WatchCoordinator {
     }, (this.options.pollIntervalSec ?? 300) * 1000);
   }
   private async watchError(error: unknown): Promise<void> {
-    this.options.onError?.(error); this.watcher.stop();
+    this.options.onError?.(error); this.watcher.stop(); this.watcherActive = false;
     this.state = this.options.requested === 'watch' ? 'degraded' : 'polling';
     this.degradedReason = '实时监视发生错误，已改为轮询并请求全量对账';
+    this.selectedState = this.state; this.selectedReason = this.degradedReason;
     this.schedulePoll(); await this.options.port.requestFullReconcile('watch-error');
   }
   private async onEvent(event: PathEvent): Promise<void> {
