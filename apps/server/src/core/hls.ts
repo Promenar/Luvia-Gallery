@@ -13,7 +13,7 @@ export function hlsDirectory(cacheDir: string, session: string, generation: stri
   if (!/^[a-f0-9]{64}$/.test(session) || !/^[a-f0-9]{32}$/.test(generation)) throw new Error('HLS 缓存标识无效');
   return path.join(path.resolve(cacheDir), 'hls', session, generation);
 }
-export function ensureHls(db: Database.Database, source: MediaSource, principal: string): HlsSession {
+export function ensureHls(db: Database.Database, source: MediaSource, principal: string): HlsSession | undefined {
   const id = hlsId(source, principal); const time = Date.now();
   return db.transaction(() => {
     const previous = db.prepare('SELECT * FROM hls_sessions WHERE id=?').get(id) as HlsSession | undefined;
@@ -26,6 +26,8 @@ export function ensureHls(db: Database.Database, source: MediaSource, principal:
         return { ...previous, last_access_at: time, generation: reset ? null : previous.generation, state: reset ? 'queued' : previous.state };
       }
     }
+    const active = db.prepare("SELECT count(*) AS n FROM jobs WHERE dedupe_key LIKE 'hls:%' AND status IN ('queued','running','paused')").get() as { n: number };
+    if (active.n >= 8) return undefined;
     const jobId = randomUUID();
     db.prepare("INSERT INTO jobs(id,type,label,status,trigger,payload,created_at,dedupe_key) VALUES (?,'previews','视频转码','queued','system',?,unixepoch(),?)")
       .run(jobId, JSON.stringify({ hlsSessionId: id }), `hls:${id}`);

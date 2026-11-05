@@ -595,9 +595,12 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
           return sendFile(req, reply, previous, { mime: 'image/webp', name: row.name, etagKey: `legacy:${cacheKey(row, variant)}`, authorize });
         }
       }
-      const waiter = wait ? randomUUID() : undefined;
-      const jobId = enqueueMediaTask(db, row, variant, { waiter });
-      if (wait) {
+      const { waiter, jobId } = db.transaction(() => {
+        const active = wait ? (db.prepare('SELECT count(*) AS n FROM media_waiters WHERE lease_expires_at>unixepoch()').get() as { n: number }).n : 0;
+        const waiter = wait && active < 32 ? randomUUID() : undefined;
+        return { waiter, jobId: enqueueMediaTask(db, row, variant, { waiter }) };
+      }).immediate();
+      if (waiter) {
         let disconnected = false; let released = false; let ready = false; let renewal = Date.now() + 5000;
         const release = (cancel: boolean) => {
           if (released) return;
@@ -668,7 +671,8 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     const current = db.prepare('SELECT playability FROM files WHERE id=?').get(row.id) as { playability: string | null } | undefined;
     if (row.media_type !== 'video' || current?.playability !== 'transcode' || !readSettings(db).transcode.enabled) return fail(404, 'NOT_FOUND', '视频不需要转码或转码已关闭');
     const id = hlsId(row, principal);
-    let session = resource === 'index.m3u8' ? ensureHls(db, row, principal)
+    const ensure = () => ensureHls(db, row, principal) ?? fail(503, 'UNAVAILABLE', '视频转码任务已满，请稍后重试');
+    let session = resource === 'index.m3u8' ? ensure()
       : db.prepare('SELECT * FROM hls_sessions WHERE id=? AND principal_hash=?').get(id, principal) as HlsSession | undefined;
     if (!session) return fail(404, 'NOT_FOUND', 'HLS 会话不存在');
     db.prepare('UPDATE hls_sessions SET last_access_at=? WHERE id=? AND principal_hash=?').run(Date.now(), id, principal);
@@ -680,7 +684,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
       if (resource !== 'index.m3u8') return fail(404, 'NOT_FOUND', 'HLS 分片尚未就绪');
       if (session.state === 'ready') {
         db.prepare("UPDATE hls_sessions SET state='failed' WHERE id=? AND state='ready' AND generation=?").run(id, session.generation);
-        session = ensureHls(db, row, principal);
+        session = ensure();
       }
       return reply.header('Retry-After', '1').code(202).send({ status: 'pending' });
     }
@@ -920,14 +924,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
         WHERE f.id=? AND f.size=? AND f.modified_at=? AND f.playability='transcode'`).get(id, row.size, row.modified_at) || !readSettings(db).transcode.enabled) fail(404, 'NOT_FOUND', '媒体不可访问');
     };
     check();
-    const cookieName = `luvia_hls_${initial.share.id.replaceAll('-', '')}`;
-    let visitor = req.cookies[cookieName];
-    if (!visitor || !/^[A-Za-z0-9_-]{32,128}$/.test(visitor)) {
-      if (resource !== 'index.m3u8') return fail(404, 'NOT_FOUND', 'HLS 会话不存在');
-      visitor = secret();
-      reply.setCookie(cookieName, visitor, { httpOnly: true, sameSite: 'lax', secure, path: `/api/v2/public/shares/${initial.share.token}`, maxAge: 7200 });
-    }
-    const principal = digest(`share:${initial.share.id}:${digest(visitor)}`);
+    const principal = digest('share:media');
     return hlsResponse(req, reply, row, principal, resource, check);
   });
   type DownloadTarget = ReturnType<typeof endpoints.createDownload.body.parse>;
