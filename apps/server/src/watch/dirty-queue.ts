@@ -22,7 +22,7 @@ export function excluded(value: string, rules: string[], isDir = false): boolean
 }
 
 export class DirtyQueue {
-  private readonly pending = new Map<string, number>();
+  private readonly pending = new Map<string, { firstAt: number; lastAt: number }>();
   private firstAt: number | null = null;
   private timer: unknown = null;
   private readonly clock: Clock;
@@ -37,22 +37,24 @@ export class DirtyQueue {
     const key = dir === '.' ? '' : dir;
     const now = this.clock.now();
     if (this.firstAt === null) this.firstAt = now;
-    this.pending.set(key, now); this.schedule();
+    const firstAt = this.pending.get(key)?.firstAt ?? now;
+    this.pending.set(key, { firstAt, lastAt: now }); if (this.timer === null) this.schedule();
   }
   stop(): void { if (this.timer !== null) this.clock.clearTimeout(this.timer); this.timer = null; this.pending.clear(); this.firstAt = null; }
   private schedule(): void {
     if (this.timer !== null) this.clock.clearTimeout(this.timer);
     if (this.firstAt === null || this.pending.size === 0) { this.timer = null; return; }
-    const deadline = Math.min(this.firstAt + 10_000, ...[...this.pending.values()].map((at) => at + 2_000));
+    let deadline = this.firstAt + 10_000;
+    for (const item of this.pending.values()) deadline = Math.min(deadline, item.lastAt + 2_000);
     this.timer = this.clock.setTimeout(() => this.release(), Math.max(0, deadline - this.clock.now()));
   }
   private release(): void {
     this.timer = null; const now = this.clock.now();
     const forced = this.firstAt !== null && now >= this.firstAt + 10_000;
     const ready: string[] = [];
-    for (const [dir, at] of this.pending) if (forced || now >= at + 2_000) { this.pending.delete(dir); ready.push(dir); }
-    if (this.pending.size === 0) this.firstAt = null;
-    else if (forced) this.firstAt = now;
+    for (const [dir, item] of this.pending) if (forced || now >= item.lastAt + 2_000) { this.pending.delete(dir); ready.push(dir); }
+    this.firstAt = null;
+    for (const item of this.pending.values()) this.firstAt = this.firstAt === null ? item.firstAt : Math.min(this.firstAt, item.firstAt);
     this.schedule();
     if (ready.length) this.options.onReady(ready);
   }
