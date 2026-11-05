@@ -28,7 +28,7 @@ test('分享密码、目标、下载权限、所有者目录权限和撤销均�
     assert.equal(locked.unlocked, false); assert.equal(locked.mediaCount, null); assert.equal(locked.cover, null);
     assert.equal((await app.inject({ method: 'GET', url: `${base}/media` })).statusCode, 403);
     assert.equal((await app.inject({ method: 'POST', url: `${base}/unlock`, headers: { 'x-luvia-request': '1' }, payload: { password: 'incorrect' } })).statusCode, 401);
-    const unlock = await app.inject({ method: 'POST', url: `${base}/unlock`, headers: { 'x-luvia-request': '1' }, payload: { password: 'test password' } });
+    const unlock = await app.inject({ method: 'POST', url: `${base}/unlock`, payload: { password: 'test password' } });
     assert.equal(unlock.statusCode, 204);
     const shareCookie = (unlock.headers['set-cookie'] as string).split(';')[0]!;
     assert.equal(PublicShare.parse((await app.inject({ method: 'GET', url: base, headers: { cookie: shareCookie } })).json()).unlocked, true);
