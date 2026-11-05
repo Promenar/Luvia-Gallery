@@ -281,6 +281,10 @@ const schemaV22 = `
   INSERT OR IGNORE INTO settings(key,value)
     SELECT 'legacy.identity_upgrade_locked','true' WHERE EXISTS(SELECT 1 FROM legacy_import_users)
       OR EXISTS(SELECT 1 FROM jobs WHERE type='import_legacy' AND started_at IS NOT NULL);
+  INSERT INTO settings(key,value)
+    SELECT 'legacy.pending','true' WHERE EXISTS(SELECT 1 FROM settings WHERE key='legacy.identity_upgrade_locked')
+      AND NOT EXISTS(SELECT 1 FROM users WHERE role='admin')
+    ON CONFLICT(key) DO UPDATE SET value='true';
 `;
 
 export function openDatabase(filename: string, options: { readonly?: boolean; bootstrapLegacy?: boolean } = {}): Database.Database {

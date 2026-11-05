@@ -14,6 +14,9 @@ type LegacyFavorite = { source_rowid: number; user_id: string; item_id: string; 
 type Root = { id: string; root: string };
 type Counts = { imported: number; pending: number; unmatched: number };
 type Pending = { source_key: string; user_id: string | null; absolute_path: string | null; item_type: string; created_at: number };
+export class LegacyIdentityUncertainError extends Error {
+  constructor() { super('旧账户导入状态无法安全确认，需要人工核验'); }
+}
 const digest = (s: string) => createHash('sha256').update(s).digest('hex');
 const idFor = (label: string, value: string) => `${label}_${createHash('sha256').update(value).digest('base64url').slice(0, 22)}`;
 function isWithin(parent: string, child: string): boolean {
@@ -102,6 +105,7 @@ export async function importLegacy(db: DatabaseType.Database, options: { legacyD
       root.id = (db.prepare('SELECT id FROM libraries WHERE root=?').get(root.root) as { id: string }).id;
     }
     if (typeof config.title === 'string' && config.title.trim()) db.prepare("INSERT OR IGNORE INTO settings (key,value) VALUES ('siteName',?)").run(JSON.stringify(config.title));
+    const locked = !!db.prepare("SELECT 1 FROM settings WHERE key='legacy.identity_upgrade_locked'").get();
     for (const user of importedUsers) {
       const mapped = (user.allowedPaths ?? []).flatMap((p) => {
         const absolute = path.resolve(p);
@@ -110,10 +114,10 @@ export async function importLegacy(db: DatabaseType.Database, options: { legacyD
         return roots.filter((r) => isWithin(absolute, r.root)).map((r) => r.id);
       });
       let origin = db.prepare('SELECT user_id FROM legacy_import_users WHERE username=?').get(user.username) as { user_id: string } | undefined;
-      const locked = !!db.prepare("SELECT 1 FROM settings WHERE key='legacy.identity_upgrade_locked'").get();
       if (!origin) {
         const occupied = db.prepare('SELECT 1 FROM users WHERE username=?').get(user.username);
         const revoked = db.prepare('SELECT 1 FROM legacy_jwt_revoked_users WHERE username=?').get(user.username);
+        if (locked && !occupied && !revoked) throw new LegacyIdentityUncertainError();
         const id = !occupied && !revoked && !locked ? randomUUID() : '';
         if (id) {
           db.prepare(`INSERT INTO users (id,username,password_hash,role,allowed_paths,preferences,created_at)
@@ -123,6 +127,7 @@ export async function importLegacy(db: DatabaseType.Database, options: { legacyD
         db.prepare('INSERT INTO legacy_import_users(username,user_id) VALUES (?,?)').run(user.username, id);
         origin = { user_id: id };
       }
+      if (locked && !origin.user_id && db.prepare('SELECT 1 FROM users WHERE username=?').get(user.username)) throw new LegacyIdentityUncertainError();
       const actual = db.prepare('SELECT id FROM users WHERE id=? AND username=?').get(origin.user_id, user.username) as { id: string } | undefined;
       if (user.wallpaperToken) {
         const hash = digest(user.wallpaperToken);
@@ -136,6 +141,7 @@ export async function importLegacy(db: DatabaseType.Database, options: { legacyD
           VALUES (?,?,?,?,?,?,?,?,?,1)`).run(idFor('tok', user.wallpaperToken), actual.id, hash, '旧版壁纸令牌', 'wallpaper', user.wallpaperToken.slice(0, 8), now, JSON.stringify(wallpaper), decoded.exp);
       }
     }
+    if (locked && !db.prepare("SELECT 1 FROM users WHERE role='admin' LIMIT 1").get()) throw new LegacyIdentityUncertainError();
   }).immediate();
   if (!hasDb) return { ...counts(db), unmappedRoots };
   const source = new Database(legacyPath, { readonly: true, fileMustExist: true });
