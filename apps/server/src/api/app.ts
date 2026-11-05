@@ -8,6 +8,7 @@ import { CSRF_HEADER, endpoints, JobAction, Preferences, WallpaperConfig, defaul
 import type { User } from '@luvia/contracts';
 import { hashPassword, verifyPassword } from '../core/password.ts';
 import { MediaReader } from '../core/media-query.ts';
+import { FolderReader } from '../core/folder-reader.ts';
 import { pathAllowed } from '../core/paths.ts';
 import { jobView, publishJob } from '../core/job-view.ts';
 import type { JobRecord } from '../core/job-view.ts';
@@ -45,6 +46,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
   await app.register(cookie);
   const identities = new WeakMap<FastifyRequest, Identity>();
   const media = new MediaReader(db);
+  const folders = new FolderReader(db);
   const attempts = new Map<string, number[]>();
   const secure = options.secureCookies ?? process.env.NODE_ENV === 'production';
   const findUser = db.prepare('SELECT * FROM users WHERE username = ?');
@@ -219,6 +221,26 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     const u = userOut(requireUser(req).user);
     return { id: u.id, allowedPaths: u.allowedPaths };
   }
+  function folderContext(req: FastifyRequest) {
+    const user = userOut(requireUser(req).user);
+    return { id: user.id, allowedPaths: user.allowedPaths, isAdmin: user.role === 'admin' };
+  }
+  register('folders', async (req) => {
+    const query = endpoints.folders.query.parse(req.query);
+    return folders.list(query.path ?? '', folderContext(req)) ?? fail(404, 'NOT_FOUND', '文件夹不存在或不可访问');
+  });
+  register('folderTree', async (req) => {
+    const query = endpoints.folderTree.query.parse(req.query);
+    return folders.tree(query.path ?? '', folderContext(req)) ?? fail(404, 'NOT_FOUND', '文件夹不存在或不可访问');
+  });
+  register('setFolderFavorite', async (req, _reply, body) => {
+    const context = folderContext(req);
+    if (!folders.canFavorite(body.path, context)) fail(403, 'FORBIDDEN', '文件夹不可访问');
+    if (body.favorite) db.prepare("INSERT OR IGNORE INTO favorites(user_id,item_id,item_type) VALUES (?,?,'folder')").run(context.id, body.path);
+    else db.prepare("DELETE FROM favorites WHERE user_id=? AND item_id=? AND item_type='folder'").run(context.id, body.path);
+    return { ok: true };
+  });
+  register('favoriteFolders', async (req) => folders.favorites(folderContext(req)));
   register('setFavorite', async (req, _reply, body) => {
     const context = mediaContext(req);
     const ids = [...new Set(body.ids as string[])];

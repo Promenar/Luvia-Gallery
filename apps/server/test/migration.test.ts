@@ -51,7 +51,6 @@ test('旧库只导入用户数据，收藏在扫描后匹配，孤儿保留且�
     assert.equal(JSON.parse((db.prepare("SELECT value FROM settings WHERE key='siteName'").get() as { value: string }).value), '家庭图库');
     const lib = db.prepare('SELECT id,root FROM libraries').get() as { id: string; root: string };
     await scanLibrary(db, lib, { allowedRoots: [media] });
-    db.prepare('INSERT INTO folders(path,library_id,parent,name) VALUES (?,?,?,?)').run(`${lib.id}/sub`, lib.id, lib.id, 'sub');
     const reconcileLegacyFavorites = Reflect.get(legacyImport, 'reconcileLegacyFavorites');
     assert.equal(typeof reconcileLegacyFavorites, 'function');
     const result = reconcileLegacyFavorites(db, { finalize: true });
