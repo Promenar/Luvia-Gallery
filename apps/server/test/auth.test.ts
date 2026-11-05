@@ -43,15 +43,27 @@ test('初始化、会话、访问令牌和密码更改后会话撤销', async ()
   } finally { await app.close(); db.close(); }
 });
 
-test('迁移待处理时禁止匿名初始化；跨站请求必须携带自定义头', async () => {
+test('迁移待处理时禁止匿名初始化；会话写请求必须携带自定义头', async () => {
   const db = openDatabase(':memory:');
   const app = await createApp({ db, legacyPending: true });
   try {
     let res = await app.inject({ method: 'POST', url: '/api/v2/auth/setup', payload: { username: 'admin', password: 'password' } });
-    assert.equal(res.statusCode, 403);
+    assert.equal(res.statusCode, 503);
     res = await app.inject({ method: 'POST', url: '/api/v2/auth/setup', headers: header, payload: { username: 'admin', password: 'password' } });
     assert.equal(res.statusCode, 503);
     assert.equal((db.prepare('SELECT count(*) AS n FROM users').get() as { n: number }).n, 0);
+  } finally { await app.close(); db.close(); }
+});
+
+test('匿名初始化与登录无需会话 CSRF 标头，会话写入仍受保护', async () => {
+  const db = openDatabase(':memory:'); const app = await createApp({ db, legacyPending: false });
+  try {
+    const account = { username: 'admin', password: 'test password' };
+    const setup = await app.inject({ method: 'POST', url: '/api/v2/auth/setup', payload: account });
+    assert.equal(setup.statusCode, 200);
+    const cookie = (setup.headers['set-cookie'] as string).split(';')[0]!;
+    assert.equal((await app.inject({ method: 'PATCH', url: '/api/v2/me/preferences', headers: { cookie }, payload: { density: 2 } })).statusCode, 403);
+    assert.equal((await app.inject({ method: 'POST', url: '/api/v2/auth/login', payload: account })).statusCode, 200);
   } finally { await app.close(); db.close(); }
 });
 

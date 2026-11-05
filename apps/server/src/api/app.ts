@@ -181,7 +181,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     const isLegacy = isLegacyPath(url.pathname);
     const queryTokens = isLegacy ? url.searchParams.getAll('token') : [];
     const identity = authenticate(req) ?? (queryTokens.length ? tokenIdentity(queryTokens.at(-1)!, true) : undefined);
-    if (url.pathname.startsWith('/api/v2/') && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) && identity?.kind !== 'token' && req.headers[CSRF_HEADER.toLowerCase()] !== '1') {
+    if (url.pathname.startsWith('/api/v2/') && req.method !== 'GET' && identity?.kind === 'session' && req.headers[CSRF_HEADER.toLowerCase()] !== '1') {
       fail(403, 'FORBIDDEN', '请求缺少安全标头');
     }
     if (identity) identities.set(req, identity);
