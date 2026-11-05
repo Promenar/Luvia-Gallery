@@ -25,14 +25,41 @@ export const ThemePatch = z
 export const ThemePreference = z.object({
   mode: ThemeMode.default('system'),
   base: ThemeBase.default('graphite'),
-  accent: ThemeAccent.default('mono'),
+  accent: ThemeAccent.default('dynamic'),
   radius: ThemeRadius.default('default'),
   viewerBackdrop: ViewerBackdrop.default('ambient'),
 });
 export type ThemePreference = z.infer<typeof ThemePreference>;
 
+/**
+ * 首页大图轮播的内容来源。memories 为往年同期；favorites 为收藏的媒体与收藏文件夹之下的媒体；
+ * library 为全部可见媒体；folder 为 heroFolder 指定文件夹及其子孙。后三者随机抽取（GET /api/v2/media/random）。
+ */
+const HeroSource = z.enum(['memories', 'favorites', 'library', 'folder']);
+export const HomePreference = z.object({
+  heroSource: HeroSource.default('memories'),
+  /** heroSource=folder 时的虚拟文件夹路径；文件夹不存在或无权访问时前端回退到 library。 */
+  heroFolder: z.string().nullable().default(null),
+});
+/**
+ * 幻灯片播放。播放范围由打开查看器的位置决定（时间线=全部，文件夹=当前文件夹，相册=当前相册……），不在偏好中保存。
+ * 图片按 intervalSec 切换；视频播放完毕后自动切换下一项。
+ */
+export const SlideshowPreference = z.object({
+  intervalSec: z.number().int().min(2).max(120).default(5),
+  order: z.enum(['sequential', 'shuffle']).default('sequential'),
+  /** 图片停留期间缓慢推近。 */
+  kenBurns: z.boolean().default(true),
+  /** 播完后从头循环。 */
+  loop: z.boolean().default(true),
+});
+
 export const Preferences = z.object({
   theme: ThemePreference.default(ThemePreference.parse({})),
+  home: HomePreference.default(HomePreference.parse({})),
+  slideshow: SlideshowPreference.default(SlideshowPreference.parse({})),
+  /** 文件夹视图中媒体网格是否包含子文件夹内容（默认只显示直接位于该文件夹的媒体）。 */
+  folderIncludeSubfolders: z.boolean().default(false),
   locale: z.enum(['zh-CN', 'en']).default('zh-CN'),
   /** 网格行高档位 1（最密）–5（最疏）。 */
   density: z.number().int().min(1).max(5).default(3),
@@ -89,6 +116,16 @@ export const UserResponse = z.object({ user: User });
 export const PreferencesPatch = z
   .object({
     theme: ThemePatch,
+    home: z.object({ heroSource: HeroSource, heroFolder: z.string().nullable() }).partial(),
+    slideshow: z
+      .object({
+        intervalSec: SlideshowPreference.shape.intervalSec.unwrap(),
+        order: SlideshowPreference.shape.order.unwrap(),
+        kenBurns: z.boolean(),
+        loop: z.boolean(),
+      })
+      .partial(),
+    folderIncludeSubfolders: z.boolean(),
     locale: Preferences.shape.locale.unwrap(),
     density: z.number().int().min(1).max(5),
     gridStyle: Preferences.shape.gridStyle.unwrap(),
@@ -106,10 +143,27 @@ export const ChangePasswordBody = z.object({ current: z.string().min(1), next: z
  * 以 `Authorization: Bearer <token>` 调用 v2；旧版兼容接口另允许 `?token=`。
  * scope=read 可读全部可见媒体；scope=wallpaper 仅可调用随机媒体与媒体资源接口。
  */
+/**
+ * 壁纸播放设置，保存在 scope=wallpaper 的令牌上。v1 兼容接口 /api/scan/results?random=true 用该令牌访问时
+ * 按此设置抽取内容，因此 Wallpaper Engine 壁纸端无需改动即可在控制台调整播放内容。
+ */
+export const WallpaperConfig = z.object({
+  source: z.enum(['library', 'favorites', 'folder']).default('library'),
+  /** source=folder 时的虚拟文件夹路径（含子孙）。 */
+  folder: z.string().nullable().default(null),
+  /** 壁纸端切换间隔，写入兼容响应供新版壁纸读取；旧壁纸端忽略。 */
+  intervalSec: z.number().int().min(5).max(3600).default(30),
+  landscapeOnly: z.boolean().default(true),
+  includeVideos: z.boolean().default(false),
+});
+export type WallpaperConfig = z.infer<typeof WallpaperConfig>;
+
 export const ApiToken = z.object({
   id: z.string(),
   name: z.string(),
   scope: z.enum(['read', 'wallpaper']),
+  /** 仅 scope=wallpaper 有值。 */
+  wallpaper: WallpaperConfig.nullable(),
   /** 令牌前 8 位，用于辨认。 */
   prefix: z.string(),
   createdAt: IsoDateTime,
@@ -122,6 +176,12 @@ export const CreateTokenBody = z.object({
   name: z.string().trim().min(1).max(80),
   scope: z.enum(['read', 'wallpaper']).default('read'),
   expiresAt: IsoDateTime.nullable().optional(),
+  wallpaper: WallpaperConfig.optional(),
+});
+/** PATCH /api/v2/me/tokens/:id：改名或调整壁纸设置（不可改 scope，不重新签发）。 */
+export const UpdateTokenBody = z.object({
+  name: z.string().trim().min(1).max(80).optional(),
+  wallpaper: WallpaperConfig.partial().optional(),
 });
 /** 明文 token 只在创建响应中出现一次。 */
 export const CreatedToken = z.object({ token: z.string(), meta: ApiToken });
