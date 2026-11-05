@@ -28,3 +28,5 @@ DATA_DIR=./data CACHE_DIR=./cache MEDIA_ROOT=/path/to/fixture npx -y -p node@24 
 `/healthz` 检查 API 事件循环，`/readyz` 还要求 worker 心跳正常。worker 启动时探测 FFmpeg 和 NVENC 单帧编码能力；探测结果可从管理员系统接口读取。在 macOS 开发环境中，`MEDIA_ROOT` 指定本地合成媒体目录；Linux 环境以 mountinfo 中检测到的候选挂载限制扫描范围。
 
 现有测试使用临时合成数据，不代表大媒体库性能、真实旧库迁移或生产环境验收。作业领取与扫描锁支持租约，扫描支持目录级断点。旧版导入只迁移用户数据并保留待匹配收藏；完整生产迁移、媒体管线与端到端性能尚未验收。
+
+根目录的 Dockerfile 和 Compose 配置使用同一 Node 24 镜像运行 API 与 worker，媒体挂载为只读；可按 Compose 注释启用 NVIDIA 设备。容器构建、卷权限、GPU 与前端资源尚需在 FNOS 验证，当前后端仍不可用于生产。

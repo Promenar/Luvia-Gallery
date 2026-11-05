@@ -1,0 +1,54 @@
+services:
+  api:
+    build:
+      context: .
+    image: luvia-gallery-v2:local
+    command: ["node", "src/api/main.ts"]
+    ports:
+      - "3000:3001"
+    environment:
+      DATA_DIR: /data
+      CACHE_DIR: /cache
+      MEDIA_ROOT: /media
+      TZ: ${TZ:-Asia/Shanghai}
+      LUVIA_HOST_PATHS: "${LUVIA_HOST_PATHS:-}"
+    volumes:
+      - luvia-data:/data
+      - luvia-cache:/cache
+      - "${LUVIA_MEDIA_PATH:-./media}:/media:ro"
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+    image: luvia-gallery-v2:local
+    command: ["node", "src/worker/main.ts"]
+    environment:
+      DATA_DIR: /data
+      CACHE_DIR: /cache
+      MEDIA_ROOT: /media
+      TZ: ${TZ:-Asia/Shanghai}
+      LUVIA_HOST_PATHS: "${LUVIA_HOST_PATHS:-}"
+    volumes:
+      - luvia-data:/data
+      - luvia-cache:/cache
+      - "${LUVIA_MEDIA_PATH:-./media}:/media:ro"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "try { const D=require('better-sqlite3'); const db=new D(process.env.DATA_DIR+'/luvia.db',{readonly:true,fileMustExist:true}); const row=db.prepare(\"SELECT value FROM settings WHERE key='worker.heartbeat'\").get(); const h=JSON.parse(row.value); db.close(); process.exit(h.healthy && Date.now()/1000-h.at<20 ? 0 : 1); } catch { process.exit(1); }"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    # 需要 NVIDIA 容器运行时和 GPU 时，可启用以下可选设备预留。
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+volumes:
+  luvia-data:
+  luvia-cache:
