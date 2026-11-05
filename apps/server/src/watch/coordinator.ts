@@ -47,6 +47,7 @@ type Candidate = MoveCandidate & { source: Source };
 type Options = {
   libraryId: string; root: string; exclude: string[]; port: LibraryIndexPort; missingGraceDays: number;
   requested?: LibraryWatch['mode']; fsType?: string | null; dirCount?: number; quota?: number | null; pollIntervalSec?: number;
+  currentFsType?: () => string | null;
   clock?: Clock; watcher?: Watcher; guard?: RootGuard; onError?: (error: unknown) => void;
 };
 const extensions = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.avif', '.heic', '.heif', '.tif', '.tiff', '.bmp', '.mp4', '.m4v', '.mkv', '.mov', '.webm', '.avi', '.wmv', '.mpeg', '.mpg', '.mp3', '.wav', '.flac', '.m4a', '.aac', '.ogg', '.wma', '.opus']);
@@ -70,6 +71,7 @@ export class WatchCoordinator {
   private state: LibraryWatch['state'] = 'starting';
   private selectedState: LibraryWatch['state'] = 'starting';
   private selectedReason: string | null = null;
+  private fsType: string | null;
   private rootUnavailable = false;
   private watcherActive = false;
   private degradedReason: string | null = null;
@@ -78,7 +80,7 @@ export class WatchCoordinator {
   private readonly pendingSources = new Map<string, Source>();
 
   constructor(options: Options) {
-    this.options = options; this.clock = options.clock ?? systemClock;
+    this.options = options; this.clock = options.clock ?? systemClock; this.fsType = options.fsType ?? null;
     this.watcher = options.watcher ?? new NodeFsWatcher(options.root);
     this.guard = options.guard ?? new RootGuard({ root: options.root });
     this.dirty = new DirtyQueue({ exclude: options.exclude, clock: this.clock, onReady: (dirs) => {
@@ -135,9 +137,22 @@ export class WatchCoordinator {
       if (this.watcherActive) { this.watcher.stop(); this.watcherActive = false; }
       return false;
     }
+    const fsType = this.options.currentFsType?.() ?? this.fsType;
+    if (fsType !== this.fsType) {
+      this.fsType = fsType;
+      const decision = decideWatchMode({ requested: this.options.requested ?? 'auto', fsType,
+        dirCount: this.options.dirCount ?? 0, quota: this.options.quota ?? null, pollIntervalSec: this.options.pollIntervalSec });
+      this.selectedState = decision.state; this.selectedReason = decision.degradedReason;
+      if (this.watcherActive && decision.state !== 'watching') { this.watcher.stop(); this.watcherActive = false; }
+      this.rootUnavailable = true;
+    }
     if (this.rootUnavailable) {
       this.rootUnavailable = false; this.state = this.selectedState; this.degradedReason = this.selectedReason;
-      if (this.started && !this.stopping && this.state === 'watching') await this.startWatcher();
+      if (this.state === 'watching') {
+        if (this.pollTimer !== null) this.clock.clearTimeout(this.pollTimer);
+        this.pollTimer = null;
+        if (this.started && !this.stopping) await this.startWatcher();
+      } else if (this.started && !this.stopping && this.state !== 'off') this.schedulePoll();
     }
     if (status.needsFullReconcile) await this.options.port.requestFullReconcile('root-recovered');
     return status.state === 'available';
@@ -165,7 +180,13 @@ export class WatchCoordinator {
     if (this.pollTimer !== null || this.stopping) return;
     this.pollTimer = this.clock.setTimeout(() => {
       this.pollTimer = null;
-      void this.run(async () => { if (await this.checkRoot()) await this.options.port.requestFullReconcile('poll'); this.schedulePoll(); }).catch(() => {});
+      void this.run(async () => {
+        const available = await this.checkRoot();
+        if (this.state !== 'watching' && this.state !== 'off') {
+          if (available) await this.options.port.requestFullReconcile('poll');
+          this.schedulePoll();
+        }
+      }).catch(() => {});
     }, (this.options.pollIntervalSec ?? 300) * 1000);
   }
   private async watchError(error: unknown): Promise<void> {

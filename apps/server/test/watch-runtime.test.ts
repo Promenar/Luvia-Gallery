@@ -175,3 +175,17 @@ test('媒体库根目录在允许范围外时不认领或监视', async () => {
     assert.equal(state.state, 'degraded'); assert.match(state.degraded_reason, /允许/);
   } finally { await runtime.stop(); db.close(); await rm(dir, { recursive: true, force: true }); }
 });
+
+test('首次挂载恢复后按真实网络文件系统选择轮询', async () => {
+  const { WatchRuntime } = await import('../src/worker/watch-runtime.ts');
+  const dir = await mkdtemp(path.join(tmpdir(), 'luvia-watch-network-')); const media = path.join(dir, 'media');
+  const db = openDatabase(path.join(dir, 'db.sqlite')); let starts = 0;
+  db.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib','照片',?)").run(media);
+  const runtime = new WatchRuntime(db, { owner: 'worker', watcher: () => { const w = new FakeWatcher(); const start = w.start.bind(w); w.start = (h) => { starts++; start(h); }; return w; },
+    mount: async () => JSON.stringify(['nfs', 'server:/share', '/']) });
+  try {
+    await runtime.tick(); await mkdir(media); await runtime.tick();
+    assert.equal((db.prepare('SELECT state FROM library_watch_state').get() as {state:string}).state, 'polling');
+    assert.equal(starts, 0);
+  } finally { await runtime.stop(); db.close(); await rm(dir, { recursive: true, force: true }); }
+});

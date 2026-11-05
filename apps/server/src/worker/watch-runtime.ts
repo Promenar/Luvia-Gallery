@@ -17,6 +17,10 @@ import { publishLibraryEvent } from './watch-events.ts';
 type LibraryRow = { id: string; root: string; exclude: string; watch_mode: LibraryWatch['mode']; watch_poll_interval_sec: number };
 type Running = { coordinator: WatchCoordinator; port: SqliteLibraryIndex; db: Database.Database; token: string; config: string };
 type State = { mount_root: string | null; mount_identity: string | null };
+function filesystemType(identity: string | null): string | null {
+  try { const parts: unknown = identity && JSON.parse(identity); return Array.isArray(parts) && typeof parts[0] === 'string' ? parts[0] : null; }
+  catch { return null; }
+}
 export function serviceWatchUsage(db: Database.Database, at = Math.floor(Date.now() / 1000)): number {
   return (db.prepare('SELECT COALESCE(sum(watched_count),0) n FROM watch_worker_usage WHERE lease_expires_at>?').get(at) as { n: number }).n;
 }
@@ -77,14 +81,14 @@ export class WatchRuntime {
             publishLibraryEvent(this.db, event);
           }).immediate(); },
         });
-        let fsType: string | null = null;
-        try { const parts: unknown = saved.mount_identity && JSON.parse(saved.mount_identity); if (Array.isArray(parts) && typeof parts[0] === 'string') fsType = parts[0]; } catch { /* 无法解析时保持未知。 */ }
+        const fsType = filesystemType(saved.mount_identity);
         const quota = await readInotifyQuota();
         const used = serviceWatchUsage(this.db);
         const dirCount = (this.db.prepare('SELECT count(*) n FROM folders WHERE library_id=? AND missing_at_ms IS NULL').get(row.id) as {n:number}).n || 1;
         if (!this.owns(row.id, token)) throw new Error('监控租约已失效');
         coordinator = new WatchCoordinator({ libraryId: row.id, root: row.root, exclude: JSON.parse(row.exclude), port, missingGraceDays: grace, guard,
-          requested: row.watch_mode, pollIntervalSec: row.watch_poll_interval_sec, fsType, dirCount, quota: quota === null ? null : Math.max(0, quota - used), watcher: this.options.watcher?.(row.root) });
+          requested: row.watch_mode, pollIntervalSec: row.watch_poll_interval_sec, fsType, dirCount, quota: quota === null ? null : Math.max(0, quota - used), watcher: this.options.watcher?.(row.root),
+          currentFsType: () => filesystemType((this.db.prepare('SELECT mount_identity FROM library_watch_state WHERE library_id=?').get(row.id) as State | undefined)?.mount_identity ?? null) });
         await coordinator.start();
         const current = { coordinator, port, db: connection, token, config: this.config(row, grace) };
         this.running.set(row.id, current); await this.writeStatus(row.id, current); await this.reportUsage();
