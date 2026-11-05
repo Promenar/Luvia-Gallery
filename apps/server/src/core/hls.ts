@@ -11,7 +11,7 @@ const SHARE_HLS_LIMIT = 2;
 const PER_SHARE_HLS_LIMIT = 1;
 const LEGACY_SHARE_PRINCIPAL = createHash('sha256').update('share:media').digest('hex');
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
-export const hlsId = (source: MediaSource, principal: string) => hash(JSON.stringify([source.id, source.size, source.modified_at, principal]));
+export const hlsId = (source: MediaSource, principal: string) => hash(JSON.stringify(source.cache_generation ? [source.id, source.size, source.modified_at, principal, source.cache_generation] : [source.id, source.size, source.modified_at, principal]));
 export const hlsCacheKey = (session: string, generation: string, name: string) => hash(JSON.stringify([session, generation, name]));
 export function hlsDirectory(cacheDir: string, session: string, generation: string): string {
   if (!/^[a-f0-9]{64}$/.test(session) || !/^[a-f0-9]{32}$/.test(generation)) throw new Error('HLS 缓存标识无效');

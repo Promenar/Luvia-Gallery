@@ -1,10 +1,35 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { copyFile, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { openDatabase } from '../src/core/database.ts';
 import Database from 'better-sqlite3';
+import { createApp } from '../src/api/app.ts';
+
+test('版本 22 升级保留媒体及关联数据并提供持久身份字段', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'luvia-watch-upgrade-'));
+  const filename = path.join(dir, 'v22.sqlite');
+  try {
+    await copyFile(new URL('./fixtures/watch-v22.sqlite', import.meta.url), filename);
+    const db = openDatabase(filename);
+    try {
+      assert.equal(db.pragma('user_version', { simple: true }), 29);
+      assert.deepEqual(db.prepare("SELECT id,missing_at_ms,dev,ino,mtime_ms,head_hash FROM files WHERE id='f'").get(),
+        { id: 'f', missing_at_ms: null, dev: null, ino: null, mtime_ms: null, head_hash: null });
+      db.prepare("UPDATE files SET dev=?,ino=?,mtime_ms=?,head_hash=? WHERE id='f'").run('18446744073709551615', '18446744073709551614', 1234.5, 'abc');
+      assert.deepEqual(db.prepare("SELECT dev,ino FROM files WHERE id='f'").get(), { dev: '18446744073709551615', ino: '18446744073709551614' });
+      assert.ok(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='file_watch_index'").get(), '缺少增量回填的身份索引');
+      assert.deepEqual(db.prepare("SELECT file_id FROM file_watch_index WHERE library_id='lib' AND dev=? AND ino=?").all('18446744073709551615', '18446744073709551614'), [{ file_id: 'f' }]);
+      db.prepare("UPDATE files SET missing_at_ms=2000 WHERE id='f'").run();
+      assert.deepEqual(db.prepare("SELECT file_id FROM file_watch_index WHERE library_id='lib' AND missing_at_ms=2000").all(), [{ file_id: 'f' }]);
+      assert.equal((db.prepare("SELECT count(*) AS n FROM favorites WHERE item_id='f'").get() as { n: number }).n, 1);
+      assert.equal((db.prepare("SELECT count(*) AS n FROM album_items WHERE file_id='f'").get() as { n: number }).n, 1);
+      assert.equal((db.prepare("SELECT count(*) AS n FROM cache_entries WHERE media_id='f'").get() as { n: number }).n, 1);
+      assert.deepEqual(db.prepare("SELECT missing_at_ms,dev,ino,mtime_ms FROM folders LIMIT 1").all(), []);
+    } finally { db.close(); }
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
 
 test('数据库迁移持久且可重复，支持只读连接', async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'luvia-db-'));
@@ -12,7 +37,7 @@ test('数据库迁移持久且可重复，支持只读连接', async () => {
   try {
     const db = openDatabase(filename);
     assert.equal(db.pragma('journal_mode', { simple: true }), 'wal');
-    assert.equal(db.pragma('user_version', { simple: true }), 22);
+    assert.equal(db.pragma('user_version', { simple: true }), 29);
     db.prepare("INSERT INTO libraries (id, name, root) VALUES ('lib1', '测试', '/test')").run();
     db.close();
     const writable = openDatabase(filename);
@@ -74,16 +99,54 @@ test('物化月份统计随文件新增、拍摄时间变更和删除保持一�
   } finally { db.close(); }
 });
 
+test('缺失与恢复同步维护物化月份统计', () => {
+  const db = openDatabase(':memory:');
+  try {
+    db.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib','照片','/fixture')").run();
+    const stamp = Date.UTC(2024, 0, 15) / 1000;
+    db.prepare("INSERT INTO files(id,library_id,relative_path,folder,name,mime,media_type,size,modified_at,taken_at,taken_at_source) VALUES ('a','lib','a.jpg','lib','a.jpg','image/jpeg','image',1,?,?,'mtime')").run(stamp, stamp);
+    assert.deepEqual(db.prepare('SELECT month,count FROM timeline_counts').all(), [{ month: '2024-01', count: 1 }]);
+    db.prepare("UPDATE files SET missing_at_ms=1 WHERE id='a'").run();
+    assert.deepEqual(db.prepare('SELECT month,count FROM timeline_counts').all(), []);
+    db.prepare("UPDATE files SET taken_at=?,missing_at_ms=NULL WHERE id='a'").run(Date.UTC(2024, 1, 15) / 1000);
+    assert.deepEqual(db.prepare('SELECT month,count FROM timeline_counts').all(), [{ month: '2024-02', count: 1 }]);
+  } finally { db.close(); }
+});
+
+test('升级已有缺失记录的版本 27 后分批恢复月份统计，期间的变更不丢失', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'luvia-timeline-upgrade-')); const filename = path.join(dir, 'old.sqlite');
+  await copyFile(new URL('./fixtures/watch-v27.sqlite', import.meta.url), filename);
+  let db: Database.Database | undefined;
+  try {
+    assert.doesNotThrow(() => { db = openDatabase(filename); });
+    const app = await createApp({ db: db!, legacyPending: false });
+    try {
+      const setup = await app.inject({ method: 'POST', url: '/api/v2/auth/setup', payload: { username: 'admin', password: 'test password' } });
+      const cookie = (setup.headers['set-cookie'] as string).split(';')[0]!;
+      const buckets = await app.inject({ method: 'GET', url: '/api/v2/media/buckets', headers: { cookie } });
+      assert.equal(buckets.statusCode, 200); assert.equal(buckets.json().total, 1);
+    } finally { await app.close(); }
+    const { processTimelineRebuildBatch } = await import('../src/worker/timeline-rebuild.ts');
+    assert.equal(await processTimelineRebuildBatch(db!, 1), false);
+    db!.prepare("UPDATE files SET missing_at_ms=NULL WHERE id='a'").run();
+    db!.prepare("DELETE FROM files WHERE id='b'").run();
+    const stamp = Date.UTC(2024, 0, 15) / 1000;
+    db!.prepare("INSERT INTO files(id,library_id,relative_path,folder,name,mime,media_type,size,modified_at,taken_at,taken_at_source) VALUES ('c','lib','c.jpg','lib','c.jpg','image/jpeg','image',1,?,?,'mtime')").run(stamp, stamp);
+    while (!await processTimelineRebuildBatch(db!, 1)) { /* 分批推进直到完成。 */ }
+    assert.deepEqual(db!.prepare('SELECT month,count FROM timeline_counts').all(), [{ month: '2024-01', count: 2 }]);
+  } finally { if (db?.open) db.close(); await rm(dir, { recursive: true, force: true }); }
+});
+
 
 test('已有版本 1 数据库升级时保留数据并创建扫描锁表', async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'luvia-upgrade-'));
   const filename = path.join(dir, 'luvia.db');
   const old = new Database(filename);
-  old.exec("CREATE TABLE libraries (id TEXT PRIMARY KEY, name TEXT NOT NULL); CREATE TABLE folders (path TEXT PRIMARY KEY, library_id TEXT NOT NULL,cover_file_id TEXT); CREATE TABLE users (id TEXT PRIMARY KEY,username TEXT NOT NULL,role TEXT NOT NULL); CREATE TABLE api_tokens (id TEXT PRIMARY KEY,user_id TEXT,token_hash TEXT); CREATE TABLE jobs (id TEXT PRIMARY KEY, status TEXT NOT NULL,type TEXT,started_at INTEGER); CREATE TABLE files (id TEXT PRIMARY KEY,folder TEXT NOT NULL,taken_at INTEGER NOT NULL,created_at INTEGER NOT NULL DEFAULT 0); CREATE TABLE settings (key TEXT PRIMARY KEY,value TEXT NOT NULL); INSERT INTO libraries VALUES ('lib1','测试'); PRAGMA user_version=1");
+  old.exec("CREATE TABLE libraries (id TEXT PRIMARY KEY, name TEXT NOT NULL); CREATE TABLE folders (path TEXT PRIMARY KEY, library_id TEXT NOT NULL,cover_file_id TEXT); CREATE TABLE users (id TEXT PRIMARY KEY,username TEXT NOT NULL,role TEXT NOT NULL); CREATE TABLE api_tokens (id TEXT PRIMARY KEY,user_id TEXT,token_hash TEXT); CREATE TABLE jobs (id TEXT PRIMARY KEY, status TEXT NOT NULL,type TEXT,started_at INTEGER); CREATE TABLE files (id TEXT PRIMARY KEY,library_id TEXT,folder TEXT NOT NULL,size INTEGER,taken_at INTEGER NOT NULL,created_at INTEGER NOT NULL DEFAULT 0); CREATE TABLE settings (key TEXT PRIMARY KEY,value TEXT NOT NULL); INSERT INTO libraries VALUES ('lib1','测试'); PRAGMA user_version=1");
   old.close();
   try {
     const db = openDatabase(filename);
-    assert.equal(db.pragma('user_version', { simple: true }), 22);
+    assert.equal(db.pragma('user_version', { simple: true }), 29);
     assert.equal((db.prepare('SELECT count(*) AS n FROM libraries').get() as { n: number }).n, 1);
     db.prepare("INSERT INTO scan_locks(library_id,owner,acquired_at) VALUES ('lib1','owner',1)").run();
     db.close();
