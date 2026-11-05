@@ -8,7 +8,8 @@ import { Role, User } from './auth.ts';
 export const AdminOverview = z.object({
   version: z.string(),
   uptimeSec: z.number(),
-  media: z.object({ total: z.number().int(), images: z.number().int(), videos: z.number().int(), audio: z.number().int() }),
+  /** missing：文件已从磁盘消失、仍在删除宽限期内的媒体数（不计入 total）。 */
+  media: z.object({ total: z.number().int(), images: z.number().int(), videos: z.number().int(), audio: z.number().int(), missing: z.number().int() }),
   /** coverage 为 0–1。 */
   thumbnails: z.object({ coverage: z.number(), missing: z.number().int() }),
   metadata: z.object({ indexed: z.number().int(), total: z.number().int() }),
@@ -28,6 +29,28 @@ export const AdminOverview = z.object({
 export type AdminOverview = z.infer<typeof AdminOverview>;
 
 export const LibraryStatus = z.enum(['ok', 'slow', 'unavailable', 'scanning']);
+
+/**
+ * 实时监控模式。auto：本地文件系统用 inotify 实时监视，NFS/CIFS/FUSE 等网络挂载或监视额度不足时改为轮询；
+ * watch：强制实时监视（额度不足时仍降级并给出原因）；poll：按 pollIntervalSec 定期对账；off：只靠手动与定时扫描。
+ * 事件只作为“目录有变化”的提示，worker 按目录对账后落库；实时监控只在 worker 进程运行。
+ */
+export const WatchMode = z.enum(['auto', 'watch', 'poll', 'off']);
+export const LibraryWatch = z.object({
+  mode: WatchMode,
+  /** 轮询对账间隔，60–86400 秒，默认 300。 */
+  pollIntervalSec: z.number().int().min(60).max(86400),
+  /** 当前实际状态。starting 为正在建立监视；degraded 为请求 watch 但只能轮询或部分目录无法监视。 */
+  state: z.enum(['starting', 'watching', 'polling', 'degraded', 'off']),
+  /** 已建立监视的目录数；未监视时为 null。 */
+  watchedDirs: z.number().int().nullable(),
+  lastEventAt: IsoDateTime.nullable(),
+  lastReconcileAt: IsoDateTime.nullable(),
+  /** 降级原因（中文，面向管理员），例如“网络文件系统 cifs 不支持实时事件，已改为每 5 分钟对账”。 */
+  degradedReason: z.string().nullable(),
+});
+export type LibraryWatch = z.infer<typeof LibraryWatch>;
+const LibraryWatchPatch = z.object({ mode: WatchMode, pollIntervalSec: LibraryWatch.shape.pollIntervalSec }).partial();
 export const Library = z.object({
   id: z.string(),
   name: z.string(),
@@ -45,6 +68,7 @@ export const Library = z.object({
   mediaCount: z.number().int(),
   lastScanAt: IsoDateTime.nullable(),
   enabled: z.boolean(),
+  watch: LibraryWatch,
 });
 export type Library = z.infer<typeof Library>;
 /** GET /api/v2/admin/libraries；POST 新增；PATCH /:id；DELETE /:id（只删除索引，不触碰文件） */
@@ -56,6 +80,8 @@ export const CreateLibraryBody = z.object({
   enabled: z.boolean().default(true),
   hostRoot: z.string().min(1).nullable().optional(),
   exclude: z.array(z.string().min(1).max(200)).max(100).optional(),
+  /** 省略时 mode=auto、pollIntervalSec=300。 */
+  watch: LibraryWatchPatch.optional(),
 });
 export const UpdateLibraryBody = z.object({
   name: z.string().trim().min(1).max(80).optional(),
@@ -63,7 +89,26 @@ export const UpdateLibraryBody = z.object({
   /** 传 null 恢复自动识别。 */
   hostRoot: z.string().min(1).nullable().optional(),
   exclude: z.array(z.string().min(1).max(200)).max(100).optional(),
+  watch: LibraryWatchPatch.optional(),
 });
+
+/**
+ * GET /api/v2/admin/libraries/:id/changes?limit=：worker 落库的最近变更（最新在前，默认 100 条，保留最近 30 天）。
+ * moved 表示识别为同一文件的移动或改名（保留媒体 ID、收藏与相册关系）；missing 表示文件消失、进入删除宽限期；
+ * restored 表示宽限期内重新出现；removed 表示宽限期结束后清理。目录级变化以 isDir=true 记录一条，不逐个展开子项。
+ */
+export const LibraryChange = z.object({
+  ts: IsoDateTime,
+  kind: z.enum(['added', 'updated', 'moved', 'missing', 'restored', 'removed']),
+  /** 媒体库内相对路径；moved 时为新路径。 */
+  path: z.string(),
+  /** moved 时的旧路径，其它为 null。 */
+  fromPath: z.string().nullable(),
+  isDir: z.boolean(),
+  mediaId: z.string().nullable(),
+  source: z.enum(['watch', 'poll', 'scan']),
+});
+export const LibraryChangeList = z.object({ changes: z.array(LibraryChange) });
 
 /**
  * GET /api/v2/admin/mounts：容器内可见的挂载目录（解析 /proc/self/mountinfo）。
@@ -94,10 +139,22 @@ export const AdminSettings = z.object({
   siteName: z.string(),
   /** 对外访问地址，例如 http://192.168.1.20:3000；生成分享链接、客户端配置与二维码时使用。null 时前端用当前页面地址。 */
   publicUrl: z.string().url().nullable(),
-  libraries: z.object({ autoEnableNewMounts: z.boolean() }),
+  libraries: z.object({
+    autoEnableNewMounts: z.boolean(),
+    /** 文件消失后保留记录（收藏、相册、缩略图）的天数，0–365，默认 7；0 表示下一次对账即清理。 */
+    missingGraceDays: z.number().int().min(0).max(365),
+  }),
   /** 是否向普通用户显示宿主机真实路径（管理员总能看到）。 */
   folders: z.object({ exposeHostPaths: z.boolean() }),
-  scan: z.object({ mode: z.enum(['manual', 'interval']), intervalMinutes: z.number().int().min(15).max(10080) }),
+  /**
+   * 全量对账（兜底实时监控遗漏）。daily 为每天 dailyAt（服务器本地时间 HH:MM，默认 04:00）；
+   * interval 为每 intervalMinutes 分钟；manual 只在手动、worker 启动与监视异常时执行。默认 daily。
+   */
+  scan: z.object({
+    mode: z.enum(['manual', 'interval', 'daily']),
+    intervalMinutes: z.number().int().min(15).max(10080),
+    dailyAt: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
+  }),
   workers: z.object({
     /** 缩略图并发，1–16。 */
     thumbnailConcurrency: z.number().int().min(1).max(16),
@@ -189,5 +246,7 @@ export const SystemInfo = z.object({
   sharp: z.object({ version: z.string(), heif: z.boolean() }),
   dataDir: z.string(),
   cacheDir: z.string(),
+  /** Linux inotify 额度（/proc/sys/fs/inotify/max_user_watches，按真实用户 ID 共享）与本服务已用监视数；非 Linux 为 null。 */
+  inotify: z.object({ maxUserWatches: z.number().int(), used: z.number().int() }).nullable(),
 });
 export type SystemInfo = z.infer<typeof SystemInfo>;
