@@ -1218,7 +1218,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
         const removed = db.prepare('DELETE FROM scan_runs WHERE job_id=? AND complete=1 AND errors>0').run(id);
         if (removed.changes) db.prepare('UPDATE jobs SET checkpoint=NULL,progress_done=0,progress_total=NULL WHERE id=?').run(id);
       }
-      db.prepare('UPDATE jobs SET status=?,owner=NULL,heartbeat_at=NULL,lease_expires_at=NULL,finished_at=? WHERE id=?')
+      db.prepare('UPDATE jobs SET status=?,owner=NULL,heartbeat_at=NULL,lease_expires_at=NULL,lease_token=NULL,finished_at=? WHERE id=?')
         .run(next, next === 'cancelled' ? now() : null, id);
       publishJob(db, id);
       return jobView(db.prepare('SELECT * FROM jobs WHERE id=?').get(id) as JobRecord);

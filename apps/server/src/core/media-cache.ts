@@ -32,7 +32,7 @@ export function enqueueMediaTask(db: Database.Database, source: MediaSource, var
 export function cancelUnobservedMediaTask(db: Database.Database, job: string): boolean {
   return db.transaction(() => {
     db.prepare('DELETE FROM media_waiters WHERE job_id=? AND lease_expires_at<=unixepoch()').run(job);
-    const changed = db.prepare(`UPDATE jobs SET status='cancelled',finished_at=unixepoch(),owner=NULL,heartbeat_at=NULL,lease_expires_at=NULL
+    const changed = db.prepare(`UPDATE jobs SET status='cancelled',finished_at=unixepoch(),owner=NULL,heartbeat_at=NULL,lease_expires_at=NULL,lease_token=NULL
       WHERE id=? AND media_background=0 AND status IN ('queued','running','paused') AND NOT EXISTS
       (SELECT 1 FROM media_waiters WHERE job_id=? AND lease_expires_at>unixepoch())`).run(job, job).changes;
     if (changed) publishJob(db, job);
