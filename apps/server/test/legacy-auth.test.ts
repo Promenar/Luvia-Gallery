@@ -163,6 +163,26 @@ test('旧版导入中途崩溃后升级无法确认身份时保持迁移阻断',
   } finally { if (db.open) db.close(); await rm(root, { recursive: true, force: true }); }
 });
 
+test('首次导入旧配置缺少管理员时始终阻止匿名初始化', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'luvia-legacy-no-admin-'));
+  try {
+    for (const config of [{ title: '旧图库' }, { users: [] }, { users: [{ username: 'ordinary', password: 'synthetic password' }] }]) {
+      await writeFile(path.join(root, 'lumina-config.json'), JSON.stringify(config));
+      const db = openDatabase(':memory:', { bootstrapLegacy: true });
+      const app = await createApp({ db, legacyPending: () => (db.prepare("SELECT value FROM settings WHERE key='legacy.pending'").get() as { value: string } | undefined)?.value === 'true' });
+      try {
+        const setup = () => app.inject({ method: 'POST', url: '/api/v2/auth/setup', payload: { username: 'replacement', password: 'synthetic password' } });
+        assert.equal((await setup()).statusCode, 503);
+        await runNextJob(db, { owner: 'worker', allowedRoots: [], legacyDir: root, systemRoots: [] });
+        const failed = db.prepare("SELECT status,error FROM jobs WHERE type='import_legacy'").get() as { status: string; error: string };
+        assert.equal(failed.status, 'failed'); assert.match(failed.error, /无法安全确认/);
+        assert.equal((db.prepare("SELECT value FROM settings WHERE key='legacy.pending'").get() as { value: string }).value, 'true');
+        assert.equal((await setup()).statusCode, 503);
+      } finally { await app.close(); db.close(); }
+    }
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test('旧账户已改密且升级后身份来源不明时，收藏导入不能静默成功', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'luvia-legacy-identity-uncertain-'));
   const file = path.join(root, 'v2.db'); let db = openDatabase(file);
