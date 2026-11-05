@@ -134,8 +134,13 @@ export class MediaReader {
     const cached = this.cache.get(key);
     if (cached && cached.version === version && cached.expires > Date.now()) return cached.value;
     const condition = where(filter, context);
-    const rows = this.db.prepare(`SELECT strftime('%Y-%m', f.taken_at, 'unixepoch', 'localtime') AS key, count(*) AS count
-      FROM files f WHERE ${condition.sql} GROUP BY key ORDER BY key DESC`).all(...condition.params) as { key: string; count: number }[];
+    const unfiltered = context.allowedPaths === null && filter.scope === 'all' && !filter.q && !filter.types?.length &&
+      filter.from === undefined && filter.to === undefined && !filter.cameras?.length && !filter.orientation &&
+      filter.hasLocation === undefined && filter.favorite === undefined && !filter.under;
+    const rows = (unfiltered
+      ? this.db.prepare('SELECT month AS key,count FROM timeline_counts ORDER BY month DESC').all()
+      : this.db.prepare(`SELECT strftime('%Y-%m', f.taken_at, 'unixepoch', 'localtime') AS key, count(*) AS count
+        FROM files f WHERE ${condition.sql} GROUP BY key ORDER BY key DESC`).all(...condition.params)) as { key: string; count: number }[];
     const buckets = rows.map(({ key, count }) => {
       const [year, month] = key.split('-').map(Number);
       return { key, count, start: Math.floor(new Date(year!, month! - 1, 1).getTime() / 1000), end: Math.floor(new Date(year!, month!, 1).getTime() / 1000) };
