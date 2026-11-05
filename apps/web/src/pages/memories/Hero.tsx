@@ -5,7 +5,7 @@ import { ChevronDown, ChevronLeft, ChevronRight, GalleryHorizontalEnd, Play } fr
 import { toast } from 'sonner';
 import { mediaUrls } from '@luvia/contracts';
 import { cn } from '@/lib/cn';
-import { thumbhashUrl } from '@/components/media/Thumb';
+import { canThumb, thumbhashUrl } from '@/components/media/Thumb';
 import { setDynamicFrom } from '@/theme/ThemeProvider';
 import { openViewer, useViewer, type ViewerScope } from '@/stores/viewer';
 import { useLibraryNames, useIsNarrow, useReducedMotion, type HeroData } from './hooks';
@@ -192,7 +192,7 @@ export function Hero({ data }: { data: HeroData }) {
               className={cn('absolute inset-0 bg-cover bg-center transition-opacity duration-[1100ms]', on ? 'opacity-100' : 'opacity-0')}
               style={{ backgroundImage: ph ? `url(${ph})` : undefined }}
             >
-              {(seen.has(i) || on) && s.item.thumbVersion > 0 && (
+              {(seen.has(i) || on) && canThumb(s.item) && (
                 <img
                   ref={(el) => { imgRefs.current[i] = el; }}
                   src={mediaUrls.thumb(s.item.id, 'l', s.item.thumbVersion)}

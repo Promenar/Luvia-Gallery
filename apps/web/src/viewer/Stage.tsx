@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { mediaUrls, type MediaItem } from '@luvia/contracts';
-import { thumbhashUrl } from '@/components/media/Thumb';
+import { canThumb, thumbhashUrl } from '@/components/media/Thumb';
 import { activeMedia, isReduceMotion, useViewerUi } from './state';
 import { VideoMedia } from './VideoMedia';
 import { Icon } from './icons';
@@ -13,8 +13,8 @@ const dpr = () => (typeof devicePixelRatio === 'number' && devicePixelRatio > 0 
 /** l 档缩略图的长边约 1600px。 */
 const L_EDGE = 1600;
 
-export const thumbL = (m: MediaItem) => (m.thumbVersion > 0 ? mediaUrls.thumb(m.id, 'l', m.thumbVersion) : null);
-export const thumbS = (m: MediaItem) => (m.thumbVersion > 0 ? mediaUrls.thumb(m.id, 's', m.thumbVersion) : undefined);
+export const thumbL = (m: MediaItem) => (canThumb(m) ? mediaUrls.thumb(m.id, 'l', m.thumbVersion) : null);
+export const thumbS = (m: MediaItem) => (canThumb(m) ? mediaUrls.thumb(m.id, 's', m.thumbVersion) : undefined);
 
 /** 缩放上下文：几何信息与上限，供手势、按钮和键盘共用。 */
 export interface ZoomCtx {
