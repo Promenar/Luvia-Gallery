@@ -9,6 +9,7 @@ import { systemClock } from './clock.ts';
 import type { Clock } from './clock.ts';
 import { DirtyQueue, excluded, normalizeRelative } from './dirty-queue.ts';
 import { classifyMissing } from './grace.ts';
+import { statFields } from './file-info.ts';
 import { decideWatchMode } from './mode.ts';
 import { matchKind, MoveMatcher } from './move-matcher.ts';
 import type { MoveCandidate } from './move-matcher.ts';
@@ -173,10 +174,9 @@ export class WatchCoordinator {
   }
   private async statEntry(relative: string): Promise<MoveCandidate | null> {
     try {
-      const full = await this.checkedPath(relative); const info = await lstat(full);
+      const full = await this.checkedPath(relative); const info = await lstat(full, { bigint: true });
       if (info.isSymbolicLink() || (!info.isDirectory() && !info.isFile())) return null;
-      return { path: relative, isDir: info.isDirectory(), size: info.size, mtimeMs: info.mtimeMs,
-        dev: info.dev, ino: info.ino, mediaId: null, headHash: null };
+      return { path: relative, isDir: info.isDirectory(), ...statFields(info), mediaId: null, headHash: null };
     } catch (error) { if (missingError(error)) return null; throw error; }
   }
   private async readDisk(directory: string): Promise<DirectoryEntry[]> {
@@ -184,12 +184,12 @@ export class WatchCoordinator {
     for (const entry of entries) {
       if (entry.isSymbolicLink()) continue;
       const relative = directory ? `${directory}/${entry.name}` : entry.name;
-      const info = await lstat(path.join(full, entry.name));
+      const info = await lstat(path.join(full, entry.name), { bigint: true });
       if (info.isSymbolicLink() || (!info.isDirectory() && !info.isFile())) continue;
       const isDir = info.isDirectory();
       if (excluded(relative, this.options.exclude, isDir)) continue;
       if (!isDir && !extensions.has(path.posix.extname(relative).toLowerCase())) continue;
-      result.push({ name: entry.name, isDir, size: info.size, mtimeMs: info.mtimeMs, dev: info.dev, ino: info.ino });
+      result.push({ name: entry.name, isDir, ...statFields(info) });
     }
     return result;
   }
