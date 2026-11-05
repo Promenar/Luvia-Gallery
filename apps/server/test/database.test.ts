@@ -25,6 +25,20 @@ test('数据库迁移持久且可重复，支持只读连接', async () => {
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
+test('仅新建数据库时原子排队一次旧数据导入', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'luvia-bootstrap-'));
+  const filename = path.join(dir, 'luvia.db');
+  try {
+    const first = openDatabase(filename, { bootstrapLegacy: true });
+    assert.equal((first.prepare("SELECT count(*) AS n FROM jobs WHERE type='import_legacy' AND status='queued'").get() as { n: number }).n, 1);
+    assert.equal((first.prepare("SELECT value FROM settings WHERE key='legacy.pending'").get() as { value: string }).value, 'true');
+    first.close();
+    const again = openDatabase(filename, { bootstrapLegacy: true });
+    assert.equal((again.prepare("SELECT count(*) AS n FROM jobs WHERE type='import_legacy'").get() as { n: number }).n, 1);
+    again.close();
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
 test('trigram 索引能查找中文中间子串并在修改后同步', () => {
   const db = openDatabase(':memory:');
   try {

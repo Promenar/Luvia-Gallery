@@ -7,6 +7,9 @@
     "node": ">=24 <25"
   },
   "scripts": {
+    "dev": "node src/dev.ts",
+    "start:api": "node src/api/main.ts",
+    "start:worker": "node src/worker/main.ts",
     "test": "node --test test/*.test.ts",
     "typecheck": "tsc -p tsconfig.json"
   },
