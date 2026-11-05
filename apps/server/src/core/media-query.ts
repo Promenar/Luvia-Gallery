@@ -98,6 +98,13 @@ export class MediaReader {
   constructor(privateDb: Database.Database) { this.db = privateDb; }
   private db: Database.Database;
 
+  one(id: string, context: Context) {
+    const params: Params = [];
+    const allowed = allowedClause(context.allowedPaths, params);
+    const row = this.db.prepare(`${selection} WHERE f.id=? AND ${allowed}`).get(context.id, id, ...params) as FileRow | undefined;
+    return row ? item(row) : null;
+  }
+
   page(filter: Query, context: Context) {
     const condition = where(filter, context);
     const order = sorts[filter.sort];

@@ -148,6 +148,14 @@ const schemaV5 = `
   CREATE INDEX legacy_favorites_status ON legacy_favorites_pending(status,source_key);
 `;
 
+const schemaV6 = `
+  ALTER TABLE libraries ADD COLUMN host_root TEXT;
+  ALTER TABLE libraries ADD COLUMN host_root_source TEXT;
+  ALTER TABLE libraries ADD COLUMN exclude TEXT NOT NULL DEFAULT '["@eaDir","#recycle",".*",".thumbnails"]';
+  ALTER TABLE folders ADD COLUMN scan_marker TEXT;
+  CREATE INDEX folders_library_marker ON folders(library_id,scan_marker);
+`;
+
 export function openDatabase(filename: string, options: { readonly?: boolean } = {}): Database.Database {
   const readonly = options.readonly ?? false;
   const db = new Database(filename, { readonly, fileMustExist: readonly });
@@ -161,7 +169,7 @@ export function openDatabase(filename: string, options: { readonly?: boolean } =
       db.pragma('synchronous = NORMAL');
       db.transaction(() => {
         const version = db.pragma('user_version', { simple: true });
-        if (version !== 0 && version !== 1 && version !== 2 && version !== 3 && version !== 4 && version !== 5) throw new Error(`不支持的数据库版本: ${version}`);
+        if (version !== 0 && version !== 1 && version !== 2 && version !== 3 && version !== 4 && version !== 5 && version !== 6) throw new Error(`不支持的数据库版本: ${version}`);
         if (version === 0) {
           db.exec(schemaV1);
           db.pragma('user_version = 1');
@@ -182,8 +190,12 @@ export function openDatabase(filename: string, options: { readonly?: boolean } =
           db.exec(schemaV5);
           db.pragma('user_version = 5');
         }
+        if (version === 0 || version === 1 || version === 2 || version === 3 || version === 4 || version === 5) {
+          db.exec(schemaV6);
+          db.pragma('user_version = 6');
+        }
       }).immediate();
-    } else if (db.pragma('user_version', { simple: true }) !== 5) {
+    } else if (db.pragma('user_version', { simple: true }) !== 6) {
       throw new Error('数据库尚未就绪或版本不受支持');
     }
     return db;

@@ -69,6 +69,10 @@ async function scanWithLock(db: Database.Database, library: { id: string; root: 
   const root = await realpath(library.root);
   const allowedRoots = await Promise.all(options.allowedRoots.map((allowed) => realpath(allowed)));
   if (!allowedRoots.some((allowed) => within(allowed, root))) throw new Error('扫描路径不在允许的挂载根目录内');
+  const libraryRow = db.prepare('SELECT name,exclude FROM libraries WHERE id=?').get(library.id) as { name: string; exclude: string } | undefined;
+  if (!libraryRow) throw new Error('媒体库不存在');
+  const exclude = JSON.parse(libraryRow.exclude) as unknown;
+  if (!Array.isArray(exclude) || exclude.some((rule) => typeof rule !== 'string')) throw new Error('媒体库排除规则无效');
   const jobId = options.jobId;
   let marker: string = randomUUID();
   let result: ScanResult = { added: 0, removed: 0, errors: 0 };
@@ -136,6 +140,7 @@ async function scanWithLock(db: Database.Database, library: { id: string; root: 
       for await (const entry of await openDir(resolved)) {
         signal?.throwIfAborted();
         const relative = relativeDir ? `${relativeDir}/${entry.name}` : entry.name;
+        if (entry.isDirectory() && exclude.some((rule: string) => path.matchesGlob(entry.name, rule) || path.matchesGlob(relative, rule))) continue;
         if (entry.isDirectory()) children.push(relative);
         else if (entry.isFile() && typeOf(relative)) {
           const full = path.join(root, relative);
@@ -162,15 +167,22 @@ async function scanWithLock(db: Database.Database, library: { id: string; root: 
     await Promise.all(pending); pending = [];
     signal?.throwIfAborted();
     flush();
-    if (jobId) {
-      db.transaction(() => {
-        assertLease();
+    db.transaction(() => {
+      assertLease();
+      const folderPath = virtualPath(library.id, relativeDir);
+      const parentRelative = relativeDir ? path.posix.dirname(relativeDir) : null;
+      const parent = parentRelative === null ? null : virtualPath(library.id, parentRelative === '.' ? '' : parentRelative);
+      db.prepare(`INSERT INTO folders(path,library_id,parent,name,scan_marker) VALUES (?,?,?,?,?)
+        ON CONFLICT(path) DO UPDATE SET parent=excluded.parent,name=excluded.name,scan_marker=excluded.scan_marker`)
+        .run(folderPath, library.id, parent, relativeDir ? path.posix.basename(relativeDir) : libraryRow.name, marker);
+      if (jobId) {
         const insert = db.prepare('INSERT OR IGNORE INTO scan_directories(job_id,relative_path) VALUES (?,?)');
         for (const child of children) insert.run(jobId, child);
         db.prepare('UPDATE scan_directories SET done=1 WHERE job_id=? AND relative_path=?').run(jobId, relativeDir);
         db.prepare('UPDATE scan_runs SET errors=? WHERE job_id=?').run(result.errors, jobId);
-      }).immediate();
-    } else queue.push(...children);
+      }
+    }).immediate();
+    if (!jobId) queue.push(...children);
   }
   if (result.errors === 0) {
     const remove = db.prepare(`DELETE FROM files WHERE rowid IN
@@ -187,10 +199,51 @@ async function scanWithLock(db: Database.Database, library: { id: string; root: 
       }).immediate();
       if (count) await new Promise<void>((resolve) => setImmediate(resolve));
     } while (count);
+    db.transaction(() => {
+      assertLease();
+      db.prepare('DELETE FROM folders WHERE library_id=? AND (scan_marker IS NULL OR scan_marker<>?)').run(library.id, marker);
+    }).immediate();
   }
+  await materializeFolders(db, library.id, assertLease, signal);
   if (jobId) db.transaction(() => {
     assertLease();
     db.prepare('UPDATE scan_runs SET complete=1 WHERE job_id=?').run(jobId);
   }).immediate();
   return result;
+}
+
+async function materializeFolders(db: Database.Database, libraryId: string, assertLease: () => void, signal?: AbortSignal): Promise<void> {
+  type Folder = { path: string; parent: string | null; direct: number; total: number; children: number; latest: number | null; cover: string | null; coverAt: number | null };
+  const folders = (db.prepare('SELECT path,parent FROM folders WHERE library_id=?').all(libraryId) as { path: string; parent: string | null }[])
+    .map((folder): Folder => ({ ...folder, direct: 0, total: 0, children: 0, latest: null, cover: null, coverAt: null }));
+  const byPath = new Map(folders.map((folder) => [folder.path, folder]));
+  const count = db.prepare('SELECT count(*) AS n FROM files WHERE folder=?');
+  const latest = db.prepare('SELECT taken_at FROM files WHERE folder=? ORDER BY taken_at DESC,id ASC LIMIT 1');
+  const cover = db.prepare('SELECT id,taken_at FROM files WHERE folder=? AND thumb_version>0 ORDER BY taken_at DESC,id ASC LIMIT 1');
+  for (const folder of folders) {
+    signal?.throwIfAborted();
+    folder.direct = (count.get(folder.path) as { n: number }).n;
+    folder.total = folder.direct;
+    folder.latest = (latest.get(folder.path) as { taken_at: number } | undefined)?.taken_at ?? null;
+    const selected = cover.get(folder.path) as { id: string; taken_at: number } | undefined;
+    folder.cover = selected?.id ?? null; folder.coverAt = selected?.taken_at ?? null;
+    if (folder.parent) { const parent = byPath.get(folder.parent); if (parent) parent.children++; }
+  }
+  folders.sort((a, b) => b.path.length - a.path.length);
+  for (const folder of folders) {
+    const parent = folder.parent ? byPath.get(folder.parent) : undefined;
+    if (!parent) continue;
+    parent.total += folder.total;
+    if (folder.latest !== null && (parent.latest === null || folder.latest > parent.latest)) parent.latest = folder.latest;
+    if (folder.coverAt !== null && (parent.coverAt === null || folder.coverAt > parent.coverAt)) { parent.cover = folder.cover; parent.coverAt = folder.coverAt; }
+  }
+  const update = db.prepare('UPDATE folders SET direct_media_count=?,media_count=?,child_count=?,cover_file_id=?,latest_at=? WHERE path=?');
+  for (let offset = 0; offset < folders.length; offset += 256) {
+    signal?.throwIfAborted();
+    db.transaction(() => {
+      assertLease();
+      for (const folder of folders.slice(offset, offset + 256)) update.run(folder.direct, folder.total, folder.children, folder.cover, folder.latest, folder.path);
+    }).immediate();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
 }
