@@ -12,6 +12,7 @@ import { scanLibrary } from '../src/worker/scan.ts';
 import { runNextJob } from '../src/worker/runner.ts';
 import { createApp } from '../src/api/app.ts';
 import { verifyPassword } from '../src/core/password.ts';
+import { restoreVersion21Fixture } from './database-upgrade-fixture.ts';
 
 const sha = (text: string | Buffer) => createHash('sha256').update(text).digest('hex');
 const signingKey = 'synthetic-legacy-signing-key';
@@ -209,7 +210,7 @@ test('缺少旧配置时，身份不明的现有用户收藏不会静默推进�
     await importLegacy(db, { legacyDir: dir, mediaRoots: [] });
     db.prepare("DELETE FROM legacy_jwt_users WHERE user_id=(SELECT id FROM users WHERE username='alice')").run();
     db.prepare("INSERT INTO legacy_jwt_revoked_users(username) VALUES ('alice')").run();
-    db.exec('DROP TABLE legacy_import_users; DROP TABLE legacy_import_tokens; ALTER TABLE api_tokens DROP COLUMN legacy_jwt; PRAGMA user_version=21');
+    restoreVersion21Fixture(db);
     db.close(); db = openDatabase(filename); await unlink(config);
     const source = new Database(path.join(dir, 'lumina.db'));
     source.exec('CREATE TABLE files(id TEXT,path TEXT); CREATE TABLE favorites(user_id TEXT,item_id TEXT,item_type TEXT,created_at INTEGER)');
