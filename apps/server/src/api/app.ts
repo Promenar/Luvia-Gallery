@@ -33,7 +33,7 @@ import type { JobRecord } from '../core/job-view.ts';
 import { detectMounts } from '../core/mounts.ts';
 import type { Mount } from '../core/mounts.ts';
 import { readSettings, writeSettings } from '../core/settings.ts';
-import { cacheKey, cachePath, enqueueMediaTask } from '../core/media-cache.ts';
+import { cacheKey, cachePath, enqueueMediaTask, releaseMediaWaiter } from '../core/media-cache.ts';
 import type { Variant } from '../core/media-cache.ts';
 
 type UserRow = {
@@ -537,14 +537,34 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
   async function cachedMedia(req: FastifyRequest, reply: FastifyReply, row: BinaryRow, variant: Variant, wait: boolean, authorize?: () => unknown) {
     const filename = cachePath(cacheDir, row, variant);
     if (!await exists(filename)) {
-      const jobId = enqueueMediaTask(db, row, variant);
+      const waiter = wait ? randomUUID() : undefined;
+      const jobId = enqueueMediaTask(db, row, variant, { waiter });
       if (wait) {
-        const deadline = Date.now() + 5000;
-        while (Date.now() < deadline && !req.raw.aborted) {
-          await delay(50);
-          if (await exists(filename)) break;
-          const job = db.prepare('SELECT status FROM jobs WHERE id=?').get(jobId) as { status: string } | undefined;
-          if (!job || job.status === 'failed' || job.status === 'cancelled') return fail(404, 'NOT_FOUND', '媒体缓存生成失败');
+        let disconnected = false; let released = false; let ready = false; let renewal = Date.now() + 5000;
+        const release = (cancel: boolean) => {
+          if (released) return;
+          released = true;
+          try { releaseMediaWaiter(db, jobId, waiter!, cancel); } catch { /* 服务关闭时数据库可能已关闭。 */ }
+        };
+        const close = () => { if (!reply.raw.writableFinished) { disconnected = true; release(true); } };
+        reply.raw.once('close', close);
+        try {
+          const deadline = Date.now() + 120_000;
+          while (Date.now() < deadline && !req.raw.aborted && !disconnected) {
+            await delay(50);
+            if (await exists(filename)) { ready = true; break; }
+            const job = db.prepare('SELECT status FROM jobs WHERE id=?').get(jobId) as { status: string } | undefined;
+            if (!job || job.status === 'failed' || job.status === 'cancelled') return fail(404, 'NOT_FOUND', '媒体缓存生成失败');
+            if (Date.now() >= renewal) {
+              db.prepare('UPDATE media_waiters SET lease_expires_at=unixepoch()+30 WHERE id=? AND job_id=?').run(waiter, jobId);
+              renewal = Date.now() + 5000;
+            }
+          }
+          if (disconnected || req.raw.aborted) return reply;
+          if (!ready) return fail(404, 'NOT_FOUND', '媒体缓存生成超时');
+        } finally {
+          reply.raw.off('close', close);
+          release(!ready);
         }
       }
       if (!await exists(filename)) { authorize?.(); return reply.header('Retry-After', '1').code(202).send({ status: 'pending' }); }
@@ -573,6 +593,17 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     const key = identity.kind === 'session' ? identity.sessionHash : identity.kind === 'token' ? identity.tokenHash : undefined;
     if (!key) return fail(401, 'UNAUTHORIZED', '需要有效会话或令牌');
     return digest(`${identity.kind}:${key}`);
+  }
+  function mediaAuthorization(req: FastifyRequest, row: BinaryRow): () => void {
+    const principal = identityPrincipal(requireUser(req));
+    return () => {
+      const current = authenticate(req) ?? fail(401, 'UNAUTHORIZED', '会话已失效');
+      if (identityPrincipal(current) !== principal || !pathAllowed(row.folder, userOut(current.user).allowedPaths) ||
+        !db.prepare(`SELECT 1 FROM files f JOIN libraries l ON l.id=f.library_id AND l.enabled=1
+          WHERE f.id=? AND f.folder=? AND f.size=? AND f.modified_at=?`).get(row.id, row.folder, row.size, row.modified_at)) {
+        fail(404, 'NOT_FOUND', '媒体不可访问');
+      }
+    };
   }
   async function hlsResponse(req: FastifyRequest, reply: FastifyReply, row: BinaryRow, principal: string, resource: string, authorize: () => unknown) {
     if (resource !== 'index.m3u8' && !/^seg-\d{6}\.ts$/.test(resource)) return fail(404, 'NOT_FOUND', 'HLS 资源不存在');
@@ -630,7 +661,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     if (resource === 'thumb') {
       const parsed = (req.query as { size?: string }).size ?? 'm';
       if (parsed !== 's' && parsed !== 'm' && parsed !== 'l') return fail(400, 'VALIDATION', '缩略图尺寸无效');
-      return cachedMedia(req, reply, row, { kind: 'thumb', size: parsed }, true);
+      return cachedMedia(req, reply, row, { kind: 'thumb', size: parsed }, true, mediaAuthorization(req, row));
     }
     if (resource === 'preview') {
       if (row.media_type !== 'video') return fail(404, 'NOT_FOUND', '视频预览不存在');
@@ -657,7 +688,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     if (resource === 'display') {
       if (row.media_type !== 'image') return fail(404, 'NOT_FOUND', '媒体不支持图像显示');
       if (!['image/jpeg', 'image/png', 'image/webp', 'image/avif', 'image/gif'].includes(row.mime))
-        return cachedMedia(req, reply, row, { kind: 'display' }, false);
+        return cachedMedia(req, reply, row, { kind: 'display' }, false, mediaAuthorization(req, row));
     }
     const download = resource === 'original' && (req.query as { download?: string }).download === '1';
     return sendFile(req, reply, filename, { mime: row.mime, name: row.name, download, etagKey: row.id });
@@ -678,7 +709,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     if (level > maxLevel) return fail(404, 'NOT_FOUND', '瓦片不存在');
     const scale = 2 ** (maxLevel - level);
     if (col * 256 >= Math.ceil(row.width / scale) || tileRow * 256 >= Math.ceil(row.height / scale)) return fail(404, 'NOT_FOUND', '瓦片不存在');
-    return cachedMedia(req, reply, row, { kind: 'tile', level, col, row: tileRow }, false);
+    return cachedMedia(req, reply, row, { kind: 'tile', level, col, row: tileRow }, false, mediaAuthorization(req, row));
   });
   type ShareRow = { id: string; user_id: string; token: string; title: string; target: string; password_hash: string | null; allow_download: number; expires_at: number | null; created_at: number; view_count: number };
   type ShareTargetValue = ReturnType<typeof ShareTarget.parse>;
