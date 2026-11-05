@@ -25,10 +25,10 @@ test('登录账号和分享解锁分桶，同时保留每 IP 总体限速', asyn
   } finally { await app.close(); db.close(); }
 });
 
-test('代理信任默认关闭，启用跳数或 true 后区分转发的客户端', async () => {
+test('代理信任默认关闭，按跳数启用后区分转发的客户端', async () => {
   const previous = process.env.TRUST_PROXY;
   try {
-    for (const config of [undefined, '1', 'true']) {
+    for (const config of [undefined, '1']) {
       if (config === undefined) delete process.env.TRUST_PROXY; else process.env.TRUST_PROXY = config;
       const db = openDatabase(':memory:'); const app = await createApp({ db, legacyPending: false });
       try {
@@ -39,6 +39,36 @@ test('代理信任默认关闭，启用跳数或 true 后区分转发的客户�
       } finally { await app.close(); db.close(); }
     }
   } finally { if (previous === undefined) delete process.env.TRUST_PROXY; else process.env.TRUST_PROXY = previous; }
+});
+
+test('TRUST_PROXY 只接受跳数：拒绝 true，并忽略客户端伪造的最左侧转发地址', async () => {
+  const previous = process.env.TRUST_PROXY;
+  try {
+    process.env.TRUST_PROXY = 'true';
+    // true 会取客户端可伪造的最左侧地址，使按 IP 限速失效，因此必须拒绝启动
+    await assert.rejects(createApp({ db: openDatabase(':memory:'), legacyPending: false }), /TRUST_PROXY/);
+    process.env.TRUST_PROXY = '1';
+    const db = openDatabase(':memory:'); const app = await createApp({ db, legacyPending: false });
+    try {
+      // 可信代理（10.0.0.1）追加真实客户端 1.1.1.1；最左侧的伪造地址每次都换，限速仍按真实地址累计
+      const request = (spoof: string) => app.inject({ method: 'POST', url: '/api/v2/auth/login', remoteAddress: '10.0.0.1', headers: { 'x-forwarded-for': `${spoof}, 1.1.1.1` }, payload: { username: 'missing', password: 'wrong password' } });
+      for (let i = 0; i < 10; i++) assert.equal((await request(`6.6.6.${i}`)).statusCode, 401);
+      assert.equal((await request('6.6.6.99')).statusCode, 429);
+    } finally { await app.close(); db.close(); }
+  } finally { if (previous === undefined) delete process.env.TRUST_PROXY; else process.env.TRUST_PROXY = previous; }
+});
+
+test('容量类 503 记为警告而不是错误，真正的 500 仍记为错误', async () => {
+  const db = openDatabase(':memory:'); const app = await createApp({ db, legacyPending: false });
+  app.get('/test-capacity', async (_req, reply) => reply.code(503).send({ error: { code: 'UNAVAILABLE', message: '任务已满' } }));
+  try {
+    const setup = await app.inject({ method: 'POST', url: '/api/v2/auth/setup', payload: { username: 'admin', password: 'test password' } });
+    const cookie = (setup.headers['set-cookie'] as string).split(';')[0]!;
+    for (let i = 0; i < 3; i++) assert.equal((await app.inject({ method: 'GET', url: '/test-capacity' })).statusCode, 503);
+    const logs = async (level: string) => (await app.inject({ method: 'GET', url: `/api/v2/admin/logs?level=${level}`, headers: { cookie } })).json().logs as unknown[];
+    assert.equal((await logs('error')).length, 0);
+    assert.ok((await logs('warn')).length >= 3);
+  } finally { await app.close(); db.close(); }
 });
 
 test('单个 IP 的大量不同账号请求仍受总体上限约束', async () => {
