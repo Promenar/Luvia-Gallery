@@ -53,3 +53,64 @@ test('下载票据只能使用一次，ZIP 包含授权媒体且权限变化后�
     assert.equal((await app.inject({ method: 'GET', url: expired.url, headers: { cookie } })).statusCode, 404);
   } finally { await app.close(); db.close(); await rm(root, { recursive: true, force: true }); await rm(output, { recursive: true, force: true }); }
 });
+
+test('每用户 ZIP 并发上限保护票据并在下载结束后释放', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'luvia-zip-limit-'));
+  const db = openDatabase(':memory:'); const app = await createApp({ db, legacyPending: false });
+  try {
+    await writeFile(path.join(root, 'large.jpg'), Buffer.alloc(4 * 1024 * 1024, 42));
+    db.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib','照片',?)").run(root);
+    await scanLibrary(db, { id: 'lib', root }, { allowedRoots: [root] });
+    const { id } = db.prepare('SELECT id FROM files').get() as { id: string };
+    const setup = await app.inject({ method: 'POST', url: '/api/v2/auth/setup', payload: { username: 'admin', password: 'test password' } });
+    const cookie = (setup.headers['set-cookie'] as string).split(';')[0]!;
+    await app.inject({ method: 'POST', url: '/api/v2/admin/users', headers: { cookie, 'x-luvia-request': '1' }, payload: { username: 'other', password: 'test password' } });
+    const otherLogin = await app.inject({ method: 'POST', url: '/api/v2/auth/login', payload: { username: 'other', password: 'test password' } });
+    const otherCookie = (otherLogin.headers['set-cookie'] as string).split(';')[0]!;
+    const tickets: string[] = [];
+    for (let i = 0; i < 3; i++) {
+      const response = await app.inject({ method: 'POST', url: '/api/v2/downloads', headers: { cookie, 'x-luvia-request': '1' }, payload: { ids: [id] } });
+      tickets.push(response.json().url);
+    }
+    const otherTicket = await app.inject({ method: 'POST', url: '/api/v2/downloads', headers: { cookie: otherCookie, 'x-luvia-request': '1' }, payload: { ids: [id] } });
+    const results = await Promise.all([...tickets.map((url) => app.inject({ method: 'GET', url, headers: { cookie } })),
+      app.inject({ method: 'GET', url: otherTicket.json().url, headers: { cookie: otherCookie } })]);
+    const responses = results.slice(0, 3);
+    assert.equal(results[3]!.statusCode, 200);
+    assert.deepEqual(responses.map((response) => response.statusCode).sort(), [200, 200, 429]);
+    const rejected = responses.findIndex((response) => response.statusCode === 429);
+    assert.equal((await app.inject({ method: 'GET', url: tickets[rejected]!, headers: { cookie } })).statusCode, 200);
+  } finally { await app.close(); db.close(); await rm(root, { recursive: true, force: true }); }
+});
+
+test('ZIP 客户端中断后回收并发名额', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'luvia-zip-abort-'));
+  const db = openDatabase(':memory:'); const app = await createApp({ db, legacyPending: false });
+  const controllers = Array.from({ length: 3 }, () => new AbortController());
+  try {
+    await writeFile(path.join(root, 'large.jpg'), Buffer.alloc(4 * 1024 * 1024, 42));
+    db.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib','照片',?)").run(root);
+    await scanLibrary(db, { id: 'lib', root }, { allowedRoots: [root] });
+    const { id } = db.prepare('SELECT id FROM files').get() as { id: string };
+    const setup = await app.inject({ method: 'POST', url: '/api/v2/auth/setup', payload: { username: 'admin', password: 'test password' } });
+    const cookie = (setup.headers['set-cookie'] as string).split(';')[0]!;
+    const tickets: string[] = [];
+    for (let i = 0; i < 3; i++) {
+      const response = await app.inject({ method: 'POST', url: '/api/v2/downloads', headers: { cookie, 'x-luvia-request': '1' }, payload: { ids: [id] } });
+      tickets.push(response.json().url);
+    }
+    for (let i = 0; i < 2; i++) {
+      const response = await app.inject({ method: 'GET', url: tickets[i]!, headers: { cookie }, payloadAsStream: true, signal: controllers[i]!.signal });
+      assert.equal(response.statusCode, 200); response.stream().on('error', () => {});
+    }
+    assert.equal((await app.inject({ method: 'GET', url: tickets[2]!, headers: { cookie } })).statusCode, 429);
+    controllers[0]!.abort();
+    let status = 429;
+    for (let i = 0; i < 50 && status === 429; i++) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 10));
+      const response = await app.inject({ method: 'GET', url: tickets[2]!, headers: { cookie }, payloadAsStream: true, signal: controllers[2]!.signal });
+      status = response.statusCode; response.stream().on('error', () => {});
+    }
+    assert.equal(status, 200);
+  } finally { for (const controller of controllers) controller.abort(); await app.close(); db.close(); await rm(root, { recursive: true, force: true }); }
+});

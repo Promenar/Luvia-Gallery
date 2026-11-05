@@ -94,7 +94,23 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
   });
   const folders = new FolderReader(db);
   const attempts = new Map<string, number[]>();
-  const secure = options.secureCookies ?? process.env.NODE_ENV === 'production';
+  const cookieSecure = process.env.COOKIE_SECURE?.trim().toLowerCase();
+  if (cookieSecure !== undefined && cookieSecure !== 'true' && cookieSecure !== 'false') throw new Error('COOKIE_SECURE 必须为 true 或 false');
+  const secure = options.secureCookies ?? (cookieSecure === undefined ? process.env.NODE_ENV === 'production' : cookieSecure === 'true');
+  const sseConnections = new Map<string, number>();
+  const zipConnections = new Map<string, number>();
+  function reserveUserSlot(slots: Map<string, number>, userId: string, limit: number): () => void {
+    const active = slots.get(userId) ?? 0;
+    if (active >= limit) fail(429, 'RATE_LIMITED', '并发请求过多，请稍后重试');
+    slots.set(userId, active + 1);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const remaining = (slots.get(userId) ?? 1) - 1;
+      if (remaining) slots.set(userId, remaining); else slots.delete(userId);
+    };
+  }
   const systemRoots = options.systemRoots ?? [path.resolve(process.env.DATA_DIR ?? 'data'), path.resolve(process.env.CACHE_DIR ?? 'cache')];
   const configuredMediaRoots = (process.env.MEDIA_ROOT ?? '').split(';').map((part) => part.trim()).filter(Boolean).map((part) => path.resolve(part));
   const getMounts = options.mounts ?? (() => process.platform === 'darwin'
@@ -625,6 +641,13 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
         }
       }
       const { waiter, jobId } = db.transaction(() => {
+        if (variant.kind === 'tile') {
+          const key = `media:${cacheKey(row, variant)}`;
+          const existing = db.prepare("SELECT 1 FROM jobs WHERE dedupe_key=? AND status IN ('queued','running','paused')").get(key);
+          const active = (db.prepare(`SELECT count(*) AS n FROM jobs WHERE type='thumbnails' AND status IN ('queued','running','paused')
+            AND json_valid(payload) AND json_extract(payload,'$.mediaId')=? AND json_extract(payload,'$.variant.kind')='tile'`).get(row.id) as { n: number }).n;
+          if (!existing && active >= 8) fail(503, 'UNAVAILABLE', '瓦片生成任务已满，请稍后重试');
+        }
         const active = wait ? (db.prepare('SELECT count(*) AS n FROM media_waiters WHERE lease_expires_at>unixepoch()').get() as { n: number }).n : 0;
         const waiter = wait && active < 32 ? randomUUID() : undefined;
         return { waiter, jobId: enqueueMediaTask(db, row, variant, { waiter }) };
@@ -985,6 +1008,8 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
   app.get('/api/v2/downloads/:ticket', async (req, reply) => {
     const identity = requireUser(req); const { ticket } = req.params as { ticket: string };
     if (ticket.length > 256) return fail(404, 'NOT_FOUND', '下载票据不存在或已过期');
+    const release = reserveUserSlot(zipConnections, identity.user.id, 2);
+    reply.raw.once('finish', release); reply.raw.once('close', release);
     const target = db.transaction(() => {
       const user = currentSessionUser(identity);
       const record = db.prepare('SELECT target FROM download_tickets WHERE token_hash=? AND user_id=? AND expires_at>?')
@@ -1354,6 +1379,8 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
   app.get('/api/v2/events', async (req, reply) => {
     const identity = requireUser(req);
     if (identity.scope === 'wallpaper') fail(403, 'FORBIDDEN', '令牌权限不足');
+    const release = reserveUserSlot(sseConnections, identity.user.id, 8);
+    reply.raw.once('finish', release); reply.raw.once('close', release);
     const last = req.headers['last-event-id'];
     let cursor = typeof last === 'string' && /^\d{1,15}$/.test(last) ? Number(last) :
       (db.prepare('SELECT COALESCE(max(id),0) AS n FROM job_events').get() as { n: number }).n;
