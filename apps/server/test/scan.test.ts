@@ -1,11 +1,54 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, unlink, rm, opendir, symlink, realpath } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, unlink, rm, opendir, symlink, realpath, rename } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { openDatabase } from '../src/core/database.ts';
 import { scanLibrary } from '../src/worker/scan.ts';
 import { JobQueue } from '../src/core/jobs.ts';
+import type { Dirent } from 'node:fs';
+
+test('扫描按 inode 保留移动媒体 ID，旧路径重新出现时分配不冲突的 ID', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'luvia-scan-move-'));
+  const db = openDatabase(':memory:');
+  try {
+    db.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib','照片',?)").run(root);
+    await writeFile(path.join(root, 'a.jpg'), 'original');
+    await scanLibrary(db, { id: 'lib', root }, { allowedRoots: [root] });
+    const original = db.prepare("SELECT id,dev,ino FROM files WHERE relative_path='a.jpg'").get() as { id: string; dev: string | null; ino: string | null };
+    assert.ok(original.dev && original.ino, '扫描应记录文件身份');
+    await rename(path.join(root, 'a.jpg'), path.join(root, 'b.jpg'));
+    await scanLibrary(db, { id: 'lib', root }, { allowedRoots: [root] });
+    assert.equal((db.prepare("SELECT id FROM files WHERE relative_path='b.jpg'").get() as { id: string }).id, original.id);
+    await writeFile(path.join(root, 'a.jpg'), 'replacement');
+    await scanLibrary(db, { id: 'lib', root }, { allowedRoots: [root] });
+    const rows = db.prepare('SELECT id,relative_path FROM files ORDER BY relative_path').all() as { id: string; relative_path: string }[];
+    assert.equal(rows.length, 2); assert.equal(rows[1]?.id, original.id); assert.notEqual(rows[0]?.id, original.id);
+    await scanLibrary(db, { id: 'lib', root }, { allowedRoots: [root] });
+    assert.deepEqual(db.prepare('SELECT id,relative_path FROM files ORDER BY relative_path').all(), rows);
+  } finally { db.close(); await rm(root, { recursive: true, force: true }); }
+});
+
+test('移动后旧路径同时出现新文件时，扫描顺序不改变原媒体 ID', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'luvia-scan-move-replace-')); const db = openDatabase(':memory:');
+  try {
+    db.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib','照片',?)").run(root);
+    await writeFile(path.join(root, 'a.jpg'), 'original');
+    await scanLibrary(db, { id: 'lib', root }, { allowedRoots: [root] });
+    const id = (db.prepare("SELECT id FROM files WHERE relative_path='a.jpg'").get() as { id: string }).id;
+    await rename(path.join(root, 'a.jpg'), path.join(root, 'b.jpg'));
+    await writeFile(path.join(root, 'a.jpg'), 'replacement');
+    const sorted: typeof opendir = async (p, options) => {
+      const dir = await opendir(p, options); const entries: Dirent[] = [];
+      for await (const entry of dir) entries.push(entry);
+      entries.sort((a, b) => a.name.localeCompare(b.name));
+      return { async *[Symbol.asyncIterator]() { yield* entries; } } as unknown as Awaited<ReturnType<typeof opendir>>;
+    };
+    await scanLibrary(db, { id: 'lib', root }, { allowedRoots: [root], openDir: sorted });
+    const rows = db.prepare('SELECT id,relative_path FROM files ORDER BY relative_path').all() as { id: string; relative_path: string }[];
+    assert.equal(rows.length, 2); assert.equal(rows[1]?.id, id); assert.notEqual(rows[0]?.id, id);
+  } finally { db.close(); await rm(root, { recursive: true, force: true }); }
+});
 
 test('扫描增删文件；读取错误或取消时保留未见文件', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'luvia-scan-'));

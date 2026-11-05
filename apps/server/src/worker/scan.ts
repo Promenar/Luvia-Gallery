@@ -1,15 +1,16 @@
 import type Database from 'better-sqlite3';
-import { opendir, stat, realpath } from 'node:fs/promises';
+import { opendir, stat, lstat, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { lookup } from 'mime-types';
 import { mediaId, virtualPath } from '../core/paths.ts';
+import { statFields } from '../watch/file-info.ts';
 
 type Options = {
   allowedRoots: string[]; openDir?: typeof opendir; signal?: AbortSignal;
   batchSize?: number; statConcurrency?: number; owner?: string; jobId?: string; jobLeaseToken?: string; clock?: () => number;
 };
-type Candidate = { relative: string; size: number; mtime: number };
+type Candidate = { relative: string; size: number; mtime: number; mtimeMs: number; dev: string; ino: string; movedId: string | null };
 type ScanResult = { added: number; removed: number; errors: number };
 type ScanRun = ScanResult & { library_id: string; marker: string; complete: number };
 const imageExt = new Set(['.jpg','.jpeg','.png','.gif','.webp','.avif','.heic','.heif','.tif','.tiff','.bmp']);
@@ -97,17 +98,23 @@ async function scanWithLock(db: Database.Database, library: { id: string; root: 
     result = { added: run.added, removed: run.removed, errors: run.errors };
     if (run.complete) return result;
   }
+  db.transaction(() => {
+    assertLease();
+    db.prepare('DELETE FROM scan_conflicts WHERE library_id=? AND marker<>?').run(library.id, marker);
+  }).immediate();
   const queue: string[] = [''];
   let batch: Candidate[] = [];
   let pending: Promise<void>[] = [];
   const existing = db.prepare('SELECT id FROM files WHERE id=?');
+  const existingPath = db.prepare('SELECT id,dev,ino FROM files WHERE library_id=? AND relative_path=?');
+  const identity = db.prepare('SELECT id,relative_path FROM files WHERE library_id=? AND dev=? AND ino=? LIMIT 2');
   const resetMetadata = ['orientation','duration_sec','codec','audio_codec','container','fps','bitrate','make','model','lens','f_number','exposure_time','iso','focal_length','focal_length35','software','latitude','longitude','altitude','playability']
     .map((column) => `${column}=CASE WHEN files.size != excluded.size OR files.modified_at != excluded.modified_at THEN NULL ELSE files.${column} END`).join(',');
   const upsert = db.prepare(`INSERT INTO files
-    (id,library_id,relative_path,folder,name,mime,media_type,size,modified_at,taken_at,taken_at_source,scan_marker)
-    VALUES (@id,@library_id,@relative_path,@folder,@name,@mime,@media_type,@size,@mtime,@mtime,'mtime',@marker)
+    (id,library_id,relative_path,folder,name,mime,media_type,size,modified_at,taken_at,taken_at_source,scan_marker,dev,ino,mtime_ms)
+    VALUES (@id,@library_id,@relative_path,@folder,@name,@mime,@media_type,@size,@mtime,@mtime,'mtime',@marker,@dev,@ino,@mtime_ms)
     ON CONFLICT(id) DO UPDATE SET
-      name=excluded.name, folder=excluded.folder, mime=excluded.mime, media_type=excluded.media_type,
+      name=excluded.name, relative_path=excluded.relative_path, folder=excluded.folder, mime=excluded.mime, media_type=excluded.media_type,
       taken_at=CASE WHEN files.size != excluded.size OR files.modified_at != excluded.modified_at THEN excluded.modified_at ELSE files.taken_at END,
       taken_at_source=CASE WHEN files.size != excluded.size OR files.modified_at != excluded.modified_at THEN 'mtime' ELSE files.taken_at_source END,
       metadata_status=CASE WHEN files.size != excluded.size OR files.modified_at != excluded.modified_at THEN 'pending' ELSE files.metadata_status END,
@@ -118,20 +125,30 @@ async function scanWithLock(db: Database.Database, library: { id: string; root: 
       height=CASE WHEN files.size != excluded.size OR files.modified_at != excluded.modified_at THEN NULL ELSE files.height END,
       ${resetMetadata},
       has_preview=CASE WHEN files.size != excluded.size OR files.modified_at != excluded.modified_at THEN 0 ELSE files.has_preview END,
-      size=excluded.size, modified_at=excluded.modified_at, scan_marker=excluded.scan_marker`);
-  const flush = () => {
+      head_hash=CASE WHEN files.size != excluded.size OR files.mtime_ms != excluded.mtime_ms THEN NULL ELSE files.head_hash END,
+      size=excluded.size, modified_at=excluded.modified_at, scan_marker=excluded.scan_marker,dev=excluded.dev,ino=excluded.ino,mtime_ms=excluded.mtime_ms`);
+  const flush = (allowDefer = true) => {
     if (!batch.length) return;
     const current = batch; batch = [];
     db.transaction(() => {
       assertLease();
       for (const file of current) {
-        const id = mediaId(library.id, file.relative);
+        const byPath = existingPath.get(library.id, file.relative) as { id: string; dev: string | null; ino: string | null } | undefined;
+        if (allowDefer && byPath?.dev && byPath.ino && (byPath.dev !== file.dev || byPath.ino !== file.ino)) {
+          db.prepare(`INSERT OR REPLACE INTO scan_conflicts(library_id,marker,relative_path,size,mtime,mtime_ms,dev,ino,moved_id)
+            VALUES (?,?,?,?,?,?,?,?,?)`).run(library.id, marker, file.relative, file.size, file.mtime, file.mtimeMs, file.dev, file.ino, file.movedId);
+          continue;
+        }
+        const moved = file.movedId ? db.prepare('SELECT id FROM files WHERE id=? AND library_id=? AND dev=? AND ino=? AND (scan_marker IS NULL OR scan_marker<>?)').get(file.movedId, library.id, file.dev, file.ino, marker) as { id: string } | undefined : undefined;
+        const preferred = mediaId(library.id, file.relative);
+        const id = byPath?.id ?? moved?.id ?? (existing.get(preferred) ? randomUUID() : preferred);
         const kind = typeOf(file.relative)!;
         const dirname = path.posix.dirname(file.relative);
         if (!existing.get(id)) result.added++;
         upsert.run({ id, library_id: library.id, relative_path: file.relative, folder: virtualPath(library.id, dirname === '.' ? '' : dirname),
           name: path.posix.basename(file.relative), mime: lookup(file.relative) || 'application/octet-stream', media_type: kind,
-          size: file.size, mtime: file.mtime, marker });
+          size: file.size, mtime: file.mtime, marker, dev: file.dev, ino: file.ino, mtime_ms: file.mtimeMs });
+        if (!allowDefer) db.prepare('DELETE FROM scan_conflicts WHERE library_id=? AND marker=? AND relative_path=?').run(library.id, marker, file.relative);
       }
       if (jobId) db.prepare('UPDATE scan_runs SET added=? WHERE job_id=?').run(result.added, jobId);
     }).immediate();
@@ -160,8 +177,19 @@ async function scanWithLock(db: Database.Database, library: { id: string; root: 
             try {
               const resolvedFile = await realpath(full);
               if (!within(root, resolvedFile)) throw new Error('文件越出媒体库');
-              const info = await stat(resolvedFile);
-              if (info.isFile()) batch.push({ relative, size: info.size, mtime: Math.floor(info.mtimeMs / 1000) });
+              const info = await stat(resolvedFile, { bigint: true });
+              if (info.isFile()) {
+                const fields = statFields(info); let movedId: string | null = null;
+                const candidates = identity.all(library.id, fields.dev, fields.ino) as { id: string; relative_path: string }[];
+                if (candidates.length === 1 && candidates[0]!.relative_path !== relative) {
+                  try {
+                    const old = await lstat(path.join(root, candidates[0]!.relative_path), { bigint: true });
+                    if (old.dev.toString() !== fields.dev || old.ino.toString() !== fields.ino) movedId = candidates[0]!.id;
+                  }
+                  catch (error) { if (['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code ?? '')) movedId = candidates[0]!.id; else throw error; }
+                }
+                batch.push({ relative, size: fields.size, mtime: Math.floor(fields.mtimeMs / 1000), mtimeMs: fields.mtimeMs, dev: fields.dev, ino: fields.ino, movedId });
+              }
             } catch { result.errors++; }
           })());
           if (pending.length >= concurrency) {
@@ -195,6 +223,14 @@ async function scanWithLock(db: Database.Database, library: { id: string; root: 
       }
     }).immediate();
     if (!jobId) queue.push(...children);
+  }
+  while (result.errors === 0) {
+    signal?.throwIfAborted();
+    const conflicts = db.prepare(`SELECT relative_path AS relative,size,mtime,mtime_ms AS mtimeMs,dev,ino,moved_id AS movedId
+      FROM scan_conflicts WHERE library_id=? AND marker=? ORDER BY relative_path LIMIT ?`).all(library.id, marker, batchSize) as Candidate[];
+    if (!conflicts.length) break;
+    batch = conflicts; flush(false);
+    await new Promise<void>((resolve) => setImmediate(resolve));
   }
   if (result.errors === 0) {
     const remove = db.prepare(`DELETE FROM files WHERE rowid IN
