@@ -51,18 +51,17 @@ test('HLS 按会话转码、逐段鉴权、支持分享并在闲置后回收', a
     const share = Share.parse(created.json()); const publicIndex = `/api/v2/public/shares/${share.token}/media/${id}/hls/index.m3u8`;
     const publicPending = await app.inject({ method: 'GET', url: publicIndex });
     assert.equal(publicPending.statusCode, 202);
-    const visitorCookie = (publicPending.headers['set-cookie'] as string).split(';')[0]!;
     for (let step = 0; step < 4; step++) {
-      const state = await app.inject({ method: 'GET', url: publicIndex, headers: { cookie: visitorCookie } });
+      const state = await app.inject({ method: 'GET', url: publicIndex });
       if (state.statusCode === 200) break;
       await runNextJob(db, options);
     }
-    const publicPlaylist = await app.inject({ method: 'GET', url: publicIndex, headers: { cookie: visitorCookie } });
+    const publicPlaylist = await app.inject({ method: 'GET', url: publicIndex });
     assert.equal(publicPlaylist.statusCode, 200);
     const publicSegment = publicPlaylist.body.split('\n').find((line) => /^seg-\d+\.ts$/.test(line)); assert.ok(publicSegment);
-    assert.equal((await app.inject({ method: 'GET', url: `/api/v2/public/shares/${share.token}/media/${id}/hls/${publicSegment}`, headers: { cookie: visitorCookie } })).statusCode, 200);
+    assert.equal((await app.inject({ method: 'GET', url: `/api/v2/public/shares/${share.token}/media/${id}/hls/${publicSegment}` })).statusCode, 200);
     assert.equal((await app.inject({ method: 'DELETE', url: `/api/v2/shares/${share.id}`, headers })).statusCode, 204);
-    assert.equal((await app.inject({ method: 'GET', url: publicIndex, headers: { cookie: visitorCookie } })).statusCode, 404);
+    assert.equal((await app.inject({ method: 'GET', url: publicIndex })).statusCode, 404);
     db.prepare('UPDATE hls_sessions SET last_access_at=0').run();
     const { cleanupHls } = await import('../src/worker/hls.ts');
     await cleanupHls(db, cache, Date.now());

@@ -2,13 +2,15 @@ import { randomInt } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import type { QueryExecutor } from './query-executor.ts';
 import { rowIdRange } from './rowid-range.ts';
+import { where as mediaWhere } from './media-query.ts';
+import { RandomQuery } from '@luvia/contracts';
 
 type Value = string | number;
 export type LegacyRow = { id: string; relative_path: string; root: string; name: string; mime: string; media_type: string; size: number;
   modified_at: number; width: number | null; height: number | null; favorite: number };
 type Options = { userId: string; allowedPaths: string[] | null; folder: string | null; recursive: boolean; favorite: boolean;
   search?: string; mediaType?: string; excludeMediaType?: string; from?: number; to?: number; sort?: string;
-  random: boolean; seed: number | null; limit: number; offset: number };
+  random: boolean; seed: number | null; limit: number; offset: number; wallpaper?: ReturnType<typeof RandomQuery.parse> };
 
 export async function legacyPage(db: Database.Database, executor: QueryExecutor, options: Options): Promise<{ rows: LegacyRow[]; hasMore: boolean }> {
   const parameters: Value[] = [];
@@ -19,6 +21,10 @@ export async function legacyPage(db: Database.Database, executor: QueryExecutor,
   };
   if (options.allowedPaths !== null) {
     clauses.push(options.allowedPaths.length ? `(${options.allowedPaths.map((value) => prefix('f.folder', value)).join(' OR ')})` : '0');
+  }
+  if (options.wallpaper) {
+    const scope = mediaWhere(options.wallpaper, { id: options.userId, allowedPaths: options.allowedPaths }, db);
+    clauses.push(`(${scope.sql})`); parameters.push(...scope.params);
   }
   if (options.folder) {
     if (options.recursive) clauses.push(prefix('f.folder', options.folder));
