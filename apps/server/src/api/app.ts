@@ -15,6 +15,7 @@ import { CSRF_HEADER, endpoints, JobAction, MediaListQuery, Preferences, RandomQ
 import type { MediaItem, User } from '@luvia/contracts';
 import { hashPassword, verifyPassword } from '../core/password.ts';
 import { MediaReader } from '../core/media-query.ts';
+import { QueryExecutor } from '../core/query-executor.ts';
 import { FolderReader } from '../core/folder-reader.ts';
 import { mediaId, pathAllowed, secureMediaPath, virtualPath } from '../core/paths.ts';
 import { sendFile } from './binary.ts';
@@ -58,7 +59,9 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
   const app = Fastify({ logger: false, routerOptions: { maxParamLength: 8192 } });
   await app.register(cookie);
   const identities = new WeakMap<FastifyRequest, Identity>();
-  const media = new MediaReader(db);
+  const queries = new QueryExecutor(db);
+  const media = new MediaReader(db, queries);
+  app.addHook('onClose', async () => { await queries.close(); });
   const folders = new FolderReader(db);
   const attempts = new Map<string, number[]>();
   const secure = options.secureCookies ?? process.env.NODE_ENV === 'production';
@@ -369,9 +372,9 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
   function ownedAlbum(id: string, userId: string): AlbumRow {
     return (db.prepare('SELECT * FROM albums WHERE id=? AND user_id=?').get(id, userId) as AlbumRow | undefined) ?? fail(404, 'NOT_FOUND', '相册不存在');
   }
-  function albumOut(row: AlbumRow, context: { id: string; allowedPaths: string[] | null }) {
+  async function albumOut(row: AlbumRow, context: { id: string; allowedPaths: string[] | null }) {
     const query = albumQuery(row.id);
-    const summary = media.summary(query, context);
+    const summary = await media.summary(query, context);
     const cover = row.cover_id && media.contains(query, context, row.cover_id) ? media.one(row.cover_id, context) : media.page(query, context).items[0] ?? null;
     return { id: row.id, name: row.name, description: row.description, kind: row.kind, filter: row.filter ? JSON.parse(row.filter) : null,
       count: summary.count, cover, startAt: iso(summary.start), endAt: iso(summary.end), createdAt: iso(row.created_at)!, updatedAt: iso(row.updated_at)! };
@@ -386,7 +389,9 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
   register('listAlbums', async (req) => {
     const context = mediaContext(req);
     const rows = db.prepare('SELECT * FROM albums WHERE user_id=? ORDER BY updated_at DESC,id DESC').all(context.id) as AlbumRow[];
-    return { albums: rows.map((row) => albumOut(row, context)) };
+    const albums = [];
+    for (let index = 0; index < rows.length; index += 32) albums.push(...await Promise.all(rows.slice(index, index + 32).map((row) => albumOut(row, context))));
+    return { albums };
   });
   register('createAlbum', async (req, _reply, body) => {
     const context = mediaContext(req);
@@ -465,6 +470,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     catch (err) { if (err instanceof Error && err.message === '无效游标') fail(400, 'VALIDATION', '无效游标'); throw err; }
   });
   register('buckets', async (req) => media.buckets(endpoints.buckets.query.parse(req.query), mediaContext(req)));
+  register('facets', async (req) => media.facets(endpoints.facets.query.parse(req.query), mediaContext(req)));
   register('randomMedia', async (req) => {
     const query = endpoints.randomMedia.query.parse(req.query);
     if (query.exclude && query.exclude.length > 500) fail(400, 'VALIDATION', '排除的媒体不能超过 500 个');
