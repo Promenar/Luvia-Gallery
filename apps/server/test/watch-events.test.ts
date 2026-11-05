@@ -6,6 +6,18 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
+test('空目录列表的扫描事件合并时保留已有受影响目录', async () => {
+  const { publishLibraryEvent, flushLibraryEvents } = await import('../src/worker/watch-events.ts'); const db = openDatabase(':memory:');
+  try {
+    db.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib','照片','/lib')").run();
+    const event = { libraryId: 'lib', source: 'scan' as const, folders: ['lib/allowed'], added: 0, removed: 0, updated: 0, moved: 1 };
+    publishLibraryEvent(db, event, 1000); publishLibraryEvent(db, event, 1100);
+    publishLibraryEvent(db, { ...event, folders: [], moved: 0 }, 1200); flushLibraryEvents(db, 3000);
+    const row = db.prepare("SELECT payload FROM job_events WHERE event_type='library' ORDER BY id DESC LIMIT 1").get() as {payload:string};
+    assert.deepEqual(JSON.parse(row.payload).folders, ['lib/allowed']);
+  } finally { db.close(); }
+});
+
 test('同库扫描与监控事件跨连接节流并持久合并', async () => {
   const mod = await import('../src/worker/watch-events.ts').catch(() => null);
   assert.ok(mod, '媒体库事件持久节流尚未接入');
