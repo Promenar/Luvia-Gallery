@@ -1157,7 +1157,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     } else if (query.favorites === 'true') selected = folders.favorites(context).folders;
     const aggregates = (await queries.run([{ sql: `SELECT folder,count(*) AS count,max(modified_at) AS latest FROM files
       WHERE folder IN (SELECT value FROM json_each(?)) AND media_type IN ('image','video') GROUP BY folder`,
-      params: [JSON.stringify(selected.map((folder) => folder.path))] }]))[0] as { folder: string; count: number; latest: number }[];
+      params: [JSON.stringify(selected.filter((folder) => pathAllowed(folder.path, context.allowedPaths)).map((folder) => folder.path))] }]))[0] as { folder: string; count: number; latest: number }[];
     const byPath = new Map(aggregates.map((entry) => [entry.folder, entry]));
     const result = [];
     for (const folder of selected) {
@@ -1180,7 +1180,9 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
         }
       }
       const aggregate = byPath.get(folder.path);
-      result.push({ name: path.basename(absolute), path: absolute, mediaCount: aggregate?.count ?? 0, coverMedia, lastModified: aggregate?.latest ?? 0, isFavorite: folder.favorite });
+      const accessible = pathAllowed(folder.path, context.allowedPaths);
+      result.push({ name: path.basename(absolute), path: absolute, mediaCount: accessible ? aggregate?.count ?? 0 : folder.mediaCount, coverMedia,
+        lastModified: accessible ? aggregate?.latest ?? 0 : folder.latestAt ? Date.parse(folder.latestAt) / 1000 : 0, isFavorite: folder.favorite });
     }
     return { folders: result };
   });
