@@ -2,6 +2,7 @@ import type Database from 'better-sqlite3';
 import { randomInt } from 'node:crypto';
 import type { z } from 'zod';
 import { MediaFilter, MediaListQuery, RandomQuery, MediaItem } from '@luvia/contracts';
+import { QueryExecutor } from './query-executor.ts';
 
 type Query = z.output<typeof MediaListQuery>;
 type RandomFilter = z.output<typeof RandomQuery>;
@@ -105,8 +106,9 @@ function parseCursor(value: string, sort: Query['sort']): Cursor {
 }
 export class MediaReader {
   private cache = new Map<string, { version: string; expires: number; value: unknown }>();
-  constructor(privateDb: Database.Database) { this.db = privateDb; }
+  constructor(privateDb: Database.Database, executor = new QueryExecutor(privateDb)) { this.db = privateDb; this.executor = executor; }
   private db: Database.Database;
+  private executor: QueryExecutor;
 
   one(id: string, context: Context) {
     const params: Params = [];
@@ -137,7 +139,7 @@ export class MediaReader {
     return { items: rows.map(item), nextCursor, total: null };
   }
 
-  buckets(filter: Query, context: Context) {
+  async buckets(filter: Query, context: Context) {
     const key = JSON.stringify(['buckets', filter, context]);
     const changes = this.db.prepare('SELECT total_changes() AS n').get() as { n: number };
     const version = `${this.db.pragma('data_version', { simple: true })}:${changes.n}`;
@@ -149,8 +151,8 @@ export class MediaReader {
       filter.hasLocation === undefined && filter.favorite === undefined && !filter.under;
     const rows = (unfiltered
       ? this.db.prepare('SELECT month AS key,count FROM timeline_counts ORDER BY month DESC').all()
-      : this.db.prepare(`SELECT strftime('%Y-%m', f.taken_at, 'unixepoch', 'localtime') AS key, count(*) AS count
-        FROM files f WHERE ${condition.sql} GROUP BY key ORDER BY key DESC`).all(...condition.params)) as { key: string; count: number }[];
+      : (await this.executor.run([{ sql: `SELECT strftime('%Y-%m', f.taken_at, 'unixepoch', 'localtime') AS key, count(*) AS count
+        FROM files f WHERE ${condition.sql} GROUP BY key ORDER BY key DESC`, params: condition.params }]))[0]) as { key: string; count: number }[];
     const buckets = rows.map(({ key, count }) => {
       const [year, month] = key.split('-').map(Number);
       return { key, count, start: Math.floor(new Date(year!, month! - 1, 1).getTime() / 1000), end: Math.floor(new Date(year!, month!, 1).getTime() / 1000) };
@@ -159,6 +161,21 @@ export class MediaReader {
     if (this.cache.size >= 64) this.cache.delete(this.cache.keys().next().value!);
     this.cache.set(key, { version, expires: Date.now() + 10_000, value });
     return value;
+  }
+
+  async facets(filter: Query, context: Context) {
+    const condition = where(filter, context, this.db);
+    const statements = [
+      `SELECT f.model AS name,count(*) AS count FROM files f WHERE ${condition.sql} AND f.model IS NOT NULL AND f.model<>'' GROUP BY f.model ORDER BY count DESC,name COLLATE NOCASE`,
+      `SELECT CAST(strftime('%Y',f.taken_at,'unixepoch','localtime') AS INTEGER) AS year,count(*) AS count FROM files f WHERE ${condition.sql} GROUP BY year HAVING year IS NOT NULL ORDER BY year DESC`,
+      `SELECT f.media_type AS type,count(*) AS count FROM files f WHERE ${condition.sql} GROUP BY f.media_type`,
+    ].map((sql) => ({ sql, params: condition.params }));
+    const [cameras, years, counts] = await this.executor.run(statements) as [
+      { name: string; count: number }[], { year: number; count: number }[], { type: 'image' | 'video' | 'audio'; count: number }[]
+    ];
+    const types = { image: 0, video: 0, audio: 0 };
+    for (const row of counts) if (row.type in types) types[row.type] = row.count;
+    return { cameras, years, types };
   }
 
   random(filter: RandomFilter, context: Context) {
@@ -173,10 +190,10 @@ export class MediaReader {
     return { items: rows.map(item) };
   }
 
-  summary(filter: Query, context: Context) {
+  async summary(filter: Query, context: Context) {
     const condition = where(filter, context, this.db);
-    return this.db.prepare(`SELECT count(*) AS count,min(f.taken_at) AS start,max(f.taken_at) AS end FROM files f WHERE ${condition.sql}`)
-      .get(...condition.params) as { count: number; start: number | null; end: number | null };
+    const rows = await this.executor.run([{ sql: `SELECT count(*) AS count,min(f.taken_at) AS start,max(f.taken_at) AS end FROM files f WHERE ${condition.sql}`, params: condition.params }]);
+    return rows[0]![0] as { count: number; start: number | null; end: number | null };
   }
 
   contains(filter: Query, context: Context, id: string): boolean {
