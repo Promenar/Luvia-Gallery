@@ -1,0 +1,61 @@
+# FNOS 开发调试覆盖文件：叠加在仓库根 docker-compose.yml 之上使用。
+#
+#   docker compose -p luvia-v2-dev -f docker-compose.yml -f deploy/compose.fnos-dev.yml up -d
+#
+# 与正在运行的 v1 生产实例完全隔离：独立项目名、独立端口、独立数据与缓存目录，
+# 媒体目录一律只读挂载。宿主机路径全部来自环境变量，不写进仓库；
+# 未设置必填变量时 compose 直接报错退出，不会退回到默认卷。
+#
+# 必填：
+#   LUVIA_DEV_DATA          调试用数据目录（SQLite 数据库、会话等）
+#   LUVIA_DEV_CACHE         调试用缓存目录（缩略图、预览、转码）
+#   LUVIA_DEV_MEDIA_A       第一个媒体目录（宿主机路径，只读挂载到 /media/a）
+#   LUVIA_DEV_MEDIA_B       第二个媒体目录（宿主机路径，只读挂载到 /media/b）
+# 可选：
+#   LUVIA_DEV_PORT          对外端口，默认 9981
+#   LUVIA_DEV_IMAGE         镜像标签，默认 promenarleng/luvia-gallery:v2-candidate
+
+x-dev-env: &dev-env
+  DATA_DIR: /data
+  CACHE_DIR: /cache
+  MEDIA_ROOT: /media/a;/media/b
+  # 让界面显示宿主机上的真实路径，而不是容器内路径
+  LUVIA_HOST_PATHS: "/media/a=${LUVIA_DEV_MEDIA_A:?需要设置 LUVIA_DEV_MEDIA_A};/media/b=${LUVIA_DEV_MEDIA_B:?需要设置 LUVIA_DEV_MEDIA_B}"
+  TZ: ${TZ:-Asia/Shanghai}
+
+services:
+  api:
+    image: ${LUVIA_DEV_IMAGE:-promenarleng/luvia-gallery:v2-candidate}
+    pull_policy: never
+    ports: !override
+      - "${LUVIA_DEV_PORT:-9981}:3001"
+    environment: *dev-env
+    # YAML 不允许在别名上加 !override，两个服务各写一份完整列表
+    volumes: !override
+      - "${LUVIA_DEV_DATA:?需要设置 LUVIA_DEV_DATA}:/data"
+      - "${LUVIA_DEV_CACHE:?需要设置 LUVIA_DEV_CACHE}:/cache"
+      - "${LUVIA_DEV_MEDIA_A:?需要设置 LUVIA_DEV_MEDIA_A}:/media/a:ro"
+      - "${LUVIA_DEV_MEDIA_B:?需要设置 LUVIA_DEV_MEDIA_B}:/media/b:ro"
+    restart: "no"
+
+  worker:
+    image: ${LUVIA_DEV_IMAGE:-promenarleng/luvia-gallery:v2-candidate}
+    pull_policy: never
+    environment: *dev-env
+    # YAML 不允许在别名上加 !override，两个服务各写一份完整列表
+    volumes: !override
+      - "${LUVIA_DEV_DATA:?需要设置 LUVIA_DEV_DATA}:/data"
+      - "${LUVIA_DEV_CACHE:?需要设置 LUVIA_DEV_CACHE}:/cache"
+      - "${LUVIA_DEV_MEDIA_A:?需要设置 LUVIA_DEV_MEDIA_A}:/media/a:ro"
+      - "${LUVIA_DEV_MEDIA_B:?需要设置 LUVIA_DEV_MEDIA_B}:/media/b:ro"
+    restart: "no"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+# 调试环境使用宿主机目录，不创建命名卷
+volumes: !reset {}
