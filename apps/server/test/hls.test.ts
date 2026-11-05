@@ -131,3 +131,18 @@ test('转码尚在运行时提供已经完成的 HLS 分片，停止 worker 会�
     await app.close(); db.close(); await rm(root, { recursive: true, force: true }); await rm(cache, { recursive: true, force: true }); await rm(bin, { recursive: true, force: true });
   }
 });
+
+
+test('HLS 不处理扫描后同秒同大小发生变化的视频', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'luvia-hls-change-')); const cache = await mkdtemp(path.join(tmpdir(), 'luvia-hls-change-cache-')); const db = openDatabase(':memory:');
+  try {
+    const file = path.join(root, 'a.mp4'); await writeFile(file, 'first'); await utimes(file, 1700000000.1, 1700000000.1);
+    db.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib','视频',?)").run(root);
+    await scanLibrary(db, { id: 'lib', root }, { allowedRoots: [root] }); db.prepare("UPDATE files SET playability='transcode'").run();
+    const row = db.prepare('SELECT id,size,modified_at,cache_generation FROM files').get() as { id: string; size: number; modified_at: number; cache_generation: number };
+    const { ensureHls } = await import('../src/core/hls.ts'); const session = ensureHls(db, row, 'principal')!;
+    await writeFile(file, 'other'); await utimes(file, 1700000000.9, 1700000000.9);
+    const { generateHls } = await import('../src/worker/hls.ts');
+    await assert.rejects(generateHls(db, session.id, session.job_id!, { owner: 'worker', cacheDir: cache, allowedRoots: [root], assertLease: () => {} }), /视频已变化/);
+  } finally { db.close(); await rm(root, { recursive: true, force: true }); await rm(cache, { recursive: true, force: true }); }
+});

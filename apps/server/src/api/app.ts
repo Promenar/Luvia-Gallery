@@ -605,9 +605,9 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
         WHERE ai.file_id=? AND a.user_id=? AND a.kind='manual' ORDER BY ai.album_id`).all(id, context.id) as { album_id: string }[]).map((album) => album.album_id),
     };
   });
-  type BinaryRow = { id: string; name: string; relative_path: string; folder: string; mime: string; media_type: string; root: string; size: number; modified_at: number; width: number | null; height: number | null };
+  type BinaryRow = { id: string; name: string; relative_path: string; folder: string; mime: string; media_type: string; root: string; size: number; modified_at: number; cache_generation: number; width: number | null; height: number | null };
   async function binaryMediaFor(context: { id: string; allowedPaths: string[] | null; ids?: string[] }, id: string): Promise<{ row: BinaryRow; filename: string }> {
-    const row = db.prepare(`SELECT f.id,f.name,f.relative_path,f.folder,f.mime,f.media_type,f.size,f.modified_at,f.width,f.height,l.root FROM files f
+    const row = db.prepare(`SELECT f.id,f.name,f.relative_path,f.folder,f.mime,f.media_type,f.size,f.modified_at,f.cache_generation,f.width,f.height,l.root FROM files f
       JOIN libraries l ON l.id=f.library_id WHERE f.id=? AND l.enabled=1 AND f.missing_at_ms IS NULL`).get(id) as BinaryRow | undefined;
     if (!row || !pathAllowed(row.folder, context.allowedPaths) || context.ids && !context.ids.includes(id)) return fail(404, 'NOT_FOUND', '媒体不存在或不可访问');
     let filename: string;
@@ -701,8 +701,8 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
         .run(key, path.relative(cacheDir, filename), info.size, touched, row.id, variant.kind, row.size, row.modified_at);
     } else db.prepare('UPDATE cache_entries SET last_access_at=? WHERE cache_key=? AND last_access_at<?').run(touched, key, touched - 60_000);
     if (variant.kind === 'thumb') db.transaction(() => {
-      const changed = db.prepare('UPDATE files SET thumb_ready=1,thumb_version=CASE WHEN thumb_version=0 THEN 1 ELSE thumb_version END WHERE id=? AND size=? AND modified_at=? AND thumb_ready=0')
-        .run(row.id, row.size, row.modified_at);
+      const changed = db.prepare('UPDATE files SET thumb_ready=1,thumb_version=CASE WHEN thumb_version=0 THEN 1 ELSE thumb_version END WHERE id=? AND size=? AND modified_at=? AND cache_generation=? AND thumb_ready=0')
+        .run(row.id, row.size, row.modified_at, row.cache_generation);
       if (changed.changes) noteThumbnail(db, row.id);
     }).immediate();
     return sendFile(req, reply, filename, { mime: 'image/webp', name: row.name, etagKey: key, authorize });
@@ -718,7 +718,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
       const current = authenticateRequest(req) ?? fail(401, 'UNAUTHORIZED', '会话已失效');
       if (identityPrincipal(current) !== principal || !pathAllowed(row.folder, userOut(current.user).allowedPaths) ||
         !db.prepare(`SELECT 1 FROM files f JOIN libraries l ON l.id=f.library_id AND l.enabled=1
-          WHERE f.id=? AND f.folder=? AND f.size=? AND f.modified_at=? AND f.missing_at_ms IS NULL`).get(row.id, row.folder, row.size, row.modified_at)) {
+          WHERE f.id=? AND f.folder=? AND f.size=? AND f.modified_at=? AND f.cache_generation=? AND f.missing_at_ms IS NULL`).get(row.id, row.folder, row.size, row.modified_at, row.cache_generation)) {
         fail(404, 'NOT_FOUND', '媒体不可访问');
       }
       requireWallpaperMedia(current, row.id);
@@ -769,7 +769,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
       const current = authenticate(req) ?? fail(401, 'UNAUTHORIZED', '会话已失效');
       if (identityPrincipal(current) !== principal || !pathAllowed(row.folder, userOut(current.user).allowedPaths)) fail(404, 'NOT_FOUND', '媒体不可访问');
       if (!db.prepare(`SELECT 1 FROM files f JOIN libraries l ON l.id=f.library_id AND l.enabled=1
-        WHERE f.id=? AND f.size=? AND f.modified_at=? AND f.playability='transcode' AND f.missing_at_ms IS NULL`).get(id, row.size, row.modified_at) || !readSettings(db).transcode.enabled) fail(404, 'NOT_FOUND', '媒体不可访问');
+        WHERE f.id=? AND f.folder=? AND f.size=? AND f.modified_at=? AND f.cache_generation=? AND f.playability='transcode' AND f.missing_at_ms IS NULL`).get(id, row.folder, row.size, row.modified_at, row.cache_generation) || !readSettings(db).transcode.enabled) fail(404, 'NOT_FOUND', '媒体不可访问');
       requireWallpaperMedia(current, id);
     };
     authorize();
@@ -980,7 +980,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     const check = () => {
       authorize();
       if (!db.prepare(`SELECT 1 FROM files f JOIN libraries l ON l.id=f.library_id AND l.enabled=1
-        WHERE f.id=? AND f.size=? AND f.modified_at=? AND f.playability='transcode' AND f.missing_at_ms IS NULL`).get(id, row.size, row.modified_at) || !readSettings(db).transcode.enabled) fail(404, 'NOT_FOUND', '媒体不可访问');
+        WHERE f.id=? AND f.size=? AND f.modified_at=? AND f.cache_generation=? AND f.playability='transcode' AND f.missing_at_ms IS NULL`).get(id, row.size, row.modified_at, row.cache_generation) || !readSettings(db).transcode.enabled) fail(404, 'NOT_FOUND', '媒体不可访问');
     };
     check();
     const principal = digest('share:media');

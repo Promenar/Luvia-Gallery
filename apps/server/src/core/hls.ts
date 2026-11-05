@@ -7,7 +7,7 @@ import type { MediaSource } from './media-cache.ts';
 export type HlsSession = { id: string; media_id: string; principal_hash: string; source_size: number; source_modified: number;
   job_id: string | null; generation: string | null; state: string; last_access_at: number };
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
-export const hlsId = (source: MediaSource, principal: string) => hash(JSON.stringify([source.id, source.size, source.modified_at, principal]));
+export const hlsId = (source: MediaSource, principal: string) => hash(JSON.stringify(source.cache_generation ? [source.id, source.size, source.modified_at, principal, source.cache_generation] : [source.id, source.size, source.modified_at, principal]));
 export const hlsCacheKey = (session: string, generation: string, name: string) => hash(JSON.stringify([session, generation, name]));
 export function hlsDirectory(cacheDir: string, session: string, generation: string): string {
   if (!/^[a-f0-9]{64}$/.test(session) || !/^[a-f0-9]{32}$/.test(generation)) throw new Error('HLS 缓存标识无效');

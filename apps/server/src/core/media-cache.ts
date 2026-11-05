@@ -3,12 +3,12 @@ import path from 'node:path';
 import type Database from 'better-sqlite3';
 import { publishJob } from './job-view.ts';
 
-export type MediaSource = { id: string; size: number; modified_at: number };
+export type MediaSource = { id: string; size: number; modified_at: number; cache_generation?: number };
 export type Variant = { kind: 'thumb'; size: 's' | 'm' | 'l' } | { kind: 'display' } | { kind: 'dimensions' } | { kind: 'preview' } | { kind: 'tile'; level: number; col: number; row: number };
-export type MediaTask = { mediaId: string; sourceSize: number; sourceModified: number; variant: Variant };
+export type MediaTask = { mediaId: string; sourceSize: number; sourceModified: number; sourceGeneration?: number; variant: Variant };
 const digest = (value: string) => createHash('sha256').update(value).digest('hex');
 export function cacheKey(source: MediaSource, variant: Variant): string {
-  return digest(JSON.stringify([source.id, source.size, source.modified_at, variant]));
+  return digest(JSON.stringify(source.cache_generation ? [source.id, source.size, source.modified_at, variant, source.cache_generation] : [source.id, source.size, source.modified_at, variant]));
 }
 export function cachePath(cacheDir: string, source: MediaSource, variant: Variant): string {
   const key = cacheKey(source, variant);
@@ -18,7 +18,7 @@ export function enqueueMediaTask(db: Database.Database, source: MediaSource, var
   const key = `media:${cacheKey(source, variant)}`;
   return db.transaction(() => {
     const id = randomUUID();
-    const payload: MediaTask = { mediaId: source.id, sourceSize: source.size, sourceModified: source.modified_at, variant };
+    const payload: MediaTask = { mediaId: source.id, sourceSize: source.size, sourceModified: source.modified_at, sourceGeneration: source.cache_generation ?? 0, variant };
     const result = db.prepare("INSERT OR IGNORE INTO jobs(id,type,label,status,trigger,payload,created_at,dedupe_key,media_background) VALUES (?,?,?,'queued','system',?,unixepoch(),?,?)")
       .run(id, variant.kind === 'preview' ? 'previews' : 'thumbnails', variant.kind === 'preview' ? '生成视频预览' : '生成媒体缓存', JSON.stringify(payload), key, options.waiter ? 0 : 1);
     const job = result.changes ? id : (db.prepare("SELECT id FROM jobs WHERE dedupe_key=? AND status IN ('queued','running','paused')").get(key) as { id: string }).id;
