@@ -27,7 +27,8 @@ dist-ssr
 # Luvia Gallery Data
 data/
 cache/
-media/
+# 只忽略仓库根的媒体目录；不加 / 会连带忽略源码中的 media 目录（如 apps/web/src/components/media）
+/media/
 thumbs/
 lumina-config.json
 media_test/
