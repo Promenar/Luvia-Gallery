@@ -24,6 +24,23 @@ test('worker 领取扫描作业，保存结果并发出库变化事件', async (
   } finally { db.close(); await rm(root, { recursive: true, force: true }); }
 });
 
+test('只在设置允许时把新挂载建库并排队扫描', async () => {
+  const module = await import('../src/worker/discover.ts').catch(() => null);
+  assert.ok(module, '挂载发现模块尚未实现');
+  const root = await mkdtemp(path.join(tmpdir(), 'luvia-discovery-'));
+  const db = openDatabase(':memory:');
+  const mount = { containerPath: root, hostPath: '/volume/photos', kind: 'candidate' as const, libraryId: null, readOnly: true, mediaEstimate: null };
+  try {
+    assert.equal(await module.discoverNewMounts(db, [mount], []), 0);
+    db.prepare("INSERT INTO settings(key,value) VALUES('admin.settings',?)").run(JSON.stringify({ libraries: { autoEnableNewMounts: true } }));
+    assert.equal(await module.discoverNewMounts(db, [mount], []), 1);
+    assert.equal(await module.discoverNewMounts(db, [mount], []), 0);
+    const library = db.prepare('SELECT root,host_root,host_root_source FROM libraries').get() as { root: string; host_root: string; host_root_source: string };
+    assert.deepEqual(library, { root, host_root: '/volume/photos', host_root_source: 'auto' });
+    assert.equal((db.prepare("SELECT count(*) AS n FROM jobs WHERE type='scan' AND status='queued'").get() as { n: number }).n, 1);
+  } finally { db.close(); await rm(root, { recursive: true, force: true }); }
+});
+
 test('尚未支持的作业类型返回失败状态', async () => {
   const module = await import('../src/worker/runner.ts').catch(() => null);
   assert.ok(module, 'worker 执行器尚未实现');
