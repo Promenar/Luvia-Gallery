@@ -34,6 +34,7 @@ import { detectMounts } from '../core/mounts.ts';
 import type { Mount } from '../core/mounts.ts';
 import { readSettings, writeSettings } from '../core/settings.ts';
 import { cacheKey, cachePath, enqueueMediaTask, releaseMediaWaiter } from '../core/media-cache.ts';
+import { listLibraryChanges } from '../core/library-changes.ts';
 import type { Variant } from '../core/media-cache.ts';
 
 type UserRow = {
@@ -1248,6 +1249,12 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     // 实时监控尚未接入：如实报告为关闭，接入后由监控模块提供真实状态
     watch: { mode: 'off' as const, pollIntervalSec: 300, state: 'off' as const, watchedDirs: null, lastEventAt: null, lastReconcileAt: null, degradedReason: null } });
   register('listLibraries', async () => ({ libraries: (db.prepare(`${librarySql} ORDER BY l.name COLLATE NOCASE,l.id`).all() as LibraryRow[]).map(libraryOut) }));
+  register('libraryChanges', async (req) => {
+    const { id } = req.params as { id: string };
+    if (!db.prepare('SELECT 1 FROM libraries WHERE id=?').get(id)) fail(404, 'NOT_FOUND', '媒体库不存在');
+    const { limit } = endpoints.libraryChanges.query.parse(req.query);
+    return { changes: listLibraryChanges(db, id, limit) };
+  });
   register('createLibrary', async (_req, _reply, body) => {
     const resolved = await findRoot(body.root);
     if (db.prepare('SELECT 1 FROM libraries WHERE root=?').get(resolved.root)) fail(409, 'CONFLICT', '媒体库已经存在');
