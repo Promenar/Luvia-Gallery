@@ -30,6 +30,7 @@ export function writeSettings(db: Database.Database, patch: Partial<Settings>): 
     save.run('admin.settings', JSON.stringify(next));
     save.run('siteName', JSON.stringify(next.siteName));
     save.run('folders.exposeHostPaths', JSON.stringify(next.folders.exposeHostPaths));
+    if (next.scan.mode !== current.scan.mode || next.scan.intervalMinutes !== current.scan.intervalMinutes) db.prepare("DELETE FROM settings WHERE key='scan.scheduler'").run();
     return next;
   }).immediate();
 }
