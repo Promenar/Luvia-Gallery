@@ -297,11 +297,32 @@ const schemaV23 = `
   ALTER TABLE folders ADD COLUMN dev TEXT;
   ALTER TABLE folders ADD COLUMN ino TEXT;
   ALTER TABLE folders ADD COLUMN mtime_ms REAL;
-  CREATE INDEX files_missing ON files(library_id,missing_at_ms) WHERE missing_at_ms IS NOT NULL;
-  CREATE INDEX files_identity ON files(library_id,dev,ino) WHERE dev IS NOT NULL AND ino IS NOT NULL;
-  CREATE INDEX files_head ON files(library_id,size,mtime_ms,head_hash) WHERE head_hash IS NOT NULL;
-  CREATE INDEX folders_missing ON folders(library_id,missing_at_ms) WHERE missing_at_ms IS NOT NULL;
-  CREATE INDEX folders_identity ON folders(library_id,dev,ino) WHERE dev IS NOT NULL AND ino IS NOT NULL;
+  CREATE TABLE file_watch_index (file_id TEXT PRIMARY KEY,library_id TEXT NOT NULL,missing_at_ms INTEGER,
+    dev TEXT,ino TEXT,size INTEGER NOT NULL,mtime_ms REAL,head_hash TEXT);
+  CREATE INDEX files_missing ON file_watch_index(library_id,missing_at_ms) WHERE missing_at_ms IS NOT NULL;
+  CREATE INDEX files_identity ON file_watch_index(library_id,dev,ino) WHERE dev IS NOT NULL AND ino IS NOT NULL;
+  CREATE INDEX files_head ON file_watch_index(library_id,size,mtime_ms,head_hash) WHERE head_hash IS NOT NULL;
+  CREATE TABLE folder_watch_index (folder_path TEXT PRIMARY KEY,library_id TEXT NOT NULL,missing_at_ms INTEGER,dev TEXT,ino TEXT);
+  CREATE INDEX folders_missing ON folder_watch_index(library_id,missing_at_ms) WHERE missing_at_ms IS NOT NULL;
+  CREATE INDEX folders_identity ON folder_watch_index(library_id,dev,ino) WHERE dev IS NOT NULL AND ino IS NOT NULL;
+  CREATE TRIGGER files_watch_insert AFTER INSERT ON files WHEN new.missing_at_ms IS NOT NULL OR (new.dev IS NOT NULL AND new.ino IS NOT NULL) OR new.head_hash IS NOT NULL BEGIN
+    INSERT INTO file_watch_index VALUES(new.id,new.library_id,new.missing_at_ms,new.dev,new.ino,new.size,new.mtime_ms,new.head_hash);
+  END;
+  CREATE TRIGGER files_watch_update AFTER UPDATE OF id,library_id,missing_at_ms,dev,ino,size,mtime_ms,head_hash ON files BEGIN
+    DELETE FROM file_watch_index WHERE file_id=old.id;
+    INSERT INTO file_watch_index SELECT new.id,new.library_id,new.missing_at_ms,new.dev,new.ino,new.size,new.mtime_ms,new.head_hash
+      WHERE new.missing_at_ms IS NOT NULL OR (new.dev IS NOT NULL AND new.ino IS NOT NULL) OR new.head_hash IS NOT NULL;
+  END;
+  CREATE TRIGGER files_watch_delete AFTER DELETE ON files BEGIN DELETE FROM file_watch_index WHERE file_id=old.id; END;
+  CREATE TRIGGER folders_watch_insert AFTER INSERT ON folders WHEN new.missing_at_ms IS NOT NULL OR (new.dev IS NOT NULL AND new.ino IS NOT NULL) BEGIN
+    INSERT INTO folder_watch_index VALUES(new.path,new.library_id,new.missing_at_ms,new.dev,new.ino);
+  END;
+  CREATE TRIGGER folders_watch_update AFTER UPDATE OF path,library_id,missing_at_ms,dev,ino ON folders BEGIN
+    DELETE FROM folder_watch_index WHERE folder_path=old.path;
+    INSERT INTO folder_watch_index SELECT new.path,new.library_id,new.missing_at_ms,new.dev,new.ino
+      WHERE new.missing_at_ms IS NOT NULL OR (new.dev IS NOT NULL AND new.ino IS NOT NULL);
+  END;
+  CREATE TRIGGER folders_watch_delete AFTER DELETE ON folders BEGIN DELETE FROM folder_watch_index WHERE folder_path=old.path; END;
 `;
 const schemaV24 = `
   CREATE TABLE library_changes (
@@ -328,6 +349,9 @@ const schemaV26 = `
     PRIMARY KEY(library_id,marker,relative_path)
   );
 `;
+const schemaV27 = `
+  CREATE TABLE cache_gc (cache_key TEXT PRIMARY KEY,relative_path TEXT NOT NULL);
+`;
 
 export function openDatabase(filename: string, options: { readonly?: boolean; bootstrapLegacy?: boolean } = {}): Database.Database {
   const readonly = options.readonly ?? false;
@@ -342,7 +366,7 @@ export function openDatabase(filename: string, options: { readonly?: boolean; bo
       db.pragma('synchronous = NORMAL');
       db.transaction(() => {
         const version = db.pragma('user_version', { simple: true });
-        if (typeof version !== 'number' || version < 0 || version > 26) throw new Error(`不支持的数据库版本: ${version}`);
+        if (typeof version !== 'number' || version < 0 || version > 27) throw new Error(`不支持的数据库版本: ${version}`);
         if (version === 0) {
           db.exec(schemaV1);
           db.pragma('user_version = 1');
@@ -447,6 +471,10 @@ export function openDatabase(filename: string, options: { readonly?: boolean; bo
           db.exec(schemaV26);
           db.pragma('user_version = 26');
         }
+        if (version <= 26) {
+          db.exec(schemaV27);
+          db.pragma('user_version = 27');
+        }
         const timezone = process.env.TZ ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
         const previous = db.prepare("SELECT value FROM settings WHERE key='timeline.timezone'").get() as { value: string } | undefined;
         if (previous && previous.value !== timezone) {
@@ -459,7 +487,7 @@ export function openDatabase(filename: string, options: { readonly?: boolean; bo
           db.prepare("INSERT INTO jobs(id,type,label,status,trigger,created_at) VALUES (?,'import_legacy','导入旧版数据','queued','system',unixepoch())").run(randomUUID());
         }
       }).immediate();
-    } else if (db.pragma('user_version', { simple: true }) !== 26) {
+    } else if (db.pragma('user_version', { simple: true }) !== 27) {
       throw new Error('数据库尚未就绪或版本不受支持');
     }
     return db;

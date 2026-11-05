@@ -2,11 +2,38 @@ import type Database from 'better-sqlite3';
 import { realpath, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { replaceEvictedThumbnailCovers } from '../core/folder-covers.ts';
+import { withMediaGenerationLock } from './media-lock.ts';
 
 type Entry = { cache_key: string; relative_path: string; bytes: number; last_access_at: number; media_id: string | null; variant: string | null };
 function within(root: string, target: string): boolean {
   const relative = path.relative(root, target);
   return relative !== '' && relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+}
+export async function cleanupDeletedMediaCache(db: Database.Database, cacheDir: string, options: { owner: string; signal?: AbortSignal; assertLease?: () => void }): Promise<void> {
+  let cursor = ''; const root = path.resolve(cacheDir);
+  while (true) {
+    options.signal?.throwIfAborted(); options.assertLease?.();
+    const entries = db.prepare('SELECT cache_key,relative_path FROM cache_gc WHERE cache_key>? ORDER BY cache_key LIMIT 256').all(cursor) as { cache_key: string; relative_path: string }[];
+    if (!entries.length) return;
+    for (const entry of entries) {
+      cursor = entry.cache_key;
+      await withMediaGenerationLock(db, options.owner, `media:${entry.cache_key}`, async (signal) => {
+        const stillUsed = db.prepare('SELECT 1 FROM cache_entries WHERE cache_key=? OR relative_path=?').get(entry.cache_key, entry.relative_path);
+        if (!stillUsed) {
+          const filename = path.resolve(root, entry.relative_path);
+          if (!within(root, filename)) return;
+          let safe = false;
+          try { const actualRoot = await realpath(root); const parent = await realpath(path.dirname(filename)); safe = parent === actualRoot || within(actualRoot, parent); } catch { return; }
+          if (!safe) return;
+          try { await unlink(filename); }
+          catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return; }
+        }
+        signal.throwIfAborted(); options.assertLease?.();
+        db.prepare('DELETE FROM cache_gc WHERE cache_key=? AND relative_path=?').run(entry.cache_key, entry.relative_path);
+      }, options);
+    }
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
 }
 export async function pruneCache(db: Database.Database, cacheDir: string, limitBytes: number, assertLease: () => void = () => {}): Promise<{ removed: number; bytes: number }> {
   if (!Number.isFinite(limitBytes) || limitBytes < 0) throw new Error('缓存上限无效');
