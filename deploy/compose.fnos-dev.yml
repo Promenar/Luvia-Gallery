@@ -41,7 +41,10 @@ services:
   worker:
     image: ${LUVIA_DEV_IMAGE:-promenarleng/luvia-gallery:v2-candidate}
     pull_policy: never
-    environment: *dev-env
+    environment:
+      <<: *dev-env
+      # 默认只注入 compute/utility，NVENC 需要 video 能力才会挂载 libnvidia-encode
+      NVIDIA_DRIVER_CAPABILITIES: compute,video,utility
     # YAML 不允许在别名上加 !override，两个服务各写一份完整列表
     volumes: !override
       - "${LUVIA_DEV_DATA:?需要设置 LUVIA_DEV_DATA}:/data"
