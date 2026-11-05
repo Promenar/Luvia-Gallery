@@ -8,10 +8,12 @@ import { statFields } from '../watch/file-info.ts';
 import { readSettings } from '../core/settings.ts';
 import { cleanupDeletedMediaCache } from './cache-prune.ts';
 import { moveDirectoryPaths } from '../core/directory-move.ts';
+import { readRootMountIdentity } from '../watch/root-guard.ts';
 
 type Options = {
   allowedRoots: string[]; openDir?: typeof opendir; signal?: AbortSignal;
   batchSize?: number; statConcurrency?: number; owner?: string; jobId?: string; jobLeaseToken?: string; clock?: () => number; cacheDir?: string;
+  mount?: (root: string) => Promise<string | null>;
 };
 type Candidate = { relative: string; size: number; mtime: number; mtimeMs: number; dev: string; ino: string; movedId: string | null; fromPath?: string };
 type ScanResult = { added: number; removed: number; errors: number };
@@ -77,6 +79,15 @@ async function scanWithLock(db: Database.Database, library: { id: string; root: 
   const concurrency = Math.max(1, Math.min(32, options.statConcurrency ?? 8));
   const root = await realpath(library.root);
   const rootIdentity = await stat(root, { bigint: true });
+  const checkMount = async () => {
+    const current = db.prepare('SELECT l.root,s.mount_root,s.mount_identity,s.mount_attempted FROM libraries l LEFT JOIN library_watch_state s ON s.library_id=l.id WHERE l.id=?').get(library.id) as { root: string; mount_root: string | null; mount_identity: string | null; mount_attempted: number | null } | undefined;
+    if (!current || current.root !== library.root) return false;
+    if (current.mount_root === null) {
+      return !current.mount_attempted;
+    }
+    return current.mount_root === library.root && await (options.mount ?? readRootMountIdentity)(library.root) === current.mount_identity;
+  };
+  if (!(await checkMount())) throw new Error('媒体库挂载身份不符或尚未确认');
   const allowedRoots = await Promise.all(options.allowedRoots.map((allowed) => realpath(allowed)));
   if (!allowedRoots.some((allowed) => within(allowed, root))) throw new Error('扫描路径不在允许的挂载根目录内');
   const libraryRow = db.prepare('SELECT name,exclude FROM libraries WHERE id=?').get(library.id) as { name: string; exclude: string } | undefined;
@@ -347,7 +358,7 @@ async function scanWithLock(db: Database.Database, library: { id: string; root: 
   const rootAvailable = async () => {
     try {
       const finalRoot = await realpath(library.root); const finalIdentity = await stat(finalRoot, { bigint: true });
-      return finalRoot === root && finalIdentity.dev === rootIdentity.dev && finalIdentity.ino === rootIdentity.ino;
+      return finalRoot === root && finalIdentity.dev === rootIdentity.dev && finalIdentity.ino === rootIdentity.ino && await checkMount();
     } catch { return false; }
   };
   if (result.errors === 0 && !(await rootAvailable())) result.errors++;
