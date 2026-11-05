@@ -124,9 +124,13 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     if (legacy && options.legacyJwtSecret) {
       try {
         const decoded = jwt.verify(value, options.legacyJwtSecret, { algorithms: ['HS256'] });
-        if (typeof decoded !== 'object' || typeof decoded.username !== 'string') return undefined;
-        const user = findUser.get(decoded.username) as UserRow | undefined;
-        return user ? { user, kind: 'legacy', scope: decoded.isWallpaper === true ? 'wallpaper' : 'read' } : undefined;
+        if (typeof decoded !== 'object' || typeof decoded.username !== 'string' || decoded.isWallpaper === true) return undefined;
+        const user = typeof decoded.sub === 'string'
+          ? db.prepare(`SELECT u.* FROM users u JOIN legacy_jwt_sessions s ON s.user_id=u.id
+              WHERE s.token_hash=? AND s.expires_at>? AND u.id=? AND u.username=?`).get(digest(value), now(), decoded.sub, decoded.username) as UserRow | undefined
+          : db.prepare(`SELECT u.* FROM users u JOIN legacy_jwt_users legacy ON legacy.user_id=u.id
+              WHERE u.username=? AND NOT EXISTS(SELECT 1 FROM legacy_jwt_revoked_users r WHERE r.username=u.username)`).get(decoded.username) as UserRow | undefined;
+        return user ? { user, kind: 'legacy', scope: 'read', tokenHash: digest(value) } : undefined;
       } catch { return undefined; }
     }
     return undefined;
@@ -145,6 +149,11 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     const row = db.prepare(`SELECT u.* FROM sessions s JOIN users u ON u.id=s.user_id
       WHERE s.token_hash=? AND s.expires_at>?`).get(sessionHash, now()) as UserRow | undefined;
     return row ? { user: row, kind: 'session', sessionHash } : undefined;
+  }
+  function authenticateRequest(req: FastifyRequest): Identity | undefined {
+    const url = new URL(req.raw.url ?? '/', 'http://localhost');
+    const queryTokens = isLegacyPath(url.pathname) ? url.searchParams.getAll('token') : [];
+    return authenticate(req) ?? (queryTokens.length ? tokenIdentity(queryTokens.at(-1)!, true) : undefined);
   }
   function requireUser(req: FastifyRequest): Identity {
     return identities.get(req) ?? fail(401, 'UNAUTHORIZED', '请先登录');
@@ -168,6 +177,11 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
       if (attempts.size > 10000) attempts.delete(attempts.keys().next().value!);
     }
   }
+  function revokeLegacyUser(id: string): void {
+    db.prepare('INSERT OR IGNORE INTO legacy_jwt_revoked_users(username) SELECT username FROM users WHERE id=?').run(id);
+    db.prepare('DELETE FROM legacy_jwt_users WHERE user_id=?').run(id);
+    db.prepare('DELETE FROM legacy_jwt_sessions WHERE user_id=?').run(id);
+  }
   app.setErrorHandler((err, _req, reply) => {
     if (err instanceof ZodError) return reply.code(400).send({ error: { code: 'VALIDATION', message: '请求参数无效' } });
     if (err instanceof HttpError) return reply.code(err.statusCode).send({ error: { code: err.code, message: err.message } });
@@ -178,9 +192,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     if (url.pathname.startsWith('/api/v2/') && [...url.searchParams.keys()].some((key) => key.toLowerCase() === 'token')) {
       fail(400, 'VALIDATION', '不允许在 URL 中传递令牌');
     }
-    const isLegacy = isLegacyPath(url.pathname);
-    const queryTokens = isLegacy ? url.searchParams.getAll('token') : [];
-    const identity = authenticate(req) ?? (queryTokens.length ? tokenIdentity(queryTokens.at(-1)!, true) : undefined);
+    const identity = authenticateRequest(req);
     if (url.pathname.startsWith('/api/v2/') && req.method !== 'GET' && identity?.kind === 'session' && req.headers[CSRF_HEADER.toLowerCase()] !== '1') {
       fail(403, 'FORBIDDEN', '请求缺少安全标头');
     }
@@ -259,6 +271,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
       const update = db.prepare('UPDATE users SET password_hash=? WHERE id=? AND password_hash=?').run(next, identity.user.id, identity.user.password_hash);
       if (!update.changes) fail(409, 'CONFLICT', '账户状态已经变化');
       db.prepare('DELETE FROM sessions WHERE user_id=?').run(identity.user.id);
+      revokeLegacyUser(identity.user.id);
     }).immediate();
   });
   register('listTokens', async (req) => {
@@ -342,7 +355,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
       user.allowed_paths = role === 'admin' ? null : (allowedPaths === undefined ? user.allowed_paths : allowedPaths);
       user.password_hash = passwordHash ?? user.password_hash;
       db.prepare('UPDATE users SET role=?, allowed_paths=?, password_hash=? WHERE id=?').run(user.role, user.allowed_paths, user.password_hash, id);
-      if (passwordHash !== undefined) db.prepare('DELETE FROM sessions WHERE user_id=?').run(id);
+      if (passwordHash !== undefined) { db.prepare('DELETE FROM sessions WHERE user_id=?').run(id); revokeLegacyUser(id); }
       return userOut(user);
     }).immediate();
   });
@@ -531,7 +544,11 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     catch { return fail(404, 'NOT_FOUND', '媒体不可访问'); }
     return { row, filename };
   }
-  async function binaryMedia(req: FastifyRequest, id: string) { return binaryMediaFor(mediaContext(req), id); }
+  async function binaryMedia(req: FastifyRequest, id: string) {
+    const result = await binaryMediaFor(mediaContext(req), id);
+    mediaAuthorization(req, result.row)();
+    return result;
+  }
   const cacheDir = options.cacheDir ?? path.resolve(process.env.CACHE_DIR ?? 'cache');
   const exists = async (filename: string) => { try { await access(filename); return true; } catch { return false; } };
   async function cachedMedia(req: FastifyRequest, reply: FastifyReply, row: BinaryRow, variant: Variant, wait: boolean, authorize?: () => unknown) {
@@ -587,17 +604,17 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
         .run(row.id, row.size, row.modified_at);
       if (changed.changes) noteThumbnail(db, row.id);
     }).immediate();
-    return sendFile(req, reply, filename, { mime: 'image/webp', name: row.name, etagKey: key });
+    return sendFile(req, reply, filename, { mime: 'image/webp', name: row.name, etagKey: key, authorize });
   }
   function identityPrincipal(identity: Identity): string {
-    const key = identity.kind === 'session' ? identity.sessionHash : identity.kind === 'token' ? identity.tokenHash : undefined;
+    const key = identity.kind === 'session' ? identity.sessionHash : identity.tokenHash;
     if (!key) return fail(401, 'UNAUTHORIZED', '需要有效会话或令牌');
     return digest(`${identity.kind}:${key}`);
   }
   function mediaAuthorization(req: FastifyRequest, row: BinaryRow): () => void {
     const principal = identityPrincipal(requireUser(req));
     return () => {
-      const current = authenticate(req) ?? fail(401, 'UNAUTHORIZED', '会话已失效');
+      const current = authenticateRequest(req) ?? fail(401, 'UNAUTHORIZED', '会话已失效');
       if (identityPrincipal(current) !== principal || !pathAllowed(row.folder, userOut(current.user).allowedPaths) ||
         !db.prepare(`SELECT 1 FROM files f JOIN libraries l ON l.id=f.library_id AND l.enabled=1
           WHERE f.id=? AND f.folder=? AND f.size=? AND f.modified_at=?`).get(row.id, row.folder, row.size, row.modified_at)) {
@@ -639,7 +656,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
         .run(hlsCacheKey(id, generation, resource), path.relative(path.resolve(cacheDir), filename), info.size, touched, row.id, row.size, row.modified_at, id);
     }).immediate();
     return sendFile(req, reply, filename, { mime: resource === 'index.m3u8' ? 'application/vnd.apple.mpegurl' : 'video/mp2t', name: resource,
-      etagKey: hlsCacheKey(id, generation, resource) });
+      etagKey: hlsCacheKey(id, generation, resource), authorize });
   }
   app.get('/api/v2/media/:id/hls/:resource', async (req, reply) => {
     const { id, resource } = req.params as { id: string; resource: string };
@@ -674,7 +691,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
       const touched = Date.now();
       db.prepare('UPDATE cache_entries SET last_access_at=? WHERE cache_key=? AND last_access_at<?')
         .run(touched, cacheKey(row, variant), touched - 60_000);
-      return sendFile(req, reply, preview, { mime: 'video/mp4', name: row.name, etagKey: cacheKey(row, variant) });
+      return sendFile(req, reply, preview, { mime: 'video/mp4', name: row.name, etagKey: cacheKey(row, variant), authorize: mediaAuthorization(req, row) });
     }
     if (resource === 'tiles.dzi') {
       if (row.media_type !== 'image') return fail(404, 'NOT_FOUND', '媒体不支持深度缩放');
@@ -691,7 +708,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
         return cachedMedia(req, reply, row, { kind: 'display' }, false, mediaAuthorization(req, row));
     }
     const download = resource === 'original' && (req.query as { download?: string }).download === '1';
-    return sendFile(req, reply, filename, { mime: row.mime, name: row.name, download, etagKey: row.id });
+    return sendFile(req, reply, filename, { mime: row.mime, name: row.name, download, etagKey: row.id, authorize: mediaAuthorization(req, row) });
   });
   app.get('/api/v2/media/:id/tiles/:level/:tile', async (req, reply) => {
     const { id, level: rawLevel, tile } = req.params as { id: string; level: string; tile: string };
@@ -841,9 +858,9 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
       authorize();
       const touched = Date.now();
       db.prepare('UPDATE cache_entries SET last_access_at=? WHERE cache_key=? AND last_access_at<?').run(touched, cacheKey(row, variant), touched - 60_000);
-      return sendFile(req, reply, filename, { mime: 'video/mp4', name: row.name, etagKey: cacheKey(row, variant) });
+      return sendFile(req, reply, filename, { mime: 'video/mp4', name: row.name, etagKey: cacheKey(row, variant), authorize });
     }
-    return sendFile(req, reply, filename, { mime: row.mime, name: row.name, download: (req.query as { download?: string }).download === '1', etagKey: row.id });
+    return sendFile(req, reply, filename, { mime: row.mime, name: row.name, download: (req.query as { download?: string }).download === '1', etagKey: row.id, authorize });
   });
   app.get('/api/v2/public/shares/:token/media/:id/hls/:resource', async (req, reply) => {
     const { token, id, resource } = req.params as { token: string; id: string; resource: string };
@@ -988,12 +1005,13 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     const verified = await verifyPassword(body.password, user.password_hash);
     if (!verified.valid) return fail(401, 'UNAUTHORIZED', '用户名或密码错误');
     if (!options.legacyJwtSecret) return fail(503, 'INTERNAL', '旧客户端登录暂不可用');
-    if (verified.needsUpgrade) {
-      const replacement = await hashPassword(body.password);
+    const replacement = verified.needsUpgrade ? await hashPassword(body.password) : user.password_hash;
+    const token = jwt.sign({ username: user.username, role: user.role }, options.legacyJwtSecret, { algorithm: 'HS256', expiresIn: '7d', subject: user.id, jwtid: randomUUID() });
+    db.transaction(() => {
       const changed = db.prepare('UPDATE users SET password_hash=? WHERE id=? AND password_hash=?').run(replacement, user.id, user.password_hash);
-      if (!changed.changes) return fail(409, 'CONFLICT', '账户状态已经变化');
-    }
-    const token = jwt.sign({ username: user.username, role: user.role }, options.legacyJwtSecret, { algorithm: 'HS256', expiresIn: '7d' });
+      if (!changed.changes) fail(409, 'CONFLICT', '账户状态已经变化');
+      db.prepare('INSERT INTO legacy_jwt_sessions(token_hash,user_id,expires_at) VALUES (?,?,?)').run(digest(token), user.id, now() + 7 * 86400);
+    }).immediate();
     const allowedPaths = user.allowed_paths ? (JSON.parse(user.allowed_paths) as string[]).flatMap((value) => legacyAbsolute(value) ?? []) : [];
     return { token, user: { username: user.username, isAdmin: user.role === 'admin', allowedPaths } };
   });
@@ -1115,7 +1133,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     const legacyId = (req.params as { '*': string })['*'];
     const id = legacyMediaId(legacyId) ?? fail(404, 'NOT_FOUND', '媒体不存在');
     const { row, filename } = await binaryMedia(req, id);
-    return sendFile(req, reply, filename, { mime: row.mime, name: row.name, etagKey: row.id });
+    return sendFile(req, reply, filename, { mime: row.mime, name: row.name, etagKey: row.id, authorize: mediaAuthorization(req, row) });
   });
   app.get('/api/thumb/:id', async (req, reply) => {
     const legacyId = (req.params as { id: string }).id;
@@ -1123,8 +1141,8 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     const { row } = await binaryMedia(req, id);
     const hash = createHash('md5').update(legacyId).digest('hex');
     const previous = path.join(cacheDir, hash.slice(0, 2), hash.slice(2, 4), `${hash}.webp`);
-    if (await exists(previous)) return sendFile(req, reply, previous, { mime: 'image/webp', name: row.name, etagKey: hash });
-    return cachedMedia(req, reply, row, { kind: 'thumb', size: 'm' }, true);
+    if (await exists(previous)) return sendFile(req, reply, previous, { mime: 'image/webp', name: row.name, etagKey: hash, authorize: mediaAuthorization(req, row) });
+    return cachedMedia(req, reply, row, { kind: 'thumb', size: 'm' }, true, mediaAuthorization(req, row));
   });
   type LibraryRow = { id: string; name: string; root: string; enabled: number; status: string; scanning: number; last_scan_at: number | null; host_root: string | null; host_root_source: 'auto' | 'manual' | null; exclude: string; media_count: number };
   const librarySql = "SELECT l.*,COALESCE(f.media_count,0) AS media_count,EXISTS(SELECT 1 FROM scan_locks sl WHERE sl.library_id=l.id AND sl.lease_expires_at>unixepoch()) AS scanning FROM libraries l LEFT JOIN folders f ON f.path=l.id";

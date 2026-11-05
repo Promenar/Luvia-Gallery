@@ -253,6 +253,16 @@ const schemaV19 = `
   ALTER TABLE jobs ADD COLUMN lease_token TEXT;
   ALTER TABLE scan_locks ADD COLUMN lease_token TEXT;
 `;
+const schemaV20 = `
+  CREATE TABLE legacy_jwt_users (user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE);
+  CREATE TABLE legacy_jwt_sessions (token_hash TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,expires_at INTEGER NOT NULL);
+  CREATE INDEX legacy_jwt_sessions_user ON legacy_jwt_sessions(user_id);
+  CREATE TABLE legacy_jwt_revoked_users (username TEXT PRIMARY KEY);
+  INSERT INTO legacy_jwt_users(user_id) SELECT id FROM users WHERE id GLOB 'usr_*';
+  CREATE TRIGGER legacy_user_retire AFTER DELETE ON users BEGIN
+    INSERT OR IGNORE INTO legacy_jwt_revoked_users(username) VALUES(old.username);
+  END;
+`;
 
 export function openDatabase(filename: string, options: { readonly?: boolean; bootstrapLegacy?: boolean } = {}): Database.Database {
   const readonly = options.readonly ?? false;
@@ -267,7 +277,7 @@ export function openDatabase(filename: string, options: { readonly?: boolean; bo
       db.pragma('synchronous = NORMAL');
       db.transaction(() => {
         const version = db.pragma('user_version', { simple: true });
-        if (typeof version !== 'number' || version < 0 || version > 19) throw new Error(`不支持的数据库版本: ${version}`);
+        if (typeof version !== 'number' || version < 0 || version > 20) throw new Error(`不支持的数据库版本: ${version}`);
         if (version === 0) {
           db.exec(schemaV1);
           db.pragma('user_version = 1');
@@ -344,6 +354,10 @@ export function openDatabase(filename: string, options: { readonly?: boolean; bo
           db.exec(schemaV19);
           db.pragma('user_version = 19');
         }
+        if (version <= 19) {
+          db.exec(schemaV20);
+          db.pragma('user_version = 20');
+        }
         const timezone = process.env.TZ ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
         const previous = db.prepare("SELECT value FROM settings WHERE key='timeline.timezone'").get() as { value: string } | undefined;
         if (previous && previous.value !== timezone) {
@@ -356,7 +370,7 @@ export function openDatabase(filename: string, options: { readonly?: boolean; bo
           db.prepare("INSERT INTO jobs(id,type,label,status,trigger,created_at) VALUES (?,'import_legacy','导入旧版数据','queued','system',unixepoch())").run(randomUUID());
         }
       }).immediate();
-    } else if (db.pragma('user_version', { simple: true }) !== 19) {
+    } else if (db.pragma('user_version', { simple: true }) !== 20) {
       throw new Error('数据库尚未就绪或版本不受支持');
     }
     return db;
