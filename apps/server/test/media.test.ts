@@ -50,3 +50,31 @@ test('分页稳定、权限过滤、中文子串、区间分桶与随机浏览',
     assert.ok(randomItems.every((i) => i.folder === 'lib1/旅行'));
   } finally { await app.close(); db.close(); }
 });
+
+test('随机查询区分直接文件夹、收藏文件夹和排除列表', async () => {
+  const db = openDatabase(':memory:');
+  const app = await createApp({ db, legacyPending: false });
+  try {
+    const setup = await app.inject({ method: 'POST', url: '/api/v2/auth/setup', headers: { 'x-luvia-request': '1' }, payload: { username: 'admin', password: 'test password' } });
+    const cookie = (setup.headers['set-cookie'] as string).split(';')[0]!;
+    const userId = setup.json().user.id as string;
+    db.prepare("INSERT INTO libraries (id,name,root) VALUES ('lib','测试','/test')").run();
+    const add = db.prepare(`INSERT INTO files (id,library_id,relative_path,folder,name,mime,media_type,size,modified_at,taken_at,taken_at_source) VALUES (?,'lib',?,?,?,'image/jpeg','image',1,1,1,'mtime')`);
+    add.run('a', 'parent/a.jpg', 'lib/parent', 'a.jpg');
+    add.run('b', 'parent/sub/b.jpg', 'lib/parent/sub', 'b.jpg');
+    add.run('c', 'other/c.jpg', 'lib/other', 'c.jpg');
+    db.prepare("INSERT INTO favorites (user_id,item_id,item_type) VALUES (?, 'a', 'file'), (?, 'lib/parent/sub', 'folder')").run(userId, userId);
+    const ids = async (query: string) => {
+      const res = await app.inject({ method: 'GET', url: `/api/v2/media/random?count=10&${query}`, headers: { cookie } });
+      assert.equal(res.statusCode, 200);
+      return MediaItems.parse(res.json()).items.map((value) => value.id).sort();
+    };
+    assert.deepEqual(await ids('folder=lib%2Fparent'), ['a']);
+    assert.deepEqual(await ids('favorite=true'), ['a']);
+    assert.deepEqual(await ids('favorite=true&favoriteFolders=true'), ['a', 'b']);
+    assert.deepEqual(await ids('favorite=true&favoriteFolders=true&exclude=a'), ['b']);
+    const tooMany = Array.from({ length: 501 }, (_, i) => `id${i}`).join(',');
+    const rejected = await app.inject({ method: 'GET', url: `/api/v2/media/random?exclude=${tooMany}`, headers: { cookie } });
+    assert.equal(rejected.statusCode, 400);
+  } finally { await app.close(); db.close(); }
+});
