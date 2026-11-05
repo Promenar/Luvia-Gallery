@@ -1,5 +1,6 @@
 import type Database from 'better-sqlite3';
 import { createHash, randomUUID } from 'node:crypto';
+import { setTimeout as delay } from 'node:timers/promises';
 import { JobQueue } from '../core/jobs.ts';
 import { publishJob } from '../core/job-view.ts';
 import { scanLibrary } from './scan.ts';
@@ -73,7 +74,16 @@ export async function runNextJob(db: Database.Database, options: WorkerOptions):
       } else {
         const library = db.prepare('SELECT id,root FROM libraries WHERE id=? AND enabled=1').get(payload.libraryId) as { id: string; root: string } | undefined;
         if (!library) throw new Error('媒体库不可用');
-        const result = await scanLibrary(db, library, { allowedRoots: options.allowedRoots, owner: options.owner, jobId: job.id, signal: controller.signal });
+        let result;
+        try { result = await scanLibrary(db, library, { allowedRoots: options.allowedRoots, owner: options.owner, jobId: job.id, jobLeaseToken: job.leaseToken, signal: controller.signal }); }
+        catch (error) {
+          if (error instanceof Error && error.message === '媒体库正在扫描' && queue.active(job.id)) {
+            await delay(500, undefined, { signal: controller.signal });
+            if (!queue.release(job.id)) throw new Error('作业租约已失效');
+            return true;
+          }
+          throw error;
+        }
         if (result.errors) {
           db.transaction(() => {
             assertLease();

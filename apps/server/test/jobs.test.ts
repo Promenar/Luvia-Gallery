@@ -45,3 +45,27 @@ test('两个实例竞争同一排队作业时最多一个实例领取', async ()
     assert.equal(claims.filter(Boolean).length, 1);
   } finally { db.close(); }
 });
+
+test('同一 worker 的暂停恢复与取消重试不会让旧执行继续写入', async () => {
+  const { JobQueue } = await import('../src/core/jobs.ts'); const db = openDatabase(':memory:');
+  try {
+    db.prepare("INSERT INTO jobs(id,type,label,status,trigger,created_at) VALUES ('job','scan','扫描','queued','manual',100)").run();
+    const previous = new JobQueue(db, 'same-worker'); const resumed = new JobQueue(db, 'same-worker');
+    assert.equal(previous.claim(100)?.id, 'job');
+    db.prepare("UPDATE jobs SET status='paused',owner=NULL,lease_expires_at=NULL WHERE id='job'").run();
+    db.prepare("UPDATE jobs SET status='queued' WHERE id='job'").run();
+    assert.equal(resumed.claim(101)?.id, 'job');
+    assert.equal(previous.active('job', 102), false);
+    assert.equal(previous.renew('job', 102), false);
+    assert.equal(previous.saveCheckpoint('job', { stale: 1 }, 102), false);
+    assert.equal(previous.finish('job', { stale: 1 }, 102), false);
+    assert.equal(previous.fail('job', '失效', 102), false);
+    assert.equal(resumed.active('job', 102), true);
+    db.prepare("UPDATE jobs SET status='cancelled',owner=NULL,lease_expires_at=NULL WHERE id='job'").run();
+    db.prepare("UPDATE jobs SET status='queued' WHERE id='job'").run();
+    const retried = new JobQueue(db, 'same-worker'); assert.equal(retried.claim(103)?.id, 'job');
+    assert.equal(resumed.active('job', 104), false);
+    assert.equal(resumed.release('job', 104), false);
+    assert.equal(retried.finish('job', { ok: 1 }, 104), true);
+  } finally { db.close(); }
+});

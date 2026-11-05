@@ -137,7 +137,7 @@ export async function cleanupHls(db: Database.Database, cacheDir: string, at = D
       const job = current.job_id ? db.prepare('SELECT status,lease_expires_at FROM jobs WHERE id=?').get(current.job_id) as { status: string; lease_expires_at: number | null } | undefined : undefined;
       if (job?.status === 'running' && (job.lease_expires_at ?? 0) > Math.floor(at / 1000)) return false;
       if (job && ['queued', 'paused', 'running'].includes(job.status)) {
-        db.prepare("UPDATE jobs SET status='cancelled',owner=NULL,heartbeat_at=NULL,lease_expires_at=NULL,finished_at=? WHERE id=?").run(Math.floor(at / 1000), current.job_id);
+        db.prepare("UPDATE jobs SET status='cancelled',owner=NULL,heartbeat_at=NULL,lease_expires_at=NULL,lease_token=NULL,finished_at=? WHERE id=?").run(Math.floor(at / 1000), current.job_id);
         publishJob(db, current.job_id!);
       }
       db.prepare('DELETE FROM hls_sessions WHERE id=?').run(current.id);

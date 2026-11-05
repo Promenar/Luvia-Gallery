@@ -7,7 +7,7 @@ import { mediaId, virtualPath } from '../core/paths.ts';
 
 type Options = {
   allowedRoots: string[]; openDir?: typeof opendir; signal?: AbortSignal;
-  batchSize?: number; statConcurrency?: number; owner?: string; jobId?: string; clock?: () => number;
+  batchSize?: number; statConcurrency?: number; owner?: string; jobId?: string; jobLeaseToken?: string; clock?: () => number;
 };
 type Candidate = { relative: string; size: number; mtime: number };
 type ScanResult = { added: number; removed: number; errors: number };
@@ -29,26 +29,30 @@ class LeaseLost extends Error {
 
 export async function scanLibrary(db: Database.Database, library: { id: string; root: string }, options: Options): Promise<ScanResult> {
   const owner = options.owner ?? randomUUID();
+  const lockToken = randomUUID();
   const clock = options.clock ?? (() => Math.floor(Date.now() / 1000));
   const at = clock();
-  const locked = db.prepare(`INSERT INTO scan_locks(library_id,owner,acquired_at,heartbeat_at,lease_expires_at)
-    VALUES (?,?,?,?,?) ON CONFLICT(library_id) DO UPDATE SET owner=excluded.owner, acquired_at=excluded.acquired_at,
-    heartbeat_at=excluded.heartbeat_at, lease_expires_at=excluded.lease_expires_at
-    WHERE scan_locks.lease_expires_at<=?`).run(library.id, owner, at, at, at + 30, at);
+  const jobToken = options.jobId ? options.jobLeaseToken ?? (db.prepare('SELECT lease_token FROM jobs WHERE id=? AND owner=?').get(options.jobId, owner) as { lease_token: string | null } | undefined)?.lease_token : null;
+  if (options.jobId && !jobToken) throw new LeaseLost();
+  const locked = db.prepare(`INSERT INTO scan_locks(library_id,owner,acquired_at,heartbeat_at,lease_expires_at,lease_token)
+    VALUES (?,?,?,?,?,?) ON CONFLICT(library_id) DO UPDATE SET owner=excluded.owner, acquired_at=excluded.acquired_at,
+    heartbeat_at=excluded.heartbeat_at, lease_expires_at=excluded.lease_expires_at,lease_token=excluded.lease_token
+    WHERE scan_locks.lease_expires_at<=?`).run(library.id, owner, at, at, at + 30, lockToken, at);
   if (!locked.changes) throw new Error('媒体库正在扫描');
   let lost = false;
   const assertLease = () => {
     if (lost) throw new LeaseLost();
     const at = clock();
-    const lock = db.prepare('SELECT 1 FROM scan_locks WHERE library_id=? AND owner=? AND lease_expires_at>?').get(library.id, owner, at);
-    const job = !options.jobId || db.prepare("SELECT 1 FROM jobs WHERE id=? AND status='running' AND owner=? AND lease_expires_at>?").get(options.jobId, owner, at);
+    const lock = db.prepare('SELECT 1 FROM scan_locks WHERE library_id=? AND owner=? AND lease_token=? AND lease_expires_at>?').get(library.id, owner, lockToken, at);
+    const job = !options.jobId || db.prepare("SELECT 1 FROM jobs WHERE id=? AND status='running' AND owner=? AND lease_token=? AND lease_expires_at>?").get(options.jobId, owner, jobToken, at);
     if (!lock || !job) throw new LeaseLost();
   };
   const timer = setInterval(() => {
     try {
       const at = clock();
-      const result = db.prepare('UPDATE scan_locks SET heartbeat_at=?,lease_expires_at=? WHERE library_id=? AND owner=? AND lease_expires_at>?')
-        .run(at, at + 30, library.id, owner, at);
+      if (options.jobId && !db.prepare("SELECT 1 FROM jobs WHERE id=? AND status='running' AND owner=? AND lease_token=? AND lease_expires_at>?").get(options.jobId, owner, jobToken, at)) { lost = true; return; }
+      const result = db.prepare('UPDATE scan_locks SET heartbeat_at=?,lease_expires_at=? WHERE library_id=? AND owner=? AND lease_token=? AND lease_expires_at>?')
+        .run(at, at + 30, library.id, owner, lockToken, at);
       if (!result.changes) lost = true;
     } catch { lost = true; }
   }, 5000);
@@ -56,7 +60,7 @@ export async function scanLibrary(db: Database.Database, library: { id: string; 
   try { return await scanWithLock(db, library, options, assertLease); }
   finally {
     clearInterval(timer);
-    db.prepare('DELETE FROM scan_locks WHERE library_id=? AND owner=?').run(library.id, owner);
+    db.prepare('DELETE FROM scan_locks WHERE library_id=? AND owner=? AND lease_token=?').run(library.id, owner, lockToken);
   }
 }
 

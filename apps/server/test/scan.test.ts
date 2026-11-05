@@ -161,3 +161,26 @@ test('过期扫描者恢复后不能覆盖已经接管的扫描结果', async ()
     assert.equal((db.prepare('SELECT count(*) AS n FROM files').get() as { n: number }).n, 1);
   } finally { release(); db.close(); await rm(root, { recursive: true, force: true }); }
 });
+
+test('同一 worker 接管过期扫描时旧执行不能删除新锁', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'luvia-scan-same-owner-')); const db = openDatabase(':memory:');
+  let time = 100; let enteredA!: () => void; let enteredB!: () => void; let releaseA!: () => void; let releaseB!: () => void;
+  const startedA = new Promise<void>((resolve) => { enteredA = resolve; }); const startedB = new Promise<void>((resolve) => { enteredB = resolve; });
+  const blockedA = new Promise<void>((resolve) => { releaseA = resolve; }); const blockedB = new Promise<void>((resolve) => { releaseB = resolve; });
+  try {
+    await writeFile(path.join(root, 'a.jpg'), 'image');
+    db.prepare('INSERT INTO libraries(id,name,root) VALUES (?,?,?)').run('lib1', '照片', root);
+    db.prepare("INSERT INTO jobs(id,type,label,status,trigger,created_at) VALUES ('scan','scan','扫描','queued','manual',100)").run();
+    const a = new JobQueue(db, 'same-worker'); const b = new JobQueue(db, 'same-worker');
+    const claimA = a.claim(time)!;
+    const first = scanLibrary(db, { id: 'lib1', root }, { allowedRoots: [root], owner: 'same-worker', jobId: 'scan', jobLeaseToken: claimA.leaseToken, clock: () => time,
+      openDir: async (p, options) => { enteredA(); await blockedA; return opendir(p, options); } });
+    await startedA; time = 131;
+    const claimB = b.claim(time)!;
+    const second = scanLibrary(db, { id: 'lib1', root }, { allowedRoots: [root], owner: 'same-worker', jobId: 'scan', jobLeaseToken: claimB.leaseToken, clock: () => time,
+      openDir: async (p, options) => { enteredB(); await blockedB; return opendir(p, options); } });
+    await startedB; releaseA(); await assert.rejects(first, /租约已失效/);
+    assert.equal((db.prepare("SELECT count(*) AS n FROM scan_locks WHERE library_id='lib1'").get() as { n: number }).n, 1);
+    releaseB(); assert.equal((await second).errors, 0);
+  } finally { releaseA(); releaseB(); db.close(); await rm(root, { recursive: true, force: true }); }
+});
