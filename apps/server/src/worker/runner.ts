@@ -9,10 +9,13 @@ import path from 'node:path';
 import { pruneCache } from './cache-prune.ts';
 import { readSettings } from '../core/settings.ts';
 import { processMetadataBatch } from './metadata.ts';
-import { enqueueMediaTask } from '../core/media-cache.ts';
+import { cacheKey, enqueueMediaTask } from '../core/media-cache.ts';
+import type { Variant } from '../core/media-cache.ts';
+import { generateHls } from './hls.ts';
+import { withThumbnailSlot } from './ffmpeg-slots.ts';
 
-type Options = { owner: string; allowedRoots: string[]; legacyDir: string; systemRoots: string[]; cacheDir?: string; signal?: AbortSignal; log?: (level: 'info' | 'warn', message: string, ctx: Record<string, string>) => void };
-type Payload = { libraryId?: string | null; legacyImportId?: string; mediaId?: string };
+export type WorkerOptions = { owner: string; allowedRoots: string[]; legacyDir: string; systemRoots: string[]; cacheDir?: string; signal?: AbortSignal; hlsIdleMs?: number; log?: (level: 'info' | 'warn', message: string, ctx: Record<string, string>) => void };
+type Payload = { libraryId?: string | null; legacyImportId?: string; mediaId?: string; hlsSessionId?: string };
 const now = () => Math.floor(Date.now() / 1000);
 const childId = (parent: string, library: string) => `scan_${createHash('sha256').update(parent).update('\0').update(library).digest('base64url').slice(0, 24)}`;
 function enqueueScan(db: Database.Database, id: string, libraryId: string, legacyImportId?: string) {
@@ -33,7 +36,7 @@ function enqueuePreviews(db: Database.Database, libraryId?: string | null) {
   if (result.changes) publishJob(db, id);
 }
 
-export async function runNextJob(db: Database.Database, options: Options): Promise<boolean> {
+export async function runNextJob(db: Database.Database, options: WorkerOptions): Promise<boolean> {
   const queue = new JobQueue(db, options.owner);
   const job = queue.claim();
   if (!job) return false;
@@ -107,20 +110,31 @@ export async function runNextJob(db: Database.Database, options: Options): Promi
           enqueuePreviews(db, payload.libraryId);
         }).immediate();
       } else if (!queue.release(job.id)) throw new Error('作业租约已失效');
-    } else if (job.type === 'previews' && !payload.mediaId) {
-      if (!readSettings(db).previews.enabled) {
+    } else if (job.type === 'previews' && payload.hlsSessionId) {
+      const result = await generateHls(db, payload.hlsSessionId, job.id, { owner: options.owner, cacheDir: options.cacheDir ?? path.resolve(process.env.CACHE_DIR ?? 'cache'), allowedRoots: options.allowedRoots, assertLease, signal: controller.signal, idleMs: options.hlsIdleMs });
+      if (!queue.finish(job.id, result)) throw new Error('作业租约已失效');
+    } else if ((job.type === 'previews' || job.type === 'thumbnails') && !payload.mediaId) {
+      if (job.type === 'previews' && !readSettings(db).previews.enabled) {
         if (!queue.finish(job.id, { queued: 0 })) throw new Error('作业租约已失效');
       } else {
         const checkpoint = job.checkpoint ? JSON.parse(job.checkpoint) as { lastId?: string; queued?: number } : {};
         let lastId = checkpoint.lastId ?? ''; let queued = checkpoint.queued ?? 0;
-        const rows = db.prepare(`SELECT id,size,modified_at FROM files WHERE media_type='video' AND has_preview=0 AND id>?
-          ${payload.libraryId ? 'AND library_id=?' : ''} ORDER BY id LIMIT 32`).all(...(payload.libraryId ? [lastId, payload.libraryId] : [lastId])) as { id: string; size: number; modified_at: number }[];
+        const rows = db.prepare(`SELECT f.id,f.size,f.modified_at FROM files f JOIN libraries l ON l.id=f.library_id AND l.enabled=1
+          WHERE ${job.type === 'previews' ? "f.media_type='video' AND f.has_preview=0" : "f.media_type IN ('image','video')"} AND f.id>?
+          ${payload.libraryId ? 'AND f.library_id=?' : ''} ORDER BY f.id LIMIT 32`).all(...(payload.libraryId ? [lastId, payload.libraryId] : [lastId])) as { id: string; size: number; modified_at: number }[];
         for (const row of rows) {
           controller.signal.throwIfAborted();
           db.transaction(() => {
             assertLease();
-            enqueueMediaTask(db, row, { kind: 'preview' });
-            lastId = row.id; queued++;
+            const variants: Variant[] = job.type === 'previews' ? [{ kind: 'preview' }] : [
+              { kind: 'thumb', size: 's' }, { kind: 'thumb', size: 'm' }, { kind: 'thumb', size: 'l' },
+            ];
+            for (const variant of variants) {
+              const key = cacheKey(row, variant);
+              if (db.prepare('SELECT 1 FROM cache_entries WHERE cache_key=?').get(key) || db.prepare("SELECT 1 FROM jobs WHERE dedupe_key=? AND status IN ('queued','running','paused')").get(`media:${key}`)) continue;
+              enqueueMediaTask(db, row, variant); queued++;
+            }
+            lastId = row.id;
             db.prepare('UPDATE jobs SET checkpoint=?,progress_done=? WHERE id=?').run(JSON.stringify({ lastId, queued }), queued, job.id);
           }).immediate();
         }
@@ -129,7 +143,7 @@ export async function runNextJob(db: Database.Database, options: Options): Promi
         } else if (!queue.release(job.id)) throw new Error('作业租约已失效');
       }
     } else if (job.type === 'thumbnails') {
-      await generateMediaCache(db, payload, { owner: options.owner, cacheDir: options.cacheDir ?? path.resolve(process.env.CACHE_DIR ?? 'cache'), allowedRoots: options.allowedRoots, assertLease, signal: controller.signal });
+      await withThumbnailSlot(db, options.owner, (signal) => generateMediaCache(db, payload, { owner: options.owner, cacheDir: options.cacheDir ?? path.resolve(process.env.CACHE_DIR ?? 'cache'), allowedRoots: options.allowedRoots, assertLease, signal }), { signal: controller.signal, assertLease });
       if (!queue.finish(job.id, { generated: 1 })) throw new Error('作业租约已失效');
     } else if (job.type === 'previews') {
       await generateMediaCache(db, payload, { owner: options.owner, cacheDir: options.cacheDir ?? path.resolve(process.env.CACHE_DIR ?? 'cache'), allowedRoots: options.allowedRoots, assertLease, signal: controller.signal });

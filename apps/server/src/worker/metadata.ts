@@ -80,7 +80,7 @@ async function readImage(filename: string, source: Source): Promise<Metadata> {
   return result;
 }
 async function readAv(filename: string, source: Source, signal: AbortSignal | undefined, transcode: boolean): Promise<Metadata> {
-  const { stdout } = await run('ffprobe', ['-v', 'error', '-show_streams', '-show_format', '-of', 'json', filename], { encoding: 'utf8', timeout: 15000, maxBuffer: 2 * 1024 * 1024, signal });
+  const { stdout } = await run('ffprobe', ['-v', 'error', '-protocol_whitelist', 'file,pipe', '-show_streams', '-show_format', '-of', 'json', filename], { encoding: 'utf8', timeout: 15000, maxBuffer: 2 * 1024 * 1024, signal });
   const probe = JSON.parse(stdout) as { streams?: Record<string, any>[]; format?: Record<string, any> };
   const streams = Array.isArray(probe.streams) ? probe.streams : [];
   const video = streams.find((stream) => stream.codec_type === 'video');

@@ -223,6 +223,21 @@ const schemaV14 = `
   ALTER TABLE cache_entries ADD COLUMN source_modified INTEGER;
   CREATE INDEX folders_cover ON folders(cover_file_id);
 `;
+const schemaV15 = `
+  CREATE TABLE hls_sessions (
+    id TEXT PRIMARY KEY, media_id TEXT NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+    principal_hash TEXT NOT NULL, source_size INTEGER NOT NULL, source_modified INTEGER NOT NULL,
+    job_id TEXT REFERENCES jobs(id) ON DELETE SET NULL, generation TEXT, state TEXT NOT NULL,
+    last_access_at INTEGER NOT NULL
+  );
+  CREATE INDEX hls_sessions_idle ON hls_sessions(last_access_at);
+  ALTER TABLE cache_entries ADD COLUMN hls_session_id TEXT;
+  CREATE INDEX cache_entries_hls ON cache_entries(hls_session_id);
+`;
+const schemaV16 = `
+  ALTER TABLE ffmpeg_slots ADD COLUMN kind TEXT NOT NULL DEFAULT 'ffmpeg';
+  CREATE INDEX worker_slots_kind ON ffmpeg_slots(kind,lease_expires_at);
+`;
 
 export function openDatabase(filename: string, options: { readonly?: boolean; bootstrapLegacy?: boolean } = {}): Database.Database {
   const readonly = options.readonly ?? false;
@@ -237,7 +252,7 @@ export function openDatabase(filename: string, options: { readonly?: boolean; bo
       db.pragma('synchronous = NORMAL');
       db.transaction(() => {
         const version = db.pragma('user_version', { simple: true });
-        if (typeof version !== 'number' || version < 0 || version > 14) throw new Error(`不支持的数据库版本: ${version}`);
+        if (typeof version !== 'number' || version < 0 || version > 16) throw new Error(`不支持的数据库版本: ${version}`);
         if (version === 0) {
           db.exec(schemaV1);
           db.pragma('user_version = 1');
@@ -294,6 +309,14 @@ export function openDatabase(filename: string, options: { readonly?: boolean; bo
           db.exec(schemaV14);
           db.pragma('user_version = 14');
         }
+        if (version <= 14) {
+          db.exec(schemaV15);
+          db.pragma('user_version = 15');
+        }
+        if (version <= 15) {
+          db.exec(schemaV16);
+          db.pragma('user_version = 16');
+        }
         const timezone = process.env.TZ ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
         const previous = db.prepare("SELECT value FROM settings WHERE key='timeline.timezone'").get() as { value: string } | undefined;
         if (previous && previous.value !== timezone) {
@@ -306,7 +329,7 @@ export function openDatabase(filename: string, options: { readonly?: boolean; bo
           db.prepare("INSERT INTO jobs(id,type,label,status,trigger,created_at) VALUES (?,'import_legacy','导入旧版数据','queued','system',unixepoch())").run(randomUUID());
         }
       }).immediate();
-    } else if (db.pragma('user_version', { simple: true }) !== 14) {
+    } else if (db.pragma('user_version', { simple: true }) !== 16) {
       throw new Error('数据库尚未就绪或版本不受支持');
     }
     return db;
