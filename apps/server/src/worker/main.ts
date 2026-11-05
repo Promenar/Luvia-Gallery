@@ -20,6 +20,8 @@ import { runIndexBackfill } from './index-backfill.ts';
 import { cleanupDeletedMediaCache } from './cache-prune.ts';
 import { runTimelineRebuild } from './timeline-rebuild.ts';
 import { flushWatchReconciles } from './watch-reconcile-queue.ts';
+import { WatchRuntime } from './watch-runtime.ts';
+import { startWatchLoop } from './watch-loop.ts';
 import { flushLibraryEvents } from './watch-events.ts';
 
 installFatalHandlers('worker');
@@ -84,7 +86,9 @@ let sampling: Promise<void> = Promise.resolve();
 let backfill: Promise<void> = Promise.resolve();
 let cacheCleanup: Promise<void> = Promise.resolve();
 let timelineRebuild: Promise<void> = Promise.resolve();
+const watchLoop = startWatchLoop(new WatchRuntime(runtime.db, { owner }), { onError: () => logger.warn('实时监控检查失败') });
 try {
+  await watchLoop.ready.catch(() => { logger.warn('实时监控启动失败，将重试'); });
   schedulePrune();
   flushMetadataFolders(runtime.db);
   scheduleHlsCleanup();
@@ -103,6 +107,7 @@ try {
     log: (level, message, ctx) => logger[level]({ ctx }, message) });
 } finally {
   stopController.abort();
+  await watchLoop.stop();
   await Promise.all([sampling, backfill, cacheCleanup, timelineRebuild]);
   clearInterval(heartbeatTimer); clearInterval(pruneTimer); clearInterval(scanTimer); clearInterval(reconcileTimer); clearInterval(eventTimer); clearInterval(folderTimer); clearInterval(hlsTimer); clearInterval(maintenanceTimer);
   await Promise.all([hlsCleanup, maintenance]); loop.disable(); runtime.db.close();

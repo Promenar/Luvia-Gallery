@@ -103,6 +103,8 @@ async function scanWithLock(db: Database.Database, library: { id: string; root: 
       let previous = db.prepare('SELECT * FROM scan_runs WHERE job_id=?').get(jobId) as ScanRun | undefined;
       const active = db.prepare('SELECT marker FROM scan_current_markers WHERE library_id=?').get(library.id) as { marker: string } | undefined;
       if (previous && (!active || previous.marker !== active.marker) && !previous.complete) {
+        db.prepare('DELETE FROM scan_event_restored WHERE job_id=?').run(jobId);
+        db.prepare('DELETE FROM scan_event_counts WHERE job_id=?').run(jobId);
         db.prepare('DELETE FROM scan_runs WHERE job_id=?').run(jobId); previous = undefined;
       }
       if (previous) {
@@ -140,8 +142,17 @@ async function scanWithLock(db: Database.Database, library: { id: string; root: 
   const grace = readSettings(db).libraries.missingGraceDays * 86_400_000;
   const scanNow = () => options.clock ? options.clock() * 1000 : Date.now();
   const insertChange = db.prepare('INSERT INTO library_changes(library_id,ts,kind,path,from_path,is_dir,media_id,source) VALUES (?,?,?,?,?,?,?,\'scan\')');
+  const eventCount = jobId ? db.prepare(`INSERT INTO scan_event_counts(job_id,added,removed,updated,moved) VALUES (?,?,?,?,?)
+    ON CONFLICT(job_id) DO UPDATE SET added=added+excluded.added,removed=removed+excluded.removed,updated=updated+excluded.updated,moved=moved+excluded.moved`) : null;
+  const eventRestored = jobId ? db.prepare('INSERT OR IGNORE INTO scan_event_restored(job_id,path) VALUES (?,?)') : null;
+  const eventMoved = jobId ? db.prepare('DELETE FROM scan_event_restored WHERE job_id=? AND path=?') : null;
   const logChange = (kind: 'added' | 'updated' | 'moved' | 'missing' | 'restored' | 'removed', relative: string, from: string | null, isDir: boolean, id: string | null) => {
     insertChange.run(library.id, scanNow(), kind, relative, from, isDir ? 1 : 0, id);
+    if (jobId) {
+      const restored = kind === 'restored' ? eventRestored!.run(jobId, relative).changes : 0;
+      const movedRestored = kind === 'moved' ? eventMoved!.run(jobId, relative).changes : 0;
+      eventCount!.run(jobId, Number(kind === 'added') + restored - movedRestored, Number(kind === 'missing'), Number(kind === 'updated'), Number(kind === 'moved'));
+    }
   };
   const changedDirectory = db.prepare('SELECT 1 FROM scan_change_directories WHERE library_id=? AND marker=? AND relative_path=?');
   const hasChangedAncestor = (relative: string): boolean => {

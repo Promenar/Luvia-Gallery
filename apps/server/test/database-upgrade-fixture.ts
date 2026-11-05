@@ -1,7 +1,7 @@
 import type Database from 'better-sqlite3';
 
 export function restoreVersion21Fixture(db: Database.Database): void {
-  db.exec(`DROP TABLE library_event_pending; DROP TABLE library_event_sent; DROP TABLE watch_worker_usage; DROP TRIGGER library_watch_root_reset; DROP TABLE library_watch_state;
+  db.exec(`DROP TABLE scan_event_restored; DROP TABLE scan_event_counts; DROP TABLE library_event_pending; DROP TABLE library_event_sent; DROP TABLE watch_worker_usage; DROP TRIGGER library_watch_root_reset; DROP TABLE library_watch_state;
     ALTER TABLE libraries DROP COLUMN watch_mode; ALTER TABLE libraries DROP COLUMN watch_poll_interval_sec;
     DROP TABLE watch_leases; DROP TABLE watch_reconcile_requests;
     DROP TRIGGER timeline_rebuild_insert; DROP TRIGGER timeline_rebuild_delete; DROP TRIGGER timeline_rebuild_update;
