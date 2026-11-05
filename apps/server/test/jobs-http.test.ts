@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Job as JobSchema, JobList } from '@luvia/contracts';
+import { Job as JobSchema, JobList, SystemInfo } from '@luvia/contracts';
 import { openDatabase } from '../src/core/database.ts';
 import { createApp } from '../src/api/app.ts';
 
@@ -26,6 +26,21 @@ test('管理员可以排队、暂停、恢复、取消作业，非法状态变�
     assert.equal(JobSchema.parse((await action('retry')).json()).status, 'queued');
     assert.equal((await action('invalid')).statusCode, 400);
     assert.equal((await app.inject({ method: 'GET', url: '/api/v2/admin/jobs' })).statusCode, 401);
+  } finally { await app.close(); db.close(); }
+});
+
+test('系统信息展示 worker 的 FFmpeg 试编码探测结果', async () => {
+  const db = openDatabase(':memory:');
+  const app = await createApp({ db, legacyPending: false });
+  try {
+    const setup = await app.inject({ method: 'POST', url: '/api/v2/auth/setup', headers: header, payload: { username: 'admin', password: 'test password' } });
+    const cookie = (setup.headers['set-cookie'] as string).split(';')[0]!;
+    db.prepare("INSERT INTO settings(key,value) VALUES('worker.ffmpeg',?)").run(JSON.stringify({ available: true, version: 'fixture', hwaccels: ['nvenc'], encoder: 'nvenc' }));
+    const response = await app.inject({ method: 'GET', url: '/api/v2/admin/system', headers: { cookie } });
+    assert.equal(response.statusCode, 200);
+    const system = SystemInfo.parse(response.json());
+    assert.deepEqual(system.ffmpeg, { available: true, version: 'fixture', hwaccels: ['nvenc'] });
+    assert.equal(typeof system.sharp.heif, 'boolean');
   } finally { await app.close(); db.close(); }
 });
 

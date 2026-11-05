@@ -3,6 +3,8 @@ import cookie from '@fastify/cookie';
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import type Database from 'better-sqlite3';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import path from 'node:path';
+import sharp from 'sharp';
 import { ZodError } from 'zod';
 import { CSRF_HEADER, endpoints, JobAction, Preferences, WallpaperConfig, defaultPreferences } from '@luvia/contracts';
 import type { User } from '@luvia/contracts';
@@ -303,6 +305,14 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
       publishJob(db, id);
       return jobView(db.prepare('SELECT * FROM jobs WHERE id=?').get(id) as JobRecord);
     }).immediate();
+  });
+  register('system', async () => {
+    const row = db.prepare("SELECT value FROM settings WHERE key='worker.ffmpeg'").get() as { value: string } | undefined;
+    const ffmpeg = row ? JSON.parse(row.value) : { available: false, version: null, hwaccels: [] };
+    const sqlite = db.prepare('SELECT sqlite_version() AS version').get() as { version: string };
+    return { version: '2.0.0-alpha.0', commit: null, node: process.version, platform: `${process.platform}-${process.arch}`, sqlite: sqlite.version,
+      ffmpeg, sharp: { version: sharp.versions.sharp, heif: sharp.format.heif?.input?.fileSuffix?.includes('.heic') ?? false },
+      dataDir: path.resolve(process.env.DATA_DIR ?? 'data'), cacheDir: path.resolve(process.env.CACHE_DIR ?? 'cache') };
   });
   app.get('/api/v2/events', async (req, reply) => {
     const identity = requireUser(req);

@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3';
+import { randomUUID } from 'node:crypto';
 
 const schemaV1 = `
   CREATE TABLE libraries (
@@ -156,7 +157,7 @@ const schemaV6 = `
   CREATE INDEX folders_library_marker ON folders(library_id,scan_marker);
 `;
 
-export function openDatabase(filename: string, options: { readonly?: boolean } = {}): Database.Database {
+export function openDatabase(filename: string, options: { readonly?: boolean; bootstrapLegacy?: boolean } = {}): Database.Database {
   const readonly = options.readonly ?? false;
   const db = new Database(filename, { readonly, fileMustExist: readonly });
   try {
@@ -193,6 +194,10 @@ export function openDatabase(filename: string, options: { readonly?: boolean } =
         if (version === 0 || version === 1 || version === 2 || version === 3 || version === 4 || version === 5) {
           db.exec(schemaV6);
           db.pragma('user_version = 6');
+        }
+        if (version === 0 && options.bootstrapLegacy) {
+          db.prepare("INSERT INTO settings(key,value) VALUES('legacy.pending','true')").run();
+          db.prepare("INSERT INTO jobs(id,type,label,status,trigger,created_at) VALUES (?,'import_legacy','导入旧版数据','queued','system',unixepoch())").run(randomUUID());
         }
       }).immediate();
     } else if (db.pragma('user_version', { simple: true }) !== 6) {

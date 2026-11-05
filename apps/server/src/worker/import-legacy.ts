@@ -49,7 +49,7 @@ function counts(db: DatabaseType.Database): Counts {
   return totals;
 }
 
-export async function importLegacy(db: DatabaseType.Database, options: { legacyDir: string; mediaRoots: string[]; systemRoots?: string[]; batchSize?: number }): Promise<Counts & { unmappedRoots: number }> {
+export async function importLegacy(db: DatabaseType.Database, options: { legacyDir: string; mediaRoots: string[]; systemRoots?: string[]; batchSize?: number; assertLease?: () => void }): Promise<Counts & { unmappedRoots: number }> {
   const configPath = path.join(options.legacyDir, 'lumina-config.json');
   const legacyPath = path.join(options.legacyDir, 'lumina.db');
   const hasConfig = await exists(configPath);
@@ -95,6 +95,7 @@ export async function importLegacy(db: DatabaseType.Database, options: { legacyD
   }
   const now = Math.floor(Date.now() / 1000);
   db.transaction(() => {
+    options.assertLease?.();
     for (const root of roots) {
       db.prepare('INSERT OR IGNORE INTO libraries (id,name,root) VALUES (?,?,?)').run(root.id, path.basename(root.root) || root.root, root.root);
       root.id = (db.prepare('SELECT id FROM libraries WHERE root=?').get(root.root) as { id: string }).id;
@@ -129,6 +130,7 @@ export async function importLegacy(db: DatabaseType.Database, options: { legacyD
       const batch = favorites.all(cursor, batchSize) as LegacyFavorite[];
       if (!batch.length) break;
       db.transaction(() => {
+        options.assertLease?.();
         for (const favorite of batch) {
           const user = db.prepare('SELECT id FROM users WHERE username=?').get(favorite.user_id) as { id: string } | undefined;
           const byId = findId?.get(favorite.item_id) as { path: string } | undefined;
@@ -149,13 +151,14 @@ export async function importLegacy(db: DatabaseType.Database, options: { legacyD
   return { ...counts(db), unmappedRoots };
 }
 
-export function reconcileLegacyFavorites(db: DatabaseType.Database, options: { finalize: boolean }): Counts {
+export function reconcileLegacyFavorites(db: DatabaseType.Database, options: { finalize: boolean; assertLease?: () => void }): Counts {
   const roots = db.prepare('SELECT id,root FROM libraries').all() as Root[];
   let cursor = '';
   while (true) {
     const rows = db.prepare("SELECT source_key,user_id,absolute_path,item_type,created_at FROM legacy_favorites_pending WHERE status='pending' AND source_key>? ORDER BY source_key LIMIT 256").all(cursor) as Pending[];
     if (!rows.length) break;
     db.transaction(() => {
+      options.assertLease?.();
       for (const pending of rows) {
         const match = pending.absolute_path ? mappedPath(pending.absolute_path, roots) : undefined;
         let itemId: string | undefined;
