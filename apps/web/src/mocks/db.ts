@@ -113,7 +113,20 @@ export const db = {
   media: build(),
   favoriteFolders: new Set<string>(['photos/2025/2025-09 上海', 'photos/2026/2026-07 杭州']),
   user: null as unknown as User,
+  /** 媒体所在的手动相册 ID；由 handlers/albums.ts 在加载时注入，避免 core 与 albums 互相导入。 */
+  albumIdsOf: (_mediaId: string): string[] => [],
 };
+
+/** 模拟相机：图片按种子稳定分配，约四成富士、五成 iPhone，其余没有相机信息；视频没有。 */
+export const MOCK_CAMERAS = [
+  { make: 'FUJIFILM', model: 'X-T5', name: 'FUJIFILM X-T5' },
+  { make: 'Apple', model: 'iPhone 16 Pro', name: 'iPhone 16 Pro' },
+] as const;
+export function cameraOf(m: Pick<MockMedia, 'mediaType' | 'seed'>) {
+  if (m.mediaType !== 'image') return null;
+  const d = m.seed % 10;
+  return d < 4 ? MOCK_CAMERAS[0] : d < 9 ? MOCK_CAMERAS[1] : null;
+}
 
 const prefs: Preferences = defaultPreferences();
 db.user = {

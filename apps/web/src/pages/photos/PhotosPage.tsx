@@ -68,14 +68,16 @@ function useTimelineStore(buckets: { key: string; count: number; start: number; 
 }
 
 export default function PhotosPage() {
-  const search = useSearch({ strict: false }) as { q?: string };
+  const search = useSearch({ strict: false }) as { q?: string; type?: Exclude<TypeFilter, 'all'> };
   const query = search.q?.trim() || undefined;
   const navigate = useNavigate();
   const prefs = usePreferences();
   const isAdmin = useIsAdmin();
   const narrow = useNarrow();
 
-  const [typeFilter, setTypeFilter] = useState<TypeFilter>('all');
+  const typeFilter: TypeFilter = search.type ?? 'all';
+  const setTypeFilter = (t: TypeFilter) =>
+    void navigate({ to: '/photos', search: (prev: { q?: string }) => ({ q: prev.q, type: t === 'all' ? undefined : t }) });
   const [text, setText] = useState(query ?? '');
   useEffect(() => setText(query ?? ''), [query]);
 
@@ -396,10 +398,7 @@ export default function PhotosPage() {
         <p>可以换个关键词，或者清除筛选查看全部照片。</p>
         <button
           type="button"
-          onClick={() => {
-            setTypeFilter('all');
-            void navigate({ to: '/photos', search: {} });
-          }}
+          onClick={() => void navigate({ to: '/photos', search: {} })}
           className="mt-2 inline-flex h-10 items-center rounded-full border border-line-2 px-[18px] text-[13.5px] font-semibold text-fg-2 hover:bg-accent-soft"
         >
           清除搜索和筛选
@@ -434,10 +433,10 @@ export default function PhotosPage() {
         search={{
           value: text,
           onChange: setText,
-          onSubmit: (v) => void navigate({ to: '/photos', search: v ? { q: v } : {} }),
+          onSubmit: (v) => void navigate({ to: '/photos', search: (prev: { type?: Exclude<TypeFilter, 'all'> }) => ({ q: v || undefined, type: prev.type }) }),
           onClear: () => {
             setText('');
-            if (query) void navigate({ to: '/photos', search: {} });
+            if (query) void navigate({ to: '/photos', search: (prev: { type?: Exclude<TypeFilter, 'all'> }) => ({ type: prev.type }) });
           },
           placeholder: '搜索文件名或文件夹，回车查找',
           label: '搜索照片和视频',

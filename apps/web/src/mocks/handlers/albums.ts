@@ -78,6 +78,9 @@ function toAlbum(a: MockAlbum): Album {
 }
 
 const find = (id: unknown) => albums.find((a) => a.id === id);
+
+// 媒体详情里的 albumIds 只列当前用户的手动相册（智能相册按条件动态计算，不记录归属）
+db.albumIdsOf = (mediaId) => albums.filter((a) => a.kind === 'manual' && a.ids.includes(mediaId)).map((a) => a.id);
 const touch = (a: MockAlbum) => { a.updatedAt = new Date().toISOString(); };
 
 function sortMedia(list: MockMedia[], sort: string | null) {
