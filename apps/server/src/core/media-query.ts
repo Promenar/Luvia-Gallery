@@ -46,12 +46,16 @@ function where(filter: Partial<Query> | RandomFilter, context: Context): { sql: 
   }
   if (filter.hasLocation !== undefined) clauses.push(filter.hasLocation ? '(f.latitude IS NOT NULL AND f.longitude IS NOT NULL)' : '(f.latitude IS NULL OR f.longitude IS NULL)');
   if (filter.favorite === true || ('scope' in filter && filter.scope === 'favorites')) {
-    clauses.push(`(EXISTS (SELECT 1 FROM favorites fav WHERE fav.user_id=? AND fav.item_type='file' AND fav.item_id=f.id)
-      OR EXISTS (SELECT 1 FROM favorites fav WHERE fav.user_id=? AND fav.item_type='folder' AND (f.folder=fav.item_id OR (f.folder >= fav.item_id || '/' AND f.folder < fav.item_id || '0'))))`);
-    params.push(context.id, context.id);
+    const includeFolders = 'count' in filter ? filter.favoriteFolders === true : true;
+    clauses.push(`(EXISTS (SELECT 1 FROM favorites fav WHERE fav.user_id=? AND fav.item_type='file' AND fav.item_id=f.id)${includeFolders ?
+      " OR EXISTS (SELECT 1 FROM favorites fav WHERE fav.user_id=? AND fav.item_type='folder' AND (f.folder=fav.item_id OR (f.folder >= fav.item_id || '/' AND f.folder < fav.item_id || '0')))" : ''})`);
+    params.push(context.id);
+    if (includeFolders) params.push(context.id);
   }
   if (filter.favorite === false) { clauses.push("NOT EXISTS (SELECT 1 FROM favorites fav WHERE fav.user_id=? AND fav.item_type='file' AND fav.item_id=f.id)"); params.push(context.id); }
   if (filter.under) clauses.push(prefixClause('f.folder', filter.under, params));
+  if ('count' in filter && filter.folder) { clauses.push('f.folder = ?'); params.push(filter.folder); }
+  if ('count' in filter && filter.exclude?.length) { clauses.push(`f.id NOT IN (${filter.exclude.map(() => '?').join(',')})`); params.push(...filter.exclude); }
   if ('scope' in filter && filter.scope === 'folder') {
     if (!filter.folder) clauses.push('0');
     else if (filter.recursive) clauses.push(prefixClause('f.folder', filter.folder, params));

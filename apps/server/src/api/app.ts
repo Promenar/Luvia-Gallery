@@ -4,7 +4,7 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import type Database from 'better-sqlite3';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { ZodError } from 'zod';
-import { endpoints, Preferences, defaultPreferences } from '@luvia/contracts';
+import { CSRF_HEADER, endpoints, Preferences, WallpaperConfig, defaultPreferences } from '@luvia/contracts';
 import type { User } from '@luvia/contracts';
 import { hashPassword, verifyPassword } from '../core/password.ts';
 import { MediaReader } from '../core/media-query.ts';
@@ -16,7 +16,7 @@ type UserRow = {
 };
 type TokenRow = {
   id: string; name: string; scope: 'read' | 'wallpaper'; prefix: string;
-  created_at: number; last_used_at: number | null; expires_at: number | null;
+  created_at: number; last_used_at: number | null; expires_at: number | null; wallpaper: string | null;
 };
 type Identity = { user: UserRow; kind: 'session' | 'token'; scope?: string; sessionHash?: string };
 type Options = { db: Database.Database; legacyPending: boolean | (() => boolean); secureCookies?: boolean };
@@ -33,6 +33,7 @@ const userOut = (u: UserRow): User => ({
 });
 const tokenOut = (t: TokenRow) => ({
   id: t.id, name: t.name, scope: t.scope, prefix: t.prefix,
+  wallpaper: t.scope === 'wallpaper' ? WallpaperConfig.parse(t.wallpaper ? JSON.parse(t.wallpaper) : {}) : null,
   createdAt: iso(t.created_at)!, lastUsedAt: iso(t.last_used_at), expiresAt: iso(t.expires_at),
 });
 
@@ -96,10 +97,10 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     if (url.pathname.startsWith('/api/v2/') && [...url.searchParams.keys()].some((key) => key.toLowerCase() === 'token')) {
       fail(400, 'VALIDATION', '不允许在 URL 中传递令牌');
     }
-    if (url.pathname.startsWith('/api/v2/') && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) && req.headers['x-luvia-request'] !== '1') {
+    const identity = authenticate(req);
+    if (url.pathname.startsWith('/api/v2/') && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) && identity?.kind !== 'token' && req.headers[CSRF_HEADER.toLowerCase()] !== '1') {
       fail(403, 'FORBIDDEN', '请求缺少安全标头');
     }
-    const identity = authenticate(req);
     if (identity) identities.set(req, identity);
   });
   function register<K extends keyof typeof endpoints>(name: K, handler: (req: FastifyRequest, reply: FastifyReply, body: any) => unknown | Promise<unknown>): void {
@@ -162,7 +163,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
   register('updatePreferences', async (req, _reply, body) => {
     const identity = requireUser(req);
     const old = userOut(identity.user).preferences;
-    const merged = Preferences.parse({ ...old, ...body, theme: { ...old.theme, ...body.theme } });
+    const merged = Preferences.parse({ ...old, ...body, theme: { ...old.theme, ...body.theme }, home: { ...old.home, ...body.home }, slideshow: { ...old.slideshow, ...body.slideshow } });
     db.prepare('UPDATE users SET preferences=? WHERE id=?').run(JSON.stringify(merged), identity.user.id);
     return merged;
   });
@@ -185,12 +186,26 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
   register('createToken', async (req, _reply, body) => {
     const identity = requireUser(req);
     if (identity.kind !== 'session') fail(403, 'FORBIDDEN', '需要会话验证');
+    if (body.scope !== 'wallpaper' && body.wallpaper !== undefined) fail(400, 'VALIDATION', '普通令牌不能设置壁纸配置');
     const token = secret();
-    const t: TokenRow = { id: randomUUID(), name: body.name, scope: body.scope, prefix: token.slice(0, 8), created_at: now(), last_used_at: null, expires_at: body.expiresAt ? Math.floor(new Date(body.expiresAt).getTime() / 1000) : null };
+    const t: TokenRow = { id: randomUUID(), name: body.name, scope: body.scope, prefix: token.slice(0, 8), created_at: now(), last_used_at: null, expires_at: body.expiresAt ? Math.floor(new Date(body.expiresAt).getTime() / 1000) : null, wallpaper: body.scope === 'wallpaper' ? JSON.stringify(WallpaperConfig.parse(body.wallpaper ?? {})) : null };
     if (t.expires_at !== null && (!Number.isFinite(t.expires_at) || t.expires_at <= now())) fail(400, 'VALIDATION', '令牌过期时间无效');
-    db.prepare('INSERT INTO api_tokens (id,user_id,token_hash,name,scope,prefix,created_at,expires_at) VALUES (?,?,?,?,?,?,?,?)')
-      .run(t.id, identity.user.id, digest(token), t.name, t.scope, t.prefix, t.created_at, t.expires_at);
+    db.prepare('INSERT INTO api_tokens (id,user_id,token_hash,name,scope,prefix,created_at,expires_at,wallpaper) VALUES (?,?,?,?,?,?,?,?,?)')
+      .run(t.id, identity.user.id, digest(token), t.name, t.scope, t.prefix, t.created_at, t.expires_at, t.wallpaper);
     return { token, meta: tokenOut(t) };
+  });
+  register('updateToken', async (req, _reply, body) => {
+    const identity = requireUser(req);
+    if (identity.kind !== 'session') fail(403, 'FORBIDDEN', '需要会话验证');
+    const { id } = req.params as { id: string };
+    const existing = db.prepare('SELECT * FROM api_tokens WHERE id=? AND user_id=?').get(id, identity.user.id) as TokenRow | undefined;
+    const t = existing ?? fail(404, 'NOT_FOUND', '令牌不存在');
+    if (t.scope !== 'wallpaper' && body.wallpaper !== undefined) fail(400, 'VALIDATION', '普通令牌不能设置壁纸配置');
+    const raw = req.body as { wallpaper?: Record<string, unknown> };
+    const supplied = raw.wallpaper ? Object.fromEntries(Object.keys(raw.wallpaper).map((key) => [key, body.wallpaper?.[key]])) : {};
+    const wallpaper = t.scope === 'wallpaper' ? JSON.stringify(WallpaperConfig.parse({ ...tokenOut(t).wallpaper, ...supplied })) : null;
+    db.prepare('UPDATE api_tokens SET name=?, wallpaper=? WHERE id=? AND user_id=?').run(body.name ?? t.name, wallpaper, id, identity.user.id);
+    return tokenOut({ ...t, name: body.name ?? t.name, wallpaper });
   });
   register('deleteToken', async (req) => {
     const identity = requireUser(req);
@@ -225,6 +240,10 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     catch (err) { if (err instanceof Error && err.message === '无效游标') fail(400, 'VALIDATION', '无效游标'); throw err; }
   });
   register('buckets', async (req) => media.buckets(endpoints.buckets.query.parse(req.query), mediaContext(req)));
-  register('randomMedia', async (req) => media.random(endpoints.randomMedia.query.parse(req.query), mediaContext(req)));
+  register('randomMedia', async (req) => {
+    const query = endpoints.randomMedia.query.parse(req.query);
+    if (query.exclude && query.exclude.length > 500) fail(400, 'VALIDATION', '排除的媒体不能超过 500 个');
+    return media.random(query, mediaContext(req));
+  });
   return app;
 }

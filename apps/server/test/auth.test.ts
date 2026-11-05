@@ -71,3 +71,48 @@ test('登录兼容旧版 scrypt 与历史明文并升级', async () => {
     assert.match((db.prepare("SELECT password_hash FROM users WHERE id='2'").get() as { password_hash: string }).password_hash, /^scrypt\$v2\$/);
   } finally { await app.close(); db.close(); }
 });
+
+test('偏好补丁深度合并并保留未修改字段', async () => {
+  const db = openDatabase(':memory:');
+  const app = await createApp({ db, legacyPending: false });
+  try {
+    const setup = await app.inject({ method: 'POST', url: '/api/v2/auth/setup', headers: header, payload: { username: 'admin', password: 'test password' } });
+    const cookie = (setup.headers['set-cookie'] as string).split(';')[0]!;
+    assert.equal(setup.json().user.preferences.theme.accent, 'dynamic');
+    let res = await app.inject({ method: 'PATCH', url: '/api/v2/me/preferences', headers: { ...header, cookie }, payload: { home: { heroSource: 'folder', heroFolder: 'lib/trip' }, slideshow: { intervalSec: 9, loop: false }, folderIncludeSubfolders: true } });
+    assert.equal(res.statusCode, 200);
+    res = await app.inject({ method: 'PATCH', url: '/api/v2/me/preferences', headers: { ...header, cookie }, payload: { home: { heroSource: 'favorites' }, slideshow: { order: 'shuffle' } } });
+    assert.equal(res.statusCode, 200);
+    assert.deepEqual(res.json().home, { heroSource: 'favorites', heroFolder: 'lib/trip' });
+    assert.deepEqual(res.json().slideshow, { intervalSec: 9, order: 'shuffle', kenBurns: true, loop: false });
+    assert.equal(res.json().folderIncludeSubfolders, true);
+  } finally { await app.close(); db.close(); }
+});
+
+test('壁纸令牌可创建并合并修改，普通令牌不接受壁纸配置', async () => {
+  const db = openDatabase(':memory:');
+  const app = await createApp({ db, legacyPending: false });
+  try {
+    const setup = await app.inject({ method: 'POST', url: '/api/v2/auth/setup', headers: header, payload: { username: 'admin', password: 'test password' } });
+    const cookie = (setup.headers['set-cookie'] as string).split(';')[0]!;
+    const created = await app.inject({ method: 'POST', url: '/api/v2/me/tokens', headers: { ...header, cookie }, payload: { name: '壁纸', scope: 'wallpaper', wallpaper: { source: 'folder', folder: 'lib/a', landscapeOnly: false } } });
+    assert.equal(created.statusCode, 200);
+    const { token, meta } = CreatedToken.parse(created.json());
+    assert.equal(meta.wallpaper?.source, 'folder');
+    assert.equal(meta.wallpaper?.folder, 'lib/a');
+    assert.equal(meta.wallpaper?.landscapeOnly, false);
+    const patched = await app.inject({ method: 'PATCH', url: `/api/v2/me/tokens/${meta.id}`, headers: { ...header, cookie }, payload: { wallpaper: { includeVideos: true }, name: '桌面' } });
+    assert.equal(patched.statusCode, 200);
+    assert.deepEqual(patched.json().wallpaper, { source: 'folder', folder: 'lib/a', landscapeOnly: false, includeVideos: true, intervalSec: 30 });
+    const listed = await app.inject({ method: 'GET', url: '/api/v2/me/tokens', headers: { cookie } });
+    assert.deepEqual(listed.json().tokens[0].wallpaper, patched.json().wallpaper);
+    assert.equal(JSON.stringify(listed.json()).includes(token), false);
+    const denied = await app.inject({ method: 'PATCH', url: `/api/v2/me/tokens/${meta.id}`, headers: { cookie }, payload: { name: '拒绝' } });
+    assert.equal(denied.statusCode, 403);
+    const bearer = await app.inject({ method: 'PATCH', url: '/api/v2/me/preferences', headers: { authorization: `Bearer ${token}` }, payload: { density: 1 } });
+    assert.equal(bearer.statusCode, 403);
+    assert.notEqual(bearer.json().error.message, '请求缺少安全标头');
+    const readToken = await app.inject({ method: 'POST', url: '/api/v2/me/tokens', headers: { ...header, cookie }, payload: { name: '读取', scope: 'read', wallpaper: { source: 'library' } } });
+    assert.equal(readToken.statusCode, 400);
+  } finally { await app.close(); db.close(); }
+});

@@ -113,6 +113,8 @@ const schemaV2 = `
   );
 `;
 
+const schemaV3 = `ALTER TABLE api_tokens ADD COLUMN wallpaper TEXT;`;
+
 export function openDatabase(filename: string, options: { readonly?: boolean } = {}): Database.Database {
   const readonly = options.readonly ?? false;
   const db = new Database(filename, { readonly, fileMustExist: readonly });
@@ -126,7 +128,7 @@ export function openDatabase(filename: string, options: { readonly?: boolean } =
       db.pragma('synchronous = NORMAL');
       db.transaction(() => {
         const version = db.pragma('user_version', { simple: true });
-        if (version !== 0 && version !== 1 && version !== 2) throw new Error(`不支持的数据库版本: ${version}`);
+        if (version !== 0 && version !== 1 && version !== 2 && version !== 3) throw new Error(`不支持的数据库版本: ${version}`);
         if (version === 0) {
           db.exec(schemaV1);
           db.pragma('user_version = 1');
@@ -135,8 +137,12 @@ export function openDatabase(filename: string, options: { readonly?: boolean } =
           db.exec(schemaV2);
           db.pragma('user_version = 2');
         }
+        if (version === 0 || version === 1 || version === 2) {
+          db.exec(schemaV3);
+          db.pragma('user_version = 3');
+        }
       }).immediate();
-    } else if (db.pragma('user_version', { simple: true }) !== 2) {
+    } else if (db.pragma('user_version', { simple: true }) !== 3) {
       throw new Error('数据库尚未就绪或版本不受支持');
     }
     return db;
