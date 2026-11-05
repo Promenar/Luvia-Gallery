@@ -63,3 +63,20 @@ test('缩略图等待达到全局上限时返回待处理且不增加等待者',
     assert.equal((f.db.prepare('SELECT count(*) AS n FROM media_waiters').get() as { n: number }).n, 32);
   } finally { if (timer) clearTimeout(timer); await f.close(); }
 });
+
+test('同一媒体的瓦片待处理作业有上限且允许已有瓦片复用', async () => {
+  const f = await fixture(1, 'jpg');
+  try {
+    const row = f.rows[0]!;
+    f.db.prepare('UPDATE files SET width=16384,height=1024 WHERE id=?').run(row.id);
+    const url = (col: number) => `/api/v2/media/${row.id}/tiles/14/${col}_0.webp`;
+    for (let col = 0; col < 8; col++) assert.equal((await f.app.inject({ method: 'GET', url: url(col), headers: { cookie: f.cookie } })).statusCode, 202);
+    assert.equal((await f.app.inject({ method: 'GET', url: url(0), headers: { cookie: f.cookie } })).statusCode, 202);
+    assert.equal((await f.app.inject({ method: 'GET', url: url(8), headers: { cookie: f.cookie } })).statusCode, 503);
+    const active = () => (f.db.prepare("SELECT count(*) AS n FROM jobs WHERE type='thumbnails' AND status IN ('queued','running','paused') AND json_extract(payload,'$.variant.kind')='tile'").get() as { n: number }).n;
+    assert.equal(active(), 8);
+    f.db.prepare("UPDATE jobs SET status='succeeded' WHERE id=(SELECT id FROM jobs WHERE type='thumbnails' AND json_extract(payload,'$.variant.kind')='tile' LIMIT 1)").run();
+    assert.equal((await f.app.inject({ method: 'GET', url: url(8), headers: { cookie: f.cookie } })).statusCode, 202);
+    assert.equal(active(), 8);
+  } finally { await f.close(); }
+});

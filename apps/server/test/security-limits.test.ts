@@ -71,3 +71,26 @@ test('Fastify 客户端错误保留状态且不会写入错误日志', async () 
     assert.equal((await logs()).json().logs.length, 1);
   } finally { await app.close(); db.close(); }
 });
+
+test('生产 Cookie 默认 Secure，显式配置可以控制 Secure 属性', async () => {
+  const previousEnv = process.env.NODE_ENV; const previousSecure = process.env.COOKIE_SECURE;
+  try {
+    for (const [environment, setting, expected] of [['production', undefined, true], ['production', 'false', false], ['development', 'true', true], ['development', undefined, false]] as const) {
+      process.env.NODE_ENV = environment;
+      if (setting === undefined) delete process.env.COOKIE_SECURE; else process.env.COOKIE_SECURE = setting;
+      const db = openDatabase(':memory:'); const app = await createApp({ db, legacyPending: false });
+      try {
+        const response = await app.inject({ method: 'POST', url: '/api/v2/auth/setup', payload: { username: 'admin', password: 'test password' } });
+        assert.equal(/(?:^|;\s*)Secure(?:;|$)/i.test(String(response.headers['set-cookie'])), expected);
+        db.prepare(`INSERT INTO shares(id,user_id,token,title,target,password_hash,allow_download,created_at)
+          SELECT 'share',id,'share-token','测试','{"type":"media","ids":[]}',password_hash,0,1 FROM users WHERE username='admin'`).run();
+        const unlock = await app.inject({ method: 'POST', url: '/api/v2/public/shares/share-token/unlock', payload: { password: 'test password' } });
+        assert.equal(unlock.statusCode, 204);
+        assert.equal(/(?:^|;\s*)Secure(?:;|$)/i.test(String(unlock.headers['set-cookie'])), expected);
+      } finally { await app.close(); db.close(); }
+    }
+  } finally {
+    if (previousEnv === undefined) delete process.env.NODE_ENV; else process.env.NODE_ENV = previousEnv;
+    if (previousSecure === undefined) delete process.env.COOKIE_SECURE; else process.env.COOKIE_SECURE = previousSecure;
+  }
+});
