@@ -10,7 +10,7 @@ import { createApp } from '../src/api/app.ts';
 test('媒体库只能建立在检测到的挂载内，宿主路径遵循手动优先', async () => {
   const base = await mkdtemp(path.join(tmpdir(), 'luvia-admin-'));
   const mount = path.join(base, 'mount'); const photos = path.join(mount, 'photos'); const outside = path.join(base, 'outside');
-  await mkdir(mount); await mkdir(photos); await mkdir(outside); await symlink(outside, path.join(mount, 'escape'));
+  await mkdir(mount); await mkdir(photos); await mkdir(path.join(photos, 'child')); await mkdir(outside); await symlink(outside, path.join(mount, 'escape'));
   const db = openDatabase(':memory:');
   const app = await createApp({ db, legacyPending: false, mounts: async () => [{ containerPath: mount, hostPath: '/volume/archive', kind: 'candidate', libraryId: null, readOnly: true, mediaEstimate: null }], systemRoots: [] });
   try {
@@ -23,6 +23,11 @@ test('媒体库只能建立在检测到的挂载内，宿主路径遵循手动�
     const response = await create(photos);
     assert.equal(response.statusCode, 200);
     const library = Library.parse(response.json());
+    const listed = await app.inject({ method: 'GET', url: '/api/v2/admin/libraries', headers: { cookie } });
+    assert.deepEqual(listed.json().libraries.map((item: { id: string }) => item.id), [library.id]);
+    const filesystem = await app.inject({ method: 'GET', url: `/api/v2/admin/fs?path=${encodeURIComponent(photos)}`, headers: { cookie } });
+    assert.equal(filesystem.statusCode, 200); assert.deepEqual(filesystem.json().dirs.map((item: { name: string }) => item.name), ['child']);
+    assert.equal((await app.inject({ method: 'GET', url: `/api/v2/admin/fs?path=${encodeURIComponent(outside)}`, headers: { cookie } })).statusCode, 400);
     assert.equal(library.hostRoot, '/volume/archive/photos');
     assert.equal(library.hostRootSource, 'auto');
     assert.deepEqual(library.exclude, ['@eaDir', '#recycle', '.*', '.thumbnails']);
@@ -34,6 +39,8 @@ test('媒体库只能建立在检测到的挂载内，宿主路径遵循手动�
     const detected = MountList.parse((await app.inject({ method: 'GET', url: '/api/v2/admin/mounts', headers: { cookie } })).json()).mounts[0];
     assert.equal(detected?.containerPath, mount);
     assert.equal(detected?.mediaEstimate, 7);
+    assert.equal((await app.inject({ method: 'DELETE', url: `/api/v2/admin/libraries/${library.id}`, headers })).statusCode, 204);
+    assert.deepEqual((await app.inject({ method: 'GET', url: '/api/v2/admin/libraries', headers: { cookie } })).json().libraries, []);
   } finally { await app.close(); db.close(); await rm(base, { recursive: true, force: true }); }
 });
 

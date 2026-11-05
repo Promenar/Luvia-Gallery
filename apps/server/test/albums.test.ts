@@ -35,6 +35,9 @@ test('手动与智能相册遵守成员、筛选及用户目录权限', async ()
     const removed = await app.inject({ method: 'DELETE', url: `/api/v2/albums/${manual.id}/items`, headers, payload: { ids: ['one'] } });
     assert.equal(removed.statusCode, 200); assert.equal(removed.json().updated, 1);
     assert.equal(Album.parse((await app.inject({ method: 'GET', url: `/api/v2/albums/${manual.id}`, headers: { cookie } })).json()).cover?.id, 'two');
+    const added = await app.inject({ method: 'POST', url: `/api/v2/albums/${manual.id}/items`, headers, payload: { ids: ['one', 'one'] } });
+    assert.equal(added.statusCode, 200); assert.equal(added.json().updated, 1);
+    assert.equal(Album.parse((await app.inject({ method: 'GET', url: `/api/v2/albums/${manual.id}`, headers: { cookie } })).json()).count, 2);
     const smartRes = await create({ name: '照片', kind: 'smart', filter: { types: ['image'] } });
     assert.equal(smartRes.statusCode, 200);
     const smart = Album.parse(smartRes.json());

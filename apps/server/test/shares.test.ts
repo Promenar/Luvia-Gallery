@@ -23,6 +23,8 @@ test('分享密码、目标、下载权限、所有者目录权限和撤销均�
     const created = await app.inject({ method: 'POST', url: '/api/v2/shares', headers: owner, payload: { title: '照片', target: { type: 'media', ids: [ids[0]!.id] }, password: 'test password', allowDownload: false } });
     assert.equal(created.statusCode, 200);
     const share = Share.parse(created.json()); assert.equal(share.mediaCount, 1); assert.equal(share.hasPassword, true);
+    const ownShares = await app.inject({ method: 'GET', url: '/api/v2/shares', headers: { cookie: ownerCookie } });
+    assert.equal(ownShares.statusCode, 200); assert.deepEqual(ownShares.json().shares.map((item: { id: string }) => item.id), [share.id]);
     const base = `/api/v2/public/shares/${share.token}`;
     const locked = PublicShare.parse((await app.inject({ method: 'GET', url: base })).json());
     assert.equal(locked.unlocked, false); assert.equal(locked.mediaCount, null); assert.equal(locked.cover, null);
