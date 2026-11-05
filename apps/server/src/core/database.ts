@@ -238,6 +238,10 @@ const schemaV16 = `
   ALTER TABLE ffmpeg_slots ADD COLUMN kind TEXT NOT NULL DEFAULT 'ffmpeg';
   CREATE INDEX worker_slots_kind ON ffmpeg_slots(kind,lease_expires_at);
 `;
+const schemaV17 = `
+  CREATE TABLE metadata_dirty_folders (path TEXT PRIMARY KEY, updated INTEGER NOT NULL);
+  CREATE INDEX files_folder_cover ON files(folder,taken_at DESC,id ASC) WHERE thumb_ready=1;
+`;
 
 export function openDatabase(filename: string, options: { readonly?: boolean; bootstrapLegacy?: boolean } = {}): Database.Database {
   const readonly = options.readonly ?? false;
@@ -252,7 +256,7 @@ export function openDatabase(filename: string, options: { readonly?: boolean; bo
       db.pragma('synchronous = NORMAL');
       db.transaction(() => {
         const version = db.pragma('user_version', { simple: true });
-        if (typeof version !== 'number' || version < 0 || version > 16) throw new Error(`不支持的数据库版本: ${version}`);
+        if (typeof version !== 'number' || version < 0 || version > 17) throw new Error(`不支持的数据库版本: ${version}`);
         if (version === 0) {
           db.exec(schemaV1);
           db.pragma('user_version = 1');
@@ -317,6 +321,10 @@ export function openDatabase(filename: string, options: { readonly?: boolean; bo
           db.exec(schemaV16);
           db.pragma('user_version = 16');
         }
+        if (version <= 16) {
+          db.exec(schemaV17);
+          db.pragma('user_version = 17');
+        }
         const timezone = process.env.TZ ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
         const previous = db.prepare("SELECT value FROM settings WHERE key='timeline.timezone'").get() as { value: string } | undefined;
         if (previous && previous.value !== timezone) {
@@ -329,7 +337,7 @@ export function openDatabase(filename: string, options: { readonly?: boolean; bo
           db.prepare("INSERT INTO jobs(id,type,label,status,trigger,created_at) VALUES (?,'import_legacy','导入旧版数据','queued','system',unixepoch())").run(randomUUID());
         }
       }).immediate();
-    } else if (db.pragma('user_version', { simple: true }) !== 16) {
+    } else if (db.pragma('user_version', { simple: true }) !== 17) {
       throw new Error('数据库尚未就绪或版本不受支持');
     }
     return db;

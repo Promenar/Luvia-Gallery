@@ -14,6 +14,7 @@ import { scheduleScans } from './schedule.ts';
 import { createWorkerLogger } from '../core/observability.ts';
 import { cleanupHls } from './hls.ts';
 import { runWorkerPool } from './pool.ts';
+import { flushMetadataFolders } from './metadata.ts';
 
 installFatalHandlers('worker');
 const runtime = await openRuntime();
@@ -51,6 +52,8 @@ const pruneTimer = setInterval(schedulePrune, 60_000);
 pruneTimer.unref();
 const scanTimer = setInterval(() => { try { scheduleScans(runtime.db); } catch { logger.warn('扫描调度失败'); } }, 30_000);
 scanTimer.unref();
+const folderTimer = setInterval(() => { try { flushMetadataFolders(runtime.db); } catch { logger.warn('目录统计恢复失败'); } }, 5000);
+folderTimer.unref();
 let cleaning = false; let hlsCleanup: Promise<void> = Promise.resolve();
 const scheduleHlsCleanup = () => {
   if (cleaning) return;
@@ -61,6 +64,7 @@ const hlsTimer = setInterval(scheduleHlsCleanup, 30_000); hlsTimer.unref();
 let sampling: Promise<void> = Promise.resolve();
 try {
   schedulePrune();
+  flushMetadataFolders(runtime.db);
   scheduleHlsCleanup();
   await discoverNewMounts(runtime.db, mounts, [runtime.dataDir, runtime.cacheDir]);
   scheduleScans(runtime.db);
@@ -73,6 +77,6 @@ try {
 } finally {
   stopController.abort();
   await sampling;
-  clearInterval(heartbeatTimer); clearInterval(pruneTimer); clearInterval(scanTimer); clearInterval(hlsTimer);
+  clearInterval(heartbeatTimer); clearInterval(pruneTimer); clearInterval(scanTimer); clearInterval(folderTimer); clearInterval(hlsTimer);
   await hlsCleanup; loop.disable(); runtime.db.close();
 }
