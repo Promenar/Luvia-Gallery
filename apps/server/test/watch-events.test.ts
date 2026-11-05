@@ -2,15 +2,19 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { LibraryChangedEvent } from '@luvia/contracts';
 import { openDatabase } from '../src/core/database.ts';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 
 test('同库扫描与监控事件跨连接节流并持久合并', async () => {
   const mod = await import('../src/worker/watch-events.ts').catch(() => null);
   assert.ok(mod, '媒体库事件持久节流尚未接入');
-  const db = openDatabase(':memory:');
+  const dir = await mkdtemp(path.join(tmpdir(), 'luvia-event-')); const filename = path.join(dir, 'db.sqlite');
+  const db = openDatabase(filename); const other = openDatabase(filename);
   try {
     db.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib','照片','/lib')").run();
     mod.publishLibraryEvent(db, { libraryId: 'lib', source: 'scan', folders: ['lib/a'], added: 1, removed: 0, updated: 0, moved: 0 }, 1000);
-    mod.publishLibraryEvent(db, { libraryId: 'lib', source: 'watch', folders: ['lib/a/b'], added: 1, removed: 0, updated: 0, moved: 0 }, 2000);
+    mod.publishLibraryEvent(other, { libraryId: 'lib', source: 'watch', folders: ['lib/a/b'], added: 1, removed: 0, updated: 0, moved: 0 }, 2000);
     mod.publishLibraryEvent(db, { libraryId: 'lib', source: 'scan', folders: ['lib/a'], added: 0, removed: 1, updated: 0, moved: 0 }, 2100);
     assert.equal((db.prepare("SELECT count(*) n FROM job_events WHERE event_type='library'").get() as {n:number}).n, 1);
     assert.equal(mod.flushLibraryEvents(db, 2999), 0);
@@ -21,7 +25,7 @@ test('同库扫描与监控事件跨连接节流并持久合并', async () => {
     assert.deepEqual(rows.map((row) => LibraryChangedEvent.parse(JSON.parse(row.payload)).source), ['scan','watch','scan']);
     assert.equal(LibraryChangedEvent.parse(JSON.parse(rows[1]!.payload)).added, 1);
     assert.equal((db.prepare("SELECT last_event_at FROM library_watch_state WHERE library_id='lib'").get() as {last_event_at:string}).last_event_at, new Date(5000).toISOString());
-  } finally { db.close(); }
+  } finally { other.close(); db.close(); await rm(dir, { recursive: true, force: true }); }
 });
 
 test('发布的媒体库事件经 SSE 按用户目录权限过滤', async () => {

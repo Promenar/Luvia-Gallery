@@ -14,6 +14,7 @@ type Options = {
   requestFullReconcile: (reason: string) => Promise<void>;
   publishEvent: (event: LibraryChangedEvent) => Promise<void>;
   now?: () => number;
+  assertLease?: () => void;
 };
 type FileRow = { id: string; relative_path: string; size: number; modified_at: number; mtime_ms: number | null; dev: string | null; ino: string | null; head_hash: string | null; missing_at_ms: number | null };
 type FolderRow = { path: string; mtime_ms: number | null; dev: string | null; ino: string | null; missing_at_ms: number | null };
@@ -95,6 +96,7 @@ export class SqliteLibraryIndex implements LibraryIndexPort {
     this.duplicate = null;
     this.db.exec('BEGIN IMMEDIATE');
     try {
+      this.options.assertLease?.();
       if (this.db.prepare('SELECT 1 FROM scan_locks WHERE library_id=? AND lease_expires_at>unixepoch()').get(this.libraryId)) throw new Error('媒体库正在全量扫描');
       work(); this.pending = pending;
     }
@@ -265,7 +267,9 @@ export class SqliteLibraryIndex implements LibraryIndexPort {
   async appendChange(change: WatchLibraryChange): Promise<void> {
     if (!this.pending) {
       if (this.duplicate && change.kind === this.duplicate.kind && change.path === this.duplicate.path && change.fromPath === this.duplicate.fromPath && change.source === this.duplicate.source) { this.duplicate = null; return; }
-      this.duplicate = null; appendLibraryChange(this.db, this.libraryId, change, this.options.now?.() ?? Date.now()); return;
+      this.duplicate = null;
+      this.db.transaction(() => { this.options.assertLease?.(); appendLibraryChange(this.db, this.libraryId, change, this.options.now?.() ?? Date.now()); }).immediate();
+      return;
     }
     const pending = this.pending;
     try {

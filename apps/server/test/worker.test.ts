@@ -81,3 +81,26 @@ test('媒体任务参数不完整时返回失败状态', async () => {
     assert.ok(row.error);
   } finally { db.close(); }
 });
+
+test('全量扫描事件准确反映修改、移动和进入缺失的媒体', async () => {
+  const { runNextJob } = await import('../src/worker/runner.ts');
+  const { flushLibraryEvents } = await import('../src/worker/watch-events.ts');
+  const { rename } = await import('node:fs/promises');
+  const root = await mkdtemp(path.join(tmpdir(), 'luvia-scan-event-counts-')); const db = openDatabase(':memory:');
+  try {
+    for (const file of ['move.jpg', 'change.jpg', 'gone.jpg']) await writeFile(path.join(root, file), 'old');
+    db.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib','照片',?)").run(root);
+    const scan = async (id: string) => {
+      db.prepare("INSERT INTO jobs(id,type,label,status,trigger,payload,created_at) VALUES (?,'scan','扫描','queued','manual',?,unixepoch())").run(id, JSON.stringify({libraryId:'lib'}));
+      await runNextJob(db, { owner: 'worker', allowedRoots: [root], legacyDir: root, systemRoots: [] });
+      db.prepare("UPDATE jobs SET status='succeeded' WHERE type='metadata'").run();
+    };
+    await scan('first');
+    await rename(path.join(root, 'move.jpg'), path.join(root, 'moved.jpg'));
+    await writeFile(path.join(root, 'change.jpg'), 'updated data'); await unlink(path.join(root, 'gone.jpg'));
+    await scan('second'); flushLibraryEvents(db, Date.now() + 3000);
+    const row = db.prepare("SELECT payload FROM job_events WHERE event_type='library' ORDER BY id DESC LIMIT 1").get() as {payload:string};
+    const event = JSON.parse(row.payload);
+    assert.equal(event.source, 'scan'); assert.equal(event.updated, 1); assert.equal(event.moved, 1); assert.equal(event.removed, 1); assert.equal(event.added, 0);
+  } finally { db.close(); await rm(root, { recursive: true, force: true }); }
+});
