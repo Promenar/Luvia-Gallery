@@ -89,7 +89,7 @@ export async function runNextJob(db: Database.Database, options: Options): Promi
         if (!queue.finish(job.id, result.counts)) throw new Error('作业租约已失效');
       } else if (!queue.release(job.id)) throw new Error('作业租约已失效');
     } else if (job.type === 'thumbnails') {
-      await generateMediaCache(db, payload, { cacheDir: options.cacheDir ?? path.resolve(process.env.CACHE_DIR ?? 'cache'), allowedRoots: options.allowedRoots, assertLease, signal: controller.signal });
+      await generateMediaCache(db, payload, { owner: options.owner, cacheDir: options.cacheDir ?? path.resolve(process.env.CACHE_DIR ?? 'cache'), allowedRoots: options.allowedRoots, assertLease, signal: controller.signal });
       if (!queue.finish(job.id, { generated: 1 })) throw new Error('作业租约已失效');
     } else if (job.type === 'cache_prune') {
       const result = await pruneCache(db, options.cacheDir ?? path.resolve(process.env.CACHE_DIR ?? 'cache'), readSettings(db).cache.limitGB * 1024 ** 3, assertLease);

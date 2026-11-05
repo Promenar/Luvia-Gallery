@@ -110,3 +110,31 @@ test('数据库内伪造的越界符号链接不能经原文件接口读取', as
     assert.equal((await app.inject({ method: 'GET', url: '/api/v2/media/evil/original', headers: { cookie } })).statusCode, 404);
   } finally { await app.close(); db.close(); await rm(root, { recursive: true, force: true }); await rm(external, { recursive: true, force: true }); }
 });
+
+test('视频缩略图经 FFmpeg 抽帧与 sharp 生成，并发请求合并', async () => {
+  const { execFile } = await import('node:child_process'); const { promisify } = await import('node:util');
+  const { fileURLToPath } = await import('node:url');
+  const root = await mkdtemp(path.join(tmpdir(), 'luvia-video-thumb-'));
+  const cache = await mkdtemp(path.join(tmpdir(), 'luvia-video-cache-'));
+  const db = openDatabase(':memory:'); const app = await createApp({ db, legacyPending: false, cacheDir: cache });
+  try {
+    await promisify(execFile)(process.execPath, [fileURLToPath(new URL('../scripts/fixtures.ts', import.meta.url)), '--output', root]);
+    db.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib','照片',?)").run(root);
+    await scanLibrary(db, { id: 'lib', root }, { allowedRoots: [root] });
+    const { id } = db.prepare("SELECT id FROM files WHERE name='direct.mp4'").get() as { id: string };
+    const setup = await app.inject({ method: 'POST', url: '/api/v2/auth/setup', headers: { 'x-luvia-request': '1' }, payload: { username: 'admin', password: 'test password' } });
+    const cookie = (setup.headers['set-cookie'] as string).split(';')[0]!;
+    const first = app.inject({ method: 'GET', url: `/api/v2/media/${id}/thumb?size=s`, headers: { cookie } });
+    const second = app.inject({ method: 'GET', url: `/api/v2/media/${id}/thumb?size=s`, headers: { cookie } });
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if ((db.prepare("SELECT count(*) AS n FROM jobs WHERE type='thumbnails' AND status='queued'").get() as { n: number }).n) break;
+      await new Promise<void>((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal((db.prepare("SELECT count(*) AS n FROM jobs WHERE type='thumbnails' AND status='queued'").get() as { n: number }).n, 1);
+    await runNextJob(db, { owner: 'worker-a', allowedRoots: [root], legacyDir: root, systemRoots: [], cacheDir: cache });
+    const [a, b] = await Promise.all([first, second]);
+    assert.equal(a.statusCode, 200); assert.equal(b.statusCode, 200);
+    assert.equal((await sharp(a.rawPayload).metadata()).format, 'webp');
+    assert.ok((db.prepare('SELECT thumbhash FROM files WHERE id=?').get(id) as { thumbhash: string | null }).thumbhash);
+  } finally { await app.close(); db.close(); await rm(root, { recursive: true, force: true }); await rm(cache, { recursive: true, force: true }); }
+});
