@@ -22,6 +22,8 @@ x-dev-env: &dev-env
   # 让界面显示宿主机上的真实路径，而不是容器内路径
   LUVIA_HOST_PATHS: "/media/a=${LUVIA_DEV_MEDIA_A:?需要设置 LUVIA_DEV_MEDIA_A};/media/b=${LUVIA_DEV_MEDIA_B:?需要设置 LUVIA_DEV_MEDIA_B}"
   TZ: ${TZ:-Asia/Shanghai}
+  # 调试实例经纯 HTTP 访问，生产模式默认的 Secure Cookie 不会被浏览器回传
+  COOKIE_SECURE: "false"
 
 services:
   api:
