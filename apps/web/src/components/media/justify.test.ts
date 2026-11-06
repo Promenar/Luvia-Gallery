@@ -34,3 +34,13 @@ describe('对齐行布局', () => {
     expect(rows[0]!.cells[0]!.width * cols + 4 * (cols - 1)).toBeCloseTo(1000, 6);
   });
 });
+
+describe('aspectOf 使用列表加载后补到的宽高', () => {
+  it('列表项缺宽高时按补到的宽高计算，已有宽高时不被覆盖', async () => {
+    const { addDimensions } = await import('@/lib/dimension-cache');
+    expect(aspectOf({ id: 'late', width: null, height: null })).toBe(1);
+    addDimensions([{ id: 'late', width: 1600, height: 800 }, { id: 'own', width: 100, height: 100 }]);
+    expect(aspectOf({ id: 'late', width: null, height: null })).toBe(2);
+    expect(aspectOf({ id: 'own', width: 300, height: 200 })).toBe(1.5);
+  });
+});

@@ -153,10 +153,21 @@ function refreshDirtyFolders(db: Database.Database): boolean {
  * 按 id 顺序取第一项：
  * 统计信息过期或抽样失真时，规划器会改由媒体库驱动、扫整库再排序，大库上每次认领都要数秒并占住写锁。
  */
+/** 界面请求的优先读取项保留时长（秒）。 */
+export const PRIORITY_TTL_SECONDS = 600;
+
+/** 下一个待读文件：沿索引按修改时间倒序，最近的文件先读，与默认时间线顺序一致。 */
 export function metadataClaimSql(byLibrary: boolean): string {
-  return `SELECT f.id,f.relative_path,f.folder,f.name,f.media_type,f.size,f.modified_at,l.root FROM files f INDEXED BY ${byLibrary ? 'files_library_metadata' : 'files_metadata'}
+  return `SELECT f.id,f.relative_path,f.folder,f.name,f.media_type,f.size,f.modified_at,l.root FROM files f INDEXED BY ${byLibrary ? 'files_library_metadata_recent' : 'files_metadata_recent'}
     CROSS JOIN libraries l ON l.id=f.library_id AND l.enabled=1 LEFT JOIN metadata_claims c ON c.file_id=f.id
-    WHERE f.metadata_status='pending' AND f.missing_at_ms IS NULL AND c.file_id IS NULL${byLibrary ? ' AND f.library_id=?' : ''} ORDER BY f.id LIMIT 1`;
+    WHERE f.metadata_status='pending' AND f.missing_at_ms IS NULL AND c.file_id IS NULL${byLibrary ? ' AND f.library_id=?' : ''} ORDER BY f.modified_at DESC LIMIT 1`;
+}
+
+/** 界面正在显示且缺少宽高的文件（metadata_priority），最近请求的先读。 */
+export function metadataPriorityClaimSql(byLibrary: boolean): string {
+  return `SELECT f.id,f.relative_path,f.folder,f.name,f.media_type,f.size,f.modified_at,l.root FROM metadata_priority p INDEXED BY metadata_priority_recent
+    CROSS JOIN files f ON f.id=p.file_id CROSS JOIN libraries l ON l.id=f.library_id AND l.enabled=1 LEFT JOIN metadata_claims c ON c.file_id=f.id
+    WHERE f.metadata_status='pending' AND f.missing_at_ms IS NULL AND c.file_id IS NULL${byLibrary ? ' AND f.library_id=?' : ''} ORDER BY p.requested_at DESC LIMIT 1`;
 }
 
 export function flushMetadataFolders(db: Database.Database, assertLease: () => void = () => {}): boolean {
@@ -225,7 +236,11 @@ export async function processMetadataBatch(db: Database.Database, job: JobRow, o
   const claim = () => db.transaction(() => {
     options.assertLease();
     db.prepare('DELETE FROM metadata_claims WHERE lease_expires_at<=?').run(now());
-    const row = db.prepare(metadataClaimSql(!!options.libraryId)).get(...libraryArgs) as Source | undefined;
+    // 界面请求超过 10 分钟的优先项已滚走，不再插队
+    db.prepare('DELETE FROM metadata_priority WHERE requested_at<=?').run(now() - PRIORITY_TTL_SECONDS);
+    const priority = db.prepare(metadataPriorityClaimSql(!!options.libraryId)).get(...libraryArgs) as Source | undefined;
+    if (priority) db.prepare('DELETE FROM metadata_priority WHERE file_id=?').run(priority.id);
+    const row = priority ?? db.prepare(metadataClaimSql(!!options.libraryId)).get(...libraryArgs) as Source | undefined;
     if (row) db.prepare('INSERT INTO metadata_claims(file_id,job_id,owner,lease_expires_at) VALUES (?,?,?,?)').run(row.id, job.id, options.owner, now() + 30);
     return row;
   }).immediate();

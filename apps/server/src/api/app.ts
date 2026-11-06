@@ -587,6 +587,22 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     const filter = wallpaperFilter(requireUser(req));
     return filter === null ? { items: [] } : media.random(query, mediaContext(req), filter);
   });
+  register('mediaDimensions', async (req, _reply, body) => {
+    const context = mediaContext(req);
+    const items: { id: string; width: number; height: number }[] = []; const missing: string[] = [];
+    for (const id of new Set<string>(body.ids)) {
+      const item = media.one(id, context);
+      if (!item) continue;
+      if (item.width && item.height) items.push({ id, width: item.width, height: item.height }); else missing.push(id);
+    }
+    if (missing.length) {
+      const at = now();
+      const prioritize = db.prepare(`INSERT INTO metadata_priority(file_id,requested_at) SELECT id,? FROM files WHERE id=? AND metadata_status='pending'
+        ON CONFLICT(file_id) DO UPDATE SET requested_at=excluded.requested_at`);
+      db.transaction(() => { for (const id of missing) prioritize.run(at, id); }).immediate();
+    }
+    return { items };
+  });
   register('mediaDetail', async (req) => {
     const context = mediaContext(req); const { id } = req.params as { id: string };
     let item = media.one(id, context) ?? fail(404, 'NOT_FOUND', '媒体不存在或不可访问');

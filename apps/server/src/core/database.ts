@@ -630,6 +630,13 @@ export function openDatabase(filename: string, options: { readonly?: boolean; bo
         // 纯增量索引不提升版本号，回滚到旧镜像时旧代码仍能打开数据库。
         const fileColumns = new Set((db.pragma('table_info(files)') as { name: string }[]).map((column) => column.name));
         if (fileColumns.has('library_id') && fileColumns.has('metadata_status')) db.exec('CREATE INDEX IF NOT EXISTS files_library_metadata ON files(library_id, metadata_status, id)');
+        // 拍摄信息按修改时间倒序读取（与默认时间线顺序一致）；界面正在显示的文件记入 metadata_priority 优先读取
+        if (fileColumns.has('library_id') && fileColumns.has('metadata_status') && fileColumns.has('modified_at')) {
+          db.exec(`CREATE INDEX IF NOT EXISTS files_metadata_recent ON files(metadata_status, modified_at);
+            CREATE INDEX IF NOT EXISTS files_library_metadata_recent ON files(library_id, metadata_status, modified_at);
+            CREATE TABLE IF NOT EXISTS metadata_priority (file_id TEXT PRIMARY KEY REFERENCES files(id) ON DELETE CASCADE, requested_at INTEGER NOT NULL);
+            CREATE INDEX IF NOT EXISTS metadata_priority_recent ON metadata_priority(requested_at)`);
+        }
         // 时间线按修改时间分桶：无筛选时只读这个部分覆盖索引
         if (fileColumns.has('modified_at') && fileColumns.has('missing_at_ms')) db.exec('CREATE INDEX IF NOT EXISTS files_present_modified ON files(modified_at) WHERE missing_at_ms IS NULL');
         const timezone = process.env.TZ ?? Intl.DateTimeFormat().resolvedOptions().timeZone;

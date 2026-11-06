@@ -168,6 +168,11 @@ export const coreHandlers = [
   }),
   http.get('/api/v2/media/:id/display', ({ params }) => svgResponse(byId(params.id), 4200)),
   http.get('/api/v2/media/:id/original', ({ params }) => svgResponse(byId(params.id), 4200)),
+  http.post('/api/v2/media/dimensions', async ({ request }) => {
+    const { ids } = (await request.json()) as { ids: string[] };
+    const items = ids.map(byId).filter((m): m is NonNullable<typeof m> => !!m && !!m.width && !!m.height).map((m) => ({ id: m.id, width: m.width!, height: m.height! }));
+    return HttpResponse.json({ items });
+  }),
   http.get('/api/v2/media/:id', ({ params }) => {
     const m = byId(params.id);
     if (!m) return err(404, 'NOT_FOUND', '媒体不存在');

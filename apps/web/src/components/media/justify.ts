@@ -1,12 +1,16 @@
+import { knownDimensions } from '@/lib/dimension-cache';
+
 /** 对齐行布局（justified）：每行高度接近目标行高，宽度恰好填满容器；最后一行不拉伸。 */
 export interface JustifyInput { ratio: number }
 export interface JustifiedCell<T> { item: T; index: number; width: number; height: number }
 export interface JustifiedRow<T> { cells: JustifiedCell<T>[]; height: number; top: number }
 
-export function aspectOf(m: { width: number | null; height: number | null }): number {
-  if (!m.width || !m.height) return 1;
+export function aspectOf(m: { id?: string; width: number | null; height: number | null }): number {
+  // 列表加载后才读到的宽高（见 lib/dimension-cache.ts）
+  const size = m.width && m.height ? m : m.id ? knownDimensions(m.id) : undefined;
+  if (!size?.width || !size.height) return 1;
   // 极端全景与长截图限制在合理范围，避免一张图独占整行或细成一条
-  return Math.max(0.4, Math.min(3.2, m.width / m.height));
+  return Math.max(0.4, Math.min(3.2, size.width / size.height));
 }
 
 export function justifyRows<T>(
