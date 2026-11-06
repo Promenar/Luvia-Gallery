@@ -4,6 +4,7 @@ import { unlinkSync } from 'node:fs';
 import path from 'node:path';
 import { replaceEvictedThumbnailCovers } from '../core/folder-covers.ts';
 import { withMediaGenerationLock } from './media-lock.ts';
+import { readCacheUsage } from './cache-usage.ts';
 
 type Entry = { cache_key: string; relative_path: string; bytes: number; last_access_at: number; media_id: string | null; variant: string | null };
 function within(root: string, target: string): boolean {
@@ -44,20 +45,22 @@ export async function cleanupDeletedMediaCache(db: Database.Database, cacheDir: 
     await new Promise<void>((resolve) => setImmediate(resolve));
   }
 }
-export async function pruneCache(db: Database.Database, cacheDir: string, limitBytes: number, assertLease: () => void = () => {}): Promise<{ removed: number; bytes: number }> {
+export async function pruneCache(db: Database.Database, cacheDir: string, limitBytes: number, assertLease: () => void = () => {}, signal?: AbortSignal): Promise<{ removed: number; bytes: number }> {
   if (!Number.isFinite(limitBytes) || limitBytes < 0) throw new Error('缓存上限无效');
-  let total = (db.prepare('SELECT COALESCE(sum(bytes),0) AS n FROM cache_entries').get() as { n: number }).n;
+  let total = await readCacheUsage(db, signal);
   let removed = 0; let bytes = 0; let lastAccess = -1; let lastKey = '';
   const root = path.resolve(cacheDir);
   let actualRoot: string;
   try { actualRoot = await realpath(root); } catch { actualRoot = root; }
   while (total > limitBytes) {
+    signal?.throwIfAborted();
     assertLease();
     const entries = db.prepare(`SELECT * FROM cache_entries WHERE (last_access_at>? OR (last_access_at=? AND cache_key>?))
       AND (variant IS NULL OR variant<>'hls' OR NOT EXISTS(SELECT 1 FROM hls_sessions h WHERE h.id=cache_entries.hls_session_id AND h.last_access_at>?))
       ORDER BY last_access_at,cache_key LIMIT 256`).all(lastAccess, lastAccess, lastKey, Date.now() - 60_000) as Entry[];
     if (!entries.length) break;
     for (const entry of entries) {
+      signal?.throwIfAborted();
       if (total <= limitBytes) break;
       lastAccess = entry.last_access_at; lastKey = entry.cache_key;
       assertLease();
@@ -68,6 +71,7 @@ export async function pruneCache(db: Database.Database, cacheDir: string, limitB
         catch { safe = false; }
       }
       const outcome = db.transaction(() => {
+        signal?.throwIfAborted();
         assertLease();
         const current = db.prepare(`SELECT 1 FROM cache_entries WHERE cache_key=? AND last_access_at=?
           AND (variant IS NULL OR variant<>'hls' OR NOT EXISTS(SELECT 1 FROM hls_sessions h WHERE h.id=cache_entries.hls_session_id AND h.last_access_at>?))`)
@@ -95,5 +99,6 @@ export async function pruneCache(db: Database.Database, cacheDir: string, limitB
     }
     await new Promise<void>((resolve) => setImmediate(resolve));
   }
+  signal?.throwIfAborted();
   return { removed, bytes };
 }

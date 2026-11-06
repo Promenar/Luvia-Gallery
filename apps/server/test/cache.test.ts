@@ -1,10 +1,102 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, access, readFile, rm } from 'node:fs/promises';
+import { setTimeout as delay } from 'node:timers/promises';
 import { writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { openDatabase } from '../src/core/database.ts';
+import Database from 'better-sqlite3';
+
+test('排他写锁下正在等待的后台统计可被中止', async () => {
+  const { readCacheUsage } = await import('../src/worker/cache-usage.ts');
+  const root = await mkdtemp(path.join(tmpdir(), 'luvia-cache-abort-busy-')); const filename = path.join(root, 'db.sqlite');
+  const db = openDatabase(filename); db.pragma('journal_mode = DELETE'); const peer = new Database(filename);
+  try {
+    peer.exec('BEGIN EXCLUSIVE');
+    const controller = new AbortController();
+    const pending = readCacheUsage(db, controller.signal).then(() => 'success', (error: Error) => error.name);
+    await delay(200);
+    const start = performance.now(); controller.abort();
+    assert.equal(await pending, 'AbortError');
+    assert.ok(performance.now() - start < 700, '取消后等待后台统计时间过长');
+  } finally { if (peer.inTransaction) peer.exec('ROLLBACK'); peer.close(); db.close(); await rm(root, { recursive: true, force: true }); }
+});
+
+test('后台缓存统计保留 SQLite 繁忙错误码', async () => {
+  const { readCacheUsage } = await import('../src/worker/cache-usage.ts');
+  const root = await mkdtemp(path.join(tmpdir(), 'luvia-cache-busy-')); const filename = path.join(root, 'db.sqlite');
+  const db = openDatabase(filename); db.pragma('journal_mode = DELETE'); const peer = new Database(filename);
+  try {
+    peer.exec('BEGIN EXCLUSIVE');
+    await assert.rejects(readCacheUsage(db), (error: unknown) => (error as { code?: string }).code === 'SQLITE_BUSY');
+  } finally { if (peer.inTransaction) peer.exec('ROLLBACK'); peer.close(); db.close(); await rm(root, { recursive: true, force: true }); }
+});
+
+test('缓存调度遇写锁时快速跳过并在下轮恢复', async () => {
+  const scheduler = await import('../src/worker/cache-prune-scheduler.ts');
+  const root = await mkdtemp(path.join(tmpdir(), 'luvia-cache-lock-')); const filename = path.join(root, 'db.sqlite');
+  const db = openDatabase(filename); const peer = new Database(filename);
+  try {
+    db.prepare("INSERT INTO cache_entries(cache_key,relative_path,bytes,last_access_at) VALUES ('a','a',?,1)").run(25 * 1024 ** 3);
+    peer.exec('BEGIN IMMEDIATE');
+    const start = performance.now();
+    await assert.doesNotReject(scheduler.scheduleCachePrune(db));
+    assert.ok(performance.now() - start < 1000, '缓存调度等待写锁过久');
+    assert.equal((db.prepare("SELECT count(*) AS n FROM jobs WHERE type='cache_prune'").get() as { n: number }).n, 0);
+    assert.equal(db.pragma('busy_timeout', { simple: true }), 5000);
+    peer.exec('ROLLBACK');
+    await scheduler.scheduleCachePrune(db);
+    assert.equal((db.prepare("SELECT count(*) AS n FROM jobs WHERE type='cache_prune'").get() as { n: number }).n, 1);
+  } finally { if (peer.inTransaction) peer.exec('ROLLBACK'); peer.close(); db.close(); await rm(root, { recursive: true, force: true }); }
+});
+
+test('取消缓存清理时停止后台查询且不删除缓存', async () => {
+  const { pruneCache } = await import('../src/worker/cache-prune.ts');
+  const root = await mkdtemp(path.join(tmpdir(), 'luvia-cache-cancel-')); const db = openDatabase(path.join(root, 'db.sqlite'));
+  try {
+    await writeFile(path.join(root, 'a'), 'abcd');
+    db.prepare("INSERT INTO cache_entries(cache_key,relative_path,bytes,last_access_at) VALUES ('a','a',4,1)").run();
+    const controller = new AbortController();
+    const pending = pruneCache(db, root, 0, () => {}, controller.signal);
+    controller.abort();
+    await assert.rejects(pending, { name: 'AbortError' });
+    assert.equal(await readFile(path.join(root, 'a'), 'utf8'), 'abcd');
+    assert.ok(db.prepare("SELECT 1 FROM cache_entries WHERE cache_key='a'").get());
+  } finally { db.close(); await rm(root, { recursive: true, force: true }); }
+});
+
+test('缓存清理调度在后台读取总量，并且同一时间只排一个作业', async () => {
+  const scheduler = await import('../src/worker/cache-prune-scheduler.ts').catch(() => null);
+  assert.ok(scheduler, '缺少非阻塞缓存清理调度');
+  const root = await mkdtemp(path.join(tmpdir(), 'luvia-cache-schedule-')); const db = openDatabase(path.join(root, 'cache.sqlite'));
+  try {
+    db.prepare("INSERT INTO cache_entries(cache_key,relative_path,bytes,last_access_at) VALUES ('a','a',?,1)").run(25 * 1024 ** 3);
+    const prepare = db.prepare.bind(db);
+    db.prepare = ((sql: string) => {
+      assert.doesNotMatch(sql, /sum\s*\(\s*bytes\s*\).*cache_entries/is, '调度不得在主线程统计总量');
+      return prepare(sql);
+    }) as typeof db.prepare;
+    await scheduler.scheduleCachePrune(db);
+    await scheduler.scheduleCachePrune(db);
+    const row = db.prepare("SELECT count(*) AS n FROM jobs WHERE type='cache_prune' AND status='queued'").get() as { n: number };
+    assert.equal(row.n, 1);
+  } finally { db.close(); await rm(root, { recursive: true, force: true }); }
+});
+
+test('缓存低于上限时总量查询不阻塞工作进程数据库连接', async () => {
+  const { pruneCache } = await import('../src/worker/cache-prune.ts');
+  const root = await mkdtemp(path.join(tmpdir(), 'luvia-cache-fast-')); const db = openDatabase(path.join(root, 'cache.sqlite'));
+  try {
+    db.prepare("INSERT INTO cache_entries(cache_key,relative_path,bytes,last_access_at) VALUES ('a','a',4,1)").run();
+    const prepare = db.prepare.bind(db);
+    db.prepare = ((sql: string) => {
+      assert.doesNotMatch(sql, /sum\s*\(\s*bytes\s*\).*cache_entries/is, '缓存总量读取不得全表扫描');
+      return prepare(sql);
+    }) as typeof db.prepare;
+    assert.deepEqual(await pruneCache(db, root, 8), { removed: 0, bytes: 0 });
+  } finally { db.close(); await rm(root, { recursive: true, force: true }); }
+});
 
 test('缓存淘汰按最近访问时间删除，无法越出缓存根目录', async () => {
   const module = await import('../src/worker/cache-prune.ts').catch(() => null);

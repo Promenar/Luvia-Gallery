@@ -236,7 +236,8 @@ export async function runNextJob(db: Database.Database, options: WorkerOptions):
       }, { signal: controller.signal, assertLease });
       if (!queue.finish(job.id, { generated: generated ? 1 : 0 })) throw new Error('作业租约已失效');
     } else if (job.type === 'cache_prune') {
-      const result = await pruneCache(db, options.cacheDir ?? path.resolve(process.env.CACHE_DIR ?? 'cache'), readSettings(db).cache.limitGB * 1024 ** 3, assertLease);
+      const result = await pruneCache(db, options.cacheDir ?? path.resolve(process.env.CACHE_DIR ?? 'cache'), readSettings(db).cache.limitGB * 1024 ** 3, assertLease, controller.signal);
+      controller.signal.throwIfAborted();
       if (!queue.finish(job.id, result)) throw new Error('作业租约已失效');
     } else if (job.type === 'health_check') {
       if (!queue.finish(job.id, { checked: 1 })) throw new Error('作业租约已失效');
