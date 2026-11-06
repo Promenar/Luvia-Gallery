@@ -6,16 +6,27 @@ import { runProcess } from './process-runner.ts';
 import { renewLease } from '../core/sqlite-errors.ts';
 
 const now = () => Math.floor(Date.now() / 1000);
-async function withSlot<T>(db: Database.Database, owner: string, kind: 'ffmpeg' | 'thumbnail', operation: (signal: AbortSignal) => Promise<T>, options: { signal?: AbortSignal; assertLease?: () => void } = {}): Promise<T> {
+async function withSlot<T>(db: Database.Database, owner: string, kind: 'ffmpeg' | 'thumbnail', operation: (signal: AbortSignal, assertSlot: () => void) => Promise<T>, options: { signal?: AbortSignal; assertLease?: () => void } = {}): Promise<T> {
   const id = randomUUID();
   while (true) {
     options.signal?.throwIfAborted(); options.assertLease?.();
+    const active = (db.prepare('SELECT count(*) AS n FROM ffmpeg_slots WHERE kind=? AND lease_expires_at>?').get(kind, now()) as { n: number }).n;
+    const current = readSettings(db).workers;
+    if (active >= (kind === 'ffmpeg' ? current.ffmpegConcurrency : current.thumbnailConcurrency)) {
+      await delay(50, undefined, { signal: options.signal });
+      continue;
+    }
     const acquired = db.transaction(() => {
       options.assertLease?.();
-      db.prepare('DELETE FROM ffmpeg_slots WHERE lease_expires_at<=?').run(now());
       const count = (db.prepare('SELECT count(*) AS n FROM ffmpeg_slots WHERE kind=?').get(kind) as { n: number }).n;
       const workers = readSettings(db).workers;
-      if (count >= (kind === 'ffmpeg' ? workers.ffmpegConcurrency : workers.thumbnailConcurrency)) return false;
+      const limit = kind === 'ffmpeg' ? workers.ffmpegConcurrency : workers.thumbnailConcurrency;
+      const toReclaim = Math.max(0, count - limit + 1);
+      if (toReclaim) {
+        const expired = (db.prepare('SELECT count(*) AS n FROM ffmpeg_slots WHERE kind=? AND lease_expires_at<=?').get(kind, now()) as { n: number }).n;
+        if (expired < toReclaim) return false;
+        db.prepare('DELETE FROM ffmpeg_slots WHERE id IN (SELECT id FROM ffmpeg_slots WHERE kind=? AND lease_expires_at<=? ORDER BY lease_expires_at,id LIMIT ?)').run(kind, now(), toReclaim);
+      }
       db.prepare('INSERT INTO ffmpeg_slots(id,owner,lease_expires_at,kind) VALUES (?,?,?,?)').run(id, owner, now() + 30, kind);
       return true;
     }).immediate();
@@ -24,14 +35,21 @@ async function withSlot<T>(db: Database.Database, owner: string, kind: 'ffmpeg' 
   }
   const local = new AbortController();
   const signal = options.signal ? AbortSignal.any([options.signal, local.signal]) : local.signal;
+  const assertSlot = () => {
+    options.assertLease?.();
+    if (!db.prepare('SELECT 1 FROM ffmpeg_slots WHERE id=? AND owner=?').get(id, owner)) {
+      local.abort(); throw new Error('转码槽位租约已失效');
+    }
+  };
   const heartbeat = setInterval(() => renewLease(() => {
     options.assertLease?.();
-    return db.prepare('UPDATE ffmpeg_slots SET lease_expires_at=? WHERE id=? AND owner=? AND lease_expires_at>?').run(now() + 30, id, owner, now()).changes > 0;
+    // 到期后只要槽位行尚未被删除或接管，原持有者仍可续租。
+    return db.prepare('UPDATE ffmpeg_slots SET lease_expires_at=? WHERE id=? AND owner=?').run(now() + 30, id, owner).changes > 0;
   }, () => local.abort()), 5000);
   heartbeat.unref();
   try {
-    const result = await operation(signal);
-    signal.throwIfAborted(); options.assertLease?.();
+    const result = await operation(signal, assertSlot);
+    signal.throwIfAborted(); assertSlot();
     return result;
   } finally {
     clearInterval(heartbeat);
@@ -39,10 +57,10 @@ async function withSlot<T>(db: Database.Database, owner: string, kind: 'ffmpeg' 
   }
 }
 
-export function withFfmpegSlot<T>(db: Database.Database, owner: string, operation: (signal: AbortSignal) => Promise<T>, options: { signal?: AbortSignal; assertLease?: () => void } = {}): Promise<T> {
+export function withFfmpegSlot<T>(db: Database.Database, owner: string, operation: (signal: AbortSignal, assertSlot: () => void) => Promise<T>, options: { signal?: AbortSignal; assertLease?: () => void } = {}): Promise<T> {
   return withSlot(db, owner, 'ffmpeg', operation, options);
 }
-export function withThumbnailSlot<T>(db: Database.Database, owner: string, operation: (signal: AbortSignal) => Promise<T>, options: { signal?: AbortSignal; assertLease?: () => void } = {}): Promise<T> {
+export function withThumbnailSlot<T>(db: Database.Database, owner: string, operation: (signal: AbortSignal, assertSlot: () => void) => Promise<T>, options: { signal?: AbortSignal; assertLease?: () => void } = {}): Promise<T> {
   return withSlot(db, owner, 'thumbnail', operation, options);
 }
 

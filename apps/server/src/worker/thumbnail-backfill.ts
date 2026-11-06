@@ -108,11 +108,11 @@ export async function processThumbnailBackfill(db: Database.Database, job: JobRo
         const legacyInput = task.variant.kind === 'thumb' ? await legacyOf(task.row) : undefined;
         if (legacyInput && task.variant.kind === 'thumb' && task.variant.size === 'm') continue;
         let usedLegacy = false;
-        await withMediaGenerationLock(db, options.owner, `media:${task.key}`, async (lockSignal) => {
+        await withMediaGenerationLock(db, options.owner, `media:${task.key}`, async (lockSignal, assertMediaLease) => {
           if (entry.get(task.key)) return;
           const payload = { ...source, variant: task.variant };
-          const { fromLegacy } = await withThumbnailSlot(db, options.owner, (inner) => generateMediaCache(db, payload, { owner: options.owner, cacheDir: options.cacheDir, allowedRoots: options.allowedRoots, assertLease: options.assertLease, signal: inner, legacyInput }),
-            { signal: lockSignal, assertLease: options.assertLease });
+          const { fromLegacy } = await withThumbnailSlot(db, options.owner, (inner, assertSlot) => generateMediaCache(db, payload, { owner: options.owner, cacheDir: options.cacheDir, allowedRoots: options.allowedRoots, assertLease: assertSlot, signal: inner, legacyInput }),
+            { signal: lockSignal, assertLease: assertMediaLease });
           state.generated++;
           if (fromLegacy) { state.legacy++; usedLegacy = true; }
         }, { signal, assertLease: options.assertLease });

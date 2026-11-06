@@ -72,7 +72,7 @@ test('全量对账时间与删除宽限期校验', () => {
     libraries: { autoEnableNewMounts: false, missingGraceDays: 7 },
     folders: { exposeHostPaths: true },
     scan: { mode: 'daily', intervalMinutes: 1440, dailyAt: '04:00' },
-    workers: { thumbnailConcurrency: 4, ffmpegConcurrency: 2 },
+    workers: { thumbnailConcurrency: 4, ffmpegConcurrency: 2, metadataConcurrency: 8 },
     transcode: { enabled: true, hwaccel: 'auto' }, previews: { enabled: true }, cache: { limitGB: 50 },
   };
   assert.equal(AdminSettings.parse(base).scan.dailyAt, '04:00');

@@ -21,12 +21,22 @@ export class JobQueue {
     this.owner = owner;
   }
 
-  claim(at = seconds()): JobRow | null {
+  claim(at = seconds(), options: { maxActivePreviews?: number | (() => number) } = {}): JobRow | null {
     return this.db.transaction(() => {
       this.db.prepare(`UPDATE jobs SET status='queued', owner=NULL, heartbeat_at=NULL, lease_expires_at=NULL,lease_token=NULL
         WHERE status='running' AND COALESCE(lease_expires_at,0)<=? AND NOT (COALESCE(owner,'')=? AND id IN (SELECT value FROM json_each(?)))`)
         .run(at, this.owner, JSON.stringify([...(running.get(this.owner) ?? [])]));
-      const job = this.db.prepare("SELECT id,type,checkpoint,payload FROM jobs WHERE status='queued' ORDER BY CASE WHEN dedupe_key LIKE 'media:%' OR dedupe_key LIKE 'hls:%' THEN 0 WHEN type IN ('metadata','previews') THEN 2 ELSE 1 END,created_at,id LIMIT 1").get() as Omit<JobRow, 'leaseToken'> | undefined;
+      const limit = typeof options.maxActivePreviews === 'function' ? options.maxActivePreviews() : options.maxActivePreviews;
+      if (limit !== undefined && (!Number.isInteger(limit) || limit < 1)) throw new Error('预览并发上限无效');
+      const active = limit === undefined ? 0 : (this.db.prepare("SELECT count(*) AS n FROM jobs WHERE status='running' AND type='previews' AND dedupe_key LIKE 'media:%'").get() as { n: number }).n;
+      const allowMedia = limit === undefined || active < limit;
+      const pendingMedia = !allowMedia && !!this.db.prepare("SELECT 1 FROM jobs WHERE status='queued' AND type='previews' AND dedupe_key LIKE 'media:%' LIMIT 1").get();
+      // 预览并发已满且还有逐文件任务排队时，让分发作业等待，避免一次排入整个视频库。
+      const job = this.db.prepare(`SELECT id,type,checkpoint,payload FROM jobs WHERE status='queued'
+        AND (?=1 OR type<>'previews' OR COALESCE(dedupe_key,'') NOT LIKE 'media:%')
+        AND (?=1 OR type<>'previews' OR COALESCE(dedupe_key,'') LIKE 'media:%' OR COALESCE(dedupe_key,'') LIKE 'hls:%')
+        ORDER BY CASE WHEN dedupe_key LIKE 'media:%' OR dedupe_key LIKE 'hls:%' THEN 0 WHEN type IN ('metadata','previews') THEN 2 ELSE 1 END,created_at,id LIMIT 1`)
+        .get(allowMedia ? 1 : 0, pendingMedia ? 0 : 1) as Omit<JobRow, 'leaseToken'> | undefined;
       if (!job) return null;
       if (this.leases.has(job.id)) throw new Error('作业队列实例不可重复领取相同作业');
       const leaseToken = randomUUID();

@@ -90,3 +90,51 @@ test('同一缓存键的旧生成尚未退出时，新生成必须等待', async
     assert.equal((db.prepare('SELECT count(*) AS n FROM media_generation_locks').get() as { n: number }).n, 0);
   } finally { release(); otherDb.close(); db.close(); await rm(data, { recursive: true, force: true }); }
 });
+
+test('媒体生成锁到期后未被接管时，持有者可以续租并完成', async () => {
+  const { withMediaGenerationLock } = await import('../src/worker/media-lock.ts');
+  const db = openDatabase(':memory:');
+  try {
+    await withMediaGenerationLock(db, 'worker', 'media:one', async (signal) => {
+      db.prepare("UPDATE media_generation_locks SET lease_expires_at=0 WHERE cache_key='media:one'").run();
+      await delay(5200);
+      assert.equal(signal.aborted, false, '未被接管的媒体锁不应中止正在执行的任务');
+      assert.equal((db.prepare("SELECT lease_expires_at>unixepoch() AS renewed FROM media_generation_locks WHERE cache_key='media:one'").get() as { renewed: number }).renewed, 1);
+    });
+  } finally { db.close(); }
+});
+
+test('到期媒体锁被接管后，旧持有者中止且不会删除新令牌', async () => {
+  const { withMediaGenerationLock } = await import('../src/worker/media-lock.ts');
+  const db = openDatabase(':memory:');
+  let releaseOld!: () => void; let releaseNew!: () => void; let startedOld!: () => void; let startedNew!: () => void;
+  const oldWait = new Promise<void>((resolve) => { releaseOld = resolve; }); const newWait = new Promise<void>((resolve) => { releaseNew = resolve; });
+  const oldStarted = new Promise<void>((resolve) => { startedOld = resolve; }); const newStarted = new Promise<void>((resolve) => { startedNew = resolve; });
+  let oldSignal: AbortSignal | undefined; let oldWork: Promise<void> | undefined; let newWork: Promise<void> | undefined;
+  try {
+    oldWork = withMediaGenerationLock(db, 'old', 'media:one', async (signal) => { oldSignal = signal; startedOld(); await oldWait; });
+    const rejected = assert.rejects(oldWork);
+    await oldStarted; db.prepare("UPDATE media_generation_locks SET lease_expires_at=0 WHERE cache_key='media:one'").run();
+    newWork = withMediaGenerationLock(db, 'new', 'media:one', async () => { startedNew(); await newWait; });
+    await newStarted; await delay(5200);
+    assert.equal(oldSignal?.aborted, true);
+    releaseOld(); await rejected;
+    assert.equal((db.prepare("SELECT count(*) AS n FROM media_generation_locks WHERE owner='new'").get() as { n: number }).n, 1);
+    releaseNew(); await newWork;
+  } finally { releaseOld(); releaseNew(); await Promise.allSettled([oldWork, newWork].filter(Boolean)); db.close(); }
+});
+
+test('媒体锁被接管后旧持有者立即完成也必须失败', async () => {
+  const { withMediaGenerationLock } = await import('../src/worker/media-lock.ts'); const db = openDatabase(':memory:');
+  let releaseOld!: () => void; let releaseNew!: () => void; let startedOld!: () => void; let startedNew!: () => void;
+  const oldWait = new Promise<void>((r) => { releaseOld = r; }); const newWait = new Promise<void>((r) => { releaseNew = r; });
+  const oldStarted = new Promise<void>((r) => { startedOld = r; }); const newStarted = new Promise<void>((r) => { startedNew = r; });
+  let old: Promise<void> | undefined; let next: Promise<void> | undefined;
+  try {
+    old = withMediaGenerationLock(db, 'old', 'media:one', async () => { startedOld(); await oldWait; }); const rejected = assert.rejects(old);
+    await oldStarted; db.prepare("UPDATE media_generation_locks SET lease_expires_at=0 WHERE cache_key='media:one'").run();
+    next = withMediaGenerationLock(db, 'new', 'media:one', async () => { startedNew(); await newWait; }); await newStarted;
+    releaseOld(); await rejected;
+    assert.equal((db.prepare("SELECT count(*) AS n FROM media_generation_locks WHERE owner='new'").get() as { n: number }).n, 1);
+  } finally { releaseOld(); releaseNew(); await Promise.allSettled([old, next].filter(Boolean)); db.close(); }
+});

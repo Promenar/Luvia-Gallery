@@ -5,6 +5,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { openDatabase } from '../src/core/database.ts';
 import { JobQueue } from '../src/core/jobs.ts';
+import { writeSettings } from '../src/core/settings.ts';
+import { runNextJob } from '../src/worker/runner.ts';
 
 test('作业租约只允许过期接管，并在接管后保留断点', async () => {
   const module = await import('../src/core/jobs.ts').catch(() => null);
@@ -114,5 +116,49 @@ test('本进程仍在执行的作业租约过期后不被本进程其它槽位�
     slotC.settle('left');
     assert.equal(slotB.claim(400)?.id, 'left');
     slotB.settle('left');
+  } finally { db.close(); }
+});
+
+test('预览作业达到视频并发上限时，其他作业仍可领取，释放后继续领取预览', () => {
+  const db = openDatabase(':memory:');
+  try {
+    const insert = db.prepare("INSERT INTO jobs(id,type,label,status,trigger,created_at,dedupe_key) VALUES (?,?,?,'queued','system',?,?)");
+    for (let i = 1; i <= 3; i++) insert.run(`preview-${i}`, 'previews', '生成视频预览', i, `media:preview-${i}`);
+    insert.run('scan', 'scan', '扫描媒体库', 4, null);
+    insert.run('batch', 'previews', '生成视频预览', 5, 'previews:all');
+    const one = new JobQueue(db, 'worker-a'); const two = new JobQueue(db, 'worker-b');
+    const next = new JobQueue(db, 'worker-c'); const after = new JobQueue(db, 'worker-d');
+    assert.equal(one.claim(100, { maxActivePreviews: 2 })?.id, 'preview-1');
+    assert.equal(two.claim(100, { maxActivePreviews: 2 })?.id, 'preview-2');
+    assert.equal(next.claim(100, { maxActivePreviews: 2 })?.id, 'scan');
+    assert.equal(after.claim(100, { maxActivePreviews: 2 }), null);
+    assert.equal(one.finish('preview-1', { generated: 1 }, 101), true);
+    assert.equal(after.claim(101, { maxActivePreviews: 2 })?.id, 'preview-3');
+    const dispatcher = new JobQueue(db, 'worker-e');
+    assert.equal(dispatcher.claim(101, { maxActivePreviews: 2 })?.id, 'batch');
+  } finally { db.close(); }
+});
+
+test('工作进程按当前视频并发设置限制领取，健康检查仍可执行', async () => {
+  const db = openDatabase(':memory:');
+  try {
+    writeSettings(db, { workers: { ffmpegConcurrency: 2 } });
+    const active = db.prepare(`INSERT INTO jobs(id,type,label,status,trigger,created_at,dedupe_key,owner,lease_token,lease_expires_at)
+      VALUES (?,'previews','生成视频预览','running','system',1,?,'other','token',unixepoch()+30)`);
+    active.run('active-1', 'media:active-1'); active.run('active-2', 'media:active-2');
+    db.prepare("INSERT INTO jobs(id,type,label,status,trigger,created_at,dedupe_key) VALUES ('waiting','previews','生成视频预览','queued','system',1,'media:waiting')").run();
+    db.prepare("INSERT INTO jobs(id,type,label,status,trigger,created_at) VALUES ('health','health_check','健康检查','queued','system',2)").run();
+    await runNextJob(db, { owner: 'worker', allowedRoots: [], legacyDir: '', systemRoots: [] });
+    assert.equal((db.prepare("SELECT status FROM jobs WHERE id='health'").get() as { status: string }).status, 'succeeded');
+    assert.equal((db.prepare("SELECT status FROM jobs WHERE id='waiting'").get() as { status: string }).status, 'queued');
+  } finally { db.close(); }
+});
+
+test('预览并发设置在领取事务内读取', () => {
+  const db = openDatabase(':memory:');
+  try {
+    db.prepare("INSERT INTO jobs(id,type,label,status,trigger,created_at) VALUES ('health','health_check','健康检查','queued','system',1)").run();
+    const queue = new JobQueue(db, 'worker');
+    assert.equal(queue.claim(100, { maxActivePreviews: () => { assert.equal(db.inTransaction, true); return 2; } })?.id, 'health');
   } finally { db.close(); }
 });
