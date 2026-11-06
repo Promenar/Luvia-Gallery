@@ -233,10 +233,11 @@ export function FolderTree({ current }: { current: string | undefined }) {
         onPointerLeave={(e) => { if (e.pointerType === 'mouse' && mode === 'hover') leaveSoon(); }}
         className={cn(
           'absolute top-3 bottom-3 left-3 z-40 border border-line-2 bg-[color-mix(in_oklab,var(--raised)_90%,transparent)] backdrop-blur-xl backdrop-saturate-150 flex w-[300px] flex-col overflow-hidden rounded-[calc(var(--r3)+2px)] shadow-[0_24px_60px_-20px_rgba(0,0,0,.55),0_2px_8px_-2px_rgba(0,0,0,.25)] will-change-transform motion-reduce:transition-none',
-          'origin-left transition-[transform,opacity]',
+          // Tailwind v4 的平移、缩放写在独立的 translate、scale 属性上，过渡要列出它们，不能只写 transform
+          'origin-left transition-[translate,scale,opacity]',
           open
             ? 'translate-x-0 scale-100 opacity-100 duration-[560ms] ease-[var(--ease-spring)]'
-            : 'pointer-events-none -translate-x-[calc(100%+28px)] scale-[.97] opacity-0 duration-200 ease-[cubic-bezier(.4,0,1,1)]',
+            : 'pointer-events-none -translate-x-[calc(100%+28px)] scale-[.97] opacity-0 duration-[320ms] ease-[cubic-bezier(.55,0,.75,.2)]',
         )}
       >
         <div className="flex items-center gap-2 px-4 pt-3.5 pb-2">
@@ -258,7 +259,7 @@ export function FolderTree({ current }: { current: string | undefined }) {
         <div
           ref={listRef}
           className={cn(
-            'min-h-0 flex-1 overflow-y-auto px-2 pb-3 [scrollbar-width:thin] transition-[opacity,transform] duration-300 motion-reduce:transition-none',
+            'min-h-0 flex-1 overflow-y-auto px-2 pb-3 [scrollbar-width:thin] transition-[opacity,translate] duration-300 motion-reduce:transition-none',
             open ? 'translate-x-0 opacity-100 delay-75' : '-translate-x-2 opacity-0',
           )}
         >

@@ -82,7 +82,7 @@ export const Thumb = memo(function Thumb({ item, width, height, className, badge
           decoding="async"
           draggable={false}
           onLoad={() => setLoaded(true)}
-          className={cn('size-full object-cover transition-[opacity,transform] duration-300', loaded ? 'opacity-100' : 'opacity-0', selected && 'scale-[.94] rounded-[calc(var(--r1)-2px)]')}
+          className={cn('size-full object-cover transition-[opacity,scale] duration-300', loaded ? 'opacity-100' : 'opacity-0', selected && 'scale-[.94] rounded-[calc(var(--r1)-2px)]')}
         />
       )}
       {badges && item.mediaType === 'video' && (
