@@ -221,3 +221,22 @@ test('数据库暂时被锁时元数据作业放回队列而不是判为失败',
     assert.deepEqual(warnings, ['数据库暂时繁忙，作业稍后继续']);
   } finally { if (other.inTransaction) other.exec('ROLLBACK'); other.close(); db.close(); await rm(root, { recursive: true, force: true }); }
 });
+
+test('扫描锁住的媒体库积压大量待刷新目录时，只按未锁定媒体库的路径范围刷新', () => {
+  const db = openDatabase(':memory:');
+  try {
+    db.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib_a','甲','/a'),('lib_b','乙','/b'),('lib_c','丙','/c')").run();
+    db.prepare("INSERT INTO scan_locks(library_id,owner,acquired_at,heartbeat_at,lease_expires_at,lease_token) VALUES ('lib_a','scan',1,1,unixepoch()+60,'t')").run();
+    const dirty = db.prepare('INSERT INTO metadata_dirty_folders(path,updated) VALUES (?,1)');
+    for (let i = 0; i < 500; i++) dirty.run(`lib_a/目录${String(i).padStart(3, '0')}`);
+    for (const path of ['lib_b', 'lib_b/旅行', 'lib_c/家庭']) dirty.run(path);
+    const left = () => (db.prepare('SELECT path FROM metadata_dirty_folders ORDER BY path').pluck().all() as string[]);
+    // 仍有被锁住的目录，返回 true，作业稍后再刷新
+    assert.equal(flushMetadataFolders(db), true);
+    assert.equal(left().length, 500);
+    assert.ok(left().every((path) => path.startsWith('lib_a/')));
+    db.prepare('DELETE FROM scan_locks').run();
+    assert.equal(flushMetadataFolders(db), true);
+    assert.equal(left().length, 500 - 64);
+  } finally { db.close(); }
+});

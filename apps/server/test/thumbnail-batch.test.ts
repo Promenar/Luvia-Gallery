@@ -61,3 +61,23 @@ test('全库缩略图作业直接生成网格两种尺寸并记录宽高，可�
     assert.equal((db.prepare('SELECT count(*) AS n FROM metadata_claims').get() as { n: number }).n, 0);
   } finally { db.close(); await rm(root, { recursive: true, force: true }); await rm(cache, { recursive: true, force: true }); }
 });
+
+test('全库缩略图分轮查询沿 id 索引顺序读取，统计信息失真时也不对全表临时排序', async () => {
+  const { backfillRowsSql } = await import('../src/worker/thumbnail-backfill.ts');
+  const db = openDatabase(':memory:');
+  try {
+    db.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib','照片','/synthetic')").run();
+    // 生产统计：媒体库只有 2 个时 library_id 被估为每值 2001 行，规划器改走媒体库索引再临时排序
+    db.exec('ANALYZE'); db.exec("DELETE FROM sqlite_stat1 WHERE tbl IN ('files','libraries')");
+    const stat = db.prepare('INSERT INTO sqlite_stat1(tbl,idx,stat) VALUES (?,?,?)');
+    for (const [idx, value] of [['files_library_metadata_recent', '937858 2001 2001 1'], ['files_library', '937858 2001 2001'], ['files_type_taken', '937858 2001 2 1'], ['sqlite_autoindex_files_1', '937858 1']]) stat.run('files', idx, value);
+    stat.run('libraries', 'sqlite_autoindex_libraries_1', '2 1');
+    db.exec('ANALYZE sqlite_schema');
+    for (const byLibrary of [false, true]) for (const dimensionsOnly of [false, true]) {
+      const args = [...(byLibrary ? ['lib'] : []), '', 256];
+      const plan = (db.prepare(`EXPLAIN QUERY PLAN ${backfillRowsSql(byLibrary, dimensionsOnly)}`).all(...args) as { detail: string }[]).map((row) => row.detail).join(' | ');
+      assert.match(plan, /SEARCH f USING INDEX sqlite_autoindex_files_1 \(id>\?\)/, plan);
+      assert.doesNotMatch(plan, /TEMP B-TREE/, plan);
+    }
+  } finally { db.close(); }
+});

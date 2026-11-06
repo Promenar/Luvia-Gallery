@@ -109,9 +109,23 @@ async function readAv(filename: string, source: Source, signal: AbortSignal | un
 }
 
 function refreshDirtyFolders(db: Database.Database): boolean {
-  const dirty = db.prepare(`SELECT d.path,d.updated FROM metadata_dirty_folders d WHERE NOT EXISTS (
-    SELECT 1 FROM folders f JOIN scan_locks s ON s.library_id=f.library_id WHERE f.path=d.path AND s.lease_expires_at>unixepoch()
-  ) ORDER BY d.path LIMIT 64`).all() as { path: string; updated: number }[];
+  const locked = new Set(db.prepare('SELECT library_id FROM scan_locks WHERE lease_expires_at>unixepoch()').pluck().all() as string[]);
+  let dirty: { path: string; updated: number }[];
+  if (!locked.size) dirty = db.prepare('SELECT path,updated FROM metadata_dirty_folders ORDER BY path LIMIT 64').all() as { path: string; updated: number }[];
+  else {
+    // 扫描中的媒体库先跳过。目录路径以媒体库 ID 开头，按未锁定媒体库的路径范围取，
+    // 不逐条检查锁——扫描期间积压数千条时逐条跳过每次要 0.3 秒并卡住主线程
+    dirty = [];
+    const root = db.prepare('SELECT path,updated FROM metadata_dirty_folders WHERE path=?');
+    const range = db.prepare('SELECT path,updated FROM metadata_dirty_folders WHERE path>=? AND path<? ORDER BY path LIMIT ?');
+    for (const id of db.prepare('SELECT id FROM libraries ORDER BY id').pluck().all() as string[]) {
+      if (locked.has(id)) continue;
+      if (dirty.length >= 64) break;
+      const own = root.get(id) as { path: string; updated: number } | undefined;
+      if (own) dirty.push(own);
+      dirty.push(...range.all(`${id}/`, `${id}0`, 64 - dirty.length) as { path: string; updated: number }[]);
+    }
+  }
   const ancestors = new Set<string>();
   const parent = db.prepare('SELECT parent FROM folders WHERE path=?');
   for (const entry of dirty) {
