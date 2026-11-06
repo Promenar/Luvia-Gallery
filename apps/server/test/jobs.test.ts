@@ -90,3 +90,29 @@ test('租约过期但未被接管时原持有者仍可续租与收尾', () => {
     assert.equal(b.finish('job', { ok: 1 }, 201), true);
   } finally { db.close(); }
 });
+
+test('本进程仍在执行的作业租约过期后不被本进程其它槽位接管，结束后才可重新领取', () => {
+  const db = openDatabase(':memory:');
+  try {
+    db.prepare("INSERT INTO jobs(id,type,label,status,trigger,created_at) VALUES ('job','scan','扫描','queued','manual',100)").run();
+    const slotA = new JobQueue(db, 'live-worker'); const slotB = new JobQueue(db, 'live-worker');
+    assert.equal(slotA.claim(100)?.id, 'job');
+    // 主线程卡住 60 秒后恢复：同一进程的另一个槽位先领取，不应把仍在执行的作业放回队列
+    assert.equal(slotB.claim(160), null);
+    assert.equal(slotA.active('job'), true);
+    assert.equal(slotA.renew('job', 160), true);
+    // 其它进程在过期后仍可接管
+    const other = new JobQueue(db, 'other-worker');
+    assert.equal(other.claim(200)?.id, 'job');
+    assert.equal(slotA.active('job'), false);
+    slotA.settle('job');
+    assert.equal(other.finish('job', { ok: 1 }, 201), true);
+    // 执行结束（未能放回队列）后，本进程可以接手自己遗留的过期作业
+    db.prepare("INSERT INTO jobs(id,type,label,status,trigger,created_at) VALUES ('left','scan','扫描','queued','manual',300)").run();
+    const slotC = new JobQueue(db, 'live-worker');
+    assert.equal(slotC.claim(300)?.id, 'left');
+    slotC.settle('left');
+    assert.equal(slotB.claim(400)?.id, 'left');
+    slotB.settle('left');
+  } finally { db.close(); }
+});

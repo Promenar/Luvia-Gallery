@@ -72,3 +72,27 @@ test('监控关闭的已有库在挂载点为空时拒绝扫描，恢复后保�
     assert.deepEqual(db.prepare('SELECT id,missing_at_ms FROM files').get(), { id: original.id, missing_at_ms: null });
   } finally { db.close(); await rm(dir, { recursive: true, force: true }); }
 });
+
+test('扫描被中止、租约失效或数据库繁忙时不把媒体库标为降级', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'luvia-scan-abort-')); const root = path.join(dir, 'media'); await mkdir(root);
+  const db = openDatabase(path.join(dir, 'db.sqlite'));
+  const state = () => (db.prepare("SELECT state FROM library_watch_state WHERE library_id='lib'").get() as { state: string } | undefined)?.state;
+  try {
+    await writeFile(path.join(root, 'a.jpg'), 'a');
+    db.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib','照片',?)").run(root);
+    await scanLibrary(db, { id: 'lib', root }, { allowedRoots: [root], mount: async () => 'nas' });
+    const before = state();
+    // 确认挂载期间作业被中止（例如租约被接管）：原样抛出中止错误
+    const controller = new AbortController();
+    await assert.rejects(scanLibrary(db, { id: 'lib', root }, { allowedRoots: [root], signal: controller.signal,
+      mount: async () => { controller.abort(); return 'nas'; } }), { name: 'AbortError' });
+    assert.equal(state(), before);
+    // 读取挂载身份时数据库繁忙
+    const busy = Object.assign(new Error('database is locked'), { code: 'SQLITE_BUSY' });
+    await assert.rejects(scanLibrary(db, { id: 'lib', root }, { allowedRoots: [root], mount: async () => { throw busy; } }), { code: 'SQLITE_BUSY' });
+    assert.equal(state(), before);
+    // 真正无法确认挂载时仍标为降级
+    await assert.rejects(scanLibrary(db, { id: 'lib', root }, { allowedRoots: [root], mount: async () => { throw new Error('mountinfo 不可读'); } }), /挂载/);
+    assert.equal(state(), 'degraded');
+  } finally { db.close(); await rm(dir, { recursive: true, force: true }); }
+});
