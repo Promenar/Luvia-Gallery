@@ -6,7 +6,8 @@ export function runSqliteMaintenance(filename: string): Promise<MaintenanceResul
   return new Promise((resolve, reject) => {
     const worker = new Worker(new URL('./sqlite-maintenance-thread.ts', import.meta.url), { workerData: { filename } });
     let finished = false; let failed = false; let result: MaintenanceResult | undefined;
-    const timeout = setTimeout(() => { void worker.terminate(); }, 10_000);
+    // PASSIVE 检查点不阻塞读写，积压较多时允许多写回一会儿
+    const timeout = setTimeout(() => { void worker.terminate(); }, 300_000);
     timeout.unref();
     const fail = () => {
       if (finished) return;

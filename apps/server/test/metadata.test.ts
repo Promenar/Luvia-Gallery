@@ -198,3 +198,26 @@ test('界面正在显示的缺宽高文件优先读取，其余按修改时间�
     assert.equal((db.prepare('SELECT count(*) AS n FROM metadata_priority').get() as { n: number }).n, 0);
   } finally { await app.close(); db.close(); await rm(root, { recursive: true, force: true }); }
 });
+
+test('数据库暂时被锁时元数据作业放回队列而不是判为失败', async () => {
+  const Database = (await import('better-sqlite3')).default;
+  const root = await mkdtemp(path.join(tmpdir(), 'luvia-metadata-busy-'));
+  const filename = path.join(root, 'luvia.db');
+  const db = openDatabase(filename); const other = new Database(filename);
+  try {
+    await promisify(execFile)(process.execPath, [fixtureScript, '--output', path.join(root, 'media')]);
+    db.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib','照片',?)").run(path.join(root, 'media'));
+    await scanLibrary(db, { id: 'lib', root: path.join(root, 'media') }, { allowedRoots: [path.join(root, 'media')] });
+    db.prepare("INSERT INTO jobs(id,type,label,status,trigger,payload,created_at) VALUES ('meta','metadata','提取元数据','queued','system',?,1)").run(JSON.stringify({ libraryId: 'lib' }));
+    db.pragma('busy_timeout = 20');
+    const warnings: string[] = [];
+    // 作业领取是同步的；领取后到首次认领文件之间另一连接占住写锁，模拟检查点等长时间写锁
+    const running = runNextJob(db, { owner: 'worker', allowedRoots: [path.join(root, 'media')], legacyDir: root, systemRoots: [], log: (_level, message) => warnings.push(message) });
+    other.exec('BEGIN IMMEDIATE');
+    await running;
+    other.exec('COMMIT');
+    const job = db.prepare("SELECT status,error FROM jobs WHERE id='meta'").get() as { status: string; error: string | null };
+    assert.notEqual(job.status, 'failed'); assert.equal(job.error, null);
+    assert.deepEqual(warnings, ['数据库暂时繁忙，作业稍后继续']);
+  } finally { if (other.inTransaction) other.exec('ROLLBACK'); other.close(); db.close(); await rm(root, { recursive: true, force: true }); }
+});
