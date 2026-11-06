@@ -42,6 +42,7 @@ export const endpoints = {
   facets: d({ method: 'GET', path: '/api/v2/media/facets', auth: 'user', query: M.MediaListQuery, response: M.MediaFacets }),
   randomMedia: d({ method: 'GET', path: '/api/v2/media/random', auth: 'user', query: M.RandomQuery, response: M.MediaItems }),
   mediaDetail: d({ method: 'GET', path: '/api/v2/media/:id', auth: 'user', response: M.MediaDetail }),
+  mediaDimensions: d({ method: 'POST', path: '/api/v2/media/dimensions', auth: 'user', body: M.DimensionsRequest, response: M.MediaDimensions }),
   setFavorite: d({ method: 'PUT', path: '/api/v2/media/favorite', auth: 'user', body: M.SetFavoriteBody, response: M.UpdatedCount }),
   memories: d({ method: 'GET', path: '/api/v2/memories', auth: 'user', response: M.Memories }),
   suggest: d({ method: 'GET', path: '/api/v2/search/suggest', auth: 'user', query: z.object({ q: z.string().trim().min(1).max(200) }), response: M.SearchSuggest }),

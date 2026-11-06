@@ -3,6 +3,7 @@ import { thumbHashToDataURL } from 'thumbhash';
 import { Play } from 'lucide-react';
 import { mediaUrls, type MediaItem, type ThumbSize } from '@luvia/contracts';
 import { cn } from '@/lib/cn';
+import { useWantDimensions } from '@/lib/dimensions';
 
 export function formatDuration(sec: number | null | undefined) {
   if (sec == null) return '';
@@ -55,6 +56,7 @@ export interface ThumbProps {
 /** 单个媒体缩略图：ThumbHash 占位 → 懒加载 WebP 缩略图；按钮语义，可键盘打开。 */
 export const Thumb = memo(function Thumb({ item, width, height, className, badges = true, onClick, onMouseEnter, selected, lazy = true }: ThumbProps) {
   const [loaded, setLoaded] = useState(false);
+  useWantDimensions(item);
   const placeholder = useMemo(() => thumbhashUrl(item), [item]);
   const size = pickThumbSize(Math.max(width, height));
   return (

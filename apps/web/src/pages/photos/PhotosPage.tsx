@@ -14,6 +14,7 @@ import {
 } from '@/components/kit/dropdown-menu';
 import { CommandBar, CommandButton, CommandDivider } from '@/shell/CommandBar';
 import { useIsAdmin, usePreferences, useUpdatePreferences } from '@/stores/session';
+import { useDimensionsVersion } from '@/lib/dimensions';
 import { openViewer, useViewer, type ViewerScope } from '@/stores/viewer';
 import { setDynamicFrom } from '@/theme/ThemeProvider';
 import {
@@ -103,10 +104,13 @@ export default function PhotosPage() {
   // 容器重建（媒体增删）的间隙仍按分桶显示占位，避免内容高度塌陷丢失滚动位置
   const states = useMemo(() => (buckets ? monthStates(store ? segments : [], buckets) : []), [buckets, segments, store]);
   const cacheRef = useRef<LayoutCache>(new Map());
+  const dims = useDimensionsVersion();
+  const dimsRef = useRef(dims);
   const layout: TimelineLayout = useMemo(() => {
-    if (cacheRef.current.size > 4000) cacheRef.current.clear();
+    // 补到新宽高后重新排布已缓存的日期
+    if (cacheRef.current.size > 4000 || dimsRef.current !== dims) { cacheRef.current.clear(); dimsRef.current = dims; }
     return buildLayout(buckets ?? [], states, { width, rowHeight: rowH, gap, square: prefs.gridStyle === 'square', monthHeight, dayHeight: 42, basis }, cacheRef.current);
-  }, [buckets, states, width, rowH, gap, prefs.gridStyle, monthHeight, basis]);
+  }, [buckets, states, width, rowH, gap, prefs.gridStyle, monthHeight, basis, dims]);
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const [scrollEl, setScrollEl] = useState<HTMLDivElement | null>(null);

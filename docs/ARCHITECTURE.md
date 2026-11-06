@@ -56,7 +56,7 @@ api 与 worker 共享同一个 SQLite 数据库，不直接通信。作业、租
 - 兜底：每天按 `dailyAt`（默认 04:00，服务器本地时间）全量扫描，多 worker 只排队一次。
 
 ### 媒体处理
-- 拍摄信息（尺寸、拍摄时间、相机、位置、视频编码）：每个媒体库一个后台作业，按设置 `workers.metadataConcurrency` 路并发读取（图片用 sharp + exifr，视频用 ffprobe），通过 `metadata_claims` 租约认领，`files_library_metadata` / `files_metadata` 索引定位待读文件。打开媒体详情时若该文件尚未读取，api 当场读取后再返回；查看器对未读取的视频先取详情再决定直接播放或转码。
+- 拍摄信息（尺寸、拍摄时间、相机、位置、视频编码）：每个媒体库一个后台作业，按设置 `workers.metadataConcurrency` 路并发读取（图片用 sharp + exifr，视频用 ffprobe），通过 `metadata_claims` 租约认领。认领顺序：先取 `metadata_priority` 中最近请求的文件（界面正在显示且缺宽高，网格格子经 `POST /api/v2/media/dimensions` 登记，10 分钟后过期），再沿 `files_library_metadata_recent` / `files_metadata_recent` 索引按修改时间从新到旧。前端每 2 秒询问一次在显示且缺宽高的格子，读到的宽高存入 `lib/dimension-cache.ts`，排布据此重新计算。打开媒体详情时若该文件尚未读取，api 当场读取后再返回；查看器对未读取的视频先取详情再决定直接播放或转码。
 - 时间线可按文件修改时间（默认，扫描时即有）或拍摄时间排列，用户偏好 `timelineBasis`。修改时间分桶走部分覆盖索引 `files_present_modified`；拍摄时间分桶走触发器维护的 `timeline_counts`。网格的原始比例排布依赖拍摄信息里的宽高，读取前按正方形占位。
 - 缩略图：浏览时按需生成；管理页“全库缩略图”排一个 `thumbnails` 作业（同一范围只排一个），按 id 分轮为全部照片与视频补齐网格用的 s、m 两个尺寸，缓存记录存在但文件丢失的删除记录后重新生成，并为浏览中的按需生成保留 2 个并发。生成缩略图时顺带记录原始宽高；缩略图齐全但缺宽高的文件单独读取。`dimensionsOnly` 模式（管理页“补全照片宽高”）只处理缺宽高的文件：尚未读取拍摄信息的先在 `metadata_claims` 认领再读取全部拍摄信息（磁盘开销相同），与后台拍摄信息作业不重复；已读取的图片只读文件头。缩略图与视频处理分别受 `thumbnailConcurrency`（1–64）与 `ffmpegConcurrency`（1–32）的跨进程槽位限制。
 - 镜像设置 `UV_THREADPOOL_SIZE=64`，避免 sharp 与文件读写被 libuv 默认 4 线程限制。

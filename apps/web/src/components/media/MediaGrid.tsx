@@ -4,6 +4,7 @@ import type { MediaItem } from '@luvia/contracts';
 import { usePreferences } from '@/stores/session';
 import { setDynamicFrom } from '@/theme/ThemeProvider';
 import { aspectOf, justifyRows, squareRows } from './justify';
+import { useDimensionsVersion } from '@/lib/dimensions';
 import { Thumb } from './Thumb';
 
 /** 密度档位对应的目标行高（桌面 / 窄屏）。 */
@@ -76,9 +77,11 @@ export function MediaGrid({ items, scrollElement, onOpen, onEndReached, hasMore,
   const [gridEl, setGridEl] = useState<HTMLDivElement | null>(null);
   const scrollMargin = useScrollMargin(scrollElement, gridEl);
   const rowH = useRowHeight(width);
+  const dims = useDimensionsVersion();
   const rows = useMemo(
     () => (prefs.gridStyle === 'square' ? squareRows(items, width, rowH, GRID_GAP) : justifyRows(items, aspectOf, width, rowH, GRID_GAP)),
-    [items, width, rowH, prefs.gridStyle],
+    // dims：补到新宽高后重新排布
+    [items, width, rowH, prefs.gridStyle, dims],
   );
   const v = useVirtualizer({
     count: rows.length,

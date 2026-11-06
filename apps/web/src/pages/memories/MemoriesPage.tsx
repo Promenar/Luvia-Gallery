@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { mediaUrls, type MediaItem, type Memories } from '@luvia/contracts';
 import { q } from '@/lib/query';
 import { aspectOf, justifyRows } from '@/components/media/justify';
+import { useDimensionsVersion } from '@/lib/dimensions';
 import { GRID_GAP, useElementWidth, useRowHeight } from '@/components/media/MediaGrid';
 import { canThumb, Thumb, thumbhashUrl } from '@/components/media/Thumb';
 import { openViewer } from '@/stores/viewer';
@@ -87,7 +88,8 @@ function Strip({ items, label }: { items: MediaItem[]; label: string }) {
 function Rows({ items, label, maxRows }: { items: MediaItem[]; label: string; maxRows: number }) {
   const [ref, width] = useElementWidth<HTMLDivElement>();
   const h = useRowHeight(width || 1000);
-  const rows = useMemo(() => justifyRows(items, aspectOf, width, h, GRID_GAP).slice(0, maxRows), [items, width, h, maxRows]);
+  const dims = useDimensionsVersion();
+  const rows = useMemo(() => justifyRows(items, aspectOf, width, h, GRID_GAP).slice(0, maxRows), [items, width, h, maxRows, dims]);
   const shown = rows.flatMap((r) => r.cells.map((c) => c.item));
   return (
     <div ref={ref} className="flex flex-col" style={{ gap: GRID_GAP }}>

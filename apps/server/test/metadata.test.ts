@@ -117,8 +117,8 @@ test('元数据目录刷新发布符合契约的持久节流事件', () => {
   } finally { db.close(); }
 });
 
-test('元数据认领沿 metadata_status 索引按 id 顺序取下一项，不扫描整库再排序', async () => {
-  const { metadataClaimSql } = await import('../src/worker/metadata.ts');
+test('元数据认领沿索引按修改时间倒序取下一项，不扫描整库再排序', async () => {
+  const { metadataClaimSql, metadataPriorityClaimSql } = await import('../src/worker/metadata.ts');
   const db = openDatabase(':memory:');
   try {
     db.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib','照片','/synthetic')").run();
@@ -132,8 +132,11 @@ test('元数据认领沿 metadata_status 索引按 id 顺序取下一项，不�
     db.exec('ANALYZE sqlite_schema');
     for (const byLibrary of [false, true]) {
       const plan = (db.prepare(`EXPLAIN QUERY PLAN ${metadataClaimSql(byLibrary)}`).all(...(byLibrary ? ['lib'] : [])) as { detail: string }[]).map((row) => row.detail).join(' | ');
-      assert.match(plan, byLibrary ? /USING INDEX files_library_metadata \(library_id=\? AND metadata_status=\?\)/ : /USING INDEX files_metadata \(metadata_status=\?\)/, plan);
+      assert.match(plan, byLibrary ? /USING INDEX files_library_metadata_recent \(library_id=\? AND metadata_status=\?\)/ : /USING INDEX files_metadata_recent \(metadata_status=\?\)/, plan);
       assert.doesNotMatch(plan, /TEMP B-TREE/, plan);
+      const priority = (db.prepare(`EXPLAIN QUERY PLAN ${metadataPriorityClaimSql(byLibrary)}`).all(...(byLibrary ? ['lib'] : [])) as { detail: string }[]).map((row) => row.detail).join(' | ');
+      assert.match(priority, /SCAN p USING INDEX metadata_priority_recent/, priority);
+      assert.doesNotMatch(priority, /TEMP B-TREE/, priority);
     }
   } finally { db.close(); }
 });
@@ -155,5 +158,43 @@ test('打开媒体详情时立即读取尚未读取的元数据，不影响其�
     assert.equal(detail.takenAt, new Date(Date.parse('2024-05-06T10:11:12+08:00')).toISOString());
     assert.equal(detail.width, 960);
     assert.deepEqual(db.prepare("SELECT name FROM files WHERE metadata_status<>'pending'").all(), [{ name: 'exif-gps.jpg' }]);
+  } finally { await app.close(); db.close(); await rm(root, { recursive: true, force: true }); }
+});
+
+test('界面正在显示的缺宽高文件优先读取，其余按修改时间从新到旧读取', async () => {
+  const { createApp } = await import('../src/api/app.ts');
+  const { metadataClaimSql, metadataPriorityClaimSql } = await import('../src/worker/metadata.ts');
+  const root = await mkdtemp(path.join(tmpdir(), 'luvia-metadata-priority-'));
+  const db = openDatabase(':memory:'); const app = await createApp({ db, legacyPending: false });
+  try {
+    await promisify(execFile)(process.execPath, [fixtureScript, '--output', root]);
+    db.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib','照片',?)").run(root);
+    await scanLibrary(db, { id: 'lib', root }, { allowedRoots: [root] });
+    const files = db.prepare("SELECT id,name FROM files WHERE media_type='image' ORDER BY id").all() as { id: string; name: string }[];
+    assert.ok(files.length >= 3);
+    files.forEach((file, index) => db.prepare('UPDATE files SET modified_at=? WHERE id=?').run(1_700_000_000 + index * 100, file.id));
+    const newest = files.at(-1)!; const oldest = files[0]!; const sized = files[1]!;
+    db.prepare("UPDATE files SET modified_at=1800000000 WHERE metadata_status='pending' AND media_type<>'image'").run();
+    db.prepare("UPDATE files SET metadata_status='done' WHERE media_type<>'image'").run();
+    db.prepare("UPDATE files SET width=640,height=480,metadata_status='done' WHERE id=?").run(sized.id);
+    const next = () => (db.prepare(metadataPriorityClaimSql(true)).get('lib') ?? db.prepare(metadataClaimSql(true)).get('lib')) as { id: string };
+    assert.equal(next().id, newest.id);
+
+    const setup = await app.inject({ method: 'POST', url: '/api/v2/auth/setup', headers: { 'x-luvia-request': '1' }, payload: { username: 'admin', password: 'test password' } });
+    const cookie = (setup.headers['set-cookie'] as string).split(';')[0]!;
+    const ask = (ids: string[]) => app.inject({ method: 'POST', url: '/api/v2/media/dimensions', headers: { 'x-luvia-request': '1', cookie }, payload: { ids } });
+    const response = await ask([sized.id, oldest.id, 'missing-id']);
+    assert.equal(response.statusCode, 200);
+    // 已有宽高的直接返回；缺宽高的记入优先队列，不存在或无权访问的忽略
+    assert.deepEqual(response.json(), { items: [{ id: sized.id, width: 640, height: 480 }] });
+    assert.deepEqual(db.prepare('SELECT file_id FROM metadata_priority').all(), [{ file_id: oldest.id }]);
+    assert.equal(next().id, oldest.id);
+    assert.equal((await app.inject({ method: 'POST', url: '/api/v2/media/dimensions', headers: { 'x-luvia-request': '1' }, payload: { ids: [oldest.id] } })).statusCode, 401);
+
+    // 后台作业认领优先项后移出队列
+    db.prepare("INSERT INTO jobs(id,type,label,status,trigger,payload,created_at) VALUES ('meta','metadata','提取元数据','queued','system',?,1)").run(JSON.stringify({ libraryId: 'lib' }));
+    await runNextJob(db, { owner: 'worker', allowedRoots: [root], legacyDir: root, systemRoots: [] });
+    assert.notEqual((db.prepare('SELECT metadata_status FROM files WHERE id=?').get(oldest.id) as { metadata_status: string }).metadata_status, 'pending');
+    assert.equal((db.prepare('SELECT count(*) AS n FROM metadata_priority').get() as { n: number }).n, 0);
   } finally { await app.close(); db.close(); await rm(root, { recursive: true, force: true }); }
 });

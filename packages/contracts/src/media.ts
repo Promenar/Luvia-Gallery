@@ -188,6 +188,15 @@ export type MediaItems = z.infer<typeof MediaItems>;
 export const SetFavoriteBody = z.object({ ids: z.array(z.string()).min(1).max(5000), favorite: z.boolean() });
 export const UpdatedCount = z.object({ updated: z.number().int() });
 
+/**
+ * POST /api/v2/media/dimensions：界面上正在显示但还没有宽高的媒体。
+ * 返回其中已经读到宽高的条目；其余提到后台拍摄信息读取的队首。无权访问的 ID 静默忽略。
+ */
+export const DimensionsRequest = z.object({ ids: z.array(z.string().min(1).max(200)).min(1).max(200) });
+export const MediaDimensions = z.object({
+  items: z.array(z.object({ id: z.string(), width: z.number().int().positive(), height: z.number().int().positive() })),
+});
+
 /** GET /api/v2/memories */
 export const Memories = z.object({
   onThisDay: z.array(z.object({ year: z.number().int(), count: z.number().int(), items: z.array(MediaItem) })),
