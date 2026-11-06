@@ -41,8 +41,9 @@ export function where(filter: Partial<Query> | RandomFilter, context: Context, d
     }
   }
   if (filter.types?.length) { clauses.push(`f.media_type IN (${filter.types.map(() => '?').join(',')})`); params.push(...filter.types); }
-  if (filter.from !== undefined) { clauses.push('f.taken_at >= ?'); params.push(filter.from); }
-  if (filter.to !== undefined) { clauses.push('f.taken_at < ?'); params.push(filter.to); }
+  const timeColumn = 'timeField' in filter && filter.timeField === 'modified' ? 'f.modified_at' : 'f.taken_at';
+  if (filter.from !== undefined) { clauses.push(`${timeColumn} >= ?`); params.push(filter.from); }
+  if (filter.to !== undefined) { clauses.push(`${timeColumn} < ?`); params.push(filter.to); }
   if (filter.cameras?.length) { clauses.push(`f.model IN (${filter.cameras.map(() => '?').join(',')})`); params.push(...filter.cameras); }
   if (filter.orientation) {
     clauses.push(filter.orientation === 'landscape' ? 'f.width > f.height' : filter.orientation === 'portrait' ? 'f.height > f.width' : 'f.width = f.height');
@@ -149,13 +150,18 @@ export class MediaReader {
     const cached = this.cache.get(key);
     if (cached && cached.version === version && cached.expires > Date.now()) return cached.value;
     const condition = where(filter, context, this.db);
-    const unfiltered = context.allowedPaths === null && !context.ids && !this.db.prepare('SELECT 1 FROM timeline_rebuild_state WHERE id=1').get() && !this.db.prepare('SELECT 1 FROM libraries WHERE enabled=0 LIMIT 1').get() && filter.scope === 'all' && !filter.q && !filter.types?.length &&
+    const unfiltered = context.allowedPaths === null && !context.ids && (filter.timeField === 'modified' || !this.db.prepare('SELECT 1 FROM timeline_rebuild_state WHERE id=1').get()) && !this.db.prepare('SELECT 1 FROM libraries WHERE enabled=0 LIMIT 1').get() && filter.scope === 'all' && !filter.q && !filter.types?.length &&
       filter.from === undefined && filter.to === undefined && !filter.cameras?.length && !filter.orientation &&
       filter.hasLocation === undefined && filter.favorite === undefined && !filter.under;
-    const rows = (unfiltered
+    const modified = filter.timeField === 'modified';
+    const rows = (unfiltered && !modified
       ? this.db.prepare('SELECT month AS key,count FROM timeline_counts ORDER BY month DESC').all()
-      : (await this.executor.run([{ sql: `SELECT strftime('%Y-%m', f.taken_at, 'unixepoch', 'localtime') AS key, count(*) AS count
-        FROM files f WHERE ${condition.sql} GROUP BY key ORDER BY key DESC`, params: condition.params }]))[0]) as { key: string; count: number }[];
+      // 按修改时间且无筛选时只扫描未缺失文件的修改时间部分索引，不逐行检查媒体库与权限
+      : unfiltered
+        ? (await this.executor.run([{ sql: `SELECT strftime('%Y-%m', modified_at, 'unixepoch', 'localtime') AS key, count(*) AS count
+          FROM files INDEXED BY files_present_modified WHERE missing_at_ms IS NULL GROUP BY key ORDER BY key DESC`, params: [] }]))[0]
+        : (await this.executor.run([{ sql: `SELECT strftime('%Y-%m', ${modified ? 'f.modified_at' : 'f.taken_at'}, 'unixepoch', 'localtime') AS key, count(*) AS count
+          FROM files f WHERE ${condition.sql} GROUP BY key ORDER BY key DESC`, params: condition.params }]))[0]) as { key: string; count: number }[];
     const buckets = rows.map(({ key, count }) => {
       const [year, month] = key.split('-').map(Number);
       return { key, count, start: Math.floor(new Date(year!, month! - 1, 1).getTime() / 1000), end: Math.floor(new Date(year!, month!, 1).getTime() / 1000) };

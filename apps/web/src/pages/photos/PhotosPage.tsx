@@ -10,15 +10,15 @@ import { invalidate, q } from '@/lib/query';
 import { cn } from '@/lib/cn';
 import { useElementWidth, useRowHeight } from '@/components/media/MediaGrid';
 import {
-  DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuTrigger,
+  DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator, DropdownMenuTrigger,
 } from '@/components/kit/dropdown-menu';
 import { CommandBar, CommandButton, CommandDivider } from '@/shell/CommandBar';
-import { useIsAdmin, usePreferences } from '@/stores/session';
+import { useIsAdmin, usePreferences, useUpdatePreferences } from '@/stores/session';
 import { openViewer, useViewer, type ViewerScope } from '@/stores/viewer';
 import { setDynamicFrom } from '@/theme/ThemeProvider';
 import {
   anchorAt, buildLayout, dayLabel, displayOrder, folderLabel, monthAtOffset, monthStates, parseKey, resolveAnchor, topFolders,
-  type DayGroup, type LayoutCache, type ScrollAnchor, type Segment, type TimelineLayout,
+  type DayGroup, type LayoutCache, type ScrollAnchor, type Segment, type TimeBasis, type TimelineLayout,
 } from './timeline';
 import { createTimelineStore, type TimelineFilter, type TimelineSnapshot, type TimelineStore } from './store';
 import { TimelineTile, type TileApi } from './TimelineTile';
@@ -81,11 +81,13 @@ export default function PhotosPage() {
   const [text, setText] = useState(query ?? '');
   useEffect(() => setText(query ?? ''), [query]);
 
-  const filter = useMemo<TimelineFilter>(() => ({ q: query, types: TYPES_OF[typeFilter] }), [query, typeFilter]);
-  const bucketsQ = useQuery(q('buckets', { query: { scope: 'all', ...(query ? { q: query } : {}), ...(filter.types ? { types: filter.types } : {}) } }));
+  const basis = prefs.timelineBasis;
+  const updatePrefs = useUpdatePreferences();
+  const filter = useMemo<TimelineFilter>(() => ({ q: query, types: TYPES_OF[typeFilter], basis }), [query, typeFilter, basis]);
+  const bucketsQ = useQuery(q('buckets', { query: { scope: 'all', ...(query ? { q: query } : {}), ...(filter.types ? { types: filter.types } : {}), ...(basis === 'modified' ? { timeField: 'modified' as const } : {}) } }));
   const buckets = bucketsQ.data?.buckets;
   const sig = buckets ? `${bucketsQ.data!.total}|${buckets.map((b) => `${b.key}:${b.count}`).join(',')}` : '';
-  const storeKey = `${query ?? ''}|${typeFilter}|${sig}`;
+  const storeKey = `${query ?? ''}|${typeFilter}|${basis}|${sig}`;
   const { store, snap } = useTimelineStore(buckets, filter, storeKey);
   const segments = snap.segments;
 
@@ -103,8 +105,8 @@ export default function PhotosPage() {
   const cacheRef = useRef<LayoutCache>(new Map());
   const layout: TimelineLayout = useMemo(() => {
     if (cacheRef.current.size > 4000) cacheRef.current.clear();
-    return buildLayout(buckets ?? [], states, { width, rowHeight: rowH, gap, square: prefs.gridStyle === 'square', monthHeight, dayHeight: 42 }, cacheRef.current);
-  }, [buckets, states, width, rowH, gap, prefs.gridStyle, monthHeight]);
+    return buildLayout(buckets ?? [], states, { width, rowHeight: rowH, gap, square: prefs.gridStyle === 'square', monthHeight, dayHeight: 42, basis }, cacheRef.current);
+  }, [buckets, states, width, rowH, gap, prefs.gridStyle, monthHeight, basis]);
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const [scrollEl, setScrollEl] = useState<HTMLDivElement | null>(null);
@@ -461,6 +463,14 @@ export default function PhotosPage() {
                 {(Object.keys(TYPE_LABEL) as TypeFilter[]).map((k) => (
                   <DropdownMenuRadioItem key={k} value={k}>{TYPE_LABEL[k]}</DropdownMenuRadioItem>
                 ))}
+              </DropdownMenuRadioGroup>
+            </DropdownMenuGroup>
+            <DropdownMenuSeparator />
+            <DropdownMenuGroup>
+              <DropdownMenuLabel>按时间排列</DropdownMenuLabel>
+              <DropdownMenuRadioGroup value={basis} onValueChange={(v) => updatePrefs.mutate({ timelineBasis: v as TimeBasis })}>
+                <DropdownMenuRadioItem value="modified">修改时间</DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value="taken">拍摄时间</DropdownMenuRadioItem>
               </DropdownMenuRadioGroup>
             </DropdownMenuGroup>
           </DropdownMenuContent>

@@ -1,8 +1,10 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { mediaUrls, type MediaItem } from '@luvia/contracts';
 import { canThumb, thumbhashUrl } from '@/components/media/Thumb';
 import { activeMedia, isReduceMotion, useViewerUi } from './state';
 import { VideoMedia } from './VideoMedia';
+import { detailQuery } from './InfoSheet';
 import { Icon } from './icons';
 import {
   centerOn, clampPan, formatPercent, isZoomed, minimapBox, needsHigherRes, oneToOneZoom, pixelPercent, shouldPixelate,
@@ -65,6 +67,10 @@ export function Stage({ item, ctx, frameRef, first, kenBurns, onStep, onMenu, on
   const ctxRef = useRef(ctx);
   ctxRef.current = ctx;
   const isVideo = item.mediaType === 'video';
+  // 后台尚未读取元数据的视频：先取详情（服务器当场读取），再决定直接播放还是转码，避免 HEVC 等格式直接播放失败
+  const probing = isVideo && item.playability === null;
+  const detail = useQuery({ ...detailQuery(item.id), enabled: probing });
+  const video = !probing ? item : detail.data ? { ...item, playability: detail.data.playability, durationSec: detail.data.durationSec } : detail.isError ? item : null;
 
   // 图源：先 l 缩略图，显示尺寸超过其分辨率时换成 display 全分辨率；GIF 与无缩略图时直接用 display。
   const lUrl = thumbL(item);
@@ -243,11 +249,11 @@ export function Stage({ item, ctx, frameRef, first, kenBurns, onStep, onMenu, on
             }}
           >
             {isVideo ? (
-              item.playability === 'unsupported' ? (
+              !video || video.playability === 'unsupported' ? (
                 src && <img src={src} alt={item.name} draggable={false} />
               ) : (
                 <VideoMedia
-                  item={item}
+                  item={video}
                   poster={src}
                   autoPlay={slideshow === 'playing'}
                   pixelated={pixelated}

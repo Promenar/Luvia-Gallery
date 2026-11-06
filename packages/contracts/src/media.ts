@@ -106,7 +106,9 @@ export const MediaFilter = z.object({
   /** 文件名/路径全文检索（trigram，支持中文子串；1–2 个字符走前缀匹配）。 */
   q: z.string().trim().min(1).max(200).optional(),
   types: csv(MediaType).optional(),
-  /** takenAt 区间，Unix 秒，左闭右开。 */
+  /** from/to 区间与时间线分桶依据的时间：taken 拍摄时间（缺省），modified 文件修改时间。 */
+  timeField: z.enum(['taken', 'modified']).optional(),
+  /** timeField 指定时间的区间，Unix 秒，左闭右开。 */
   from: z.coerce.number().int().optional(),
   to: z.coerce.number().int().optional(),
   /** 相机型号（与 facets.cameras[].name 完全匹配），可多选。 */
@@ -148,7 +150,7 @@ export const MediaPage = z.object({
 });
 export type MediaPage = z.infer<typeof MediaPage>;
 
-/** GET /api/v2/media/buckets：按 takenAt 年月分桶（服务器时区），倒序。查询参数同 MediaListQuery（忽略 sort/cursor/limit）。 */
+/** GET /api/v2/media/buckets：按 timeField 指定的时间（缺省为 takenAt）年月分桶（服务器时区），倒序。查询参数同 MediaListQuery（忽略 sort/cursor/limit）。 */
 export const TimelineBucket = z.object({
   /** YYYY-MM */
   key: z.string(),

@@ -34,6 +34,7 @@ import { detectMounts } from '../core/mounts.ts';
 import type { Mount } from '../core/mounts.ts';
 import { readSettings, writeSettings } from '../core/settings.ts';
 import { cacheKey, cachePath, enqueueMediaTask, releaseMediaWaiter } from '../core/media-cache.ts';
+import { extractMetadataNow } from '../worker/metadata.ts';
 import { listLibraryChanges } from '../core/library-changes.ts';
 import { readInotifyQuota } from '../watch/mode.ts';
 import type { Variant } from '../core/media-cache.ts';
@@ -588,7 +589,12 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
   });
   register('mediaDetail', async (req) => {
     const context = mediaContext(req); const { id } = req.params as { id: string };
-    const item = media.one(id, context) ?? fail(404, 'NOT_FOUND', '媒体不存在或不可访问');
+    let item = media.one(id, context) ?? fail(404, 'NOT_FOUND', '媒体不存在或不可访问');
+    // 后台还没轮到的文件在查看器打开时立即读取，拍摄信息与视频能否直接播放不必等后台作业。
+    if (db.prepare("SELECT 1 FROM files WHERE id=? AND metadata_status='pending'").get(id)) {
+      try { if (await extractMetadataNow(db, id)) item = media.one(id, context) ?? item; }
+      catch { /* 读取失败时按已有数据返回，后台作业稍后重试 */ }
+    }
     const row = db.prepare(`SELECT f.*,l.name AS library_name FROM files f JOIN libraries l ON l.id=f.library_id
       WHERE f.id=? AND l.enabled=1 AND f.missing_at_ms IS NULL`).get(id) as Record<string, any> | undefined;
     if (!row) return fail(404, 'NOT_FOUND', '媒体不存在或不可访问');
@@ -1337,7 +1343,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     const id = randomUUID();
     return db.transaction(() => {
       const inserted = db.prepare("INSERT OR IGNORE INTO jobs(id,type,label,status,trigger,payload,created_at,dedupe_key) VALUES (?,?,?,'queued','manual',?,?,?)")
-        .run(id, body.type, labels[body.type], JSON.stringify({ libraryId: body.libraryId ?? null }), now(), body.type === 'cache_prune' ? 'system:cache-prune' : null);
+        .run(id, body.type, labels[body.type], JSON.stringify({ libraryId: body.libraryId ?? null }), now(), body.type === 'cache_prune' ? 'system:cache-prune' : body.type === 'thumbnails' ? `thumbnails:${body.libraryId ?? 'all'}` : null);
       if (!inserted.changes) fail(409, 'CONFLICT', '相同作业已在队列中');
       publishJob(db, id);
       return jobView(db.prepare('SELECT * FROM jobs WHERE id=?').get(id) as JobRecord);

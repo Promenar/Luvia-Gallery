@@ -163,67 +163,110 @@ export function flushMetadataFolders(db: Database.Database, assertLease: () => v
   return db.transaction(() => { assertLease(); return refreshDirtyFolders(db); }).immediate();
 }
 
+/** 读取单个文件的元数据；文件在读取前后发生变化、损坏或不在允许的挂载内时返回 null。 */
+async function extractSource(source: Source, allowed: string[], signal: AbortSignal | undefined, transcode: boolean): Promise<Metadata | null> {
+  try {
+    const root = await realpath(source.root);
+    if (!allowed.some((candidate) => candidate && within(candidate, root))) throw new Error('媒体库不在挂载内');
+    const filename = await secureMediaPath(root, source.relative_path);
+    const before = await stat(filename);
+    if (before.size !== source.size || Math.floor(before.mtimeMs / 1000) !== source.modified_at) throw new Error('媒体已变化');
+    const metadata = source.media_type === 'image' ? await readImage(filename, source) : await readAv(filename, source, signal, transcode);
+    const after = await stat(filename);
+    if (after.size !== source.size || Math.floor(after.mtimeMs / 1000) !== source.modified_at) throw new Error('媒体已变化');
+    return metadata;
+  } catch { return null; }
+}
+
+/** 在调用方的事务内保存读取结果；文件已不是待处理状态（已被其它途径读取、内容变化或缺失）时不写入。 */
+function saveMetadata(db: Database.Database, source: Source, metadata: Metadata | null): 'indexed' | 'failed' | null {
+  const current = db.prepare("SELECT 1 FROM files WHERE id=? AND size=? AND modified_at=? AND metadata_status='pending' AND missing_at_ms IS NULL").get(source.id, source.size, source.modified_at);
+  if (!current) return null;
+  if (!metadata) {
+    db.prepare("UPDATE files SET metadata_status='failed',playability=CASE WHEN media_type='video' THEN 'unsupported' ELSE NULL END WHERE id=?").run(source.id);
+    return 'failed';
+  }
+  db.prepare(`UPDATE files SET taken_at=?,taken_at_source=?,width=?,height=?,orientation=?,duration_sec=?,codec=?,audio_codec=?,container=?,fps=?,bitrate=?,
+    make=?,model=?,lens=?,f_number=?,exposure_time=?,iso=?,focal_length=?,focal_length35=?,software=?,latitude=?,longitude=?,altitude=?,playability=?,metadata_status='done' WHERE id=?`)
+    .run(metadata.takenAt, metadata.takenAtSource, metadata.width, metadata.height, metadata.orientation, metadata.duration, metadata.codec, metadata.audioCodec,
+      metadata.container, metadata.fps, metadata.bitrate, metadata.make, metadata.model, metadata.lens, metadata.fNumber, metadata.exposure, metadata.iso,
+      metadata.focalLength, metadata.focalLength35, metadata.software, metadata.latitude, metadata.longitude, metadata.altitude, metadata.playability, source.id);
+  db.prepare('INSERT INTO metadata_dirty_folders(path,updated) VALUES (?,1) ON CONFLICT(path) DO UPDATE SET updated=updated+1').run(source.folder);
+  return 'indexed';
+}
+
+/**
+ * 立即读取单个尚未读取元数据的文件（查看器打开时调用），信任边界与提供原文件相同：限定在该文件所属媒体库的根目录内。
+ * 已读取、文件缺失或媒体库停用时不做任何事，返回 false。
+ */
+export async function extractMetadataNow(db: Database.Database, fileId: string, signal?: AbortSignal): Promise<boolean> {
+  const source = db.prepare(`SELECT f.id,f.relative_path,f.folder,f.name,f.media_type,f.size,f.modified_at,l.root FROM files f
+    JOIN libraries l ON l.id=f.library_id AND l.enabled=1 WHERE f.id=? AND f.metadata_status='pending' AND f.missing_at_ms IS NULL`).get(fileId) as Source | undefined;
+  if (!source) return false;
+  const root = await realpath(source.root).catch(() => '');
+  const metadata = await extractSource(source, [root], signal, readSettings(db).transcode.enabled);
+  signal?.throwIfAborted();
+  return db.transaction(() => saveMetadata(db, source, metadata) !== null).immediate();
+}
+
 export async function processMetadataBatch(db: Database.Database, job: JobRow, options: { owner: string; allowedRoots: string[]; libraryId?: string | null; assertLease: () => void; signal?: AbortSignal }): Promise<{ complete: boolean; counts: Counts }> {
   const previous = job.checkpoint ? JSON.parse(job.checkpoint) as Partial<Counts> : {};
   const counts: Counts = { indexed: previous.indexed ?? 0, failed: previous.failed ?? 0 };
   const libraryClause = options.libraryId ? ' AND f.library_id=?' : '';
   const libraryArgs = options.libraryId ? [options.libraryId] : [];
   const allowed = await Promise.all(options.allowedRoots.map((root) => realpath(root).catch(() => '')));
-  for (let index = 0; index < 32; index++) {
-    options.signal?.throwIfAborted();
-    const source = db.transaction(() => {
-      options.assertLease();
-      db.prepare('DELETE FROM metadata_claims WHERE lease_expires_at<=?').run(now());
-      const row = db.prepare(metadataClaimSql(!!options.libraryId)).get(...libraryArgs) as Source | undefined;
-      if (row) db.prepare('INSERT INTO metadata_claims(file_id,job_id,owner,lease_expires_at) VALUES (?,?,?,?)').run(row.id, job.id, options.owner, now() + 30);
-      return row;
-    }).immediate();
-    if (!source) break;
-    const local = new AbortController();
-    const signal = options.signal ? AbortSignal.any([options.signal, local.signal]) : local.signal;
-    const timer = setInterval(() => {
-      try {
+  const settings = readSettings(db);
+  const concurrency = settings.workers.metadataConcurrency;
+  // 每轮最多处理的文件数；一轮结束后释放作业，让排队的其它作业有机会被领取。
+  const budget = Math.max(32, concurrency * 16);
+  const stop = new AbortController();
+  const signal = options.signal ? AbortSignal.any([options.signal, stop.signal]) : stop.signal;
+  let claimed = 0; let exhausted = false;
+  const claim = () => db.transaction(() => {
+    options.assertLease();
+    db.prepare('DELETE FROM metadata_claims WHERE lease_expires_at<=?').run(now());
+    const row = db.prepare(metadataClaimSql(!!options.libraryId)).get(...libraryArgs) as Source | undefined;
+    if (row) db.prepare('INSERT INTO metadata_claims(file_id,job_id,owner,lease_expires_at) VALUES (?,?,?,?)').run(row.id, job.id, options.owner, now() + 30);
+    return row;
+  }).immediate();
+  const lane = async () => {
+    while (!exhausted && claimed < budget) {
+      signal.throwIfAborted();
+      const source = claim();
+      if (!source) { exhausted = true; break; }
+      claimed++;
+      const local = new AbortController();
+      const fileSignal = AbortSignal.any([signal, local.signal]);
+      const timer = setInterval(() => {
+        try {
+          options.assertLease();
+          if (!db.prepare('UPDATE metadata_claims SET lease_expires_at=? WHERE file_id=? AND job_id=? AND owner=? AND lease_expires_at>?').run(now() + 30, source.id, job.id, options.owner, now()).changes) local.abort();
+        } catch { local.abort(); }
+      }, 5000);
+      timer.unref();
+      let metadata: Metadata | null;
+      try { metadata = await extractSource(source, allowed, fileSignal, settings.transcode.enabled); }
+      finally { clearInterval(timer); }
+      fileSignal.throwIfAborted();
+      db.transaction(() => {
         options.assertLease();
-        if (!db.prepare('UPDATE metadata_claims SET lease_expires_at=? WHERE file_id=? AND job_id=? AND owner=? AND lease_expires_at>?').run(now() + 30, source.id, job.id, options.owner, now()).changes) local.abort();
-      } catch { local.abort(); }
-    }, 5000);
-    timer.unref();
-    let metadata: Metadata | null = null;
-    try {
-      const root = await realpath(source.root);
-      if (!allowed.some((candidate) => candidate && within(candidate, root))) throw new Error('媒体库不在挂载内');
-      const filename = await secureMediaPath(root, source.relative_path);
-      const before = await stat(filename);
-      if (before.size !== source.size || Math.floor(before.mtimeMs / 1000) !== source.modified_at) throw new Error('媒体已变化');
-      metadata = source.media_type === 'image' ? await readImage(filename, source) : await readAv(filename, source, signal, readSettings(db).transcode.enabled);
-      const after = await stat(filename);
-      if (after.size !== source.size || Math.floor(after.mtimeMs / 1000) !== source.modified_at) { metadata = null; throw new Error('媒体已变化'); }
-    } catch { /* 单个损坏文件计入失败；租约和取消在提交前检查。 */ }
-    finally { clearInterval(timer); }
-    signal.throwIfAborted();
-    db.transaction(() => {
-      options.assertLease();
-      if (!db.prepare('SELECT 1 FROM metadata_claims WHERE file_id=? AND job_id=? AND owner=? AND lease_expires_at>?').get(source.id, job.id, options.owner, now())) throw new Error('元数据租约已失效');
-      const current = db.prepare("SELECT 1 FROM files WHERE id=? AND size=? AND modified_at=? AND metadata_status='pending' AND missing_at_ms IS NULL").get(source.id, source.size, source.modified_at);
-      if (current) {
-        if (metadata) {
-          db.prepare(`UPDATE files SET taken_at=?,taken_at_source=?,width=?,height=?,orientation=?,duration_sec=?,codec=?,audio_codec=?,container=?,fps=?,bitrate=?,
-            make=?,model=?,lens=?,f_number=?,exposure_time=?,iso=?,focal_length=?,focal_length35=?,software=?,latitude=?,longitude=?,altitude=?,playability=?,metadata_status='done' WHERE id=?`)
-            .run(metadata.takenAt, metadata.takenAtSource, metadata.width, metadata.height, metadata.orientation, metadata.duration, metadata.codec, metadata.audioCodec,
-              metadata.container, metadata.fps, metadata.bitrate, metadata.make, metadata.model, metadata.lens, metadata.fNumber, metadata.exposure, metadata.iso,
-              metadata.focalLength, metadata.focalLength35, metadata.software, metadata.latitude, metadata.longitude, metadata.altitude, metadata.playability, source.id);
-          counts.indexed++;
-          db.prepare('INSERT INTO metadata_dirty_folders(path,updated) VALUES (?,1) ON CONFLICT(path) DO UPDATE SET updated=updated+1').run(source.folder);
-        } else {
-          db.prepare("UPDATE files SET metadata_status='failed',playability=CASE WHEN media_type='video' THEN 'unsupported' ELSE NULL END WHERE id=?").run(source.id);
-          counts.failed++;
+        if (!db.prepare('SELECT 1 FROM metadata_claims WHERE file_id=? AND job_id=? AND owner=? AND lease_expires_at>?').get(source.id, job.id, options.owner, now())) throw new Error('元数据租约已失效');
+        const result = saveMetadata(db, source, metadata);
+        if (result) {
+          counts[result]++;
+          db.prepare('UPDATE jobs SET checkpoint=?,progress_done=? WHERE id=?').run(JSON.stringify(counts), counts.indexed + counts.failed, job.id);
         }
-        db.prepare('UPDATE jobs SET checkpoint=?,progress_done=? WHERE id=?').run(JSON.stringify(counts), counts.indexed + counts.failed, job.id);
-      }
-      db.prepare('DELETE FROM metadata_claims WHERE file_id=? AND job_id=? AND owner=?').run(source.id, job.id, options.owner);
-    }).immediate();
-    await delay(10, undefined, { signal });
-  }
+        db.prepare('DELETE FROM metadata_claims WHERE file_id=? AND job_id=? AND owner=?').run(source.id, job.id, options.owner);
+      }).immediate();
+      // 让出事件循环，避免多路并发连续占用主线程
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+  };
+  const results = await Promise.allSettled(Array.from({ length: concurrency }, async () => {
+    try { await lane(); } catch (error) { stop.abort(); throw error; }
+  }));
+  const failure = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+  if (failure) throw failure.reason;
   const dirtyRemaining = flushMetadataFolders(db, options.assertLease);
   const pending = db.prepare(`SELECT 1 FROM files f INDEXED BY ${options.libraryId ? 'files_library_metadata' : 'files_metadata'} CROSS JOIN libraries l ON l.id=f.library_id AND l.enabled=1 WHERE f.metadata_status='pending' AND f.missing_at_ms IS NULL${libraryClause} LIMIT 1`).get(...libraryArgs);
   if (pending || dirtyRemaining) await delay(50, undefined, { signal: options.signal });

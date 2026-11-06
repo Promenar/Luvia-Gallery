@@ -156,10 +156,12 @@ export const AdminSettings = z.object({
     dailyAt: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
   }),
   workers: z.object({
-    /** 缩略图并发，1–16。 */
-    thumbnailConcurrency: z.number().int().min(1).max(16),
-    /** FFmpeg 全局并发（缩略图抽帧、预览、转码共享），1–8。 */
-    ffmpegConcurrency: z.number().int().min(1).max(8),
+    /** 缩略图并发，1–64；全库批量生成时始终为浏览中的按需生成保留 2 个。 */
+    thumbnailConcurrency: z.number().int().min(1).max(64),
+    /** FFmpeg 全局并发（缩略图抽帧、预览、转码共享），1–32。 */
+    ffmpegConcurrency: z.number().int().min(1).max(32),
+    /** 每个后台元数据作业同时读取的文件数，1–64。 */
+    metadataConcurrency: z.number().int().min(1).max(64),
   }),
   transcode: z.object({ enabled: z.boolean(), hwaccel: z.enum(['auto', 'none', 'nvenc', 'vaapi', 'qsv']) }),
   previews: z.object({ enabled: z.boolean() }),

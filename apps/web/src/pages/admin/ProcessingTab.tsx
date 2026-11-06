@@ -76,7 +76,8 @@ function WorkersSection({ s, save }: { s: AdminSettings; save: (p: SettingsPatch
   const sys = useQuery(q('system'));
   const ov = useQuery(overviewQuery);
   const prune = useSave({ fn: () => call('createJob', { body: { type: 'cache_prune' } }), success: '已开始清理缓存', invalidate: [['listJobs'], ['adminOverview']] });
-  const ids = { t: useFieldId('wt'), f: useFieldId('wf'), hw: useFieldId('hw'), c: useFieldId('cl') };
+  const thumbs = useSave({ fn: () => call('createJob', { body: { type: 'thumbnails' } }), success: '已开始生成缩略图，进度在概览里查看', invalidate: [['listJobs']] });
+  const ids = { t: useFieldId('wt'), f: useFieldId('wf'), m: useFieldId('wm'), hw: useFieldId('hw'), c: useFieldId('cl') };
   const ff = sys.data?.ffmpeg;
   const hwHint = !sys.data ? '正在检测硬件加速…'
     : !ff?.available ? '没有检测到 FFmpeg，视频缩略图、预览和转码都不可用。'
@@ -86,10 +87,16 @@ function WorkersSection({ s, save }: { s: AdminSettings; save: (p: SettingsPatch
     <>
       <Section title="后台处理" desc="缩略图、拍摄信息、视频预览都在独立的后台进程里处理，再忙也不会拖慢浏览。">
         <SettingRow title="缩略图同时处理数" htmlFor={ids.t} desc="数字越大越快，NAS 的 CPU 占用也越高。">
-          <Range id={ids.t} min={1} max={16} value={s.workers.thumbnailConcurrency} onCommit={(v) => save({ workers: { thumbnailConcurrency: v } })} />
+          <Range id={ids.t} min={1} max={64} value={s.workers.thumbnailConcurrency} onCommit={(v) => save({ workers: { thumbnailConcurrency: v } })} />
         </SettingRow>
         <SettingRow title="视频同时处理数" htmlFor={ids.f} desc="抽帧、预览短片和转码共用这个上限。">
-          <Range id={ids.f} min={1} max={8} value={s.workers.ffmpegConcurrency} onCommit={(v) => save({ workers: { ffmpegConcurrency: v } })} />
+          <Range id={ids.f} min={1} max={32} value={s.workers.ffmpegConcurrency} onCommit={(v) => save({ workers: { ffmpegConcurrency: v } })} />
+        </SettingRow>
+        <SettingRow title="拍摄信息同时读取数" htmlFor={ids.m} desc="每个媒体库后台读取拍摄时间、相机和位置的文件数。打开查看器时会立即读取当前文件，不用等后台。">
+          <Range id={ids.m} min={1} max={64} value={s.workers.metadataConcurrency} onCommit={(v) => save({ workers: { metadataConcurrency: v } })} />
+        </SettingRow>
+        <SettingRow title="全库缩略图" desc="为所有照片和视频生成网格用的缩略图：已有的跳过，缺少的补上，缓存文件丢失的重新生成。每万个文件约占 0.8 GB 缓存，开始前请把缓存上限调到够用。">
+          <Chip disabled={thumbs.isPending} onClick={() => thumbs.mutate(undefined)}>开始生成</Chip>
         </SettingRow>
         <SettingRow title="浏览器不能直接播放的视频自动转码" desc="例如 HEVC、MKV。关闭后这类视频只能下载观看。">
           <Switch checked={s.transcode.enabled} onCheckedChange={(v) => save({ transcode: { enabled: v } })} aria-label="自动转码" disabled={ff?.available === false} />

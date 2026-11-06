@@ -3,13 +3,18 @@
  * 不依赖 React 与 DOM，便于单元测试。
  *
  * 数据模型：buckets（倒序，新→旧）给出全部月份与数量；已加载的媒体以“段”（Segment）组织，
- * 每段从某个月的起点开始按 taken_desc 连续向更早翻页。跳转到未加载的月份时以 `to=该月 end`
+ * 每段从某个月的起点开始按所选时间（修改时间或拍摄时间）倒序连续向更早翻页。跳转到未加载的月份时以 `to=该月 end`
  * 新建一段，两段相接后合并，保证同一段内的游标与查询始终对应。
  */
 import type { MediaItem, MediaListQuery, TimelineBucket } from '@luvia/contracts';
 import { aspectOf, justifyRows, squareRows, type JustifiedCell } from '@/components/media/justify';
 
 export const toSec = (iso: string) => Math.floor(Date.parse(iso) / 1000);
+
+/** 时间线的排序与分组依据：modified 文件修改时间，taken 拍摄时间。 */
+export type TimeBasis = 'modified' | 'taken';
+/** 媒体在给定依据下的时间（Unix 秒）。 */
+export const timeOf = (it: Pick<MediaItem, 'takenAt' | 'modifiedAt'>, basis: TimeBasis = 'taken') => (basis === 'modified' ? it.modifiedAt : toSec(it.takenAt));
 
 /** buckets 为倒序（索引 0 最新）。返回 sec 所在桶的索引，不在任何桶内返回 -1。 */
 export function bucketIndexAt(buckets: readonly TimelineBucket[], sec: number): number {
@@ -50,12 +55,12 @@ export interface DayGroup {
 export const dayLabel = (d: Pick<DayGroup, 'month' | 'day' | 'weekday'>) => `${d.month} 月 ${d.day} 日 ${WD[d.weekday]}`;
 
 /** 把同一个月（已按时间倒序）的媒体按服务器时区的自然日分组；日期与星期和桶的月份归属保持一致。 */
-export function groupByDay(items: readonly MediaItem[], bucket: TimelineBucket): DayGroup[] {
+export function groupByDay(items: readonly MediaItem[], bucket: TimelineBucket, basis: TimeBasis = 'taken'): DayGroup[] {
   const off = bucketOffsetSec(bucket);
   const out: DayGroup[] = [];
   let cur: DayGroup | null = null;
   for (const it of items) {
-    const d = new Date((toSec(it.takenAt) + off) * 1000);
+    const d = new Date((timeOf(it, basis) + off) * 1000);
     const day = d.getUTCDate();
     if (!cur || cur.day !== day) {
       const { year, month } = parseKey(bucket.key);
@@ -108,10 +113,10 @@ export function frontierOf(s: Segment): number {
 }
 
 /** 为新到的一页计算月份归属；落在任何桶外的项（例如分桶之后新增）归入前一项所在月份。 */
-export function assignMonths(buckets: readonly TimelineBucket[], items: readonly MediaItem[], prev: number): number[] {
+export function assignMonths(buckets: readonly TimelineBucket[], items: readonly MediaItem[], prev: number, basis: TimeBasis = 'taken'): number[] {
   let last = prev;
   return items.map((it) => {
-    const m = bucketIndexAt(buckets, toSec(it.takenAt));
+    const m = bucketIndexAt(buckets, timeOf(it, basis));
     last = m < 0 ? last : Math.max(m, last);
     return last;
   });
@@ -232,6 +237,8 @@ export interface LayoutMetrics {
   square: boolean;
   monthHeight: number;
   dayHeight: number;
+  /** 按天分组所用的时间，缺省为拍摄时间。 */
+  basis?: TimeBasis;
 }
 
 export type TimelineRow =
@@ -266,10 +273,10 @@ type DayRows = { day: DayGroup; rows: { cells: JustifiedCell<MediaItem>[]; heigh
 export type LayoutCache = Map<string, DayRows[]>;
 
 function layoutMonth(items: MediaItem[], bucket: TimelineBucket, m: LayoutMetrics, cache?: LayoutCache): DayRows[] {
-  const sig = `${bucket.key}|${items.length}|${items[0]?.id}|${items.at(-1)?.id}|${m.width}|${m.rowHeight}|${m.gap}|${m.square ? 1 : 0}`;
+  const sig = `${bucket.key}|${items.length}|${items[0]?.id}|${items.at(-1)?.id}|${m.width}|${m.rowHeight}|${m.gap}|${m.square ? 1 : 0}|${m.basis ?? 'taken'}`;
   const hit = cache?.get(sig);
   if (hit) return hit;
-  const res = groupByDay(items, bucket).map((day) => ({
+  const res = groupByDay(items, bucket, m.basis).map((day) => ({
     day,
     rows: (m.square ? squareRows(day.items, m.width, m.rowHeight, m.gap) : justifyRows(day.items, aspectOf, m.width, m.rowHeight, m.gap)).map((r) => ({
       cells: r.cells,

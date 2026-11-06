@@ -3,11 +3,13 @@
  * ensure(月份) 由视口内的未加载月份触发；每次页面返回后合并相接的段。
  */
 import type { MediaItem, MediaListQuery, MediaPage, MediaType, TimelineBucket } from '@luvia/contracts';
-import { assignMonths, mergeSegments, planLoad, type Segment } from './timeline';
+import { assignMonths, mergeSegments, planLoad, type Segment, type TimeBasis } from './timeline';
 
 export interface TimelineFilter {
   q?: string;
   types?: MediaType[];
+  /** 排序与分组依据，缺省为拍摄时间。 */
+  basis?: TimeBasis;
 }
 
 export type FetchPage = (query: MediaListQuery, signal: AbortSignal) => Promise<MediaPage>;
@@ -33,7 +35,9 @@ export interface TimelineStore {
 export const PAGE_LIMIT = 300;
 
 export function baseQuery(filter: TimelineFilter, limit = PAGE_LIMIT): MediaListQuery {
-  const q: MediaListQuery = { scope: 'all', sort: 'taken_desc', limit };
+  const q: MediaListQuery = filter.basis === 'modified'
+    ? { scope: 'all', sort: 'modified_desc', timeField: 'modified', limit }
+    : { scope: 'all', sort: 'taken_desc', limit };
   if (filter.q) q.q = filter.q;
   if (filter.types?.length) q.types = filter.types;
   return q;
@@ -75,7 +79,7 @@ export function createTimelineStore(
       const cur = segs.find((x) => x.id === id);
       if (!cur || destroyed) return;
       const add = page.items.filter((it) => !cur.ids.has(it.id));
-      const months = assignMonths(buckets, add, cur.months.length ? cur.months[cur.months.length - 1]! : cur.startIdx);
+      const months = assignMonths(buckets, add, cur.months.length ? cur.months[cur.months.length - 1]! : cur.startIdx, filter.basis);
       const ids = new Set(cur.ids);
       add.forEach((it) => ids.add(it.id));
       update(id, {

@@ -107,7 +107,7 @@ let settings: AdminSettings = {
   libraries: { autoEnableNewMounts: false, missingGraceDays: 7 },
   folders: { exposeHostPaths: true },
   scan: { mode: 'daily', intervalMinutes: 360, dailyAt: '04:00' },
-  workers: { thumbnailConcurrency: 4, ffmpegConcurrency: 2 },
+  workers: { thumbnailConcurrency: 8, ffmpegConcurrency: 4, metadataConcurrency: 8 },
   transcode: { enabled: true, hwaccel: 'auto' },
   previews: { enabled: true },
   cache: { limitGB: 60 },

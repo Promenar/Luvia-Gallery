@@ -64,6 +64,8 @@ export const Preferences = z.object({
   /** 网格行高档位 1（最密）–5（最疏）。 */
   density: z.number().int().min(1).max(5).default(3),
   gridStyle: z.enum(['justified', 'square']).default('justified'),
+  /** 照片时间线的排序与分组依据：modified 文件修改时间（默认，导入后立即可用），taken 拍摄时间（随后台读取逐步完善）。 */
+  timelineBasis: z.enum(['modified', 'taken']).default('modified'),
   /** 视频悬停预览。 */
   hoverPreview: z.boolean().default(true),
   reduceMotion: z.enum(['system', 'on', 'off']).default('system'),
@@ -129,6 +131,7 @@ export const PreferencesPatch = z
     locale: Preferences.shape.locale.unwrap(),
     density: z.number().int().min(1).max(5),
     gridStyle: Preferences.shape.gridStyle.unwrap(),
+    timelineBasis: Preferences.shape.timelineBasis.unwrap(),
     hoverPreview: z.boolean(),
     reduceMotion: Preferences.shape.reduceMotion.unwrap(),
     startPage: Preferences.shape.startPage.unwrap(),
