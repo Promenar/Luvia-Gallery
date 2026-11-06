@@ -75,9 +75,10 @@ export async function processThumbnailBackfill(db: Database.Database, job: JobRo
   let next = 0;
   const lane = async () => {
     while (next < tasks.length) {
+      // 先同步取任务再让路：等待期间其它通道可能取走剩余任务，醒来后再取会拿到空任务
+      const task = tasks[next++]!;
       await waitForWalCapacity(signal);
       signal.throwIfAborted(); options.assertLease();
-      const task = tasks[next++]!;
       const source = { mediaId: task.row.id, sourceSize: task.row.size, sourceModified: task.row.modified_at, sourceGeneration: task.row.cache_generation };
       try {
         if (task.kind === 'dimensions') {

@@ -81,3 +81,27 @@ test('全库缩略图分轮查询沿 id 索引顺序读取，统计信息失真�
     }
   } finally { db.close(); }
 });
+
+test('多个通道同时在 WAL 让路处等待时不会争抢到空任务，作业正常完成', async () => {
+  const { setWalPressure } = await import('../src/worker/wal-checkpoint.ts');
+  const { writeSettings } = await import('../src/core/settings.ts');
+  const root = await mkdtemp(path.join(tmpdir(), 'luvia-thumb-race-')); const cache = await mkdtemp(path.join(tmpdir(), 'luvia-thumb-race-cache-'));
+  const db = openDatabase(':memory:');
+  try {
+    for (const name of ['a', 'b', 'c']) await sharp({ create: { width: 64, height: 48, channels: 3, background: '#789' } }).jpeg().toFile(path.join(root, `${name}.jpg`));
+    db.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib','照片',?)").run(root);
+    await scanLibrary(db, { id: 'lib', root }, { allowedRoots: [root] });
+    writeSettings(db, { workers: { metadataConcurrency: 2 } });
+    db.prepare("INSERT INTO jobs(id,type,label,status,trigger,payload,created_at) VALUES ('dims','thumbnails','补全照片宽高','queued','manual',?,1)").run(JSON.stringify({ libraryId: 'lib', dimensionsOnly: true }));
+    // 两个通道先在让路处等待，放行后各取一个任务并立即再次进入积压：处理完后都会回到让路处等待，
+    // 此时只剩一个任务，放行后若醒来才取任务，其中一个通道会取到空任务
+    setWalPressure(true);
+    setTimeout(() => { setWalPressure(false); setWalPressure(true); }, 50);
+    setTimeout(() => setWalPressure(false), 1500);
+    await runNextJob(db, { owner: 'worker', allowedRoots: [root], legacyDir: root, systemRoots: [], cacheDir: cache });
+    const job = db.prepare("SELECT status,result FROM jobs WHERE id='dims'").get() as { status: string; result: string };
+    assert.equal(job.status, 'succeeded');
+    assert.equal(JSON.parse(job.result).failed, 0);
+    assert.equal((db.prepare('SELECT count(*) AS n FROM files WHERE width IS NULL').get() as { n: number }).n, 0);
+  } finally { setWalPressure(false); db.close(); await rm(root, { recursive: true, force: true }); await rm(cache, { recursive: true, force: true }); }
+});
