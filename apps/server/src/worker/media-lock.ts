@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import type Database from 'better-sqlite3';
+import { renewLease } from '../core/sqlite-errors.ts';
 
 export async function withMediaGenerationLock<T>(db: Database.Database, owner: string, key: string, operation: (signal: AbortSignal) => Promise<T>, options: { signal?: AbortSignal; assertLease?: () => void } = {}): Promise<T> {
   const token = randomUUID();
@@ -14,11 +15,9 @@ export async function withMediaGenerationLock<T>(db: Database.Database, owner: s
   }
   const local = new AbortController();
   const signal = options.signal ? AbortSignal.any([options.signal, local.signal]) : local.signal;
-  const heartbeat = setInterval(() => {
-    try {
-      if (!db.prepare('UPDATE media_generation_locks SET lease_expires_at=unixepoch()+30 WHERE cache_key=? AND owner=? AND lease_token=? AND lease_expires_at>unixepoch()').run(key, owner, token).changes) local.abort();
-    } catch { local.abort(); }
-  }, 5000);
+  const heartbeat = setInterval(() => renewLease(
+    () => db.prepare('UPDATE media_generation_locks SET lease_expires_at=unixepoch()+30 WHERE cache_key=? AND owner=? AND lease_token=? AND lease_expires_at>unixepoch()').run(key, owner, token).changes > 0,
+    () => local.abort()), 5000);
   heartbeat.unref();
   try {
     signal.throwIfAborted(); options.assertLease?.();

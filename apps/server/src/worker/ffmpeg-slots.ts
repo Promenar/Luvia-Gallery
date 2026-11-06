@@ -3,6 +3,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import type Database from 'better-sqlite3';
 import { readSettings } from '../core/settings.ts';
 import { runProcess } from './process-runner.ts';
+import { renewLease } from '../core/sqlite-errors.ts';
 
 const now = () => Math.floor(Date.now() / 1000);
 async function withSlot<T>(db: Database.Database, owner: string, kind: 'ffmpeg' | 'thumbnail', operation: (signal: AbortSignal) => Promise<T>, options: { signal?: AbortSignal; assertLease?: () => void } = {}): Promise<T> {
@@ -23,12 +24,10 @@ async function withSlot<T>(db: Database.Database, owner: string, kind: 'ffmpeg' 
   }
   const local = new AbortController();
   const signal = options.signal ? AbortSignal.any([options.signal, local.signal]) : local.signal;
-  const heartbeat = setInterval(() => {
-    try {
-      options.assertLease?.();
-      if (!db.prepare('UPDATE ffmpeg_slots SET lease_expires_at=? WHERE id=? AND owner=? AND lease_expires_at>?').run(now() + 30, id, owner, now()).changes) local.abort();
-    } catch { local.abort(); }
-  }, 5000);
+  const heartbeat = setInterval(() => renewLease(() => {
+    options.assertLease?.();
+    return db.prepare('UPDATE ffmpeg_slots SET lease_expires_at=? WHERE id=? AND owner=? AND lease_expires_at>?').run(now() + 30, id, owner, now()).changes > 0;
+  }, () => local.abort()), 5000);
   heartbeat.unref();
   try {
     const result = await operation(signal);
