@@ -7,6 +7,8 @@ export const PRESSURE_FRAMES = 65536;
 const RESUME_FRAMES = 16384;
 let pressured = false;
 const waiters = new Set<() => void>();
+/** 设置后台作业是否需要让路（检查点线程据 WAL 积压调用；测试也用它模拟积压）。 */
+export function setWalPressure(next: boolean) { setPressure(next); }
 function setPressure(next: boolean) {
   if (pressured === next) return;
   pressured = next;

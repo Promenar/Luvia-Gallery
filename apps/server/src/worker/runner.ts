@@ -241,8 +241,10 @@ export async function runNextJob(db: Database.Database, options: WorkerOptions):
     }
     else {
       // 界面只显示概括信息，原始错误写入工作进程日志便于排查
-      const code = (error as { code?: unknown } | null)?.code;
-      options.log?.('warn', '作业失败', { type: job.type, error: `${typeof code === 'string' ? `${code} ` : ''}${error instanceof Error ? `${error.name}: ${error.message}` : String(error)}`.slice(0, 300) });
+      // 日志上下文只保留白名单字段：code 记 SQLite 错误代码或错误名，消息不含路径分隔符时才附上
+      const sqliteCode = (error as { code?: unknown } | null)?.code;
+      const detail = error instanceof Error && !/[\\/]/.test(error.message) ? `: ${error.message}` : '';
+      options.log?.('warn', '作业失败', { type: job.type, code: `${typeof sqliteCode === 'string' ? sqliteCode : error instanceof Error ? error.name : 'unknown'}${detail}`.slice(0, 200) });
       db.transaction(() => {
         if (!queue.fail(job.id, message)) return;
         if (watchScan) finishWatchReconcile(db, job.id, false);
