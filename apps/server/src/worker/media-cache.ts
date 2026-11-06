@@ -2,7 +2,7 @@ import { mkdir, realpath, rename, stat, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
-import sharp from 'sharp';
+import sharp, { type Metadata } from 'sharp';
 import { rgbaToThumbHash } from 'thumbhash';
 import { z } from 'zod';
 import { cacheKey, cachePath } from '../core/media-cache.ts';
@@ -36,16 +36,20 @@ export async function generateMediaCache(db: Database.Database, payload: unknown
   const info = await stat(filename);
   if (info.size !== row.size || Math.floor(info.mtimeMs / 1000) !== row.modified_at || (row.mtime_ms !== null && info.mtimeMs !== row.mtime_ms)) throw new Error('媒体已变化');
   options.signal?.throwIfAborted(); options.assertLease();
-  if (task.variant.kind === 'dimensions') {
-    const metadata = await sharp(filename).metadata();
-    if (!metadata.width || !metadata.height) throw new Error('图片尺寸不可用');
+  /** 记录显示方向下的宽高；onlyMissing 时只填补尚无尺寸的文件，不覆盖拍摄信息读取的结果。 */
+  const recordDimensions = (metadata: Metadata, onlyMissing: boolean) => {
+    if (!metadata.width || !metadata.height) return false;
     const rotated = metadata.orientation !== undefined && metadata.orientation >= 5 && metadata.orientation <= 8;
     options.signal?.throwIfAborted();
     db.transaction(() => {
       options.assertLease();
-      db.prepare('UPDATE files SET width=?,height=?,orientation=? WHERE id=? AND size=? AND modified_at=? AND cache_generation=?')
+      db.prepare(`UPDATE files SET width=?,height=?,orientation=COALESCE(?,orientation) WHERE id=? AND size=? AND modified_at=? AND cache_generation=?${onlyMissing ? ' AND (width IS NULL OR height IS NULL)' : ''}`)
         .run(rotated ? metadata.height : metadata.width, rotated ? metadata.width : metadata.height, metadata.orientation ?? null, row.id, row.size, row.modified_at, row.cache_generation);
     }).immediate();
+    return true;
+  };
+  if (task.variant.kind === 'dimensions') {
+    if (!recordDimensions(await sharp(filename).metadata(), false)) throw new Error('图片尺寸不可用');
     return;
   }
   const cacheRoot = path.resolve(options.cacheDir);
@@ -70,6 +74,8 @@ export async function generateMediaCache(db: Database.Database, payload: unknown
       await sharp(input).rotate().resize({ width: dimension, height: dimension, fit: 'outside', withoutEnlargement: true }).webp({ quality: 82 }).toFile(temp);
       const placeholder = await sharp(input).rotate().resize({ width: 100, height: 100, fit: 'inside', withoutEnlargement: true }).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
       hash = Buffer.from(rgbaToThumbHash(placeholder.info.width, placeholder.info.height, placeholder.data)).toString('base64');
+      // 生成缩略图时顺带记录原始宽高，供网格按原始比例排布；视频帧已由 FFmpeg 按显示方向旋转
+      if (!row.width || !row.height) recordDimensions(await sharp(input).metadata(), true);
     } else if (task.variant.kind === 'preview') {
       if (!readSettings(db).previews.enabled) throw new Error('视频预览已关闭');
       const setting = readSettings(db).transcode.hwaccel;

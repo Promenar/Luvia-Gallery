@@ -21,7 +21,7 @@ import { withMediaGenerationLock } from './media-lock.ts';
 import { finishWatchReconcile } from './watch-reconcile-queue.ts';
 
 export type WorkerOptions = { owner: string; allowedRoots: string[]; legacyDir: string; systemRoots: string[]; configuredMediaRoots?: string[]; cacheDir?: string; signal?: AbortSignal; hlsIdleMs?: number; log?: (level: 'info' | 'warn', message: string, ctx: Record<string, string>) => void };
-type Payload = { libraryId?: string | null; legacyImportId?: string; mediaId?: string; hlsSessionId?: string; sourceSize?: number; sourceModified?: number; sourceGeneration?: number; variant?: Variant };
+type Payload = { libraryId?: string | null; dimensionsOnly?: boolean; legacyImportId?: string; mediaId?: string; hlsSessionId?: string; sourceSize?: number; sourceModified?: number; sourceGeneration?: number; variant?: Variant };
 const now = () => Math.floor(Date.now() / 1000);
 function safeScanError(error: unknown): string {
   const code = (error as NodeJS.ErrnoException | null)?.code;
@@ -159,7 +159,7 @@ export async function runNextJob(db: Database.Database, options: WorkerOptions):
       if (!queue.finish(job.id, result)) throw new Error('作业租约已失效');
     } else if (job.type === 'thumbnails' && !payload.mediaId) {
       const result = await processThumbnailBackfill(db, job, { owner: options.owner, cacheDir: options.cacheDir ?? path.resolve(process.env.CACHE_DIR ?? 'cache'), allowedRoots: options.allowedRoots,
-        libraryId: payload.libraryId, assertLease, signal: controller.signal });
+        libraryId: payload.libraryId, dimensionsOnly: payload.dimensionsOnly === true, assertLease, signal: controller.signal });
       if (result.complete) { if (!queue.finish(job.id, result.counts)) throw new Error('作业租约已失效'); }
       else if (!queue.release(job.id)) throw new Error('作业租约已失效');
     } else if (job.type === 'previews' && !payload.mediaId) {

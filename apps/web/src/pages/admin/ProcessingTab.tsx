@@ -77,6 +77,7 @@ function WorkersSection({ s, save }: { s: AdminSettings; save: (p: SettingsPatch
   const ov = useQuery(overviewQuery);
   const prune = useSave({ fn: () => call('createJob', { body: { type: 'cache_prune' } }), success: '已开始清理缓存', invalidate: [['listJobs'], ['adminOverview']] });
   const thumbs = useSave({ fn: () => call('createJob', { body: { type: 'thumbnails' } }), success: '已开始生成缩略图，进度在概览里查看', invalidate: [['listJobs']] });
+  const dims = useSave({ fn: () => call('createJob', { body: { type: 'thumbnails', dimensionsOnly: true } }), success: '已开始补全照片宽高，进度在概览里查看', invalidate: [['listJobs']] });
   const ids = { t: useFieldId('wt'), f: useFieldId('wf'), m: useFieldId('wm'), hw: useFieldId('hw'), c: useFieldId('cl') };
   const ff = sys.data?.ffmpeg;
   const hwHint = !sys.data ? '正在检测硬件加速…'
@@ -95,8 +96,11 @@ function WorkersSection({ s, save }: { s: AdminSettings; save: (p: SettingsPatch
         <SettingRow title="拍摄信息同时读取数" htmlFor={ids.m} desc="每个媒体库后台读取拍摄时间、相机和位置的文件数。打开查看器时会立即读取当前文件，不用等后台。">
           <Range id={ids.m} min={1} max={64} value={s.workers.metadataConcurrency} onCommit={(v) => save({ workers: { metadataConcurrency: v } })} />
         </SettingRow>
-        <SettingRow title="全库缩略图" desc="为所有照片和视频生成网格用的缩略图：已有的跳过，缺少的补上，缓存文件丢失的重新生成。每万个文件约占 0.8 GB 缓存，开始前请把缓存上限调到够用。">
+        <SettingRow title="全库缩略图" desc="为所有照片和视频生成网格用的缩略图：已有的跳过，缺少的补上，缓存文件丢失的重新生成，同时记录原始宽高。每万个文件约占 0.8 GB 缓存，开始前请把缓存上限调到够用。">
           <Chip disabled={thumbs.isPending} onClick={() => thumbs.mutate(undefined)}>开始生成</Chip>
+        </SettingRow>
+        <SettingRow title="补全照片宽高" desc="网格按原始比例排布需要宽高。只为还没有宽高的照片和视频读取，不生成缩略图；与后台读取拍摄信息互不重复。">
+          <Chip disabled={dims.isPending} onClick={() => dims.mutate(undefined)}>开始补全</Chip>
         </SettingRow>
         <SettingRow title="浏览器不能直接播放的视频自动转码" desc="例如 HEVC、MKV。关闭后这类视频只能下载观看。">
           <Switch checked={s.transcode.enabled} onCheckedChange={(v) => save({ transcode: { enabled: v } })} aria-label="自动转码" disabled={ff?.available === false} />
