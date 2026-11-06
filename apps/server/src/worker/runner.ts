@@ -22,6 +22,11 @@ import { finishWatchReconcile } from './watch-reconcile-queue.ts';
 
 export type WorkerOptions = { owner: string; allowedRoots: string[]; legacyDir: string; systemRoots: string[]; configuredMediaRoots?: string[]; cacheDir?: string; signal?: AbortSignal; hlsIdleMs?: number; log?: (level: 'info' | 'warn', message: string, ctx: Record<string, string>) => void };
 type Payload = { libraryId?: string | null; dimensionsOnly?: boolean; legacyImportId?: string; mediaId?: string; hlsSessionId?: string; sourceSize?: number; sourceModified?: number; sourceGeneration?: number; variant?: Variant };
+/** SQLite 暂时繁忙（锁等待超时），稍后重试即可恢复。 */
+export function isTransientSqliteError(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code;
+  return typeof code === 'string' && (code.startsWith('SQLITE_BUSY') || code.startsWith('SQLITE_LOCKED'));
+}
 const now = () => Math.floor(Date.now() / 1000);
 function safeScanError(error: unknown): string {
   const code = (error as NodeJS.ErrnoException | null)?.code;
@@ -223,12 +228,22 @@ export async function runNextJob(db: Database.Database, options: WorkerOptions):
     const message = watchScan ? safeScanError(error) : error instanceof LegacyIdentityUncertainError ? error.message
       : error instanceof Error && error.message === '作业类型尚未实现' ? error.message : '作业执行失败，请检查媒体库及工作进程';
     if (error instanceof LegacyIdentityUncertainError) options.log?.('warn', error.message, { type: job.type });
-    if (options.signal?.aborted) db.transaction(() => {
-      if (queue.release(job.id) && job.type === 'scan') {
-        const run = db.prepare('SELECT library_id FROM scan_runs WHERE job_id=?').get(job.id) as { library_id: string } | undefined;
-        if (run) publishScanChanges(db, job.id, run.library_id, false);
+    // 停止进程或数据库暂时被锁（例如检查点）时把作业放回队列，稍后从检查点继续，而不是判为失败
+    const transient = isTransientSqliteError(error);
+    if (options.signal?.aborted || transient) {
+      try {
+        db.transaction(() => {
+          if (queue.release(job.id) && job.type === 'scan') {
+            const run = db.prepare('SELECT library_id FROM scan_runs WHERE job_id=?').get(job.id) as { library_id: string } | undefined;
+            if (run) publishScanChanges(db, job.id, run.library_id, false);
+          }
+        }).immediate();
+      } catch (releaseError) {
+        // 仍然被锁时保留租约，过期后由其它领取者接手
+        if (!isTransientSqliteError(releaseError)) throw releaseError;
       }
-    }).immediate();
+      if (transient) options.log?.('warn', '数据库暂时繁忙，作业稍后继续', { type: job.type });
+    }
     else {
       db.transaction(() => {
         if (!queue.fail(job.id, message)) return;

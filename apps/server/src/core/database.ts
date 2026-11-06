@@ -452,6 +452,8 @@ export function openDatabase(filename: string, options: { readonly?: boolean; bo
     db.pragma('busy_timeout = 5000');
     db.pragma('cache_size = -32768');
     db.pragma('mmap_size = 67108864');
+    // WAL 每次从头复用时把文件截到 64MB，避免长期读取期间涨大的 WAL 一直占着磁盘
+    db.pragma('journal_size_limit = 67108864');
     if (!readonly) {
       db.pragma('journal_mode = WAL');
       db.pragma('synchronous = NORMAL');
