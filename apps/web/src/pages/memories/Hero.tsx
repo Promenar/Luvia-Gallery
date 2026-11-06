@@ -58,7 +58,7 @@ function HeroSourceControl({ label, open, setOpen, onReroll, onImage = true }: {
       <Popover.Trigger className={triggerCls}>{trigger}</Popover.Trigger>
       <Popover.Portal>
         <Popover.Positioner side="bottom" align="end" sideOffset={8} collisionPadding={16} className="z-40">
-          <Popover.Popup className="glass w-80 origin-[var(--transform-origin)] rounded-[calc(var(--r3)+2px)] p-2 text-fg shadow-[0_24px_60px_-20px_rgba(0,0,0,.6)] transition-[opacity,transform] duration-150 outline-none data-[ending-style]:scale-95 data-[ending-style]:opacity-0 data-[starting-style]:scale-95 data-[starting-style]:opacity-0">
+          <Popover.Popup className="glass w-80 origin-[var(--transform-origin)] rounded-[calc(var(--r3)+2px)] p-2 text-fg shadow-[0_24px_60px_-20px_rgba(0,0,0,.6)] transition-[opacity,scale] duration-150 outline-none data-[ending-style]:scale-95 data-[ending-style]:opacity-0 data-[starting-style]:scale-95 data-[starting-style]:opacity-0">
             <Popover.Title render={title} />
             <HeroSourcePicker onDone={() => setOpen(false)} onReroll={() => { onReroll(); setOpen(false); }} />
           </Popover.Popup>

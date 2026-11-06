@@ -83,7 +83,7 @@ export function FolderStack({ cover, className, hoverGroup = 'fc' }: { cover: Me
 export const countText = (mediaCount: number, childCount: number) =>
   `${mediaCount.toLocaleString('zh-CN')} 项${childCount ? `，${childCount} 个子文件夹` : ''}`;
 
-const roundBtn = 'pointer-events-auto absolute grid size-8 place-items-center rounded-full transition-[opacity,transform] duration-150 active:scale-90 [&_svg]:size-4';
+const roundBtn = 'pointer-events-auto absolute grid size-8 place-items-center rounded-full transition-[opacity,scale] duration-150 active:scale-90 [&_svg]:size-4';
 
 /**
  * 文件夹卡片（原型 .fc）：整卡是进入文件夹的链接；右上角心形收藏，
