@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import { Play } from 'lucide-react';
@@ -10,9 +10,9 @@ import { PagedMediaGrid } from '@/pages/folders/PagedMediaGrid';
 import { openViewer } from '@/stores/viewer';
 import { playQuery, useMediaPages } from '@/pages/folders/media';
 import { EmptyNote, FolderCard, FolderGrid, PageHead, PageTitle, chip, metaText } from '@/pages/folders/ui';
+import { SortMenu, useMediaSort } from '@/components/media/SortMenu';
 
 type Tab = 'media' | 'folders';
-const MEDIA_QUERY: MediaListQuery = { scope: 'favorites' };
 const LABEL = '收藏';
 
 function Tabs({ tab, folderCount, onChange }: { tab: Tab; folderCount: number | undefined; onChange: (t: Tab) => void }) {
@@ -52,8 +52,10 @@ function Tabs({ tab, folderCount, onChange }: { tab: Tab; folderCount: number | 
 }
 
 function MediaTab({ scroller }: { scroller: HTMLElement | null }) {
-  const media = useMediaPages(MEDIA_QUERY);
-  const scope = () => ({ label: LABEL, items: media.items, query: MEDIA_QUERY, nextCursor: media.nextCursor, total: media.total });
+  const sort = useMediaSort();
+  const query = useMemo<MediaListQuery>(() => ({ scope: 'favorites', sort }), [sort]);
+  const media = useMediaPages(query);
+  const scope = () => ({ label: LABEL, items: media.items, query, nextCursor: media.nextCursor, total: media.total });
   return (
     <>
       <PageHead className="pt-3 md:pt-4">
@@ -62,13 +64,16 @@ function MediaTab({ scroller }: { scroller: HTMLElement | null }) {
           {media.total != null && <div className={metaText}>{media.total.toLocaleString('zh-CN')} 项，包括收藏的文件夹中的内容</div>}
         </div>
         {media.items.length > 0 && (
-          <button
-            type="button"
-            className={cn(chip(), 'md:ml-auto')}
-            onClick={() => (media.items.length ? openViewer(scope(), 0, { play: true }) : toast('还没有可播放的收藏'))}
-          >
-            <Play className="size-3.5! fill-current" strokeWidth={0} />播放幻灯片
-          </button>
+          <div className="flex flex-wrap items-center gap-2 md:ml-auto">
+            <SortMenu small={false} />
+            <button
+              type="button"
+              className={chip()}
+              onClick={() => (media.items.length ? openViewer(scope(), 0, { play: true }) : toast('还没有可播放的收藏'))}
+            >
+              <Play className="size-3.5! fill-current" strokeWidth={0} />播放幻灯片
+            </button>
+          </div>
         )}
       </PageHead>
       {media.isError ? (
@@ -93,6 +98,7 @@ function MediaTab({ scroller }: { scroller: HTMLElement | null }) {
 }
 
 function FoldersTab() {
+  const sort = useMediaSort();
   const { data, isPending, isError, error } = useQuery(q('favoriteFolders'));
   const folders = data?.folders ?? [];
   return (
@@ -113,7 +119,7 @@ function FoldersTab() {
               key={f.path}
               folder={f}
               showHostPath
-              onPlay={() => void playQuery(`文件夹「${f.name}」`, { scope: 'folder', folder: f.path, recursive: true })}
+              onPlay={() => void playQuery(`文件夹「${f.name}」`, { scope: 'folder', folder: f.path, recursive: true, sort })}
             />
           ))}
         </FolderGrid>

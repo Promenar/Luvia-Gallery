@@ -57,7 +57,7 @@ api 与 worker 共享同一个 SQLite 数据库，不直接通信。作业、租
 
 ### 媒体处理
 - 拍摄信息（尺寸、拍摄时间、相机、位置、视频编码）：每个媒体库一个后台作业，按设置 `workers.metadataConcurrency` 路并发读取（图片用 sharp + exifr，视频用 ffprobe），通过 `metadata_claims` 租约认领。认领顺序：先取 `metadata_priority` 中最近请求的文件（界面正在显示且缺宽高，网格格子经 `POST /api/v2/media/dimensions` 登记，10 分钟后过期），再沿 `files_library_metadata_recent` / `files_metadata_recent` 索引按修改时间从新到旧。前端每 2 秒询问一次在显示且缺宽高的格子，读到的宽高存入 `lib/dimension-cache.ts`，排布据此重新计算。打开媒体详情时若该文件尚未读取，api 当场读取后再返回；查看器对未读取的视频先取详情再决定直接播放或转码。
-- 时间线可按文件修改时间（默认，扫描时即有）或拍摄时间排列，用户偏好 `timelineBasis`。修改时间分桶走部分覆盖索引 `files_present_modified`；拍摄时间分桶走触发器维护的 `timeline_counts`。网格的原始比例排布依赖拍摄信息里的宽高，读取前按正方形占位。
+- 时间线可按文件修改时间（默认，扫描时即有）或拍摄时间排列，用户偏好 `timelineBasis`。修改时间分桶走部分覆盖索引 `files_present_modified`；拍摄时间分桶走触发器维护的 `timeline_counts`。网格的原始比例排布依赖拍摄信息里的宽高，读取前按正方形占位。文件夹、相册、收藏的媒体网格共用排序偏好 `mediaSort`（默认修改时间从新到旧，可选拍摄时间、文件名、文件大小）；含子文件夹且子树占全库一半以上时，列表查询沿对应排序索引遍历（`MediaReader.walksSortIndex`），翻页游标带可走索引的闭区间边界。
 - 缩略图：浏览时按需生成；管理页“全库缩略图”排一个 `thumbnails` 作业（同一范围只排一个），按 id 分轮为全部照片与视频补齐网格用的 s、m 两个尺寸，缓存记录存在但文件丢失的删除记录后重新生成，并为浏览中的按需生成保留 2 个并发。生成缩略图时顺带记录原始宽高；缩略图齐全但缺宽高的文件单独读取。`dimensionsOnly` 模式（管理页“补全照片宽高”）只处理缺宽高的文件：尚未读取拍摄信息的先在 `metadata_claims` 认领再读取全部拍摄信息（磁盘开销相同），与后台拍摄信息作业不重复；已读取的图片只读文件头。缩略图与视频处理分别受 `thumbnailConcurrency`（1–64）与 `ffmpegConcurrency`（1–32）的跨进程槽位限制。
 - 外部程序：ffprobe、ffmpeg 由常驻的小内存子进程代理（`worker/process-runner.ts`）启动，worker 启动时先拉起代理。Linux 启动子进程要复制父进程页表，在内存占用数 GB 的 worker 主线程里直接启动每次要数百毫秒到数秒；api 当场读取元数据时按需启动自己的代理。
 - WAL 检查点：写连接关闭自动检查点（`wal_autocheckpoint=0`），由 worker 的后台线程每秒执行 PASSIVE 检查点，写回与 fsync 不落在 api、worker 主线程上；写回追平且 WAL 超过 64 MiB 时线程做一次不等待的 TRUNCATE（有读者即放弃，下一轮重试）。WAL 超过 256 MiB 时拍摄信息、缩略图与扫描作业在每个文件或批次前异步等待（`waitForWalCapacity`，最长 10 秒），回落到 64 MiB 以下恢复，避免持续写入让写回始终追不平而 WAL 无限增长。只运行 api 而不运行 worker 时 WAL 不会被写回。

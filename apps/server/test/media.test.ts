@@ -122,3 +122,43 @@ test('时间线可按修改时间分桶与按月取页，与拍摄时间互不�
     assert.deepEqual(page.items.map((item) => item.id), ['mid']);
   } finally { await app.close(); db.close(); }
 });
+
+test('文件夹含子文件夹时各排序逐页翻完顺序正确，子树占全库一半以上才沿排序索引遍历', async () => {
+  const { MediaReader } = await import('../src/core/media-query.ts');
+  const { MediaListQuery } = await import('@luvia/contracts');
+  const db = openDatabase(':memory:');
+  try {
+    db.prepare("INSERT INTO libraries (id,name,root) VALUES ('big','大','/big'),('small','小','/small')").run();
+    const folder = db.prepare('INSERT INTO folders (path,library_id,parent,name,media_count) VALUES (?,?,?,?,?)');
+    folder.run('big', 'big', null, '大', 30000); folder.run('big/a', 'big', 'big', 'a', 20000); folder.run('small', 'small', null, '小', 12000);
+    const add = db.prepare(`INSERT INTO files (id,library_id,relative_path,folder,name,mime,media_type,size,modified_at,taken_at,taken_at_source)
+      VALUES (?,?,?,?,?,'image/jpeg','image',?,?,?,'mtime')`);
+    const rows: { id: string; folder: string; name: string; size: number; modified: number; taken: number }[] = [];
+    for (let i = 0; i < 40; i++) {
+      const lib = i % 4 === 0 ? 'small' : 'big'; const sub = lib === 'big' && i % 3 === 0 ? 'big/a' : lib;
+      // 刻意制造同值，检验游标对同值行不重不漏
+      const row = { id: `f${String(i).padStart(2, '0')}`, folder: sub, name: `${['b', 'A', 'c'][i % 3]}${i % 5}.jpg`, size: (i % 6) * 100, modified: 1000 + (i % 7), taken: 2000 + (i % 4) };
+      rows.push(row); add.run(row.id, lib, `${row.id}.jpg`, row.folder, row.name, row.size, row.modified, row.taken);
+    }
+    const sqls: string[] = [];
+    const proxy = new Proxy(db, { get: (target, key) => key === 'prepare' ? (sql: string) => { sqls.push(sql); return target.prepare(sql); } : (typeof (target as any)[key] === 'function' ? (target as any)[key].bind(target) : (target as any)[key]) });
+    const reader = new MediaReader(proxy as typeof db);
+    const compare: Record<string, (a: typeof rows[0], b: typeof rows[0]) => number> = {
+      taken_desc: (a, b) => b.taken - a.taken, taken_asc: (a, b) => a.taken - b.taken, modified_desc: (a, b) => b.modified - a.modified,
+      size_desc: (a, b) => b.size - a.size, name_asc: (a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()),
+    };
+    for (const [root, forced] of [['big', true], ['big/a', false], ['small', false]] as const) {
+      for (const sort of Object.keys(compare)) {
+        const expected = rows.filter((r) => r.folder === root || r.folder.startsWith(`${root}/`))
+          .sort((a, b) => compare[sort]!(a, b) || (a.id < b.id ? -1 : 1)).map((r) => r.id);
+        const seen: string[] = []; let cursor: string | undefined; sqls.length = 0;
+        do {
+          const page = reader.page(MediaListQuery.parse({ scope: 'folder', folder: root, recursive: true, sort, limit: 3, cursor }), { id: 'u', allowedPaths: null });
+          seen.push(...page.items.map((item) => item.id)); cursor = page.nextCursor ?? undefined;
+        } while (cursor);
+        assert.deepEqual(seen, expected, `${root} ${sort}`);
+        assert.equal(sqls.some((sql) => sql.includes('INDEXED BY files_')), forced, `${root} ${sort} 计划`);
+      }
+    }
+  } finally { db.close(); }
+});

@@ -16,6 +16,7 @@ import { FolderTree } from './FolderTree';
 import { useMediaPages } from './media';
 import { containerPathOf, hostCrumbs, libraryIdOf, parentPath } from './paths';
 import { EmptyNote, FolderCard, FolderGrid, FolderStack, PageHead, PageTitle, chip, countText, metaText, subhClass } from './ui';
+import { SortMenu, useMediaSort } from '@/components/media/SortMenu';
 
 /** 管理员可见的媒体库容器内根目录；普通用户或接口不可用时为空表。 */
 function useLibraryRoots() {
@@ -110,7 +111,8 @@ function FolderView({ path, scroller }: { path: string; scroller: HTMLElement | 
   const roots = useLibraryRoots();
   const rec = prefs.folderIncludeSubfolders;
   const listing = useQuery(foldersQuery(path));
-  const query = useMemo<MediaListQuery>(() => (rec ? { scope: 'folder', folder: path, recursive: true } : { scope: 'folder', folder: path }), [path, rec]);
+  const sort = useMediaSort();
+  const query = useMemo<MediaListQuery>(() => (rec ? { scope: 'folder', folder: path, recursive: true, sort } : { scope: 'folder', folder: path, sort }), [path, rec, sort]);
   const media = useMediaPages(query, listing.isSuccess);
 
   // 窄屏面包屑单行横向滚动，进入目录时滚到末尾，让当前目录可见
@@ -207,10 +209,11 @@ function FolderView({ path, scroller }: { path: string; scroller: HTMLElement | 
       <div className={subhClass}>
         <h2 className="m-0 text-[15px] font-semibold">{rec ? '这个文件夹及子文件夹中的内容' : '这个文件夹中的内容'}</h2>
         <span className="text-[13px] font-normal text-muted">{shownCount.toLocaleString('zh-CN')} 项</span>
+        <SortMenu className="ml-auto" />
         <button
           type="button"
           aria-pressed={rec}
-          className={cn(chip(rec, true), 'ml-auto')}
+          className={chip(rec, true)}
           onClick={() => updatePrefs.mutate({ folderIncludeSubfolders: !rec })}
         >
           包含子文件夹
