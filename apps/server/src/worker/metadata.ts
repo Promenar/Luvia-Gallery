@@ -275,13 +275,16 @@ export async function processMetadataBatch(db: Database.Database, job: JobRow, o
         return db.prepare('UPDATE metadata_claims SET lease_expires_at=? WHERE file_id=? AND job_id=? AND owner=? AND lease_expires_at>?').run(now() + 30, source.id, job.id, options.owner, now()).changes > 0;
       }, () => local.abort()), 5000);
       timer.unref();
-      let metadata: Metadata | null;
+      let metadata: Metadata | null = null;
       try { metadata = await extractSource(source, allowed, fileSignal, settings.transcode.enabled); }
+      catch (error) { if (!local.signal.aborted || signal.aborted) throw error; }
       finally { clearInterval(timer); }
-      fileSignal.throwIfAborted();
+      signal.throwIfAborted();
+      // 单个文件的认领失效（例如磁盘繁忙时续租连续跳过）只放弃这个文件，认领过期后再被领取；作业租约失效仍向上抛出
+      if (local.signal.aborted) { options.assertLease(); continue; }
       db.transaction(() => {
         options.assertLease();
-        if (!db.prepare('SELECT 1 FROM metadata_claims WHERE file_id=? AND job_id=? AND owner=? AND lease_expires_at>?').get(source.id, job.id, options.owner, now())) throw new Error('元数据租约已失效');
+        if (!db.prepare('SELECT 1 FROM metadata_claims WHERE file_id=? AND job_id=? AND owner=? AND lease_expires_at>?').get(source.id, job.id, options.owner, now())) return;
         const result = saveMetadata(db, source, metadata);
         if (result) {
           counts[result]++;

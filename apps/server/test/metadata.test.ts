@@ -240,3 +240,27 @@ test('扫描锁住的媒体库积压大量待刷新目录时，只按未锁定�
     assert.equal(left().length, 500 - 64);
   } finally { db.close(); }
 });
+
+test('单个文件的认领在读取期间失效时只放弃该文件，作业不判为失败，过期后重新认领', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'luvia-metadata-claim-lost-'));
+  const db = openDatabase(':memory:');
+  try {
+    await promisify(execFile)(process.execPath, [fixtureScript, '--output', root]);
+    db.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib','照片',?)").run(root);
+    await scanLibrary(db, { id: 'lib', root }, { allowedRoots: [root] });
+    const pending = () => (db.prepare("SELECT count(*) AS n FROM files WHERE metadata_status='pending'").get() as { n: number }).n;
+    assert.ok(pending() >= 2);
+    // 第一次认领后立即让该认领过期，模拟磁盘繁忙时续租连续跳过
+    db.exec(`CREATE TEMP TABLE hits(n INTEGER); INSERT INTO hits VALUES (0);
+      CREATE TEMP TRIGGER expire_first AFTER INSERT ON metadata_claims WHEN (SELECT n FROM hits)=0 BEGIN
+        UPDATE metadata_claims SET lease_expires_at=0 WHERE file_id=NEW.file_id; UPDATE hits SET n=1; END`);
+    db.prepare("INSERT INTO jobs(id,type,label,status,trigger,payload,created_at) VALUES ('meta','metadata','提取元数据','queued','system',?,1)").run(JSON.stringify({ libraryId: 'lib' }));
+    const warnings: string[] = [];
+    const options = { owner: 'worker', allowedRoots: [root], legacyDir: root, systemRoots: [], log: (level: string, message: string) => { if (level === 'warn') warnings.push(message); } };
+    for (let i = 0; i < 10 && await runNextJob(db, options); i++);
+    const job = db.prepare("SELECT status,error FROM jobs WHERE id='meta'").get() as { status: string; error: string | null };
+    assert.equal((db.prepare('SELECT n FROM hits').get() as { n: number }).n, 1);
+    assert.deepEqual([job.status, job.error, warnings], ['succeeded', null, []]);
+    assert.equal(pending(), 0);
+  } finally { db.close(); await rm(root, { recursive: true, force: true }); }
+});
