@@ -574,3 +574,63 @@ test('过期目录恢复时同路径旧文件的清理有删除日志', async ()
     assert.ok(db.prepare("SELECT 1 FROM library_changes WHERE kind='removed' AND path='sub/a.jpg' AND media_id=?").get(id));
   } finally { db.close(); await rm(root, { recursive: true, force: true }); await rm(parked, { recursive: true, force: true }); }
 });
+
+test('无变化的全量对账不重写文件与目录行，变化与删除仍被识别', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'luvia-scan-unchanged-')); const db = openDatabase(':memory:');
+  try {
+    await mkdir(path.join(root, 'sub'));
+    for (const name of ['a.jpg', 'b.jpg', 'c.jpg']) await writeFile(path.join(root, 'sub', name), name);
+    db.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib','照片',?)").run(root);
+    const scan = () => scanLibrary(db, { id: 'lib', root }, { allowedRoots: [root] });
+    await scan();
+    db.prepare("UPDATE files SET metadata_status='done',width=10,height=10 WHERE relative_path='sub/a.jpg'").run();
+    // 统计整行重写：重写会带上 size/name 等列；只更新本轮标记时不触发
+    db.exec(`CREATE TEMP TABLE rewrites(kind TEXT);
+      CREATE TEMP TRIGGER count_file_rewrite AFTER UPDATE OF size,name ON files BEGIN INSERT INTO rewrites VALUES ('file'); END;
+      CREATE TEMP TRIGGER count_folder_rewrite AFTER UPDATE OF dev,name ON folders BEGIN INSERT INTO rewrites VALUES ('folder'); END;`);
+    const rewrites = () => (db.prepare('SELECT count(*) AS n FROM rewrites').get() as { n: number }).n;
+    assert.deepEqual(await scan(), { added: 0, removed: 0, errors: 0 });
+    assert.equal(rewrites(), 0);
+    assert.equal((db.prepare('SELECT count(*) AS n FROM files WHERE missing_at_ms IS NULL').get() as { n: number }).n, 3);
+    assert.deepEqual(db.prepare("SELECT metadata_status,width FROM files WHERE relative_path='sub/a.jpg'").get(), { metadata_status: 'done', width: 10 });
+    // 内容变化：仍走完整更新并重置拍摄信息
+    await writeFile(path.join(root, 'sub', 'a.jpg'), 'changed content'); await utimes(path.join(root, 'sub', 'a.jpg'), 2_000_000_000, 2_000_000_000);
+    await unlink(path.join(root, 'sub', 'b.jpg'));
+    await scan();
+    // a.jpg 内容变了；sub 目录因删除文件修改时间变了
+    assert.deepEqual(db.prepare('SELECT kind,count(*) AS n FROM rewrites GROUP BY kind ORDER BY kind').all(), [{ kind: 'file', n: 1 }, { kind: 'folder', n: 1 }]);
+    assert.deepEqual(db.prepare("SELECT metadata_status,width,size FROM files WHERE relative_path='sub/a.jpg'").get(), { metadata_status: 'pending', width: null, size: 15 });
+    assert.notEqual((db.prepare("SELECT missing_at_ms FROM files WHERE relative_path='sub/b.jpg'").get() as { missing_at_ms: number | null }).missing_at_ms, null);
+    assert.equal((db.prepare("SELECT missing_at_ms FROM files WHERE relative_path='sub/c.jpg'").get() as { missing_at_ms: number | null }).missing_at_ms, null);
+  } finally { db.close(); await rm(root, { recursive: true, force: true }); }
+});
+
+test('列出目录后文件消失不算读取错误，按缺失处理', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'luvia-scan-vanished-')); const db = openDatabase(':memory:');
+  try {
+    await writeFile(path.join(root, 'a.jpg'), 'a');
+    db.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib','照片',?)").run(root);
+    const logs: Record<string, string>[] = [];
+    // 目录列表里多出一个已不存在的文件，模拟列出后被移走
+    const ghost: typeof opendir = async (p, options) => {
+      const dir = await opendir(p, options);
+      return { async *[Symbol.asyncIterator]() {
+        for await (const entry of dir) yield entry;
+        yield { name: 'gone.jpg', isDirectory: () => false, isFile: () => true, isSymbolicLink: () => false };
+      } } as unknown as Awaited<ReturnType<typeof opendir>>;
+    };
+    const result = await scanLibrary(db, { id: 'lib', root }, { allowedRoots: [root], openDir: ghost, log: (_level, _message, ctx) => logs.push(ctx) });
+    assert.deepEqual(result, { added: 1, removed: 0, errors: 0 });
+    assert.equal(logs.length, 0);
+    assert.deepEqual(db.prepare('SELECT relative_path FROM files').all(), [{ relative_path: 'a.jpg' }]);
+    // 真正的读取错误仍计入，并按类型写日志
+    const unknown: typeof opendir = async (p, options) => {
+      const dir = await opendir(p, options);
+      return { async *[Symbol.asyncIterator]() {
+        for await (const entry of dir) yield { name: entry.name, isDirectory: () => false, isFile: () => false, isSymbolicLink: () => false };
+      } } as unknown as Awaited<ReturnType<typeof opendir>>;
+    };
+    assert.equal((await scanLibrary(db, { id: 'lib', root }, { allowedRoots: [root], openDir: unknown, log: (_level, _message, ctx) => logs.push(ctx) })).errors, 1);
+    assert.deepEqual(logs, [{ kinds: 'entry:type×1' }]);
+  } finally { db.close(); await rm(root, { recursive: true, force: true }); }
+});
