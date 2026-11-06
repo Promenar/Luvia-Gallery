@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useSearch } from '@tanstack/react-router';
-import { Copy, CornerLeftUp, Heart, Play } from 'lucide-react';
+import { Copy, CornerLeftUp, Heart, Layers, Play } from 'lucide-react';
 import type { MediaListQuery } from '@luvia/contracts';
 import { toast } from 'sonner';
 import { ApiError } from '@/lib/api';
@@ -178,6 +178,16 @@ function FolderView({ path, scroller }: { path: string; scroller: HTMLElement | 
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2 md:ml-auto">
+          <SortMenu small={false} />
+          <button
+            type="button"
+            aria-pressed={rec}
+            className={chip(rec)}
+            onClick={() => updatePrefs.mutate({ folderIncludeSubfolders: !rec })}
+          >
+            <Layers />包含子文件夹
+          </button>
+          <span aria-hidden className="mx-1 hidden h-5 w-px bg-line-2 sm:block" />
           <button
             type="button"
             aria-pressed={d.favorite}
@@ -209,15 +219,6 @@ function FolderView({ path, scroller }: { path: string; scroller: HTMLElement | 
       <div className={subhClass}>
         <h2 className="m-0 text-[15px] font-semibold">{rec ? '这个文件夹及子文件夹中的内容' : '这个文件夹中的内容'}</h2>
         <span className="text-[13px] font-normal text-muted">{shownCount.toLocaleString('zh-CN')} 项</span>
-        <SortMenu className="ml-auto" />
-        <button
-          type="button"
-          aria-pressed={rec}
-          className={chip(rec, true)}
-          onClick={() => updatePrefs.mutate({ folderIncludeSubfolders: !rec })}
-        >
-          包含子文件夹
-        </button>
       </div>
       {media.isError ? (
         <EmptyNote>无法加载这个文件夹的内容：{media.error.message}</EmptyNote>
@@ -226,7 +227,7 @@ function FolderView({ path, scroller }: { path: string; scroller: HTMLElement | 
       ) : !media.items.length ? (
         <EmptyNote>
           {rec ? '这个文件夹及其子文件夹中没有照片或视频。'
-            : d.folders.length ? '这里没有直接存放的照片或视频。打开上面的子文件夹，或打开“包含子文件夹”。'
+            : d.folders.length ? '这里没有直接存放的照片或视频。打开上面的子文件夹，或在顶部打开“包含子文件夹”。'
               : '这个文件夹是空的。'}
         </EmptyNote>
       ) : (
@@ -252,11 +253,11 @@ export default function FoldersPage() {
     scroller?.scrollTo({ top: 0 });
   }, [path, scroller]);
   return (
-    <div className="grid h-full grid-cols-1 md:grid-cols-[272px_minmax(0,1fr)]">
-      <FolderTree current={path || undefined} />
+    <div className="relative h-full">
       <div ref={setScroller} className="relative h-full min-w-0 overflow-x-hidden overflow-y-auto [scrollbar-width:thin]">
         {path ? <FolderView key={path} path={path} scroller={scroller} /> : <LibraryRoots />}
       </div>
+      <FolderTree current={path || undefined} />
     </div>
   );
 }

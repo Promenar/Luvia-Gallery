@@ -22,6 +22,8 @@
   --ok: #62c08f; --warn: #e0a948; --bad: #ec6a5e;
   --r1: 6px; --r2: 10px; --r3: 16px;
   --row: 180px;
+  /* 抽屉弹出用的弹簧缓动：先冲过约 4% 再回落 */
+  --ease-spring: linear(0, 0.08 3%, 0.3 8%, 0.62 15%, 0.86 23%, 0.98 31%, 1.03 39%, 1.04 46%, 1.025 56%, 1.005 70%, 1);
   color-scheme: dark;
   transition: --accent 0.45s ease, --accent-soft 0.45s ease, --bg 0.45s ease, --surface 0.45s ease, --raised 0.45s ease;
 
