@@ -1,3 +1,12 @@
+# Luvia Gallery 2.0.1：元数据提取与后台任务停滞修复（2026-11-06，已部署 FNOS）
+
+- 修复大媒体库首次导入后“拍摄信息已读取”几乎不动、对账扫描停在“正在准备”、后台工作进程被判为不健康的问题。原因是元数据任务每处理一个文件都要先找下一个待处理文件，约 94 万文件时这一步在失真的统计信息下每次要 2.3 秒并占住数据库写锁；现在固定走专用索引，每次约 0.1 毫秒。
+- 新增按媒体库认领元数据的索引 `files_library_metadata`，启动时自动补建（94 万文件约 5 秒）；数据库版本号不变，可直接回滚到 2.0。
+
+### 部署状态（2026-11-06）
+- 已部署至 FNOS 生产：修订 `194b6cf`，镜像 `promenarleng/luvia-gallery:v2-194b6cf`（`sha256:ecb16529d89ffdba24553ab9869e5fa4a5e853e95968b276fa5b1d43b2098fb3`）。回滚：把 compose 中的镜像改回 `v2-482eab5`（备份为 `docker-compose.yml.bak-482eab5`）后 `docker compose -p luvia up -d`。
+- v1 缩略图缓存按 v2 的旧缩略图回退路径复制到 v2 缓存目录（v1 原目录不动），网格在 v2 生成新缩略图前先显示 v1 缩略图。
+
 # Luvia Gallery 2.0（2026-11-06，已部署 FNOS）
 
 - 全新重写：Node.js 24 + Fastify 5 + SQLite 后端，API 与 worker 双进程；WebUI 改用 React 19 + Tailwind CSS v4 + Base UI 重新设计（照片时间线、文件夹、回忆、相册、分享、管理后台）。
