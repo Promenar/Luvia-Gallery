@@ -27,6 +27,13 @@ function allowedClause(paths: string[] | null, params: Params, column = 'f.folde
   if (!paths.length) return '0';
   return `(${paths.map((prefix) => prefixClause(column, prefix, params)).join(' OR ')})`;
 }
+/** 收藏的文件加收藏文件夹内的媒体（按目录统计估算）不到全库一半。 */
+function smallFavoriteSet(db: Database.Database, userId: string): boolean {
+  const estimate = (db.prepare(`SELECT coalesce(sum(CASE WHEN fav.item_type='file' THEN 1 ELSE coalesce(fo.media_count,0) END),0) AS n
+    FROM favorites fav LEFT JOIN folders fo ON fav.item_type='folder' AND fo.path=fav.item_id WHERE fav.user_id=?`).get(userId) as { n: number }).n;
+  const total = (db.prepare('SELECT coalesce(sum(media_count),0) AS n FROM folders WHERE parent IS NULL AND missing_at_ms IS NULL').get() as { n: number }).n;
+  return estimate * 2 < total;
+}
 export function where(filter: Partial<Query> | RandomFilter, context: Context, db: Database.Database): { sql: string; params: Params } {
   const params: Params = [];
   const clauses = [allowedClause(context.allowedPaths, params), 'f.missing_at_ms IS NULL', 'EXISTS(SELECT 1 FROM libraries library WHERE library.id=f.library_id AND library.enabled=1)'];
@@ -49,7 +56,13 @@ export function where(filter: Partial<Query> | RandomFilter, context: Context, d
     clauses.push(filter.orientation === 'landscape' ? 'f.width > f.height' : filter.orientation === 'portrait' ? 'f.height > f.width' : 'f.width = f.height');
   }
   if (filter.hasLocation !== undefined) clauses.push(filter.hasLocation ? '(f.latitude IS NOT NULL AND f.longitude IS NOT NULL)' : '(f.latitude IS NULL OR f.longitude IS NULL)');
-  if (filter.favorite === true || ('scope' in filter && filter.scope === 'favorites')) {
+  if (!('count' in filter) && 'scope' in filter && filter.scope === 'favorites' && smallFavoriteSet(db, context.id)) {
+    // 收藏集合远小于全库时先取出收藏的文件再排序；沿全局排序索引逐行判断收藏要扫描大半张表（生产按文件名排序首页约 3.4 秒）
+    clauses.push(`f.rowid IN (SELECT x.rowid FROM favorites fav JOIN files x ON x.id=fav.item_id WHERE fav.user_id=? AND fav.item_type='file'
+      UNION SELECT x.rowid FROM favorites fav JOIN files x ON x.folder=fav.item_id WHERE fav.user_id=? AND fav.item_type='folder'
+      UNION SELECT x.rowid FROM favorites fav JOIN files x ON x.folder>=fav.item_id || '/' AND x.folder<fav.item_id || '0' WHERE fav.user_id=? AND fav.item_type='folder')`);
+    params.push(context.id, context.id, context.id);
+  } else if (filter.favorite === true || ('scope' in filter && filter.scope === 'favorites')) {
     const includeFolders = 'count' in filter ? filter.favoriteFolders === true : true;
     clauses.push(`(EXISTS (SELECT 1 FROM favorites fav WHERE fav.user_id=? AND fav.item_type='file' AND fav.item_id=f.id)${includeFolders ?
       " OR EXISTS (SELECT 1 FROM favorites fav WHERE fav.user_id=? AND fav.item_type='folder' AND (f.folder=fav.item_id OR (f.folder >= fav.item_id || '/' AND f.folder < fav.item_id || '0')))" : ''})`);
