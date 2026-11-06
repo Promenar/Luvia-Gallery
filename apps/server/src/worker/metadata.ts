@@ -1,8 +1,7 @@
-import { execFile } from 'node:child_process';
 import { realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { promisify } from 'node:util';
+import { runProcess } from './process-runner.ts';
 import type Database from 'better-sqlite3';
 import { publishLibraryEvent } from './watch-events.ts';
 import exifr from 'exifr';
@@ -21,7 +20,6 @@ type Metadata = {
   software: string | null; latitude: number | null; longitude: number | null; altitude: number | null;
   playability: 'direct' | 'transcode' | 'unsupported' | null;
 };
-const run = promisify(execFile);
 const now = () => Math.floor(Date.now() / 1000);
 const number = (v: unknown): number | null => typeof v === 'number' && Number.isFinite(v) ? v : null;
 const string = (v: unknown): string | null => typeof v === 'string' && v.length > 0 ? v.slice(0, 500) : null;
@@ -81,7 +79,10 @@ async function readImage(filename: string, source: Source): Promise<Metadata> {
   return result;
 }
 async function readAv(filename: string, source: Source, signal: AbortSignal | undefined, transcode: boolean): Promise<Metadata> {
-  const { stdout } = await run('ffprobe', ['-v', 'error', '-protocol_whitelist', 'file,pipe', '-show_streams', '-show_format', '-of', 'json', filename], { encoding: 'utf8', timeout: 15000, maxBuffer: 2 * 1024 * 1024, signal });
+  const probed = await runProcess('ffprobe', ['-v', 'error', '-protocol_whitelist', 'file,pipe', '-show_streams', '-show_format', '-of', 'json', filename], { timeoutMs: 15000, maxBuffer: 2 * 1024 * 1024, capture: true, signal });
+  signal?.throwIfAborted();
+  if (probed.code !== 0 || probed.error) throw new Error('媒体信息读取失败');
+  const { stdout } = probed;
   const probe = JSON.parse(stdout) as { streams?: Record<string, any>[]; format?: Record<string, any> };
   const streams = Array.isArray(probe.streams) ? probe.streams : [];
   const video = streams.find((stream) => stream.codec_type === 'video');

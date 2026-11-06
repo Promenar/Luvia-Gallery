@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import { spawn } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 import type Database from 'better-sqlite3';
 import { readSettings } from '../core/settings.ts';
+import { runProcess } from './process-runner.ts';
 
 const now = () => Math.floor(Date.now() / 1000);
 async function withSlot<T>(db: Database.Database, owner: string, kind: 'ffmpeg' | 'thumbnail', operation: (signal: AbortSignal) => Promise<T>, options: { signal?: AbortSignal; assertLease?: () => void } = {}): Promise<T> {
@@ -48,26 +48,11 @@ export function withThumbnailSlot<T>(db: Database.Database, owner: string, opera
 }
 
 export async function runFfmpeg(db: Database.Database, owner: string, args: string[], options: { signal?: AbortSignal; assertLease?: () => void; timeoutMs?: number } = {}): Promise<void> {
-  await withFfmpegSlot(db, owner, (signal) => new Promise<void>((resolve, reject) => {
-    signal.throwIfAborted();
-    const child = spawn('ffmpeg', ['-hide_banner', '-nostdin', '-loglevel', 'error', '-protocol_whitelist', 'file,pipe', ...args], { stdio: 'ignore' });
-    let timedOut = false;
-    const stop = () => { child.kill('SIGKILL'); };
-    const timeout = setTimeout(() => { timedOut = true; stop(); }, options.timeoutMs ?? 120_000);
-    timeout.unref();
-    signal.addEventListener('abort', stop, { once: true });
-    let settled = false;
-    const finish = (error?: Error) => {
-      if (settled) return;
-      settled = true; clearTimeout(timeout); signal.removeEventListener('abort', stop);
-      if (error) reject(error); else resolve();
-    };
-    child.once('error', () => finish(new Error('FFmpeg 无法启动')));
-    child.once('close', (code) => {
-      if (signal.aborted) finish(new Error('FFmpeg 已取消'));
-      else if (timedOut) finish(new Error('FFmpeg 执行超时'));
-      else if (code !== 0) finish(new Error('FFmpeg 执行失败'));
-      else finish();
-    });
-  }), options);
+  await withFfmpegSlot(db, owner, async (signal) => {
+    const result = await runProcess('ffmpeg', ['-hide_banner', '-nostdin', '-loglevel', 'error', '-protocol_whitelist', 'file,pipe', ...args], { timeoutMs: options.timeoutMs ?? 120_000, signal });
+    if (signal.aborted) throw new Error('FFmpeg 已取消');
+    if (result.error === 'spawn' || result.error === 'runner') throw new Error('FFmpeg 无法启动');
+    if (result.error === 'timeout') throw new Error('FFmpeg 执行超时');
+    if (result.code !== 0) throw new Error('FFmpeg 执行失败');
+  }, options);
 }
