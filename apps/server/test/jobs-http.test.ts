@@ -29,6 +29,22 @@ test('管理员可以排队、暂停、恢复、取消作业，非法状态变�
   } finally { await app.close(); db.close(); }
 });
 
+test('全库缩略图作业同一范围只排队一个，不同媒体库互不影响', async () => {
+  const db = openDatabase(':memory:');
+  const app = await createApp({ db, legacyPending: false });
+  try {
+    const setup = await app.inject({ method: 'POST', url: '/api/v2/auth/setup', headers: header, payload: { username: 'admin', password: 'test password' } });
+    const cookie = (setup.headers['set-cookie'] as string).split(';')[0]!;
+    const create = () => app.inject({ method: 'POST', url: '/api/v2/admin/jobs', headers: { ...header, cookie }, payload: { type: 'thumbnails' } });
+    const first = await create();
+    assert.equal(first.statusCode, 200);
+    assert.equal((await create()).statusCode, 409);
+    const id = JobSchema.parse(first.json()).id;
+    await app.inject({ method: 'POST', url: `/api/v2/admin/jobs/${id}/cancel`, headers: { ...header, cookie } });
+    assert.equal((await create()).statusCode, 200);
+  } finally { await app.close(); db.close(); }
+});
+
 test('系统信息展示 worker 的 FFmpeg 试编码探测结果', async () => {
   const db = openDatabase(':memory:');
   const app = await createApp({ db, legacyPending: false });

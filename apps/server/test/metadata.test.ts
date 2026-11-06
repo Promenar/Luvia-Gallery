@@ -137,3 +137,23 @@ test('元数据认领沿 metadata_status 索引按 id 顺序取下一项，不�
     }
   } finally { db.close(); }
 });
+
+test('打开媒体详情时立即读取尚未读取的元数据，不影响其它文件', async () => {
+  const { createApp } = await import('../src/api/app.ts');
+  const root = await mkdtemp(path.join(tmpdir(), 'luvia-metadata-now-'));
+  const db = openDatabase(':memory:'); const app = await createApp({ db, legacyPending: false });
+  try {
+    await promisify(execFile)(process.execPath, [fixtureScript, '--output', root]);
+    db.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib','照片',?)").run(root);
+    await scanLibrary(db, { id: 'lib', root }, { allowedRoots: [root] });
+    const setup = await app.inject({ method: 'POST', url: '/api/v2/auth/setup', headers: { 'x-luvia-request': '1' }, payload: { username: 'admin', password: 'test password' } });
+    const cookie = (setup.headers['set-cookie'] as string).split(';')[0]!;
+    const photo = db.prepare("SELECT id FROM files WHERE name='exif-gps.jpg'").get() as { id: string };
+    assert.equal((db.prepare("SELECT count(*) AS n FROM files WHERE metadata_status<>'pending'").get() as { n: number }).n, 0);
+    const detail = (await app.inject({ method: 'GET', url: `/api/v2/media/${photo.id}`, headers: { cookie } })).json();
+    assert.equal(detail.exif.model, 'Fixture Camera'); assert.ok(detail.location);
+    assert.equal(detail.takenAt, new Date(Date.parse('2024-05-06T10:11:12+08:00')).toISOString());
+    assert.equal(detail.width, 960);
+    assert.deepEqual(db.prepare("SELECT name FROM files WHERE metadata_status<>'pending'").all(), [{ name: 'exif-gps.jpg' }]);
+  } finally { await app.close(); db.close(); await rm(root, { recursive: true, force: true }); }
+});

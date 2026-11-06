@@ -55,22 +55,12 @@ test('多个客户端共享缩略图作业，最后一个断开时取消 FFmpeg'
   }
 });
 
-test('批量作业保留共享缩略图；过期的孤立等待租约可回收', async () => {
+test('等待租约全部过期的按需生成任务被取消', async () => {
   const db = openDatabase(':memory:');
   try {
     db.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib','照片','/synthetic')").run();
     db.prepare("INSERT INTO files(id,library_id,relative_path,folder,name,mime,media_type,size,modified_at,taken_at,taken_at_source) VALUES ('photo','lib','a.jpg','lib','a.jpg','image/jpeg','image',1,1,1,'mtime')").run();
     const source = { id: 'photo', size: 1, modified_at: 1 };
-    const job = enqueueMediaTask(db, source, { kind: 'thumb', size: 's' }, { waiter: 'request' });
-    db.prepare("UPDATE jobs SET status='running',owner='first',lease_expires_at=unixepoch()+30 WHERE id=?").run(job);
-    db.prepare("INSERT INTO jobs(id,type,label,status,trigger,payload,created_at) VALUES ('bulk','thumbnails','批量','queued','manual',?,unixepoch())").run(JSON.stringify({ libraryId: 'lib' }));
-    await runNextJob(db, { owner: 'second', allowedRoots: [], legacyDir: '/unused', systemRoots: [] });
-    releaseMediaWaiter(db, job, 'request', true);
-    assert.deepEqual(db.prepare('SELECT status,media_background FROM jobs WHERE id=?').get(job), { status: 'running', media_background: 1 });
-    const orphan = enqueueMediaTask(db, source, { kind: 'thumb', size: 'l' }, { waiter: 'expired' });
-    db.prepare("UPDATE media_waiters SET lease_expires_at=0 WHERE id='expired'").run();
-    assert.equal(cancelUnobservedMediaTask(db, orphan), false);
-    assert.equal((db.prepare('SELECT status FROM jobs WHERE id=?').get(orphan) as { status: string }).status, 'queued');
     const lone = enqueueMediaTask(db, source, { kind: 'display' }, { waiter: 'lone' });
     db.prepare("UPDATE media_waiters SET lease_expires_at=0 WHERE id='lone'").run();
     assert.equal(cancelUnobservedMediaTask(db, lone), true);

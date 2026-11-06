@@ -30,7 +30,8 @@ COPY --from=frontend /app/apps/web/dist /app/apps/web/dist
 # 统一从构建上下文复制来的源码权限，不依赖构建机检出的 umask/ACL（如检出为 700 时 node 用户无法读取源码）；运行用户只读。
 # node_modules 在镜像内由 pnpm 创建，权限已是 755/644，不再逐文件遍历。
 RUN chmod -R u+rwX,go+rX,go-w /app/apps /app/packages
-ENV NODE_ENV=production PORT=3001 DATA_DIR=/data CACHE_DIR=/cache
+# sharp 的图片处理与文件读取共用 libuv 线程池，默认只有 4 个线程，会把缩略图与元数据的并发设置压到 4。
+ENV NODE_ENV=production PORT=3001 DATA_DIR=/data CACHE_DIR=/cache UV_THREADPOOL_SIZE=64
 USER node
 EXPOSE 3001
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \

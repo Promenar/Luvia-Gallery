@@ -12,6 +12,7 @@ import path from 'node:path';
 import { pruneCache } from './cache-prune.ts';
 import { readSettings } from '../core/settings.ts';
 import { processMetadataBatch } from './metadata.ts';
+import { processThumbnailBackfill } from './thumbnail-backfill.ts';
 import { cacheKey, cachePath, cancelUnobservedMediaTask, enqueueMediaTask } from '../core/media-cache.ts';
 import type { Variant } from '../core/media-cache.ts';
 import { generateHls } from './hls.ts';
@@ -156,22 +157,25 @@ export async function runNextJob(db: Database.Database, options: WorkerOptions):
     } else if (job.type === 'previews' && payload.hlsSessionId) {
       const result = await generateHls(db, payload.hlsSessionId, job.id, { owner: options.owner, cacheDir: options.cacheDir ?? path.resolve(process.env.CACHE_DIR ?? 'cache'), allowedRoots: options.allowedRoots, assertLease, signal: controller.signal, idleMs: options.hlsIdleMs });
       if (!queue.finish(job.id, result)) throw new Error('作业租约已失效');
-    } else if ((job.type === 'previews' || job.type === 'thumbnails') && !payload.mediaId) {
-      if (job.type === 'previews' && !readSettings(db).previews.enabled) {
+    } else if (job.type === 'thumbnails' && !payload.mediaId) {
+      const result = await processThumbnailBackfill(db, job, { owner: options.owner, cacheDir: options.cacheDir ?? path.resolve(process.env.CACHE_DIR ?? 'cache'), allowedRoots: options.allowedRoots,
+        libraryId: payload.libraryId, assertLease, signal: controller.signal });
+      if (result.complete) { if (!queue.finish(job.id, result.counts)) throw new Error('作业租约已失效'); }
+      else if (!queue.release(job.id)) throw new Error('作业租约已失效');
+    } else if (job.type === 'previews' && !payload.mediaId) {
+      if (!readSettings(db).previews.enabled) {
         if (!queue.finish(job.id, { queued: 0 })) throw new Error('作业租约已失效');
       } else {
         const checkpoint = job.checkpoint ? JSON.parse(job.checkpoint) as { lastId?: string; queued?: number } : {};
         let lastId = checkpoint.lastId ?? ''; let queued = checkpoint.queued ?? 0;
         const rows = db.prepare(`SELECT f.id,f.size,f.modified_at,f.cache_generation FROM files f JOIN libraries l ON l.id=f.library_id AND l.enabled=1
-          WHERE ${job.type === 'previews' ? "f.media_type='video' AND f.has_preview=0" : "f.media_type IN ('image','video')"} AND f.missing_at_ms IS NULL AND f.id>?
+          WHERE f.media_type='video' AND f.has_preview=0 AND f.missing_at_ms IS NULL AND f.id>?
           ${payload.libraryId ? 'AND f.library_id=?' : ''} ORDER BY f.id LIMIT 32`).all(...(payload.libraryId ? [lastId, payload.libraryId] : [lastId])) as { id: string; size: number; modified_at: number; cache_generation: number }[];
         for (const row of rows) {
           controller.signal.throwIfAborted();
           db.transaction(() => {
             assertLease();
-            const variants: Variant[] = job.type === 'previews' ? [{ kind: 'preview' }] : [
-              { kind: 'thumb', size: 's' }, { kind: 'thumb', size: 'm' }, { kind: 'thumb', size: 'l' },
-            ];
+            const variants: Variant[] = [{ kind: 'preview' }];
             for (const variant of variants) {
               const key = cacheKey(row, variant);
               if (db.prepare('SELECT 1 FROM cache_entries WHERE cache_key=?').get(key)) continue;

@@ -1,5 +1,5 @@
 import type Database from 'better-sqlite3';
-import { AdminSettings } from '@luvia/contracts';
+import { AdminSettings, AdminSettingsPatch } from '@luvia/contracts';
 import type { z } from 'zod';
 
 type Settings = z.output<typeof AdminSettings>;
@@ -7,7 +7,7 @@ const defaults: Settings = {
   siteName: 'Luvia Gallery', publicUrl: null,
   libraries: { autoEnableNewMounts: false, missingGraceDays: 7 }, folders: { exposeHostPaths: false },
   scan: { mode: 'daily', intervalMinutes: 60, dailyAt: '04:00' },
-  workers: { thumbnailConcurrency: 4, ffmpegConcurrency: 2 },
+  workers: { thumbnailConcurrency: 8, ffmpegConcurrency: 4, metadataConcurrency: 8 },
   transcode: { enabled: true, hwaccel: 'auto' }, previews: { enabled: true }, cache: { limitGB: 20 },
 };
 export function readSettings(db: Database.Database): Settings {
@@ -19,7 +19,7 @@ export function readSettings(db: Database.Database): Settings {
     workers: { ...defaults.workers, ...saved.workers }, transcode: { ...defaults.transcode, ...saved.transcode },
     previews: { ...defaults.previews, ...saved.previews }, cache: { ...defaults.cache, ...saved.cache } });
 }
-export function writeSettings(db: Database.Database, patch: Partial<Settings>): Settings {
+export function writeSettings(db: Database.Database, patch: z.output<typeof AdminSettingsPatch>): Settings {
   return db.transaction(() => {
     const current = readSettings(db);
     const next = AdminSettings.parse({ ...current, ...patch,

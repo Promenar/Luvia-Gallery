@@ -96,3 +96,29 @@ test('禁用媒体库后列表、分桶、随机和媒体写入都不再包含�
     assert.equal((await app.inject({ method: 'PUT', url: '/api/v2/media/favorite', headers: { cookie, 'x-luvia-request': '1' }, payload: { ids: ['hidden'], favorite: true } })).statusCode, 403);
   } finally { await app.close(); db.close(); }
 });
+
+test('时间线可按修改时间分桶与按月取页，与拍摄时间互不影响', async () => {
+  const db = openDatabase(':memory:');
+  const app = await createApp({ db, legacyPending: false });
+  try {
+    const setup = await app.inject({ method: 'POST', url: '/api/v2/auth/setup', headers: { 'x-luvia-request': '1' }, payload: { username: 'admin', password: 'test password' } });
+    const cookie = (setup.headers['set-cookie'] as string).split(';')[0]!;
+    db.prepare("INSERT INTO libraries (id,name,root) VALUES ('lib1','测试','/test')").run();
+    const add = db.prepare(`INSERT INTO files (id,library_id,relative_path,folder,name,mime,media_type,size,modified_at,taken_at,taken_at_source,missing_at_ms)
+      VALUES (?, 'lib1', ?, 'lib1', ?, 'image/jpeg', 'image', 100, ?, ?, 'metadata', ?)`);
+    const at = (year: number, month: number) => Math.floor(new Date(year, month - 1, 15).getTime() / 1000);
+    // 拍摄于 2019 年、2024 年 3 月拷入；拍摄于 2020 年、2024 年 5 月拷入；缺失文件不计入
+    add.run('old', 'old.jpg', 'old.jpg', at(2024, 3), at(2019, 7), null);
+    add.run('mid', 'mid.jpg', 'mid.jpg', at(2024, 5), at(2020, 1), null);
+    add.run('gone', 'gone.jpg', 'gone.jpg', at(2024, 5), at(2020, 1), Date.now());
+    const get = async (url: string) => (await app.inject({ method: 'GET', url, headers: { cookie } })).json();
+    const keys = (value: unknown) => TimelineBuckets.parse(value).buckets.map((bucket) => `${bucket.key}:${bucket.count}`);
+    assert.deepEqual(keys(await get('/api/v2/media/buckets?timeField=modified')), ['2024-05:1', '2024-03:1']);
+    assert.deepEqual(keys(await get('/api/v2/media/buckets')), ['2020-01:1', '2019-07:1']);
+    // 有筛选条件时走通用分组查询，结果一致
+    assert.deepEqual(keys(await get('/api/v2/media/buckets?timeField=modified&types=image')), ['2024-05:1', '2024-03:1']);
+    const may = TimelineBuckets.parse(await get('/api/v2/media/buckets?timeField=modified')).buckets[0]!;
+    const page = MediaPage.parse(await get(`/api/v2/media?sort=modified_desc&timeField=modified&to=${may.end}&from=${may.start}`));
+    assert.deepEqual(page.items.map((item) => item.id), ['mid']);
+  } finally { await app.close(); db.close(); }
+});
