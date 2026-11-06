@@ -359,6 +359,9 @@ test('扫描接管后从已持久化目录断点继续', async () => {
     };
     await assert.rejects(scanLibrary(db, { id: 'lib1', root }, { allowedRoots: [root], owner: 'worker-a', jobId: 'scan', clock: () => time, signal: controller.signal, openDir: interrupt }));
     assert.equal((db.prepare('SELECT count(*) AS n FROM files').get() as { n: number }).n, 1);
+    // 作业说明显示已检查的目录数，接管后从已持久化的数目继续计数
+    const message = () => (db.prepare("SELECT message FROM jobs WHERE id='scan'").get() as { message: string | null }).message;
+    assert.equal(message(), '已检查 1 个目录');
     time = 131;
     assert.equal(b.claim(time)?.id, 'scan');
     const opened: string[] = [];
@@ -367,6 +370,7 @@ test('扫描接管后从已持久化目录断点继续', async () => {
     assert.equal(opened.includes(actualRoot), false);
     assert.equal(result.errors, 0);
     assert.equal(result.added, 2);
+    assert.equal(message(), '已检查 2 个目录');
     assert.equal((db.prepare('SELECT count(*) AS n FROM files').get() as { n: number }).n, 2);
   } finally { db.close(); await rm(root, { recursive: true, force: true }); }
 });

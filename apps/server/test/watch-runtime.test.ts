@@ -261,3 +261,25 @@ test('监控首轮未完成时停止循环仍可在期限内返回', async () =>
     assert.equal(done, true); assert.equal(stopped, true);
   } finally { release(); await loop.ready; }
 });
+
+test('监控租约因停顿或数据库繁忙过期但未被接管时继续持有，不重启监控也不排全量对账', async () => {
+  const { WatchRuntime } = await import('../src/worker/watch-runtime.ts');
+  const dir = await mkdtemp(path.join(tmpdir(), 'luvia-watch-lapse-')); const root = path.join(dir, 'media'); await mkdir(root);
+  const db = openDatabase(path.join(dir, 'db.sqlite')); db.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib','照片',?)").run(root);
+  let starts = 0;
+  const runtime = new WatchRuntime(db, { owner: 'worker', heartbeatMs: 60_000,
+    watcher: () => { const w = new FakeWatcher(); const start = w.start.bind(w); w.start = (h) => { starts++; start(h); }; return w; }, mount: async () => 'mount' });
+  const generation = () => (db.prepare("SELECT generation FROM watch_reconcile_requests WHERE library_id='lib'").get() as { generation: number } | undefined)?.generation;
+  try {
+    await runtime.tick();
+    assert.equal(starts, 1); const before = generation();
+    db.prepare('UPDATE watch_leases SET lease_expires_at=unixepoch()-5').run();
+    await runtime.tick();
+    assert.equal(starts, 1); assert.equal(generation(), before);
+    assert.ok((db.prepare('SELECT lease_expires_at-unixepoch() AS remaining FROM watch_leases').get() as { remaining: number }).remaining > 20);
+    // 被其它 worker 接管（owner 改变）后仍然让出
+    db.prepare("UPDATE watch_leases SET owner='other',token='t',lease_expires_at=unixepoch()+30").run();
+    await runtime.tick();
+    assert.equal((db.prepare('SELECT owner FROM watch_leases').get() as { owner: string }).owner, 'other');
+  } finally { await runtime.stop(); db.close(); await rm(dir, { recursive: true, force: true }); }
+});
