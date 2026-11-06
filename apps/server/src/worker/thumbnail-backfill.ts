@@ -9,6 +9,7 @@ import { generateMediaCache } from './media-cache.ts';
 import { withMediaGenerationLock } from './media-lock.ts';
 import { extractMetadataNow } from './metadata.ts';
 import { waitForWalCapacity } from './wal-checkpoint.ts';
+import { runLanes } from './lanes.ts';
 
 /** 网格使用的两个尺寸；查看器大图（l）仍在打开时按需生成，避免全库生成占用过多缓存。 */
 export const BACKFILL_VARIANTS: Variant[] = [{ kind: 'thumb', size: 's' }, { kind: 'thumb', size: 'm' }];
@@ -126,11 +127,7 @@ export async function processThumbnailBackfill(db: Database.Database, job: JobRo
       }
     }
   };
-  const results = await Promise.allSettled(Array.from({ length: Math.min(concurrency, Math.max(1, tasks.length)) }, async () => {
-    try { await lane(); } catch (error) { stop.abort(); throw error; }
-  }));
-  const failure = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
-  if (failure) throw failure.reason;
+  await runLanes(Math.min(concurrency, Math.max(1, tasks.length)), stop, lane);
   if (rows.length) state.lastId = rows[rows.length - 1]!.id;
   state.done += rows.length;
   options.assertLease();

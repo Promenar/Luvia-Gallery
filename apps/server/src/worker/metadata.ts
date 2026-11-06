@@ -3,6 +3,7 @@ import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { runProcess } from './process-runner.ts';
 import { waitForWalCapacity } from './wal-checkpoint.ts';
+import { runLanes } from './lanes.ts';
 import { renewLease } from '../core/sqlite-errors.ts';
 import type Database from 'better-sqlite3';
 import { publishLibraryEvent } from './watch-events.ts';
@@ -296,11 +297,7 @@ export async function processMetadataBatch(db: Database.Database, job: JobRow, o
       await new Promise<void>((resolve) => setImmediate(resolve));
     }
   };
-  const results = await Promise.allSettled(Array.from({ length: concurrency }, async () => {
-    try { await lane(); } catch (error) { stop.abort(); throw error; }
-  }));
-  const failure = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
-  if (failure) throw failure.reason;
+  await runLanes(concurrency, stop, lane);
   const dirtyRemaining = flushMetadataFolders(db, options.assertLease);
   const pending = db.prepare(`SELECT 1 FROM files f INDEXED BY ${options.libraryId ? 'files_library_metadata' : 'files_metadata'} CROSS JOIN libraries l ON l.id=f.library_id AND l.enabled=1 WHERE f.metadata_status='pending' AND f.missing_at_ms IS NULL${libraryClause} LIMIT 1`).get(...libraryArgs);
   if (pending || dirtyRemaining) await delay(50, undefined, { signal: options.signal });
