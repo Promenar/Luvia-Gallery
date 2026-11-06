@@ -162,3 +162,47 @@ test('文件夹含子文件夹时各排序逐页翻完顺序正确，子树占�
     }
   } finally { db.close(); }
 });
+
+test('收藏较少时先取收藏集合再排序，结果与逐行判断一致且只包含收藏的文件与收藏文件夹的内容', async () => {
+  const { MediaReader } = await import('../src/core/media-query.ts');
+  const { MediaListQuery } = await import('@luvia/contracts');
+  const db = openDatabase(':memory:');
+  const app = await createApp({ db, legacyPending: false });
+  try {
+    const setup = await app.inject({ method: 'POST', url: '/api/v2/auth/setup', headers: { 'x-luvia-request': '1' }, payload: { username: 'admin', password: 'test password' } });
+    const userId = setup.json().user.id as string;
+    db.prepare("INSERT INTO libraries (id,name,root) VALUES ('lib','库','/lib')").run();
+    const folder = db.prepare('INSERT INTO folders (path,library_id,parent,name,media_count) VALUES (?,?,?,?,?)');
+    folder.run('lib', 'lib', null, '库', 30); folder.run('lib/fav', 'lib', 'lib', 'fav', 8); folder.run('lib/fav/sub', 'lib', 'lib/fav', 'sub', 3); folder.run('lib/other', 'lib', 'lib', 'other', 10);
+    const add = db.prepare(`INSERT INTO files (id,library_id,relative_path,folder,name,mime,media_type,size,modified_at,taken_at,taken_at_source)
+      VALUES (?,'lib',?,?,?,'image/jpeg','image',?,?,?,'mtime')`);
+    const folders = ['lib', 'lib/fav', 'lib/fav/sub', 'lib/other', 'lib/fav0'];
+    for (let i = 0; i < 30; i++) add.run(`f${String(i).padStart(2, '0')}`, `${i}.jpg`, folders[i % 5], `${['b', 'A', 'c'][i % 3]}${i % 4}.jpg`, (i % 6) * 10, 1000 + (i % 7), 2000 + (i % 4));
+    const favorite = db.prepare('INSERT INTO favorites (user_id,item_id,item_type) VALUES (?,?,?)');
+    favorite.run(userId, 'lib/fav', 'folder'); favorite.run(userId, 'f03', 'file'); favorite.run(userId, 'f08', 'file');
+    // 期望：lib/fav 及其子目录（不含前缀相同的 lib/fav0），加上单独收藏的文件；f08 在 lib/other，f03 在 lib/other
+    const sqls: string[] = [];
+    const proxy = new Proxy(db, { get: (target, key) => key === 'prepare' ? (sql: string) => { sqls.push(sql); return target.prepare(sql); } : (typeof (target as any)[key] === 'function' ? (target as any)[key].bind(target) : (target as any)[key]) });
+    const reader = new MediaReader(proxy as typeof db);
+    const list = (sort: string) => {
+      const seen: string[] = []; let cursor: string | undefined;
+      do {
+        const page = reader.page(MediaListQuery.parse({ scope: 'favorites', sort, limit: 4, cursor }), { id: userId, allowedPaths: null });
+        seen.push(...page.items.map((item) => item.id)); cursor = page.nextCursor ?? undefined;
+      } while (cursor);
+      return seen;
+    };
+    for (const sort of ['taken_desc', 'taken_asc', 'modified_desc', 'name_asc', 'size_desc']) {
+      sqls.length = 0; const small = list(sort);
+      assert.ok(sqls.some((sql) => sql.includes('f.rowid IN (SELECT x.rowid FROM favorites')), sort);
+      db.prepare("UPDATE folders SET media_count=10 WHERE path='lib'").run();
+      sqls.length = 0; const large = list(sort);
+      assert.ok(!sqls.some((sql) => sql.includes('f.rowid IN (SELECT x.rowid FROM favorites')), sort);
+      db.prepare("UPDATE folders SET media_count=30 WHERE path='lib'").run();
+      assert.deepEqual(small, large, sort);
+      const expected = new Set(db.prepare("SELECT id FROM files WHERE folder IN ('lib/fav','lib/fav/sub') OR id IN ('f03','f08')").pluck().all() as string[]);
+      assert.deepEqual(new Set(small), expected, sort);
+      assert.equal(small.length, expected.size, sort);
+    }
+  } finally { await app.close(); db.close(); }
+});
