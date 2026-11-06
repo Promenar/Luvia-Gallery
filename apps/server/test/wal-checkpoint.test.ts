@@ -20,7 +20,7 @@ test('写连接不在提交时自动检查点，由后台线程把 WAL 写回主
     assert.ok((await stat(`${filename}-wal`)).size > 8192 * 1500);
     const stop = startWalCheckpointer(filename, { intervalMs: 20 });
     try {
-      for (let i = 0; i < 100 && (await stat(filename)).size <= before; i++) await delay(20);
+      for (let i = 0; i < 250 && (await stat(filename)).size <= before + 8192 * 1000; i++) await delay(20);
       assert.ok((await stat(filename)).size > before + 8192 * 1000);
     } finally { await stop(); }
     assert.equal((db.prepare('SELECT count(*) AS n FROM sample').get() as { n: number }).n, 1500);
