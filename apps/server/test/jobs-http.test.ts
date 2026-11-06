@@ -42,6 +42,10 @@ test('全库缩略图作业同一范围只排队一个，不同媒体库互不�
     const id = JobSchema.parse(first.json()).id;
     await app.inject({ method: 'POST', url: `/api/v2/admin/jobs/${id}/cancel`, headers: { ...header, cookie } });
     assert.equal((await create()).statusCode, 200);
+    // 已下线的“补全照片宽高”参数不能被忽略后变成生成全库缩略图
+    const legacy = await app.inject({ method: 'POST', url: '/api/v2/admin/jobs', headers: { ...header, cookie }, payload: { type: 'thumbnails', libraryId: undefined, dimensionsOnly: true } });
+    assert.equal(legacy.statusCode, 400);
+    assert.equal((db.prepare("SELECT count(*) AS n FROM jobs WHERE type='thumbnails' AND status='queued'").get() as { n: number }).n, 1);
   } finally { await app.close(); db.close(); }
 });
 
