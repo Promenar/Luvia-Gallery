@@ -17,6 +17,20 @@ type Checkpoint = { lastId: string; total: number; done: number; generated: numb
 type Row = { id: string; size: number; modified_at: number; cache_generation: number; media_type: string; width: number | null; height: number | null; metadata_status: string };
 type Task = { kind: 'thumb'; row: Row; variant: Variant; key: string } | { kind: 'dimensions'; row: Row };
 
+function backfillWhere(byLibrary: boolean, dimensionsOnly: boolean): string {
+  return `f.media_type IN ('image','video') AND f.missing_at_ms IS NULL${byLibrary ? ' AND f.library_id=?' : ''}${dimensionsOnly ? ' AND (f.width IS NULL OR f.height IS NULL)' : ''}`;
+}
+
+/**
+ * 下一轮要处理的文件，按 id 顺序。固定走 id 唯一索引：统计信息失真时规划器会改走媒体库索引再对全表临时排序，
+ * 约 94 万文件时每轮要 5 秒以上并卡住 worker 主线程。
+ */
+export function backfillRowsSql(byLibrary: boolean, dimensionsOnly: boolean): string {
+  return `SELECT f.id,f.size,f.modified_at,f.cache_generation,f.media_type,f.width,f.height,f.metadata_status
+    FROM files f INDEXED BY sqlite_autoindex_files_1 CROSS JOIN libraries l ON l.id=f.library_id AND l.enabled=1
+    WHERE ${backfillWhere(byLibrary, dimensionsOnly)} AND f.id>? ORDER BY f.id LIMIT ?`;
+}
+
 /**
  * 全库生成、补全与修复缩略图：按 id 顺序分轮遍历图片与视频，缺少的尺寸直接生成（生成时顺带记录原始宽高）；
  * 缓存记录存在但文件已丢失的先删除记录再生成；缩略图齐全但没有宽高的单独读取宽高。
@@ -25,21 +39,19 @@ type Task = { kind: 'thumb'; row: Row; variant: Variant; key: string } | { kind:
 export async function processThumbnailBackfill(db: Database.Database, job: JobRow, options: {
   owner: string; cacheDir: string; allowedRoots: string[]; libraryId?: string | null; dimensionsOnly?: boolean; assertLease: () => void; signal: AbortSignal;
 }): Promise<{ complete: boolean; counts: Omit<Checkpoint, 'lastId'> }> {
-  const libraryClause = options.libraryId ? ' AND f.library_id=?' : '';
   const libraryArgs = options.libraryId ? [options.libraryId] : [];
-  const scope = `FROM files f JOIN libraries l ON l.id=f.library_id AND l.enabled=1
-    WHERE f.media_type IN ('image','video') AND f.missing_at_ms IS NULL${libraryClause}${options.dimensionsOnly ? ' AND (f.width IS NULL OR f.height IS NULL)' : ''}`;
+  const where = backfillWhere(!!options.libraryId, !!options.dimensionsOnly);
   const saved = job.checkpoint ? JSON.parse(job.checkpoint) as Partial<Checkpoint> : {};
   const state: Checkpoint = { lastId: saved.lastId ?? '', total: saved.total ?? -1, done: saved.done ?? 0, generated: saved.generated ?? 0, repaired: saved.repaired ?? 0, dimensions: saved.dimensions ?? 0, failed: saved.failed ?? 0 };
   if (state.total < 0) {
-    state.total = (db.prepare(`SELECT count(*) AS n ${scope}`).get(...libraryArgs) as { n: number }).n;
+    state.total = (db.prepare(`SELECT count(*) AS n FROM files f JOIN libraries l ON l.id=f.library_id AND l.enabled=1 WHERE ${where}`).get(...libraryArgs) as { n: number }).n;
     db.prepare('UPDATE jobs SET progress_total=?,checkpoint=? WHERE id=?').run(state.total, JSON.stringify(state), job.id);
   }
   const workers = readSettings(db).workers;
   // 只读宽高时主要等待磁盘，按拍摄信息读取的并发数；生成缩略图受 CPU 限制，按缩略图并发数
   const concurrency = options.dimensionsOnly ? workers.metadataConcurrency : Math.max(1, workers.thumbnailConcurrency - INTERACTIVE_RESERVE);
   const chunk = Math.max(256, concurrency * 8);
-  const rows = db.prepare(`SELECT f.id,f.size,f.modified_at,f.cache_generation,f.media_type,f.width,f.height,f.metadata_status ${scope} AND f.id>? ORDER BY f.id LIMIT ?`)
+  const rows = db.prepare(backfillRowsSql(!!options.libraryId, !!options.dimensionsOnly))
     .all(...libraryArgs, state.lastId, chunk) as Row[];
   const entry = db.prepare('SELECT 1 FROM cache_entries WHERE cache_key=?');
   const tasks: Task[] = [];
