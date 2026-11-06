@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { IsoDateTime } from './common.ts';
+import { MediaSort } from './media.ts';
 
 /**
  * 外观偏好。服务端按用户持久化为 JSON，仅做结构校验；渲染由前端主题引擎完成。
@@ -66,6 +67,8 @@ export const Preferences = z.object({
   gridStyle: z.enum(['justified', 'square']).default('justified'),
   /** 照片时间线的排序与分组依据：modified 文件修改时间（默认，导入后立即可用），taken 拍摄时间（随后台读取逐步完善）。 */
   timelineBasis: z.enum(['modified', 'taken']).default('modified'),
+  /** 文件夹、相册、收藏中媒体网格的排序，默认按修改时间从新到旧。 */
+  mediaSort: MediaSort.default('modified_desc'),
   /** 视频悬停预览。 */
   hoverPreview: z.boolean().default(true),
   reduceMotion: z.enum(['system', 'on', 'off']).default('system'),
@@ -132,6 +135,7 @@ export const PreferencesPatch = z
     density: z.number().int().min(1).max(5),
     gridStyle: Preferences.shape.gridStyle.unwrap(),
     timelineBasis: Preferences.shape.timelineBasis.unwrap(),
+    mediaSort: MediaSort,
     hoverPreview: z.boolean(),
     reduceMotion: Preferences.shape.reduceMotion.unwrap(),
     startPage: Preferences.shape.startPage.unwrap(),

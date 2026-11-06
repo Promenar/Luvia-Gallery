@@ -39,7 +39,9 @@ export function startWalCheckpointer(filename: string, options: { intervalMs?: n
   let stopped = false; let worker: Worker; let restart: NodeJS.Timeout | undefined;
   const start = () => {
     worker = new Worker(new URL('./wal-checkpoint-thread.ts', import.meta.url), { workerData: { filename, intervalMs, truncateFrames } });
-    worker.on('message', (message: { log: number }) => {
+    worker.on('message', (message: { log?: number; bytes?: number }) => {
+      if (message.bytes !== undefined) { if (message.bytes >= pressureFrames * 4096) setPressure(true); return; }
+      if (message.log === undefined) return;
       if (message.log >= pressureFrames) setPressure(true);
       else if (message.log >= 0 && message.log < truncateFrames) setPressure(false);
     });

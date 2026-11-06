@@ -1,3 +1,4 @@
+import { statSync } from 'node:fs';
 import { parentPort, workerData } from 'node:worker_threads';
 import Database from 'better-sqlite3';
 
@@ -23,6 +24,8 @@ const checkpoint = (): Result => {
   return result;
 };
 const tick = () => {
+  // 积压很多时一次写回要很久，先报告 WAL 文件大小，主线程不必等写回结束才让后台作业让路
+  try { parentPort!.postMessage({ bytes: statSync(`${workerData.filename as string}-wal`).size }); } catch { /* WAL 不存在 */ }
   const result = checkpoint();
   if (stopped) return;
   parentPort!.postMessage({ log: result.log });

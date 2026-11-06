@@ -20,6 +20,7 @@ import { AlbumDialog, invalidateAlbum } from './AlbumDialog';
 import { SmartBadge } from './SmartBadge';
 import { filterSummary, formatAlbumRange } from './format';
 import { idParams } from './params';
+import { SortMenu, useMediaSort } from '@/components/media/SortMenu';
 
 function AlbumMissing({ error }: { error: Error }) {
   const notFound = error instanceof ApiError && error.status === 404;
@@ -36,7 +37,8 @@ export default function AlbumPage() {
   const { albumId } = useParams({ from: '/app/albums/$albumId' });
   const navigate = useNavigate();
   const albumQ = useQuery({ ...q('getAlbum', { ...idParams(albumId) }), retry: noRetryOnMissing });
-  const query = useMemo<MediaListQuery>(() => ({ scope: 'album', albumId }), [albumId]);
+  const sort = useMediaSort();
+  const query = useMemo<MediaListQuery>(() => ({ scope: 'album', albumId, sort }), [albumId, sort]);
   const media = useMediaPages(query, albumQ.isSuccess);
   const [scroller, setScroller] = useState<HTMLDivElement | null>(null);
   const [editing, setEditing] = useState(false);
@@ -115,6 +117,7 @@ export default function AlbumPage() {
         </div>
         {album && (
           <div className="flex flex-wrap items-center gap-2 md:ml-auto">
+            <SortMenu small={false} />
             <button type="button" className={chip()} onClick={play}>
               <Play className="size-3.5! fill-current" strokeWidth={0} />播放幻灯片
             </button>
