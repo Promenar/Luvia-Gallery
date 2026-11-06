@@ -60,7 +60,7 @@ api 与 worker 共享同一个 SQLite 数据库，不直接通信。作业、租
 - 时间线可按文件修改时间（默认，扫描时即有）或拍摄时间排列，用户偏好 `timelineBasis`。修改时间分桶走部分覆盖索引 `files_present_modified`；拍摄时间分桶走触发器维护的 `timeline_counts`。网格的原始比例排布依赖拍摄信息里的宽高，读取前按正方形占位。
 - 缩略图：浏览时按需生成；管理页“全库缩略图”排一个 `thumbnails` 作业（同一范围只排一个），按 id 分轮为全部照片与视频补齐网格用的 s、m 两个尺寸，缓存记录存在但文件丢失的删除记录后重新生成，并为浏览中的按需生成保留 2 个并发。生成缩略图时顺带记录原始宽高；缩略图齐全但缺宽高的文件单独读取。`dimensionsOnly` 模式（管理页“补全照片宽高”）只处理缺宽高的文件：尚未读取拍摄信息的先在 `metadata_claims` 认领再读取全部拍摄信息（磁盘开销相同），与后台拍摄信息作业不重复；已读取的图片只读文件头。缩略图与视频处理分别受 `thumbnailConcurrency`（1–64）与 `ffmpegConcurrency`（1–32）的跨进程槽位限制。
 - 外部程序：ffprobe、ffmpeg 由常驻的小内存子进程代理（`worker/process-runner.ts`）启动，worker 启动时先拉起代理。Linux 启动子进程要复制父进程页表，在内存占用数 GB 的 worker 主线程里直接启动每次要数百毫秒到数秒；api 当场读取元数据时按需启动自己的代理。
-- WAL 检查点：写连接关闭自动检查点（`wal_autocheckpoint=0`），由 worker 的后台线程每 5 秒执行 PASSIVE 检查点，写回与 fsync 不落在 api、worker 主线程上；只运行 api 而不运行 worker 时 WAL 不会被写回。
+- WAL 检查点：写连接关闭自动检查点（`wal_autocheckpoint=0`），由 worker 的后台线程每秒执行 PASSIVE 检查点，写回与 fsync 不落在 api、worker 主线程上；写回追平且 WAL 超过 64 MiB 时线程做一次不等待的 TRUNCATE（有读者即放弃，下一轮重试）。WAL 超过 256 MiB 时拍摄信息、缩略图与扫描作业在每个文件或批次前异步等待（`waitForWalCapacity`，最长 10 秒），回落到 64 MiB 以下恢复，避免持续写入让写回始终追不平而 WAL 无限增长。只运行 api 而不运行 worker 时 WAL 不会被写回。
 - 数据库维护（worker 每 15 分钟，独立线程）：先做不占写锁的 PASSIVE 检查点，全部写回后才 TRUNCATE 截断 WAL；连接设置 `journal_size_limit` 为 64MB。作业遇到 SQLite 锁等待超时（`SQLITE_BUSY`/`SQLITE_LOCKED`）时放回队列从检查点继续，不判为失败。
 - 镜像设置 `UV_THREADPOOL_SIZE=64`，避免 sharp 与文件读写被 libuv 默认 4 线程限制。
 

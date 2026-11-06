@@ -10,6 +10,7 @@ import { cleanupDeletedMediaCache } from './cache-prune.ts';
 import { moveDirectoryPaths } from '../core/directory-move.ts';
 import { confirmLibraryMount } from '../watch/root-guard.ts';
 import { publishScanChanges } from './watch-events.ts';
+import { waitForWalCapacity } from './wal-checkpoint.ts';
 
 type Options = {
   allowedRoots: string[]; openDir?: typeof opendir; signal?: AbortSignal;
@@ -362,6 +363,7 @@ async function scanWithLock(db: Database.Database, library: { id: string; root: 
           if (pending.length >= concurrency) {
             await Promise.all(pending); pending = [];
             if (batch.length >= batchSize) {
+              await waitForWalCapacity(signal);
               try { flush(); } catch (error) { writeFailure = error; throw error; }
             }
           }

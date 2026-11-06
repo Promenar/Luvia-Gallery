@@ -7,6 +7,7 @@ import { withThumbnailSlot } from './ffmpeg-slots.ts';
 import { generateMediaCache } from './media-cache.ts';
 import { withMediaGenerationLock } from './media-lock.ts';
 import { extractMetadataNow } from './metadata.ts';
+import { waitForWalCapacity } from './wal-checkpoint.ts';
 
 /** 网格使用的两个尺寸；查看器大图（l）仍在打开时按需生成，避免全库生成占用过多缓存。 */
 export const BACKFILL_VARIANTS: Variant[] = [{ kind: 'thumb', size: 's' }, { kind: 'thumb', size: 'm' }];
@@ -74,6 +75,7 @@ export async function processThumbnailBackfill(db: Database.Database, job: JobRo
   let next = 0;
   const lane = async () => {
     while (next < tasks.length) {
+      await waitForWalCapacity(signal);
       signal.throwIfAborted(); options.assertLease();
       const task = tasks[next++]!;
       const source = { mediaId: task.row.id, sourceSize: task.row.size, sourceModified: task.row.modified_at, sourceGeneration: task.row.cache_generation };

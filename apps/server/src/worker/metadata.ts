@@ -2,6 +2,7 @@ import { realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { runProcess } from './process-runner.ts';
+import { waitForWalCapacity } from './wal-checkpoint.ts';
 import type Database from 'better-sqlite3';
 import { publishLibraryEvent } from './watch-events.ts';
 import exifr from 'exifr';
@@ -262,6 +263,7 @@ export async function processMetadataBatch(db: Database.Database, job: JobRow, o
   const lane = async () => {
     while (!exhausted && claimed < budget) {
       signal.throwIfAborted();
+      await waitForWalCapacity(signal);
       const source = claim();
       if (!source) { exhausted = true; break; }
       claimed++;
