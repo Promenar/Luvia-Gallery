@@ -172,35 +172,44 @@ export async function runNextJob(db: Database.Database, options: WorkerOptions):
       } else {
         const checkpoint = job.checkpoint ? JSON.parse(job.checkpoint) as { lastId?: string; queued?: number } : {};
         let lastId = checkpoint.lastId ?? ''; let queued = checkpoint.queued ?? 0;
-        // 限制每次扫描的文件数，即使没有待处理视频也能及时让出事件循环。
-        const rows = db.prepare(`SELECT f.id,f.size,f.modified_at,f.cache_generation,f.media_type,f.has_preview,f.missing_at_ms,f.library_id,l.enabled
+        // 将每轮扫描分成较小的读取块，避免大库随机读取长时间占用事件循环。
+        const read = db.prepare(`SELECT f.id,f.size,f.modified_at,f.cache_generation,f.media_type,f.has_preview,f.missing_at_ms,f.library_id,l.enabled
           FROM files f INDEXED BY sqlite_autoindex_files_1 CROSS JOIN libraries l ON l.id=f.library_id
-          WHERE f.id>? ORDER BY f.id LIMIT 512`).all(lastId) as { id: string; size: number; modified_at: number; cache_generation: number; media_type: string; has_preview: number; missing_at_ms: number | null; library_id: string; enabled: number }[];
-        let eligible = 0; let scanned = 0;
-        for (const row of rows) {
-          controller.signal.throwIfAborted();
-          scanned++; lastId = row.id;
-          if (!row.enabled || row.media_type !== 'video' || row.has_preview || row.missing_at_ms !== null || (payload.libraryId && row.library_id !== payload.libraryId)) continue;
-          eligible++;
-          db.transaction(() => {
-            assertLease();
-            const variants: Variant[] = [{ kind: 'preview' }];
-            for (const variant of variants) {
-              const key = cacheKey(row, variant);
-              if (db.prepare('SELECT 1 FROM cache_entries WHERE cache_key=?').get(key)) continue;
-              const existing = db.prepare("SELECT 1 FROM jobs WHERE dedupe_key=? AND status IN ('queued','running','paused')").get(`media:${key}`);
-              enqueueMediaTask(db, row, variant);
-              if (!existing) queued++;
-            }
-            db.prepare('UPDATE jobs SET checkpoint=?,progress_done=? WHERE id=?').run(JSON.stringify({ lastId, queued }), queued, job.id);
-          }).immediate();
-          if (eligible >= 32) break;
+          WHERE f.id>? ORDER BY f.id LIMIT 64`);
+        let eligible = 0; let scanned = 0; let exhausted = false;
+        while (scanned < 512 && eligible < 32) {
+          controller.signal.throwIfAborted(); assertLease();
+          const rows = read.all(lastId) as { id: string; size: number; modified_at: number; cache_generation: number; media_type: string; has_preview: number; missing_at_ms: number | null; library_id: string; enabled: number }[];
+          let consumed = 0;
+          for (const row of rows) {
+            controller.signal.throwIfAborted();
+            consumed++; scanned++; lastId = row.id;
+            if (!row.enabled || row.media_type !== 'video' || row.has_preview || row.missing_at_ms !== null || (payload.libraryId && row.library_id !== payload.libraryId)) continue;
+            eligible++;
+            db.transaction(() => {
+              assertLease();
+              const variants: Variant[] = [{ kind: 'preview' }];
+              for (const variant of variants) {
+                const key = cacheKey(row, variant);
+                if (db.prepare('SELECT 1 FROM cache_entries WHERE cache_key=?').get(key)) continue;
+                const existing = db.prepare("SELECT 1 FROM jobs WHERE dedupe_key=? AND status IN ('queued','running','paused')").get(`media:${key}`);
+                enqueueMediaTask(db, row, variant);
+                if (!existing) queued++;
+              }
+              db.prepare('UPDATE jobs SET checkpoint=?,progress_done=? WHERE id=?').run(JSON.stringify({ lastId, queued }), queued, job.id);
+            }).immediate();
+            if (eligible >= 32) break;
+          }
+          if (rows.length < 64 && consumed === rows.length) { exhausted = true; break; }
+          if (scanned < 512 && eligible < 32) {
+            await new Promise<void>((resolve) => setImmediate(resolve));
+          }
         }
         db.transaction(() => {
           assertLease();
           db.prepare('UPDATE jobs SET checkpoint=?,progress_done=? WHERE id=?').run(JSON.stringify({ lastId, queued }), queued, job.id);
         }).immediate();
-        if (rows.length < 512 && scanned === rows.length) {
+        if (exhausted) {
           if (!queue.finish(job.id, { queued })) throw new Error('作业租约已失效');
         } else {
           if (!queue.release(job.id)) throw new Error('作业租约已失效');
