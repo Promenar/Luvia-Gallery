@@ -181,3 +181,18 @@ test('已有版本 1 数据库升级时保留数据并创建扫描锁表', async
     db.close();
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
+
+test('已有版本 39 数据库打开时补建按库认领元数据的索引且不提升版本号', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'luvia-metadata-index-upgrade-')); const filename = path.join(dir, 'db.sqlite');
+  try {
+    const old = openDatabase(filename); old.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib','照片','/media')").run();
+    old.exec('DROP INDEX files_library_metadata'); old.close();
+    const upgraded = openDatabase(filename);
+    try {
+      // 版本号不变，回滚到旧镜像时旧代码仍能打开同一数据库。
+      assert.equal(upgraded.pragma('user_version', { simple: true }), 39);
+      assert.ok(upgraded.prepare("SELECT 1 FROM sqlite_master WHERE type='index' AND name='files_library_metadata'").get());
+      assert.ok(upgraded.prepare("SELECT 1 FROM libraries WHERE id='lib'").get());
+    } finally { upgraded.close(); }
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
