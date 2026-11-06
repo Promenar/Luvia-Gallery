@@ -561,14 +561,15 @@ async function scanWithLock(db: Database.Database, library: { id: string; root: 
   return result;
 }
 
-async function materializeFolders(db: Database.Database, libraryId: string, assertLease: () => void, signal?: AbortSignal): Promise<void> {
-  type Folder = { path: string; parent: string | null; direct: number; total: number; children: number; latest: number | null; cover: string | null; coverAt: number | null };
-  const folders = (db.prepare('SELECT path,parent FROM folders WHERE library_id=? AND missing_at_ms IS NULL').all(libraryId) as { path: string; parent: string | null }[])
+export async function materializeFolders(db: Database.Database, libraryId: string, assertLease: () => void, signal?: AbortSignal): Promise<void> {
+  type Folder = { path: string; parent: string | null; cover_file_id: string | null; direct: number; total: number; children: number; latest: number | null; cover: string | null; coverAt: number | null };
+  const folders = (db.prepare('SELECT path,parent,cover_file_id FROM folders WHERE library_id=? AND missing_at_ms IS NULL').all(libraryId) as { path: string; parent: string | null; cover_file_id: string | null }[])
     .map((folder): Folder => ({ ...folder, direct: 0, total: 0, children: 0, latest: null, cover: null, coverAt: null }));
   const byPath = new Map(folders.map((folder) => [folder.path, folder]));
   const count = db.prepare('SELECT count(*) AS n FROM files WHERE folder=? AND missing_at_ms IS NULL');
   const latest = db.prepare('SELECT taken_at FROM files WHERE folder=? AND missing_at_ms IS NULL ORDER BY taken_at DESC,id ASC LIMIT 1');
   const cover = db.prepare('SELECT id,taken_at FROM files WHERE folder=? AND missing_at_ms IS NULL AND thumb_ready=1 ORDER BY taken_at DESC,id ASC LIMIT 1');
+  let processed = 0;
   for (const folder of folders) {
     signal?.throwIfAborted();
     folder.direct = (count.get(folder.path) as { n: number }).n;
@@ -577,6 +578,10 @@ async function materializeFolders(db: Database.Database, libraryId: string, asse
     const selected = cover.get(folder.path) as { id: string; taken_at: number } | undefined;
     folder.cover = selected?.id ?? null; folder.coverAt = selected?.taken_at ?? null;
     if (folder.parent) { const parent = byPath.get(folder.parent); if (parent) parent.children++; }
+    if (++processed % 16 === 0) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      signal?.throwIfAborted(); assertLease();
+    }
   }
   folders.sort((a, b) => b.path.length - a.path.length);
   for (const folder of folders) {
@@ -589,12 +594,23 @@ async function materializeFolders(db: Database.Database, libraryId: string, asse
       parent.cover = folder.cover; parent.coverAt = folder.coverAt;
     }
   }
-  const update = db.prepare('UPDATE folders SET direct_media_count=?,media_count=?,child_count=?,cover_file_id=?,latest_at=? WHERE path=?');
+  // 若等待期间封面被其它任务修改，比较当前封面与原候选；候选失效时才重新查询该子树。
+  const update = db.prepare(`UPDATE folders SET direct_media_count=?,media_count=?,child_count=?,cover_file_id=CASE
+    WHEN cover_file_id IS NOT ? THEN COALESCE(
+      (SELECT id FROM files WHERE id IN (folders.cover_file_id,?) AND thumb_ready=1 AND missing_at_ms IS NULL AND (folder=? OR (folder>=? AND folder<?)) ORDER BY taken_at DESC,id ASC LIMIT 1),
+      (SELECT id FROM files WHERE thumb_ready=1 AND missing_at_ms IS NULL AND (folder=? OR (folder>=? AND folder<?)) ORDER BY taken_at DESC,id ASC LIMIT 1))
+    WHEN ? IS NULL AND ? IS NULL THEN NULL
+    WHEN EXISTS(SELECT 1 FROM files WHERE id=? AND thumb_ready=1 AND missing_at_ms IS NULL AND (folder=? OR (folder>=? AND folder<?))) THEN ?
+    ELSE (SELECT id FROM files WHERE thumb_ready=1 AND missing_at_ms IS NULL AND (folder=? OR (folder>=? AND folder<?)) ORDER BY taken_at DESC,id ASC LIMIT 1)
+    END,latest_at=? WHERE path=?`);
   for (let offset = 0; offset < folders.length; offset += 256) {
     signal?.throwIfAborted();
     db.transaction(() => {
       assertLease();
-      for (const folder of folders.slice(offset, offset + 256)) update.run(folder.direct, folder.total, folder.children, folder.cover, folder.latest, folder.path);
+      for (const folder of folders.slice(offset, offset + 256)) update.run(folder.direct, folder.total, folder.children, folder.cover_file_id,
+        folder.cover, folder.path, `${folder.path}/`, `${folder.path}0`, folder.path, `${folder.path}/`, `${folder.path}0`,
+        folder.cover, folder.cover_file_id, folder.cover, folder.path, `${folder.path}/`, `${folder.path}0`, folder.cover,
+        folder.path, `${folder.path}/`, `${folder.path}0`, folder.latest, folder.path);
     }).immediate();
     await new Promise<void>((resolve) => setImmediate(resolve));
   }

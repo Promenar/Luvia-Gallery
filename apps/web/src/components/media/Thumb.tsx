@@ -4,6 +4,7 @@ import { Play } from 'lucide-react';
 import { mediaUrls, type MediaItem, type ThumbSize } from '@luvia/contracts';
 import { cn } from '@/lib/cn';
 import { useWantDimensions } from '@/lib/dimensions';
+import { thumbMemory } from './thumb-memory';
 
 export function formatDuration(sec: number | null | undefined) {
   if (sec == null) return '';
@@ -59,6 +60,8 @@ export const Thumb = memo(function Thumb({ item, width, height, className, badge
   useWantDimensions(item);
   const placeholder = useMemo(() => thumbhashUrl(item), [item]);
   const size = pickThumbSize(Math.max(width, height));
+  const src = mediaUrls.thumb(item.id, size, item.thumbVersion);
+  const generation = useMemo(() => thumbMemory.generation, [src]);
   return (
     <button
       type="button"
@@ -76,12 +79,14 @@ export const Thumb = memo(function Thumb({ item, width, height, className, badge
     >
       {canThumb(item) && (
         <img
-          src={mediaUrls.thumb(item.id, size, item.thumbVersion)}
+          key={src}
+          src={src}
           alt=""
           loading={lazy ? 'lazy' : 'eager'}
           decoding="async"
           draggable={false}
-          onLoad={() => setLoaded(true)}
+          onLoad={(event) => { thumbMemory.remember(event.currentTarget, generation); setLoaded(true); }}
+          onError={(event) => { thumbMemory.forget(event.currentTarget); setLoaded(false); }}
           className={cn('size-full object-cover transition-[opacity,scale] duration-300', loaded ? 'opacity-100' : 'opacity-0', selected && 'scale-[.94] rounded-[calc(var(--r1)-2px)]')}
         />
       )}

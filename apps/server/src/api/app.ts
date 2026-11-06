@@ -653,7 +653,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
         const previous = await findLegacyThumbnail(cacheDir, row);
         if (previous) {
           authorize?.();
-          enqueueMediaTask(db, row, variant);
+          enqueueMediaTask(db, row, variant, { interactive: true });
           return sendFile(req, reply, previous, { mime: 'image/webp', name: row.name, etagKey: `legacy:${cacheKey(row, variant)}`, authorize });
         }
       }
@@ -665,9 +665,9 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
             AND json_valid(payload) AND json_extract(payload,'$.mediaId')=? AND json_extract(payload,'$.variant.kind')='tile'`).get(row.id) as { n: number }).n;
           if (!existing && active >= 8) fail(503, 'UNAVAILABLE', '瓦片生成任务已满，请稍后重试');
         }
-        const active = wait ? (db.prepare('SELECT count(*) AS n FROM media_waiters WHERE lease_expires_at>unixepoch()').get() as { n: number }).n : 0;
+        const active = wait ? (db.prepare("SELECT count(*) AS n FROM media_waiters WHERE lease_expires_at>unixepoch() AND id NOT GLOB 'priority:*'").get() as { n: number }).n : 0;
         const waiter = wait && active < 32 ? randomUUID() : undefined;
-        return { waiter, jobId: enqueueMediaTask(db, row, variant, { waiter }) };
+        return { waiter, jobId: enqueueMediaTask(db, row, variant, { waiter, interactive: !waiter }) };
       }).immediate();
       if (waiter) {
         let disconnected = false; let released = false; let ready = false; let renewal = Date.now() + 5000;
@@ -812,7 +812,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     if (resource === 'tiles.dzi') {
       if (row.media_type !== 'image') return fail(404, 'NOT_FOUND', '媒体不支持深度缩放');
       if (!row.width || !row.height) {
-        enqueueMediaTask(db, row, { kind: 'dimensions' });
+        enqueueMediaTask(db, row, { kind: 'dimensions' }, { interactive: true });
         return reply.header('Retry-After', '1').code(202).send({ status: 'pending' });
       }
       if (Math.max(row.width, row.height) <= 8192) return fail(404, 'NOT_FOUND', '媒体不支持深度缩放');
@@ -833,7 +833,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     const level = Number(rawLevel); const col = Number(match[1]); const tileRow = Number(match[2]);
     const { row } = await binaryMedia(req, id);
     if (row.media_type === 'image' && (!row.width || !row.height)) {
-      enqueueMediaTask(db, row, { kind: 'dimensions' });
+      enqueueMediaTask(db, row, { kind: 'dimensions' }, { interactive: true });
       return reply.header('Retry-After', '1').code(202).send({ status: 'pending' });
     }
     if (!row.width || !row.height || Math.max(row.width, row.height) <= 8192 || !Number.isSafeInteger(level) || !Number.isSafeInteger(col) || !Number.isSafeInteger(tileRow))
@@ -1434,6 +1434,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     reply.raw.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
     reply.raw.write(': connected\n\n');
     let lastPing = Date.now();
+    let accessScope = JSON.stringify([identity.user.role, userOut(identity.user).allowedPaths]);
     let waitingDrain = false;
     const send = (value: string) => {
       if (!reply.raw.write(value)) {
@@ -1447,6 +1448,10 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
         if (!current) {
           reply.raw.write('event: session\ndata: {"reason":"revoked"}\n\n');
           clearInterval(timer); reply.raw.end(); return;
+        }
+        const currentScope = JSON.stringify([current.user.role, userOut(current.user).allowedPaths]);
+        if (currentScope !== accessScope) {
+          accessScope = currentScope; send('event: session\ndata: {"reason":"permissions_changed"}\n\n');
         }
         if (waitingDrain) return;
         const records = db.prepare('SELECT id,event_type,payload FROM job_events WHERE id>? ORDER BY id LIMIT 256').all(cursor) as { id: number; event_type: string; payload: string }[];
