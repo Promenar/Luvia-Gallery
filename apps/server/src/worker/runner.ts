@@ -19,14 +19,12 @@ import { generateHls } from './hls.ts';
 import { withThumbnailSlot } from './ffmpeg-slots.ts';
 import { withMediaGenerationLock } from './media-lock.ts';
 import { finishWatchReconcile } from './watch-reconcile-queue.ts';
+import { isTransientSqliteError, renewLease } from '../core/sqlite-errors.ts';
 
 export type WorkerOptions = { owner: string; allowedRoots: string[]; legacyDir: string; systemRoots: string[]; configuredMediaRoots?: string[]; cacheDir?: string; signal?: AbortSignal; hlsIdleMs?: number; log?: (level: 'info' | 'warn', message: string, ctx: Record<string, string>) => void };
 type Payload = { libraryId?: string | null; dimensionsOnly?: boolean; legacyImportId?: string; mediaId?: string; hlsSessionId?: string; sourceSize?: number; sourceModified?: number; sourceGeneration?: number; variant?: Variant };
 /** SQLite 暂时繁忙（锁等待超时），稍后重试即可恢复。 */
-export function isTransientSqliteError(error: unknown): boolean {
-  const code = (error as { code?: unknown } | null)?.code;
-  return typeof code === 'string' && (code.startsWith('SQLITE_BUSY') || code.startsWith('SQLITE_LOCKED'));
-}
+export { isTransientSqliteError };
 const now = () => Math.floor(Date.now() / 1000);
 function safeScanError(error: unknown): string {
   const code = (error as NodeJS.ErrnoException | null)?.code;
@@ -66,10 +64,7 @@ export async function runNextJob(db: Database.Database, options: WorkerOptions):
   options.signal?.addEventListener('abort', stop, { once: true });
   if (options.signal?.aborted) controller.abort();
   const assertLease = () => { if (!queue.active(job.id)) throw new Error('作业租约已失效'); };
-  const timer = setInterval(() => {
-    try { if (!queue.renew(job.id)) controller.abort(); }
-    catch { controller.abort(); }
-  }, 5000);
+  const timer = setInterval(() => renewLease(() => queue.renew(job.id), () => controller.abort()), 5000);
   timer.unref();
   let waiterTimer: NodeJS.Timeout | undefined;
   try {
@@ -245,6 +240,9 @@ export async function runNextJob(db: Database.Database, options: WorkerOptions):
       if (transient) options.log?.('warn', '数据库暂时繁忙，作业稍后继续', { type: job.type });
     }
     else {
+      // 界面只显示概括信息，原始错误写入工作进程日志便于排查
+      const code = (error as { code?: unknown } | null)?.code;
+      options.log?.('warn', '作业失败', { type: job.type, error: `${typeof code === 'string' ? `${code} ` : ''}${error instanceof Error ? `${error.name}: ${error.message}` : String(error)}`.slice(0, 300) });
       db.transaction(() => {
         if (!queue.fail(job.id, message)) return;
         if (watchScan) finishWatchReconcile(db, job.id, false);

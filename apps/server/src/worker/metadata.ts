@@ -3,6 +3,7 @@ import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { runProcess } from './process-runner.ts';
 import { waitForWalCapacity } from './wal-checkpoint.ts';
+import { renewLease } from '../core/sqlite-errors.ts';
 import type Database from 'better-sqlite3';
 import { publishLibraryEvent } from './watch-events.ts';
 import exifr from 'exifr';
@@ -269,12 +270,10 @@ export async function processMetadataBatch(db: Database.Database, job: JobRow, o
       claimed++;
       const local = new AbortController();
       const fileSignal = AbortSignal.any([signal, local.signal]);
-      const timer = setInterval(() => {
-        try {
-          options.assertLease();
-          if (!db.prepare('UPDATE metadata_claims SET lease_expires_at=? WHERE file_id=? AND job_id=? AND owner=? AND lease_expires_at>?').run(now() + 30, source.id, job.id, options.owner, now()).changes) local.abort();
-        } catch { local.abort(); }
-      }, 5000);
+      const timer = setInterval(() => renewLease(() => {
+        options.assertLease();
+        return db.prepare('UPDATE metadata_claims SET lease_expires_at=? WHERE file_id=? AND job_id=? AND owner=? AND lease_expires_at>?').run(now() + 30, source.id, job.id, options.owner, now()).changes > 0;
+      }, () => local.abort()), 5000);
       timer.unref();
       let metadata: Metadata | null;
       try { metadata = await extractSource(source, allowed, fileSignal, settings.transcode.enabled); }
