@@ -90,7 +90,7 @@ export async function runNextJob(db: Database.Database, options: WorkerOptions):
         const library = db.prepare('SELECT id,root FROM libraries WHERE id=? AND enabled=1').get(payload.libraryId) as { id: string; root: string } | undefined;
         if (!library) throw new Error('媒体库不可用');
         let result;
-        try { result = await scanLibrary(db, library, { allowedRoots: options.allowedRoots, owner: options.owner, jobId: job.id, jobLeaseToken: job.leaseToken, signal: controller.signal, cacheDir: options.cacheDir ?? path.resolve(process.env.CACHE_DIR ?? 'cache') }); }
+        try { result = await scanLibrary(db, library, { allowedRoots: options.allowedRoots, owner: options.owner, jobId: job.id, jobLeaseToken: job.leaseToken, signal: controller.signal, cacheDir: options.cacheDir ?? path.resolve(process.env.CACHE_DIR ?? 'cache'), log: options.log }); }
         catch (error) {
           if (error instanceof Error && error.message === '媒体库正在扫描' && queue.active(job.id)) {
             await delay(500, undefined, { signal: controller.signal });

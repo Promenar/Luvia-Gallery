@@ -11,11 +11,13 @@ import { moveDirectoryPaths } from '../core/directory-move.ts';
 import { confirmLibraryMount } from '../watch/root-guard.ts';
 import { publishScanChanges } from './watch-events.ts';
 import { waitForWalCapacity } from './wal-checkpoint.ts';
+import { isTransientSqliteError } from '../core/sqlite-errors.ts';
 
 type Options = {
   allowedRoots: string[]; openDir?: typeof opendir; signal?: AbortSignal;
   batchSize?: number; statConcurrency?: number; owner?: string; jobId?: string; jobLeaseToken?: string; clock?: () => number; cacheDir?: string;
   mount?: (root: string) => Promise<string | null>;
+  log?: (level: 'info' | 'warn', message: string, ctx: Record<string, string>) => void;
 };
 type Candidate = { relative: string; size: number; mtime: number; mtimeMs: number; dev: string; ino: string; movedId: string | null; fromPath?: string };
 type ScanResult = { added: number; removed: number; errors: number };
@@ -30,6 +32,11 @@ function typeOf(relative: string): 'image' | 'video' | 'audio' | null {
 function within(root: string, target: string): boolean {
   const relative = path.relative(root, target);
   return relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+}
+/** 列出目录后到读取之间被移走或删除：按不存在处理，本轮结束时由缺失标记统一处理，不算读取错误。 */
+function vanished(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | null)?.code;
+  return code === 'ENOENT' || code === 'ENOTDIR';
 }
 function parentOfDirectory(relative: string): string { const parent = path.posix.dirname(relative); return parent === '.' ? '' : parent; }
 class LeaseLost extends Error {
@@ -51,19 +58,19 @@ export async function scanLibrary(db: Database.Database, library: { id: string; 
   let lost = false;
   const assertLease = () => {
     if (lost) throw new LeaseLost();
-    const at = clock();
-    const lock = db.prepare('SELECT 1 FROM scan_locks WHERE library_id=? AND owner=? AND lease_token=? AND lease_expires_at>?').get(library.id, owner, lockToken, at);
-    const job = !options.jobId || db.prepare("SELECT 1 FROM jobs WHERE id=? AND status='running' AND owner=? AND lease_token=? AND lease_expires_at>?").get(options.jobId, owner, jobToken, at);
+    // 过期只表示可被接管；未被其它扫描或领取者换掉令牌前仍归本次扫描所有
+    const lock = db.prepare('SELECT 1 FROM scan_locks WHERE library_id=? AND owner=? AND lease_token=?').get(library.id, owner, lockToken);
+    const job = !options.jobId || db.prepare("SELECT 1 FROM jobs WHERE id=? AND status='running' AND owner=? AND lease_token=?").get(options.jobId, owner, jobToken);
     if (!lock || !job) throw new LeaseLost();
   };
   const timer = setInterval(() => {
     try {
       const at = clock();
-      if (options.jobId && !db.prepare("SELECT 1 FROM jobs WHERE id=? AND status='running' AND owner=? AND lease_token=? AND lease_expires_at>?").get(options.jobId, owner, jobToken, at)) { lost = true; return; }
-      const result = db.prepare('UPDATE scan_locks SET heartbeat_at=?,lease_expires_at=? WHERE library_id=? AND owner=? AND lease_token=? AND lease_expires_at>?')
-        .run(at, at + 30, library.id, owner, lockToken, at);
+      if (options.jobId && !db.prepare("SELECT 1 FROM jobs WHERE id=? AND status='running' AND owner=? AND lease_token=?").get(options.jobId, owner, jobToken)) { lost = true; return; }
+      const result = db.prepare('UPDATE scan_locks SET heartbeat_at=?,lease_expires_at=? WHERE library_id=? AND owner=? AND lease_token=?')
+        .run(at, at + 30, library.id, owner, lockToken);
       if (!result.changes) lost = true;
-    } catch { lost = true; }
+    } catch (error) { if (!isTransientSqliteError(error)) lost = true; }
   }, 5000);
   timer.unref();
   try { return await scanWithLock(db, library, options, assertLease); }
@@ -136,7 +143,31 @@ async function scanWithLock(db: Database.Database, library: { id: string; root: 
   let batch: Candidate[] = [];
   let pending: Promise<void>[] = [];
   const existing = db.prepare('SELECT id FROM files WHERE id=?');
-  const existingPath = db.prepare('SELECT id,dev,ino,missing_at_ms FROM files WHERE library_id=? AND relative_path=?');
+  const existingPath = db.prepare('SELECT id,dev,ino,missing_at_ms,size,modified_at,mtime_ms,name,folder,mime,media_type,scan_marker FROM files WHERE library_id=? AND relative_path=?');
+  // 内容与身份都没变的文件只记下本轮已见到，不整行重写（整行重写会改写十几个索引，百万文件的对账要写入数十 GB）
+  const markSeen = db.prepare('UPDATE files SET scan_marker=? WHERE id=?');
+  type Existing = { id: string; dev: string | null; ino: string | null; missing_at_ms: number | null; size: number; modified_at: number; mtime_ms: number | null; name: string; folder: string; mime: string; media_type: string; scan_marker: string | null };
+  // 目录同理：未变化时只更新本轮标记，已是本轮标记（断点续扫）时不写
+  const folderRow = db.prepare('SELECT parent,name,dev,ino,mtime_ms,missing_at_ms,scan_marker FROM folders WHERE path=?');
+  const markFolderSeen = db.prepare('UPDATE folders SET scan_marker=? WHERE path=?');
+  const upsertFolder = db.prepare(`INSERT INTO folders(path,library_id,parent,name,scan_marker,dev,ino,mtime_ms) VALUES (?,?,?,?,?,?,?,?)
+    ON CONFLICT(path) DO UPDATE SET parent=excluded.parent,name=excluded.name,scan_marker=excluded.scan_marker,
+      dev=excluded.dev,ino=excluded.ino,mtime_ms=excluded.mtime_ms,missing_at_ms=NULL`);
+  const touchFolder = (folderPath: string, parent: string | null, name: string, info: { dev: string; ino: string; mtimeMs: number }) => {
+    const row = folderRow.get(folderPath) as { parent: string | null; name: string; dev: string | null; ino: string | null; mtime_ms: number | null; missing_at_ms: number | null; scan_marker: string | null } | undefined;
+    if (row && row.missing_at_ms === null && row.parent === parent && row.name === name && row.dev === info.dev && row.ino === info.ino && row.mtime_ms === info.mtimeMs) {
+      if (row.scan_marker !== marker) markFolderSeen.run(marker, folderPath);
+      return;
+    }
+    upsertFolder.run(folderPath, library.id, parent, name, marker, info.dev, info.ino, info.mtimeMs);
+  };
+  // 读取错误按阶段与错误代码计数，扫描结束写入日志（不含路径）
+  const errorKinds = new Map<string, number>();
+  const countError = (stage: string, error: unknown) => {
+    result.errors++;
+    const code = (error as NodeJS.ErrnoException | null)?.code ?? (error instanceof Error ? 'other' : 'unknown');
+    errorKinds.set(`${stage}:${code}`, (errorKinds.get(`${stage}:${code}`) ?? 0) + 1);
+  };
   const sidecar = !!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='file_watch_index'").get();
   const identity = db.prepare(sidecar
     ? 'SELECT f.id,f.relative_path FROM file_watch_index w JOIN files f ON f.id=w.file_id WHERE w.library_id=? AND w.dev=? AND w.ino=? LIMIT 2'
@@ -219,7 +250,7 @@ async function scanWithLock(db: Database.Database, library: { id: string; root: 
     db.transaction(() => {
       assertLease();
       for (const file of current) {
-        let byPath = existingPath.get(library.id, file.relative) as { id: string; dev: string | null; ino: string | null; missing_at_ms: number | null } | undefined;
+        let byPath = existingPath.get(library.id, file.relative) as Existing | undefined;
         let moved = file.movedId ? db.prepare('SELECT id,missing_at_ms FROM files WHERE id=? AND library_id=? AND dev=? AND ino=? AND (scan_marker IS NULL OR scan_marker<>?)').get(file.movedId, library.id, file.dev, file.ino, marker) as { id: string; missing_at_ms: number | null } | undefined : undefined;
         if (allowDefer && ((byPath?.missing_at_ms ?? null) !== null || (moved?.missing_at_ms ?? null) !== null ||
           (byPath?.dev && byPath.ino && (byPath.dev !== file.dev || byPath.ino !== file.ino)))) {
@@ -236,14 +267,23 @@ async function scanWithLock(db: Database.Database, library: { id: string; root: 
           expiryChange(file.fromPath ?? old.relative_path, false, moved.id);
           removeFile(moved.id); result.removed++; moved = undefined;
         }
-        const preferred = mediaId(library.id, file.relative);
-        const id = byPath?.id ?? moved?.id ?? (existing.get(preferred) ? randomUUID() : preferred);
         const kind = typeOf(file.relative)!;
         const dirname = path.posix.dirname(file.relative);
+        const folder = virtualPath(library.id, dirname === '.' ? '' : dirname);
+        const mime = lookup(file.relative) || 'application/octet-stream';
+        if (allowDefer && byPath && !file.movedId && byPath.missing_at_ms === null && byPath.dev === file.dev && byPath.ino === file.ino
+          && byPath.size === file.size && byPath.modified_at === file.mtime && byPath.mtime_ms === file.mtimeMs
+          && byPath.name === path.posix.basename(file.relative) && byPath.folder === folder && byPath.mime === mime && byPath.media_type === kind
+          && !(jobId && pendingMove.get(byPath.id))) {
+          if (byPath.scan_marker !== marker) markSeen.run(marker, byPath.id);
+          continue;
+        }
+        const preferred = mediaId(library.id, file.relative);
+        const id = byPath?.id ?? moved?.id ?? (existing.get(preferred) ? randomUUID() : preferred);
         const before = db.prepare('SELECT relative_path,size,modified_at,mtime_ms,missing_at_ms,dev,ino FROM files WHERE id=?').get(id) as { relative_path: string; size: number; modified_at: number; mtime_ms: number | null; missing_at_ms: number | null; dev: string | null; ino: string | null } | undefined;
         if (!before) result.added++;
-        upsert.run({ id, library_id: library.id, relative_path: file.relative, folder: virtualPath(library.id, dirname === '.' ? '' : dirname),
-          name: path.posix.basename(file.relative), mime: lookup(file.relative) || 'application/octet-stream', media_type: kind,
+        upsert.run({ id, library_id: library.id, relative_path: file.relative, folder,
+          name: path.posix.basename(file.relative), mime, media_type: kind,
           size: file.size, mtime: file.mtime, marker, dev: file.dev, ino: file.ino, mtime_ms: file.mtimeMs });
         {
           const suppressed = hasChangedAncestor(parentOfDirectory(file.relative));
@@ -273,6 +313,8 @@ async function scanWithLock(db: Database.Database, library: { id: string; root: 
   let writeFailure: unknown;
   // 已检查的目录数写入作业说明，界面据此显示进度（目录总数随遍历增长，不作为百分比）
   let checkedDirs = jobId ? (db.prepare('SELECT count(*) AS n FROM scan_directories WHERE job_id=? AND done=1').get(jobId) as { n: number }).n : 0;
+  // 本轮第一个目录立即写，之后每秒最多写一次，避免每个目录都改写作业行
+  let progressAt = 0;
   while (true) {
     signal?.throwIfAborted();
     assertLease();
@@ -327,10 +369,7 @@ async function scanWithLock(db: Database.Database, library: { id: string; root: 
         const parent = relativeDir ? virtualPath(library.id, parentOfDirectory(relativeDir)) : null;
         const previous = db.prepare('SELECT missing_at_ms FROM folders WHERE path=?').get(folderPath) as { missing_at_ms: number | null } | undefined;
         if (!previous || previous.missing_at_ms !== null) db.prepare('DELETE FROM scan_expiry_logged WHERE library_id=? AND path=?').run(library.id, relativeDir);
-        db.prepare(`INSERT INTO folders(path,library_id,parent,name,scan_marker,dev,ino,mtime_ms) VALUES (?,?,?,?,?,?,?,?)
-          ON CONFLICT(path) DO UPDATE SET parent=excluded.parent,name=excluded.name,scan_marker=excluded.scan_marker,
-            dev=excluded.dev,ino=excluded.ino,mtime_ms=excluded.mtime_ms,missing_at_ms=NULL`)
-          .run(folderPath, library.id, parent, relativeDir ? path.posix.basename(relativeDir) : libraryRow.name, marker, dirInfo!.dev, dirInfo!.ino, dirInfo!.mtimeMs);
+        touchFolder(folderPath, parent, relativeDir ? path.posix.basename(relativeDir) : libraryRow.name, dirInfo!);
         if (relativeDir && !dirMoved && (!previous || previous.missing_at_ms !== null) && !changedDirectory.get(library.id, marker, relativeDir) && !hasChangedAncestor(parentOfDirectory(relativeDir))) {
           logChange(previous ? 'restored' : 'added', relativeDir, null, true, null);
           db.prepare('INSERT OR IGNORE INTO scan_change_directories(library_id,marker,relative_path) VALUES (?,?,?)').run(library.id, marker, relativeDir);
@@ -360,7 +399,7 @@ async function scanWithLock(db: Database.Database, library: { id: string; root: 
                 }
                 batch.push({ relative, size: fields.size, mtime: Math.floor(fields.mtimeMs / 1000), mtimeMs: fields.mtimeMs, dev: fields.dev, ino: fields.ino, movedId });
               }
-            } catch { result.errors++; }
+            } catch (error) { if (!vanished(error)) countError('file', error); }
           })());
           if (pending.length >= concurrency) {
             await Promise.all(pending); pending = [];
@@ -369,12 +408,13 @@ async function scanWithLock(db: Database.Database, library: { id: string; root: 
               try { flush(); } catch (error) { writeFailure = error; throw error; }
             }
           }
-        } else if (!entry.isFile() && !entry.isSymbolicLink()) result.errors++;
+        } else if (!entry.isFile() && !entry.isSymbolicLink()) countError('entry', { code: 'type' });
       }
     } catch (error) {
       if (signal?.aborted || error instanceof LeaseLost || error === writeFailure) throw error;
       dirInfo = null;
-      result.errors++;
+      // 目录在遍历期间被移走或删除时跳过；挂载整体消失由结束时的根目录检查判为错误
+      if (!vanished(error)) countError('directory', error);
     }
     await Promise.all(pending); pending = [];
     signal?.throwIfAborted();
@@ -384,16 +424,16 @@ async function scanWithLock(db: Database.Database, library: { id: string; root: 
       const folderPath = virtualPath(library.id, relativeDir);
       const parentRelative = relativeDir ? path.posix.dirname(relativeDir) : null;
       const parent = parentRelative === null ? null : virtualPath(library.id, parentRelative === '.' ? '' : parentRelative);
-      if (dirInfo) db.prepare(`INSERT INTO folders(path,library_id,parent,name,scan_marker,dev,ino,mtime_ms) VALUES (?,?,?,?,?,?,?,?)
-        ON CONFLICT(path) DO UPDATE SET parent=excluded.parent,name=excluded.name,scan_marker=excluded.scan_marker,
-          dev=excluded.dev,ino=excluded.ino,mtime_ms=excluded.mtime_ms,missing_at_ms=NULL`)
-        .run(folderPath, library.id, parent, relativeDir ? path.posix.basename(relativeDir) : libraryRow.name, marker, dirInfo.dev, dirInfo.ino, dirInfo.mtimeMs);
+      if (dirInfo) touchFolder(folderPath, parent, relativeDir ? path.posix.basename(relativeDir) : libraryRow.name, dirInfo);
       if (jobId) {
         const insert = db.prepare('INSERT OR IGNORE INTO scan_directories(job_id,relative_path) VALUES (?,?)');
         for (const child of children) insert.run(jobId, child);
         db.prepare('UPDATE scan_directories SET done=1 WHERE job_id=? AND relative_path=?').run(jobId, relativeDir);
         db.prepare('UPDATE scan_runs SET errors=? WHERE job_id=?').run(result.errors, jobId);
-        db.prepare('UPDATE jobs SET message=? WHERE id=?').run(`已检查 ${(checkedDirs + 1).toLocaleString('en-US')} 个目录`, jobId);
+        if (Date.now() - progressAt >= 1000) {
+          db.prepare('UPDATE jobs SET message=? WHERE id=?').run(`已检查 ${(checkedDirs + 1).toLocaleString('en-US')} 个目录`, jobId);
+          progressAt = Date.now();
+        }
       }
     }).immediate();
     checkedDirs++;
@@ -405,7 +445,8 @@ async function scanWithLock(db: Database.Database, library: { id: string; root: 
       return finalRoot === root && finalIdentity.dev === rootIdentity.dev && finalIdentity.ino === rootIdentity.ino && await checkMount();
     } catch { return false; }
   };
-  if (result.errors === 0 && !(await rootAvailable())) result.errors++;
+  if (result.errors === 0 && !(await rootAvailable())) countError('root', { code: 'unavailable' });
+  if (errorKinds.size) options.log?.('warn', '媒体库扫描读取错误', { kinds: [...errorKinds].map(([kind, n]) => `${kind}×${n}`).join(',').slice(0, 300) });
   while (result.errors === 0) {
     signal?.throwIfAborted();
     const conflicts = db.prepare(`SELECT relative_path AS relative,size,mtime,mtime_ms AS mtimeMs,dev,ino,moved_id AS movedId

@@ -4,6 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { openDatabase } from '../src/core/database.ts';
+import { JobQueue } from '../src/core/jobs.ts';
 
 test('作业租约只允许过期接管，并在接管后保留断点', async () => {
   const module = await import('../src/core/jobs.ts').catch(() => null);
@@ -67,5 +68,25 @@ test('同一 worker 的暂停恢复与取消重试不会让旧执行继续写入
     assert.equal(resumed.active('job', 104), false);
     assert.equal(resumed.release('job', 104), false);
     assert.equal(retried.finish('job', { ok: 1 }, 104), true);
+  } finally { db.close(); }
+});
+
+test('租约过期但未被接管时原持有者仍可续租与收尾', () => {
+  const db = openDatabase(':memory:');
+  try {
+    db.prepare("INSERT INTO jobs(id,type,label,status,trigger,created_at) VALUES ('job','metadata','提取','queued','manual',100)").run();
+    db.prepare("INSERT INTO jobs(id,type,label,status,trigger,created_at) VALUES ('other','metadata','提取','queued','manual',100)").run();
+    const a = new JobQueue(db, 'worker-a'); const b = new JobQueue(db, 'worker-b');
+    assert.equal(a.claim(100)?.id, 'job');
+    // 主线程卡住超过租期（30 秒）后恢复：没有其它领取者接管
+    assert.equal(a.active('job', 140), true);
+    assert.equal(a.renew('job', 140), true);
+    assert.equal(a.saveCheckpoint('job', { n: 1 }, 141), true);
+    // 再次过期并被接管后，原持有者的续租、收尾都失效
+    assert.equal(b.claim(200)?.id, 'job');
+    assert.equal(a.active('job', 200), false);
+    assert.equal(a.renew('job', 200), false);
+    assert.equal(a.fail('job', '失败', 200), false);
+    assert.equal(b.finish('job', { ok: 1 }, 201), true);
   } finally { db.close(); }
 });
