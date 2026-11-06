@@ -148,6 +148,16 @@ function refreshDirtyFolders(db: Database.Database): boolean {
   return !!db.prepare('SELECT 1 FROM metadata_dirty_folders LIMIT 1').get();
 }
 
+/**
+ * 认领下一个待提取元数据的文件。固定沿 files_metadata(metadata_status,id) 按 id 顺序取第一项：
+ * 统计信息过期或抽样失真时，规划器会改由媒体库驱动、扫整库再排序，大库上每次认领都要数秒并占住写锁。
+ */
+export function metadataClaimSql(byLibrary: boolean): string {
+  return `SELECT f.id,f.relative_path,f.folder,f.name,f.media_type,f.size,f.modified_at,l.root FROM files f INDEXED BY files_metadata
+    CROSS JOIN libraries l ON l.id=f.library_id AND l.enabled=1 LEFT JOIN metadata_claims c ON c.file_id=f.id
+    WHERE f.metadata_status='pending' AND f.missing_at_ms IS NULL AND c.file_id IS NULL${byLibrary ? ' AND f.library_id=?' : ''} ORDER BY f.id LIMIT 1`;
+}
+
 export function flushMetadataFolders(db: Database.Database, assertLease: () => void = () => {}): boolean {
   return db.transaction(() => { assertLease(); return refreshDirtyFolders(db); }).immediate();
 }
@@ -163,9 +173,7 @@ export async function processMetadataBatch(db: Database.Database, job: JobRow, o
     const source = db.transaction(() => {
       options.assertLease();
       db.prepare('DELETE FROM metadata_claims WHERE lease_expires_at<=?').run(now());
-      const row = db.prepare(`SELECT f.id,f.relative_path,f.folder,f.name,f.media_type,f.size,f.modified_at,l.root FROM files f
-        JOIN libraries l ON l.id=f.library_id AND l.enabled=1 LEFT JOIN metadata_claims c ON c.file_id=f.id
-        WHERE f.metadata_status='pending' AND f.missing_at_ms IS NULL AND c.file_id IS NULL${libraryClause} ORDER BY f.id LIMIT 1`).get(...libraryArgs) as Source | undefined;
+      const row = db.prepare(metadataClaimSql(!!options.libraryId)).get(...libraryArgs) as Source | undefined;
       if (row) db.prepare('INSERT INTO metadata_claims(file_id,job_id,owner,lease_expires_at) VALUES (?,?,?,?)').run(row.id, job.id, options.owner, now() + 30);
       return row;
     }).immediate();
@@ -216,7 +224,7 @@ export async function processMetadataBatch(db: Database.Database, job: JobRow, o
     await delay(10, undefined, { signal });
   }
   const dirtyRemaining = flushMetadataFolders(db, options.assertLease);
-  const pending = db.prepare(`SELECT 1 FROM files f JOIN libraries l ON l.id=f.library_id AND l.enabled=1 WHERE f.metadata_status='pending' AND f.missing_at_ms IS NULL${libraryClause} LIMIT 1`).get(...libraryArgs);
+  const pending = db.prepare(`SELECT 1 FROM files f INDEXED BY files_metadata CROSS JOIN libraries l ON l.id=f.library_id AND l.enabled=1 WHERE f.metadata_status='pending' AND f.missing_at_ms IS NULL${libraryClause} LIMIT 1`).get(...libraryArgs);
   if (pending || dirtyRemaining) await delay(50, undefined, { signal: options.signal });
   return { complete: !pending && !dirtyRemaining, counts };
 }

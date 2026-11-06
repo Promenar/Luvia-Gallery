@@ -116,3 +116,24 @@ test('元数据目录刷新发布符合契约的持久节流事件', () => {
     assert.deepEqual(LibraryChangedEvent.parse(JSON.parse(row.payload)), { libraryId: 'lib', source: 'scan', folders: ['lib'], added: 0, removed: 0, updated: 2, moved: 0 });
   } finally { db.close(); }
 });
+
+test('元数据认领沿 metadata_status 索引按 id 顺序取下一项，不扫描整库再排序', async () => {
+  const { metadataClaimSql } = await import('../src/worker/metadata.ts');
+  const db = openDatabase(':memory:');
+  try {
+    db.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib','照片','/synthetic')").run();
+    // 复现生产统计：PRAGMA optimize 抽样把 metadata_status 与 library_id 都估成约 1352 行，规划器改由媒体库驱动、
+    // 用 files_library 扫整库再建临时排序，约 94 万文件时每认领一个文件要 2 秒以上并全程占住写锁。
+    db.exec('ANALYZE');
+    db.exec("DELETE FROM sqlite_stat1 WHERE tbl IN ('files','libraries','metadata_claims')");
+    const stat = db.prepare('INSERT INTO sqlite_stat1(tbl,idx,stat) VALUES (?,?,?)');
+    for (const [tbl, idx, value] of [['files', 'files_metadata', '665089 1352 1'], ['files', 'files_library', '665089 1352 1352'], ['files', 'sqlite_autoindex_files_1', '665089 1'],
+      ['libraries', 'sqlite_autoindex_libraries_1', '2 1'], ['metadata_claims', 'sqlite_autoindex_metadata_claims_1', '1 1']]) stat.run(tbl, idx, value);
+    db.exec('ANALYZE sqlite_schema');
+    for (const byLibrary of [false, true]) {
+      const plan = (db.prepare(`EXPLAIN QUERY PLAN ${metadataClaimSql(byLibrary)}`).all(...(byLibrary ? ['lib'] : [])) as { detail: string }[]).map((row) => row.detail).join(' | ');
+      assert.match(plan, /USING INDEX files_metadata/, plan);
+      assert.doesNotMatch(plan, /TEMP B-TREE/, plan);
+    }
+  } finally { db.close(); }
+});
