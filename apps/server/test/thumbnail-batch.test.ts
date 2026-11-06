@@ -9,15 +9,15 @@ import { scanLibrary } from '../src/worker/scan.ts';
 import { runNextJob } from '../src/worker/runner.ts';
 import { cachePath } from '../src/core/media-cache.ts';
 
-test('全库缩略图作业直接生成网格两种尺寸并记录宽高，可重复运行、修复丢失的缓存文件并单独补全宽高', async () => {
+test('全库缩略图作业直接生成网格两种尺寸并记录宽高，可重复运行、修复丢失的缓存文件并为缺宽高的文件读取宽高', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'luvia-thumb-batch-')); const cache = await mkdtemp(path.join(tmpdir(), 'luvia-thumb-batch-cache-'));
   const db = openDatabase(':memory:');
   try {
     await sharp({ create: { width: 2400, height: 1800, channels: 3, background: '#789' } }).jpeg().toFile(path.join(root, 'photo.jpg'));
     db.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib','照片',?)").run(root);
     await scanLibrary(db, { id: 'lib', root }, { allowedRoots: [root] });
-    const run = async (id: string, dimensionsOnly = false) => {
-      db.prepare("INSERT INTO jobs(id,type,label,status,trigger,payload,created_at) VALUES (?,'thumbnails','生成缩略图','queued','manual',?,1)").run(id, JSON.stringify({ libraryId: 'lib', dimensionsOnly }));
+    const run = async (id: string) => {
+      db.prepare("INSERT INTO jobs(id,type,label,status,trigger,payload,created_at) VALUES (?,'thumbnails','生成缩略图','queued','manual',?,1)").run(id, JSON.stringify({ libraryId: 'lib' }));
       await runNextJob(db, options);
       const job = db.prepare('SELECT status,result,progress_done,progress_total FROM jobs WHERE id=?').get(id) as { status: string; result: string; progress_done: number; progress_total: number };
       assert.equal(job.status, 'succeeded');
@@ -42,23 +42,34 @@ test('全库缩略图作业直接生成网格两种尺寸并记录宽高，可�
     await rm(cachePath(cache, source, { kind: 'thumb', size: 'm' }));
     assert.deepEqual(await run('repair'), { total: 1, done: 1, generated: 1, repaired: 1, dimensions: 0, failed: 0, legacy: 0 });
     assert.ok((await sharp(cachePath(cache, source, { kind: 'thumb', size: 'm' })).metadata()).width);
-    // 缩略图齐全但没有宽高（例如更早生成的）：全库作业与只补宽高作业都只读取宽高，不重新生成
+    // 缩略图齐全但没有宽高（例如更早生成的）：只读取宽高，不重新生成
     db.prepare("UPDATE files SET width=NULL,height=NULL,metadata_status='done'").run();
     assert.deepEqual(await run('fill'), { total: 1, done: 1, generated: 0, repaired: 0, dimensions: 1, failed: 0, legacy: 0 });
-    assert.deepEqual(size(), { width: 2400, height: 1800 });
-    db.prepare('UPDATE files SET width=NULL,height=NULL').run();
-    assert.deepEqual(await run('dims', true), { total: 1, done: 1, generated: 0, repaired: 0, dimensions: 1, failed: 0, legacy: 0 });
     assert.deepEqual(size(), { width: 2400, height: 1800 });
     // 尚未读取拍摄信息的文件：后台拍摄信息作业正在读取时跳过，否则读取全部拍摄信息
     db.prepare("UPDATE files SET width=NULL,height=NULL,metadata_status='pending'").run();
     db.prepare("INSERT INTO jobs(id,type,label,status,trigger,payload,created_at) VALUES ('meta','metadata','提取元数据','running','system','{}',1)").run();
     db.prepare("INSERT INTO metadata_claims(file_id,job_id,owner,lease_expires_at) VALUES (?,'meta','other',?)").run(source.id, Math.floor(Date.now() / 1000) + 60);
-    assert.deepEqual(await run('claimed', true), { total: 1, done: 1, generated: 0, repaired: 0, dimensions: 0, failed: 0, legacy: 0 });
+    assert.deepEqual(await run('claimed'), { total: 1, done: 1, generated: 0, repaired: 0, dimensions: 0, failed: 0, legacy: 0 });
     assert.deepEqual(size(), { width: null, height: null });
     db.prepare('DELETE FROM metadata_claims').run();
-    assert.deepEqual(await run('pending', true), { total: 1, done: 1, generated: 0, repaired: 0, dimensions: 1, failed: 0, legacy: 0 });
+    assert.deepEqual(await run('pending'), { total: 1, done: 1, generated: 0, repaired: 0, dimensions: 1, failed: 0, legacy: 0 });
     assert.deepEqual(db.prepare('SELECT width,height,metadata_status FROM files').get(), { width: 2400, height: 1800, metadata_status: 'done' });
     assert.equal((db.prepare('SELECT count(*) AS n FROM metadata_claims').get() as { n: number }).n, 0);
+  } finally { db.close(); await rm(root, { recursive: true, force: true }); await rm(cache, { recursive: true, force: true }); }
+});
+
+test('重试已下线的“补全照片宽高”历史作业时直接结束，不生成缩略图', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'luvia-thumb-legacy-dims-')); const cache = await mkdtemp(path.join(tmpdir(), 'luvia-thumb-legacy-dims-cache-'));
+  const db = openDatabase(':memory:');
+  try {
+    await sharp({ create: { width: 64, height: 48, channels: 3, background: '#789' } }).jpeg().toFile(path.join(root, 'a.jpg'));
+    db.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib','照片',?)").run(root);
+    await scanLibrary(db, { id: 'lib', root }, { allowedRoots: [root] });
+    db.prepare("INSERT INTO jobs(id,type,label,status,trigger,payload,created_at) VALUES ('old','thumbnails','补全照片宽高','queued','manual',?,1)").run(JSON.stringify({ libraryId: 'lib', dimensionsOnly: true }));
+    await runNextJob(db, { owner: 'worker', allowedRoots: [root], legacyDir: root, systemRoots: [], cacheDir: cache });
+    assert.equal((db.prepare("SELECT status FROM jobs WHERE id='old'").get() as { status: string }).status, 'succeeded');
+    assert.equal((db.prepare('SELECT count(*) AS n FROM cache_entries').get() as { n: number }).n, 0);
   } finally { db.close(); await rm(root, { recursive: true, force: true }); await rm(cache, { recursive: true, force: true }); }
 });
 
@@ -73,9 +84,9 @@ test('全库缩略图分轮查询沿 id 索引顺序读取，统计信息失真�
     for (const [idx, value] of [['files_library_metadata_recent', '937858 2001 2001 1'], ['files_library', '937858 2001 2001'], ['files_type_taken', '937858 2001 2 1'], ['sqlite_autoindex_files_1', '937858 1']]) stat.run('files', idx, value);
     stat.run('libraries', 'sqlite_autoindex_libraries_1', '2 1');
     db.exec('ANALYZE sqlite_schema');
-    for (const byLibrary of [false, true]) for (const dimensionsOnly of [false, true]) {
+    for (const byLibrary of [false, true]) {
       const args = [...(byLibrary ? ['lib'] : []), '', 256];
-      const plan = (db.prepare(`EXPLAIN QUERY PLAN ${backfillRowsSql(byLibrary, dimensionsOnly)}`).all(...args) as { detail: string }[]).map((row) => row.detail).join(' | ');
+      const plan = (db.prepare(`EXPLAIN QUERY PLAN ${backfillRowsSql(byLibrary)}`).all(...args) as { detail: string }[]).map((row) => row.detail).join(' | ');
       assert.match(plan, /SEARCH f USING INDEX sqlite_autoindex_files_1 \(id>\?\)/, plan);
       assert.doesNotMatch(plan, /TEMP B-TREE/, plan);
     }
@@ -91,14 +102,19 @@ test('多个通道同时在 WAL 让路处等待时不会争抢到空任务，作
     for (const name of ['a', 'b', 'c']) await sharp({ create: { width: 64, height: 48, channels: 3, background: '#789' } }).jpeg().toFile(path.join(root, `${name}.jpg`));
     db.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib','照片',?)").run(root);
     await scanLibrary(db, { id: 'lib', root }, { allowedRoots: [root] });
-    writeSettings(db, { workers: { metadataConcurrency: 2 } });
-    db.prepare("INSERT INTO jobs(id,type,label,status,trigger,payload,created_at) VALUES ('dims','thumbnails','补全照片宽高','queued','manual',?,1)").run(JSON.stringify({ libraryId: 'lib', dimensionsOnly: true }));
+    // 两个通道；先生成缩略图，再清空宽高，使下一轮只剩三个读取宽高的任务
+    writeSettings(db, { workers: { thumbnailConcurrency: 4 } });
+    const options = { owner: 'worker', allowedRoots: [root], legacyDir: root, systemRoots: [], cacheDir: cache };
+    db.prepare("INSERT INTO jobs(id,type,label,status,trigger,payload,created_at) VALUES ('warm','thumbnails','生成缩略图','queued','manual',?,1)").run(JSON.stringify({ libraryId: 'lib' }));
+    await runNextJob(db, options);
+    db.prepare("UPDATE files SET width=NULL,height=NULL,metadata_status='done'").run();
+    db.prepare("INSERT INTO jobs(id,type,label,status,trigger,payload,created_at) VALUES ('dims','thumbnails','生成缩略图','queued','manual',?,2)").run(JSON.stringify({ libraryId: 'lib' }));
     // 两个通道先在让路处等待，放行后各取一个任务并立即再次进入积压：处理完后都会回到让路处等待，
     // 此时只剩一个任务，放行后若醒来才取任务，其中一个通道会取到空任务
     setWalPressure(true);
     setTimeout(() => { setWalPressure(false); setWalPressure(true); }, 50);
     setTimeout(() => setWalPressure(false), 1500);
-    await runNextJob(db, { owner: 'worker', allowedRoots: [root], legacyDir: root, systemRoots: [], cacheDir: cache });
+    await runNextJob(db, options);
     const job = db.prepare("SELECT status,result FROM jobs WHERE id='dims'").get() as { status: string; result: string };
     assert.equal(job.status, 'succeeded');
     assert.equal(JSON.parse(job.result).failed, 0);

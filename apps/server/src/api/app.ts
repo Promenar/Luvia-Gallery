@@ -1346,11 +1346,10 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     if (body.libraryId && !db.prepare('SELECT 1 FROM libraries WHERE id=?').get(body.libraryId)) fail(404, 'NOT_FOUND', '媒体库不存在');
     const labels: Record<string, string> = { scan: '扫描媒体库', metadata: '提取元数据', thumbnails: '生成缩略图', previews: '生成预览', health_check: '健康检查', cache_prune: '清理缓存', import_legacy: '导入旧版数据' };
     const id = randomUUID();
-    const dimensionsOnly = body.type === 'thumbnails' && body.dimensionsOnly === true;
     return db.transaction(() => {
       const inserted = db.prepare("INSERT OR IGNORE INTO jobs(id,type,label,status,trigger,payload,created_at,dedupe_key) VALUES (?,?,?,'queued','manual',?,?,?)")
-        .run(id, body.type, dimensionsOnly ? '补全照片宽高' : labels[body.type], JSON.stringify(dimensionsOnly ? { libraryId: body.libraryId ?? null, dimensionsOnly } : { libraryId: body.libraryId ?? null }), now(),
-          body.type === 'cache_prune' ? 'system:cache-prune' : body.type === 'thumbnails' ? `thumbnails:${dimensionsOnly ? 'dimensions:' : ''}${body.libraryId ?? 'all'}` : null);
+        .run(id, body.type, labels[body.type], JSON.stringify({ libraryId: body.libraryId ?? null }), now(),
+          body.type === 'cache_prune' ? 'system:cache-prune' : body.type === 'thumbnails' ? `thumbnails:${body.libraryId ?? 'all'}` : null);
       if (!inserted.changes) fail(409, 'CONFLICT', '相同作业已在队列中');
       publishJob(db, id);
       return jobView(db.prepare('SELECT * FROM jobs WHERE id=?').get(id) as JobRecord);

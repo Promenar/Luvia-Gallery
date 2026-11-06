@@ -22,6 +22,7 @@ import { finishWatchReconcile } from './watch-reconcile-queue.ts';
 import { isTransientSqliteError, renewLease } from '../core/sqlite-errors.ts';
 
 export type WorkerOptions = { owner: string; allowedRoots: string[]; legacyDir: string; systemRoots: string[]; configuredMediaRoots?: string[]; cacheDir?: string; signal?: AbortSignal; hlsIdleMs?: number; log?: (level: 'info' | 'warn', message: string, ctx: Record<string, string>) => void };
+/** dimensionsOnly 只出现在已下线的“补全照片宽高”作业的历史记录里。 */
 type Payload = { libraryId?: string | null; dimensionsOnly?: boolean; legacyImportId?: string; mediaId?: string; hlsSessionId?: string; sourceSize?: number; sourceModified?: number; sourceGeneration?: number; variant?: Variant };
 /** SQLite 暂时繁忙（锁等待超时），稍后重试即可恢复。 */
 export { isTransientSqliteError };
@@ -157,9 +158,12 @@ export async function runNextJob(db: Database.Database, options: WorkerOptions):
     } else if (job.type === 'previews' && payload.hlsSessionId) {
       const result = await generateHls(db, payload.hlsSessionId, job.id, { owner: options.owner, cacheDir: options.cacheDir ?? path.resolve(process.env.CACHE_DIR ?? 'cache'), allowedRoots: options.allowedRoots, assertLease, signal: controller.signal, idleMs: options.hlsIdleMs });
       if (!queue.finish(job.id, result)) throw new Error('作业租约已失效');
+    } else if (job.type === 'thumbnails' && !payload.mediaId && payload.dimensionsOnly) {
+      // “补全照片宽高”已下线（宽高由后台拍摄信息读取写入）；重试其历史作业时直接结束，不改为生成全库缩略图
+      if (!queue.finish(job.id, { queued: 0 })) throw new Error('作业租约已失效');
     } else if (job.type === 'thumbnails' && !payload.mediaId) {
       const result = await processThumbnailBackfill(db, job, { owner: options.owner, cacheDir: options.cacheDir ?? path.resolve(process.env.CACHE_DIR ?? 'cache'), allowedRoots: options.allowedRoots,
-        libraryId: payload.libraryId, dimensionsOnly: payload.dimensionsOnly === true, assertLease, signal: controller.signal });
+        libraryId: payload.libraryId, assertLease, signal: controller.signal });
       if (result.complete) { if (!queue.finish(job.id, result.counts)) throw new Error('作业租约已失效'); }
       else if (!queue.release(job.id)) throw new Error('作业租约已失效');
     } else if (job.type === 'previews' && !payload.mediaId) {
