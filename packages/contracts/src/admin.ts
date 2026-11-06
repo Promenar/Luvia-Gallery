@@ -208,7 +208,8 @@ export type Job = z.infer<typeof Job>;
 /** GET /api/v2/admin/jobs?status=&limit=（最近优先；运行中与排队的总在前） */
 export const JobList = z.object({ jobs: z.array(Job) });
 /** POST /api/v2/admin/jobs */
-export const CreateJobBody = z.object({ type: JobType, libraryId: z.string().optional() });
+/** dimensionsOnly 仅对 thumbnails 有效：只为没有宽高的照片和视频读取宽高，不生成缩略图。 */
+export const CreateJobBody = z.object({ type: JobType, libraryId: z.string().optional(), dimensionsOnly: z.boolean().optional() });
 /** POST /api/v2/admin/jobs/:id/:action，action ∈ pause|resume|cancel|retry → Job */
 export const JobAction = z.enum(['pause', 'resume', 'cancel', 'retry']);
 

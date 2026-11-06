@@ -9,22 +9,26 @@ import { scanLibrary } from '../src/worker/scan.ts';
 import { runNextJob } from '../src/worker/runner.ts';
 import { cachePath } from '../src/core/media-cache.ts';
 
-test('全库缩略图作业直接生成网格两种尺寸，可重复运行并修复丢失的缓存文件', async () => {
+test('全库缩略图作业直接生成网格两种尺寸并记录宽高，可重复运行、修复丢失的缓存文件并单独补全宽高', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'luvia-thumb-batch-')); const cache = await mkdtemp(path.join(tmpdir(), 'luvia-thumb-batch-cache-'));
   const db = openDatabase(':memory:');
   try {
     await sharp({ create: { width: 2400, height: 1800, channels: 3, background: '#789' } }).jpeg().toFile(path.join(root, 'photo.jpg'));
     db.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib','照片',?)").run(root);
     await scanLibrary(db, { id: 'lib', root }, { allowedRoots: [root] });
-    const run = async (id: string) => {
-      db.prepare("INSERT INTO jobs(id,type,label,status,trigger,payload,created_at) VALUES (?,'thumbnails','生成缩略图','queued','manual',?,1)").run(id, JSON.stringify({ libraryId: 'lib' }));
+    const run = async (id: string, dimensionsOnly = false) => {
+      db.prepare("INSERT INTO jobs(id,type,label,status,trigger,payload,created_at) VALUES (?,'thumbnails','生成缩略图','queued','manual',?,1)").run(id, JSON.stringify({ libraryId: 'lib', dimensionsOnly }));
       await runNextJob(db, options);
       const job = db.prepare('SELECT status,result,progress_done,progress_total FROM jobs WHERE id=?').get(id) as { status: string; result: string; progress_done: number; progress_total: number };
-      assert.equal(job.status, 'succeeded'); assert.equal(job.progress_done, 1); assert.equal(job.progress_total, 1);
-      return JSON.parse(job.result) as { generated: number; repaired: number; failed: number };
+      assert.equal(job.status, 'succeeded');
+      return JSON.parse(job.result) as { generated: number; repaired: number; dimensions: number; failed: number };
     };
     const options = { owner: 'worker', allowedRoots: [root], legacyDir: root, systemRoots: [], cacheDir: cache };
-    assert.deepEqual(await run('bulk'), { total: 1, done: 1, generated: 2, repaired: 0, failed: 0 });
+    const size = () => db.prepare('SELECT width,height FROM files').get();
+    assert.deepEqual(size(), { width: null, height: null });
+    assert.deepEqual(await run('bulk'), { total: 1, done: 1, generated: 2, repaired: 0, dimensions: 0, failed: 0 });
+    // 生成缩略图时顺带记录原始宽高
+    assert.deepEqual(size(), { width: 2400, height: 1800 });
     // 不再为每个文件、每个尺寸单独排队作业
     assert.equal((db.prepare("SELECT count(*) AS n FROM jobs WHERE type='thumbnails'").get() as { n: number }).n, 1);
     const source = db.prepare('SELECT id,size,modified_at FROM files').get() as { id: string; size: number; modified_at: number };
@@ -34,9 +38,26 @@ test('全库缩略图作业直接生成网格两种尺寸，可重复运行并�
     }
     assert.equal((db.prepare("SELECT count(*) AS n FROM cache_entries WHERE variant='thumb'").get() as { n: number }).n, 2);
     assert.equal((db.prepare('SELECT thumb_ready FROM files').get() as { thumb_ready: number }).thumb_ready, 1);
-    assert.deepEqual(await run('again'), { total: 1, done: 1, generated: 0, repaired: 0, failed: 0 });
+    assert.deepEqual(await run('again'), { total: 1, done: 1, generated: 0, repaired: 0, dimensions: 0, failed: 0 });
     await rm(cachePath(cache, source, { kind: 'thumb', size: 'm' }));
-    assert.deepEqual(await run('repair'), { total: 1, done: 1, generated: 1, repaired: 1, failed: 0 });
+    assert.deepEqual(await run('repair'), { total: 1, done: 1, generated: 1, repaired: 1, dimensions: 0, failed: 0 });
     assert.ok((await sharp(cachePath(cache, source, { kind: 'thumb', size: 'm' })).metadata()).width);
+    // 缩略图齐全但没有宽高（例如更早生成的）：全库作业与只补宽高作业都只读取宽高，不重新生成
+    db.prepare("UPDATE files SET width=NULL,height=NULL,metadata_status='done'").run();
+    assert.deepEqual(await run('fill'), { total: 1, done: 1, generated: 0, repaired: 0, dimensions: 1, failed: 0 });
+    assert.deepEqual(size(), { width: 2400, height: 1800 });
+    db.prepare('UPDATE files SET width=NULL,height=NULL').run();
+    assert.deepEqual(await run('dims', true), { total: 1, done: 1, generated: 0, repaired: 0, dimensions: 1, failed: 0 });
+    assert.deepEqual(size(), { width: 2400, height: 1800 });
+    // 尚未读取拍摄信息的文件：后台拍摄信息作业正在读取时跳过，否则读取全部拍摄信息
+    db.prepare("UPDATE files SET width=NULL,height=NULL,metadata_status='pending'").run();
+    db.prepare("INSERT INTO jobs(id,type,label,status,trigger,payload,created_at) VALUES ('meta','metadata','提取元数据','running','system','{}',1)").run();
+    db.prepare("INSERT INTO metadata_claims(file_id,job_id,owner,lease_expires_at) VALUES (?,'meta','other',?)").run(source.id, Math.floor(Date.now() / 1000) + 60);
+    assert.deepEqual(await run('claimed', true), { total: 1, done: 1, generated: 0, repaired: 0, dimensions: 0, failed: 0 });
+    assert.deepEqual(size(), { width: null, height: null });
+    db.prepare('DELETE FROM metadata_claims').run();
+    assert.deepEqual(await run('pending', true), { total: 1, done: 1, generated: 0, repaired: 0, dimensions: 1, failed: 0 });
+    assert.deepEqual(db.prepare('SELECT width,height,metadata_status FROM files').get(), { width: 2400, height: 1800, metadata_status: 'done' });
+    assert.equal((db.prepare('SELECT count(*) AS n FROM metadata_claims').get() as { n: number }).n, 0);
   } finally { db.close(); await rm(root, { recursive: true, force: true }); await rm(cache, { recursive: true, force: true }); }
 });
