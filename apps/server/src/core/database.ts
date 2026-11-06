@@ -457,6 +457,9 @@ export function openDatabase(filename: string, options: { readonly?: boolean; bo
     if (!readonly) {
       db.pragma('journal_mode = WAL');
       db.pragma('synchronous = NORMAL');
+      // 关闭提交时的自动检查点：它在提交线程里同步写回主库并 fsync，磁盘繁忙时一次 1 秒以上。
+      // 检查点由 worker 的后台线程定期执行（worker/wal-checkpoint.ts）
+      db.pragma('wal_autocheckpoint = 0');
       db.transaction(() => {
         const version = db.pragma('user_version', { simple: true });
         if (typeof version !== 'number' || version < 0 || version > 39) throw new Error(`不支持的数据库版本: ${version}`);

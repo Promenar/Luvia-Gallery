@@ -16,6 +16,7 @@ import { cleanupHls } from './hls.ts';
 import { runWorkerPool } from './pool.ts';
 import { flushMetadataFolders } from './metadata.ts';
 import { runSqliteMaintenance } from './sqlite-maintenance.ts';
+import { startWalCheckpointer } from './wal-checkpoint.ts';
 import { runIndexBackfill } from './index-backfill.ts';
 import { cleanupDeletedMediaCache } from './cache-prune.ts';
 import { runTimelineRebuild } from './timeline-rebuild.ts';
@@ -27,6 +28,7 @@ import { flushLibraryEvents } from './watch-events.ts';
 installFatalHandlers('worker');
 const runtime = await openRuntime();
 const logger = createWorkerLogger(runtime.db);
+const stopCheckpointer = startWalCheckpointer(runtime.db.name, { onError: () => logger.warn('WAL 检查点线程异常，稍后重启') });
 logger.info('工作进程已启动');
 const owner = newWorkerOwner();
 const stopController = new AbortController();
@@ -124,6 +126,6 @@ try {
   await watchLoop.stop();
   await Promise.all([sampling, backfill, cacheCleanup, timelineRebuild]);
   clearInterval(heartbeatTimer); clearInterval(pruneTimer); clearInterval(scanTimer); clearInterval(reconcileTimer); clearInterval(eventTimer); clearInterval(folderTimer); clearInterval(hlsTimer); clearInterval(maintenanceTimer);
-  await Promise.all([hlsCleanup, maintenance]); loop.disable(); runtime.db.close();
+  await Promise.all([hlsCleanup, maintenance, stopCheckpointer()]); loop.disable(); runtime.db.close();
   if (shutdownDeadline) clearTimeout(shutdownDeadline);
 }
