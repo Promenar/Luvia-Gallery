@@ -132,7 +132,7 @@ test('元数据认领沿 metadata_status 索引按 id 顺序取下一项，不�
     db.exec('ANALYZE sqlite_schema');
     for (const byLibrary of [false, true]) {
       const plan = (db.prepare(`EXPLAIN QUERY PLAN ${metadataClaimSql(byLibrary)}`).all(...(byLibrary ? ['lib'] : [])) as { detail: string }[]).map((row) => row.detail).join(' | ');
-      assert.match(plan, /USING INDEX files_metadata/, plan);
+      assert.match(plan, byLibrary ? /USING INDEX files_library_metadata \(library_id=\? AND metadata_status=\?\)/ : /USING INDEX files_metadata \(metadata_status=\?\)/, plan);
       assert.doesNotMatch(plan, /TEMP B-TREE/, plan);
     }
   } finally { db.close(); }

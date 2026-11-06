@@ -626,6 +626,10 @@ export function openDatabase(filename: string, options: { readonly?: boolean; bo
           db.exec('CREATE TABLE IF NOT EXISTS scan_pending_media_moves (file_id TEXT PRIMARY KEY REFERENCES files(id) ON DELETE CASCADE)');
           db.pragma('user_version = 39');
         }
+        // 元数据作业按媒体库认领：待处理文件在 id 上跨库交错，只靠 files_metadata 需要逐条跳过其它库的记录。
+        // 纯增量索引不提升版本号，回滚到旧镜像时旧代码仍能打开数据库。
+        const fileColumns = new Set((db.pragma('table_info(files)') as { name: string }[]).map((column) => column.name));
+        if (fileColumns.has('library_id') && fileColumns.has('metadata_status')) db.exec('CREATE INDEX IF NOT EXISTS files_library_metadata ON files(library_id, metadata_status, id)');
         const timezone = process.env.TZ ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
         const previous = db.prepare("SELECT value FROM settings WHERE key='timeline.timezone'").get() as { value: string } | undefined;
         if (previous && previous.value !== timezone) {
