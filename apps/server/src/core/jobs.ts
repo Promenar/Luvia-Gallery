@@ -9,6 +9,7 @@ const leaseSeconds = 30;
 const seconds = () => Math.floor(Date.now() / 1000);
 /** 本进程内仍在执行的作业（按 owner）。进程活着时由同一进程的其它槽位接管只会重复执行、并让原执行失败，所以只允许其它进程接管。 */
 const running = new Map<string, Set<string>>();
+let preferHls = true;
 
 export class JobQueue {
   private db: Database.Database;
@@ -28,14 +29,25 @@ export class JobQueue {
         .run(at, this.owner, JSON.stringify([...(running.get(this.owner) ?? [])]));
       const limit = typeof options.maxActivePreviews === 'function' ? options.maxActivePreviews() : options.maxActivePreviews;
       if (limit !== undefined && (!Number.isInteger(limit) || limit < 1)) throw new Error('预览并发上限无效');
-      const active = limit === undefined ? 0 : (this.db.prepare("SELECT count(*) AS n FROM jobs WHERE status='running' AND type='previews' AND dedupe_key LIKE 'media:%'").get() as { n: number }).n;
+      const active = limit === undefined ? 0 : (this.db.prepare("SELECT count(*) AS n FROM jobs WHERE status='running' AND type='previews' AND (dedupe_key LIKE 'media:%' OR dedupe_key LIKE 'hls:%')").get() as { n: number }).n;
       const allowMedia = limit === undefined || active < limit;
-      const pendingMedia = !allowMedia && !!this.db.prepare("SELECT 1 FROM jobs WHERE status='queued' AND type='previews' AND dedupe_key LIKE 'media:%' LIMIT 1").get();
+      const pendingMedia = !allowMedia && !!this.db.prepare("SELECT 1 FROM jobs WHERE status='queued' AND type='previews' AND (dedupe_key LIKE 'media:%' OR dedupe_key LIKE 'hls:%') LIMIT 1").get();
       // 预览并发已满且还有逐文件任务排队时，让分发作业等待，避免一次排入整个视频库。
-      const job = this.db.prepare(`SELECT id,type,checkpoint,payload FROM jobs WHERE status='queued'
-        AND (?=1 OR type<>'previews' OR COALESCE(dedupe_key,'') NOT LIKE 'media:%')
+      // 两类前台请求同时排队时交替领取，等待者续租不会重置类别间的公平性。
+      const waiting = this.db.prepare(`SELECT j.id,j.type,j.checkpoint,j.payload FROM media_waiters w INDEXED BY media_waiters_expiry CROSS JOIN jobs j ON j.id=w.job_id
+        WHERE w.lease_expires_at>? AND j.status='queued'
+        AND (?=1 OR j.type<>'previews' OR (COALESCE(j.dedupe_key,'') NOT LIKE 'media:%' AND COALESCE(j.dedupe_key,'') NOT LIKE 'hls:%'))
+        ORDER BY w.rowid,j.id LIMIT 1`).get(at, allowMedia ? 1 : 0) as Omit<JobRow, 'leaseToken'> | undefined;
+      const hls = allowMedia ? this.db.prepare(`SELECT id,type,checkpoint,payload,created_at FROM jobs INDEXED BY jobs_active_dedupe
+        WHERE dedupe_key>='hls:' AND dedupe_key<'hls;' AND status IN ('queued','running','paused') AND status='queued'
+        ORDER BY created_at,id LIMIT 1`).get() as (Omit<JobRow, 'leaseToken'> & { created_at: number }) | undefined : undefined;
+      const interactive = waiting && hls ? (preferHls ? hls : waiting) : waiting ?? hls;
+      const job = interactive ?? this.db.prepare(`SELECT id,type,checkpoint,payload FROM jobs WHERE status='queued'
+        AND (?=1 OR type<>'previews' OR (COALESCE(dedupe_key,'') NOT LIKE 'media:%' AND COALESCE(dedupe_key,'') NOT LIKE 'hls:%'))
         AND (?=1 OR type<>'previews' OR COALESCE(dedupe_key,'') LIKE 'media:%' OR COALESCE(dedupe_key,'') LIKE 'hls:%')
-        ORDER BY CASE WHEN dedupe_key LIKE 'media:%' OR dedupe_key LIKE 'hls:%' THEN 0 WHEN type IN ('metadata','previews') THEN 2 ELSE 1 END,created_at,id LIMIT 1`)
+        ORDER BY CASE
+          WHEN dedupe_key LIKE 'hls:%' THEN 0
+          WHEN dedupe_key LIKE 'media:%' THEN 1 WHEN type IN ('metadata','previews') THEN 3 ELSE 2 END,created_at,id LIMIT 1`)
         .get(allowMedia ? 1 : 0, pendingMedia ? 0 : 1) as Omit<JobRow, 'leaseToken'> | undefined;
       if (!job) return null;
       if (this.leases.has(job.id)) throw new Error('作业队列实例不可重复领取相同作业');
@@ -43,6 +55,8 @@ export class JobQueue {
       const changed = this.db.prepare(`UPDATE jobs SET status='running', owner=?, heartbeat_at=?, lease_expires_at=?,
         lease_token=?,started_at=COALESCE(started_at,?) WHERE id=? AND status='queued'`).run(this.owner, at, at + leaseSeconds, leaseToken, at, job.id);
       if (changed.changes === 1) {
+        if (waiting && hls) preferHls = !preferHls;
+        this.db.prepare('DELETE FROM media_waiters WHERE id=?').run(`priority:${job.id}`);
         this.leases.set(job.id, leaseToken); publishJob(this.db, job.id);
         let ids = running.get(this.owner); if (!ids) running.set(this.owner, ids = new Set()); ids.add(job.id);
       }

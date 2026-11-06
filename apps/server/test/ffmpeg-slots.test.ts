@@ -1,12 +1,26 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import Database from 'better-sqlite3';
 import { openDatabase } from '../src/core/database.ts';
 import { writeSettings } from '../src/core/settings.ts';
+
+test('FFmpeg 被外部信号终止时不应归类为可回退的编码失败', async () => {
+  const { runFfmpeg, FfmpegExitError } = await import('../src/worker/ffmpeg-slots.ts');
+  const { stopProcessRunner } = await import('../src/worker/process-runner.ts');
+  const db = openDatabase(':memory:'); const dir = await mkdtemp(path.join(tmpdir(), 'luvia-ffmpeg-signal-')); const previousPath = process.env.PATH;
+  try {
+    await writeFile(path.join(dir, 'ffmpeg'), '#!/bin/sh\nkill -KILL $$\n'); await chmod(path.join(dir, 'ffmpeg'), 0o755);
+    process.env.PATH = `${dir}${path.delimiter}${previousPath ?? ''}`;
+    await assert.rejects(runFfmpeg(db, 'worker', []), (error: unknown) => error instanceof Error && !(error instanceof FfmpegExitError));
+  } finally {
+    stopProcessRunner(); if (previousPath === undefined) delete process.env.PATH; else process.env.PATH = previousPath;
+    db.close(); await rm(dir, { recursive: true, force: true });
+  }
+});
 
 test('有空余槽位时不回收其他类型或同类型的到期槽位', async () => {
   const { withFfmpegSlot, withThumbnailSlot } = await import('../src/worker/ffmpeg-slots.ts');

@@ -14,7 +14,7 @@ export function cachePath(cacheDir: string, source: MediaSource, variant: Varian
   const key = cacheKey(source, variant);
   return path.join(cacheDir, 'media', key.slice(0, 2), `${key}.${variant.kind === 'preview' ? 'mp4' : 'webp'}`);
 }
-export function enqueueMediaTask(db: Database.Database, source: MediaSource, variant: Variant, options: { waiter?: string } = {}): string {
+export function enqueueMediaTask(db: Database.Database, source: MediaSource, variant: Variant, options: { waiter?: string; interactive?: boolean } = {}): string {
   const key = `media:${cacheKey(source, variant)}`;
   return db.transaction(() => {
     const id = randomUUID();
@@ -23,10 +23,25 @@ export function enqueueMediaTask(db: Database.Database, source: MediaSource, var
       .run(id, variant.kind === 'preview' ? 'previews' : 'thumbnails', variant.kind === 'preview' ? '生成视频预览' : '生成媒体缓存', JSON.stringify(payload), key, options.waiter ? 0 : 1);
     const job = result.changes ? id : (db.prepare("SELECT id FROM jobs WHERE dedupe_key=? AND status IN ('queued','running','paused')").get(key) as { id: string }).id;
     if (result.changes) publishJob(db, job);
+    if (options.interactive) {
+      const priority = `priority:${job}`;
+      const exists = db.prepare('SELECT 1 FROM media_waiters WHERE id=?').get(priority);
+      const atLimit = () => db.prepare("SELECT 1 FROM media_waiters WHERE id GLOB 'priority:*' LIMIT 1 OFFSET 4095").get();
+      let full = !exists && atLimit();
+      if (full && pruneMediaPriorities(db, undefined, 1) > 0) full = atLimit();
+      if (!full) db.prepare(`INSERT INTO media_waiters(id,job_id,lease_expires_at) VALUES (?,?,unixepoch()+10)
+        ON CONFLICT(id) DO UPDATE SET lease_expires_at=excluded.lease_expires_at`).run(priority, job);
+    }
     if (options.waiter) db.prepare('INSERT INTO media_waiters(id,job_id,lease_expires_at) VALUES (?,?,unixepoch()+30)').run(options.waiter, job);
     else db.prepare('UPDATE jobs SET media_background=1 WHERE id=?').run(job);
     return job;
   }).immediate();
+}
+
+/** 清理未领取且已过期的浏览优先标记；真正等待中的请求由各自的连接管理。 */
+export function pruneMediaPriorities(db: Database.Database, at = Math.floor(Date.now() / 1000), limit = 4096): number {
+  return db.prepare(`DELETE FROM media_waiters WHERE id IN
+    (SELECT id FROM media_waiters INDEXED BY media_waiters_expiry WHERE lease_expires_at<=? AND id GLOB 'priority:*' ORDER BY lease_expires_at LIMIT ?)`).run(at, limit).changes;
 }
 
 export function cancelUnobservedMediaTask(db: Database.Database, job: string): boolean {

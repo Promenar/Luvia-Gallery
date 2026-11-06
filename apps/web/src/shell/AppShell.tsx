@@ -2,12 +2,13 @@ import { Suspense, useEffect } from 'react';
 import { Link, Outlet, useRouterState } from '@tanstack/react-router';
 import { create } from 'zustand';
 import { cn } from '@/lib/cn';
-import { startEvents } from '@/lib/events';
+import { startEvents, stopEvents } from '@/lib/events';
 import { useIsAdmin, useUser } from '@/stores/session';
 import { useViewer } from '@/stores/viewer';
 import { Viewer } from '@/viewer/Viewer';
 import { AppearanceStudio } from '@/pages/appearance/AppearanceStudio';
 import { ADMIN_NAV, AppearanceIcon, PRIMARY_NAV, type NavItem } from './nav';
+import { thumbMemory } from '@/components/media/thumb-memory';
 
 /** 外观面板开关（右侧抽屉，不是独立页面）。 */
 export const useStudio = create<{ open: boolean; setOpen: (v: boolean) => void }>((set) => ({
@@ -46,7 +47,8 @@ export function AppShell() {
   const viewerOpen = useViewer((s) => s.open);
   const setStudio = useStudio((s) => s.setOpen);
 
-  useEffect(() => { startEvents(); }, []);
+  useEffect(() => { startEvents(); return stopEvents; }, []);
+  useEffect(() => () => { thumbMemory.clear(); }, [user?.id]);
 
   return (
     <div className="grid h-dvh grid-cols-1 md:grid-cols-[64px_minmax(0,1fr)]">

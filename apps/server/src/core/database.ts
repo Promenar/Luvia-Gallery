@@ -633,6 +633,7 @@ export function openDatabase(filename: string, options: { readonly?: boolean; bo
         }
         // 元数据作业按媒体库认领：待处理文件在 id 上跨库交错，只靠 files_metadata 需要逐条跳过其它库的记录。
         // 纯增量索引不提升版本号，回滚到旧镜像时旧代码仍能打开数据库。
+        db.exec('CREATE INDEX IF NOT EXISTS media_waiters_expiry ON media_waiters(lease_expires_at,job_id)');
         const fileColumns = new Set((db.pragma('table_info(files)') as { name: string }[]).map((column) => column.name));
         if (fileColumns.has('library_id') && fileColumns.has('metadata_status')) db.exec('CREATE INDEX IF NOT EXISTS files_library_metadata ON files(library_id, metadata_status, id)');
         // 拍摄信息按修改时间倒序读取（与默认时间线顺序一致）；界面正在显示的文件记入 metadata_priority 优先读取

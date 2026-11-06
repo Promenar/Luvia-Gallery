@@ -64,7 +64,8 @@ test('缩略图等待达到全局上限时返回待处理且不增加等待者',
     clearTimeout(timer); timer = undefined;
     assert.equal(response.statusCode, 202);
     assert.equal(response.json().status, 'pending');
-    assert.equal((f.db.prepare('SELECT count(*) AS n FROM media_waiters').get() as { n: number }).n, 32);
+    assert.equal((f.db.prepare("SELECT count(*) AS n FROM media_waiters WHERE id NOT GLOB 'priority:*'").get() as { n: number }).n, 32);
+    assert.equal((f.db.prepare("SELECT count(*) AS n FROM media_waiters WHERE id GLOB 'priority:*'").get() as { n: number }).n, 1);
   } finally { if (timer) clearTimeout(timer); await f.close(); }
 });
 

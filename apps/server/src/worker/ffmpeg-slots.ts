@@ -6,6 +6,9 @@ import { runProcess } from './process-runner.ts';
 import { renewLease } from '../core/sqlite-errors.ts';
 
 const now = () => Math.floor(Date.now() / 1000);
+export class FfmpegExitError extends Error {
+  constructor() { super('FFmpeg 执行失败'); }
+}
 async function withSlot<T>(db: Database.Database, owner: string, kind: 'ffmpeg' | 'thumbnail', operation: (signal: AbortSignal, assertSlot: () => void) => Promise<T>, options: { signal?: AbortSignal; assertLease?: () => void } = {}): Promise<T> {
   const id = randomUUID();
   while (true) {
@@ -70,6 +73,7 @@ export async function runFfmpeg(db: Database.Database, owner: string, args: stri
     if (signal.aborted) throw new Error('FFmpeg 已取消');
     if (result.error === 'spawn' || result.error === 'runner') throw new Error('FFmpeg 无法启动');
     if (result.error === 'timeout') throw new Error('FFmpeg 执行超时');
-    if (result.code !== 0) throw new Error('FFmpeg 执行失败');
+    if (result.signal) throw new Error('FFmpeg 被系统中止');
+    if (result.code !== 0) throw new FfmpegExitError();
   }, options);
 }

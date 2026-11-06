@@ -26,6 +26,7 @@ import { flushWatchReconciles } from './watch-reconcile-queue.ts';
 import { WatchRuntime } from './watch-runtime.ts';
 import { startWatchLoop } from './watch-loop.ts';
 import { flushLibraryEvents } from './watch-events.ts';
+import { pruneMediaPriorities } from '../core/media-cache.ts';
 
 installFatalHandlers('worker');
 const runtime = await openRuntime();
@@ -81,6 +82,8 @@ const reconcileTimer = setInterval(() => { try { flushWatchReconciles(runtime.db
 reconcileTimer.unref();
 const eventTimer = setInterval(() => { try { flushLibraryEvents(runtime.db); } catch { logger.warn('媒体库事件发送失败'); } }, 250);
 eventTimer.unref();
+const priorityTimer = setInterval(() => { try { pruneMediaPriorities(runtime.db); } catch { logger.warn('浏览优先标记清理失败'); } }, 5000);
+priorityTimer.unref();
 const folderTimer = setInterval(() => { try { flushMetadataFolders(runtime.db); } catch { logger.warn('目录统计恢复失败'); } }, 5000);
 folderTimer.unref();
 let maintaining = false; let maintenance: Promise<void> = Promise.resolve();
@@ -128,7 +131,7 @@ try {
   stopController.abort();
   await watchLoop.stop();
   await Promise.all([sampling, backfill, cacheCleanup, timelineRebuild]);
-  clearInterval(heartbeatTimer); clearInterval(pruneTimer); clearInterval(scanTimer); clearInterval(reconcileTimer); clearInterval(eventTimer); clearInterval(folderTimer); clearInterval(hlsTimer); clearInterval(maintenanceTimer);
+  clearInterval(heartbeatTimer); clearInterval(pruneTimer); clearInterval(scanTimer); clearInterval(reconcileTimer); clearInterval(eventTimer); clearInterval(priorityTimer); clearInterval(folderTimer); clearInterval(hlsTimer); clearInterval(maintenanceTimer);
   await Promise.all([hlsCleanup, maintenance, stopCheckpointer()]); stopProcessRunner(); loop.disable(); runtime.db.close();
   if (shutdownDeadline) clearTimeout(shutdownDeadline);
 }

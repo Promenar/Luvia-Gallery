@@ -8,7 +8,8 @@ import { rgbaToThumbHash } from 'thumbhash';
 import { z } from 'zod';
 import { cacheKey, cachePath } from '../core/media-cache.ts';
 import { secureMediaPath } from '../core/paths.ts';
-import { runFfmpeg } from './ffmpeg-slots.ts';
+import { FfmpegExitError, runFfmpeg, withFfmpegSlot } from './ffmpeg-slots.ts';
+import { runProcess } from './process-runner.ts';
 import { readSettings } from '../core/settings.ts';
 import { noteThumbnail } from '../core/folder-covers.ts';
 
@@ -33,9 +34,9 @@ export const LEGACY_MIN_SIDE = 192;
  */
 export async function generateMediaCache(db: Database.Database, payload: unknown, options: { owner: string; cacheDir: string; allowedRoots: string[]; assertLease: () => void; signal?: AbortSignal; legacyInput?: string }): Promise<{ fromLegacy: boolean }> {
   const task = Task.parse(payload);
-  const row = db.prepare(`SELECT f.id,f.size,f.modified_at,f.cache_generation,f.mtime_ms,f.relative_path,f.media_type,f.width,f.height,l.root FROM files f
+  const row = db.prepare(`SELECT f.id,f.size,f.modified_at,f.cache_generation,f.mtime_ms,f.relative_path,f.media_type,f.width,f.height,f.duration_sec,l.root FROM files f
     JOIN libraries l ON l.id=f.library_id WHERE f.id=? AND l.enabled=1 AND f.missing_at_ms IS NULL`).get(task.mediaId) as
-    { id: string; size: number; modified_at: number; cache_generation: number; mtime_ms: number | null; relative_path: string; media_type: string; width: number | null; height: number | null; root: string } | undefined;
+    { id: string; size: number; modified_at: number; cache_generation: number; mtime_ms: number | null; relative_path: string; media_type: string; width: number | null; height: number | null; duration_sec: number | null; root: string } | undefined;
   if (!row || !(row.media_type === 'image' && task.variant.kind !== 'preview' || row.media_type === 'video' && (task.variant.kind === 'thumb' || task.variant.kind === 'preview')) || row.size !== task.sourceSize || row.modified_at !== task.sourceModified || row.cache_generation !== task.sourceGeneration) throw new Error('媒体已变化或不支持');
   const realRoot = await realpath(row.root);
   const allowed = await Promise.all(options.allowedRoots.map((root) => realpath(root)));
@@ -80,12 +81,49 @@ export async function generateMediaCache(db: Database.Database, payload: unknown
     }
     if (task.variant.kind === 'thumb') {
       if (row.media_type === 'video' && !fromLegacy) {
-        await runFfmpeg(db, options.owner, ['-n', '-i', filename, '-map', '0:v:0', '-frames:v', '1', '-threads', '1', '-f', 'image2', '-vcodec', 'mjpeg', frame], options);
+        const duration = row.duration_sec && Number.isFinite(row.duration_sec) && row.duration_sec > 0 ? row.duration_sec : 0;
+        const positions = duration > 1 ? [Math.min(duration * 0.1, 30), duration * 0.5, duration * 0.9]
+          .map((position) => ['-ss', String(Math.max(0, Math.min(position, duration - 0.25)))])
+          : duration ? [['-ss', '0']] : [['-ss', '0'], ['-sseof', '-1']];
+        let selected = false;
+        for (let index = 0; index < positions.length; index++) {
+          const position = positions[index]!;
+          options.signal?.throwIfAborted(); options.assertLease();
+          try {
+            await runFfmpeg(db, options.owner, ['-n', ...position, '-t', '1', '-i', filename, '-map', '0:v:0',
+              '-vf', `fps=${duration > 3 ? 4 : 10},blackframe=amount=0:threshold=32,metadata=mode=select:key=lavfi.blackframe.pblack:value=98:function=less`,
+              '-frames:v', '1', '-threads', '1', '-f', 'image2', '-vcodec', 'mjpeg', frame], options);
+            selected = !!(await stat(frame).catch(() => null))?.size;
+          } catch (error) {
+            if (!(error instanceof FfmpegExitError)) throw error;
+          }
+          if (selected) break;
+          await unlink(frame).catch(() => {});
+          if (!duration && index === 0) {
+            // 缺少时长且片头为黑时，再探测时长以覆盖中间画面；探测失败仍可尝试片尾。
+            const estimated = await withFfmpegSlot(db, options.owner, async (signal) => {
+              const result = await runProcess('ffprobe', ['-v', 'error', '-protocol_whitelist', 'file,pipe', '-show_entries', 'format=duration:stream=duration', '-of', 'json', filename],
+                { timeoutMs: 15000, maxBuffer: 65536, capture: true, signal });
+              signal.throwIfAborted();
+              if (result.signal && !result.error) throw new Error('媒体信息读取被系统中止');
+              if (result.code !== 0 || result.error) return 0;
+              try {
+                const probe = JSON.parse(result.stdout) as { format?: { duration?: string }; streams?: { duration?: string }[] };
+                const values = [probe.format?.duration, ...(probe.streams ?? []).map((stream) => stream.duration)].map(Number);
+                return values.find((value) => Number.isFinite(value) && value > 1) ?? 0;
+              } catch { return 0; }
+            }, options);
+            if (estimated) positions.splice(1, 0, ['-ss', String(estimated * 0.5)]);
+          }
+        }
+        // 全黑、极短或缺少可用取样时间戳时保留首帧作为封面。
+        if (!selected) await runFfmpeg(db, options.owner, ['-n', '-i', filename, '-map', '0:v:0', '-frames:v', '1', '-threads', '1', '-f', 'image2', '-vcodec', 'mjpeg', frame], options);
         input = frame;
       }
       const dimension = { s: 256, m: 768, l: 1600 }[task.variant.size];
-      await sharp(input).rotate().resize({ width: dimension, height: dimension, fit: 'outside', withoutEnlargement: true }).webp({ quality: 82 }).toFile(temp);
-      const placeholder = await sharp(input).rotate().resize({ width: 100, height: 100, fit: 'inside', withoutEnlargement: true }).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+      const thumbnail = await sharp(input).rotate().resize({ width: dimension, height: dimension, fit: 'outside', withoutEnlargement: true }).webp({ quality: 82 }).toFile(temp);
+      // 不透明缩略图复用生成结果；透明图从原图计算，保留透明度和颜色。
+      const placeholder = await sharp(thumbnail.hasAlpha ? input : temp).rotate().resize({ width: 100, height: 100, fit: 'inside', withoutEnlargement: true }).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
       hash = Buffer.from(rgbaToThumbHash(placeholder.info.width, placeholder.info.height, placeholder.data)).toString('base64');
       // 生成缩略图时顺带记录原始宽高，供网格按原始比例排布；视频帧已由 FFmpeg 按显示方向旋转
       if (!fromLegacy && (!row.width || !row.height)) recordDimensions(await sharp(input).metadata(), true);
@@ -95,14 +133,24 @@ export async function generateMediaCache(db: Database.Database, payload: unknown
       const probe = db.prepare("SELECT value FROM settings WHERE key='worker.ffmpeg'").get() as { value: string } | undefined;
       let nvenc = false;
       try { nvenc = (setting === 'auto' || setting === 'nvenc') && !!probe && JSON.parse(probe.value).encoder === 'nvenc'; } catch { nvenc = false; }
-      const common = ['-n', '-i', filename, '-map', '0:v:0', '-t', '5', '-an', '-vf', 'scale=640:-2', '-pix_fmt', 'yuv420p'];
-      const encode = (hardware: boolean) => runFfmpeg(db, options.owner, [...common,
+      const encode = (hardware: boolean, normalize: boolean) => runFfmpeg(db, options.owner, ['-n', '-i', filename, '-map', '0:v:0', '-t', '5', '-an',
+        '-vf', normalize ? 'scale=640:-2,fps=30' : 'scale=640:-2', ...(normalize ? ['-fps_mode', 'cfr'] : []), '-pix_fmt', 'yuv420p',
         ...(hardware ? ['-c:v', 'h264_nvenc', '-preset', 'p4', '-cq', '30'] : ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '30']),
         '-movflags', '+faststart', '-f', 'mp4', temp], options);
-      if (nvenc) {
-        try { await encode(true); }
-        catch { options.signal?.throwIfAborted(); options.assertLease(); await unlink(temp).catch(() => {}); await encode(false); }
-      } else await encode(false);
+      const attempt = async (normalize: boolean) => {
+        if (nvenc) {
+          try { await encode(true, normalize); return; }
+          catch (error) { if (!(error instanceof FfmpegExitError)) throw error; options.signal?.throwIfAborted(); options.assertLease(); await unlink(temp).catch(() => {}); }
+        }
+        await encode(false, normalize);
+      };
+      try { await attempt(false); }
+      catch (error) {
+        // 部分视频的帧时间戳无法直接封装 MP4；常规路径失败后才做帧率规范化。
+        if (!(error instanceof FfmpegExitError)) throw error;
+        options.signal?.throwIfAborted(); options.assertLease(); await unlink(temp).catch(() => {});
+        await attempt(true);
+      }
     } else if (task.variant.kind === 'display') {
       await sharp(input).rotate().webp({ quality: 90 }).toFile(temp);
     } else {
