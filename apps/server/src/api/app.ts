@@ -27,6 +27,7 @@ import { ensureHls, hlsCacheKey, hlsDirectory, hlsId } from '../core/hls.ts';
 import type { HlsSession } from '../core/hls.ts';
 import { FolderReader } from '../core/folder-reader.ts';
 import { pathAllowed, secureMediaPath, virtualPath } from '../core/paths.ts';
+import { findLegacyThumbnail } from '../core/legacy-thumbnail.ts';
 import { sendFile } from './binary.ts';
 import { jobView, publishJob } from '../core/job-view.ts';
 import type { JobRecord } from '../core/job-view.ts';
@@ -645,23 +646,11 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
   }
   const cacheDir = options.cacheDir ?? path.resolve(process.env.CACHE_DIR ?? 'cache');
   const exists = async (filename: string) => { try { await access(filename); return true; } catch { return false; } };
-  async function legacyThumbnail(row: BinaryRow): Promise<string | undefined> {
-    const source = path.join(row.root, row.relative_path);
-    const hash = createHash('md5').update(Buffer.from(source).toString('base64')).digest('hex');
-    const filename = path.join(cacheDir, hash.slice(0, 2), hash.slice(2, 4), `${hash}.webp`);
-    try {
-      const [info, sourceInfo] = await Promise.all([lstat(filename), secureMediaPath(row.root, row.relative_path).then((resolved) => stat(resolved))]);
-      if (!info.isFile() || info.isSymbolicLink() || info.size === 0 || info.mtimeMs < sourceInfo.mtimeMs || sourceInfo.size !== row.size || Math.floor(sourceInfo.mtimeMs / 1000) !== row.modified_at) return undefined;
-      const [root, actual] = await Promise.all([realpath(cacheDir), realpath(filename)]);
-      const relative = path.relative(root, actual);
-      return relative && relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative) ? actual : undefined;
-    } catch { return undefined; }
-  }
   async function cachedMedia(req: FastifyRequest, reply: FastifyReply, row: BinaryRow, variant: Variant, wait: boolean, authorize?: () => unknown) {
     const filename = cachePath(cacheDir, row, variant);
     if (!await exists(filename)) {
       if (variant.kind === 'thumb' && variant.size === 'm') {
-        const previous = await legacyThumbnail(row);
+        const previous = await findLegacyThumbnail(cacheDir, row);
         if (previous) {
           authorize?.();
           enqueueMediaTask(db, row, variant);
