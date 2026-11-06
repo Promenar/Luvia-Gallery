@@ -7,6 +7,42 @@ import { openDatabase } from '../src/core/database.ts';
 import Database from 'better-sqlite3';
 import { createApp } from '../src/api/app.ts';
 
+test('历史数据库的日志清理使用索引并保留任务事件', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'luvia-log-index-')); const filename = path.join(dir, 'db.sqlite');
+  try {
+    const old = openDatabase(filename);
+    const insert = old.prepare('INSERT INTO job_events(event_type,payload) VALUES (?,?)');
+    const sql = `DELETE FROM job_events WHERE event_type='log' AND id<=(
+      SELECT id FROM job_events WHERE event_type='log' ORDER BY id DESC LIMIT 1 OFFSET 999)`;
+    old.transaction(() => {
+      for (let i = 0; i < 7200; i++) {
+        insert.run('job', '{}');
+        if (i % 8 === 0) insert.run('log', '{}');
+        if (i % 100 === 0) insert.run('library', '{}');
+      }
+    })();
+    assert.equal(old.prepare(sql).run().changes, 0);
+    old.transaction(() => {
+      for (let i = 7200; i < 10000; i++) {
+        insert.run('job', '{}');
+        if (i % 8 === 0) insert.run('log', '{}');
+        if (i % 100 === 0) insert.run('library', '{}');
+      }
+    })();
+    old.exec('DROP INDEX IF EXISTS job_events_log_id'); old.close();
+    const db = openDatabase(filename);
+    try {
+      assert.equal(db.pragma('user_version', { simple: true }), 39);
+      const plan = db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all() as { detail: string }[];
+      assert.equal(plan.filter((row) => row.detail.includes('job_events_log_id')).length, 2, JSON.stringify(plan));
+      db.prepare(sql).run();
+      assert.equal((db.prepare("SELECT count(*) AS n FROM job_events WHERE event_type='log'").get() as { n: number }).n, 999);
+      assert.equal((db.prepare("SELECT count(*) AS n FROM job_events WHERE event_type='job'").get() as { n: number }).n, 10000);
+      assert.equal((db.prepare("SELECT count(*) AS n FROM job_events WHERE event_type='library'").get() as { n: number }).n, 100);
+    } finally { db.close(); }
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
 test('版本 38 升级保留媒体并创建待确认目录移动记录', async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'luvia-move-upgrade-')); const filename = path.join(dir, 'db.sqlite');
   try {
