@@ -4,6 +4,7 @@ import { access, opendir, readFile, realpath, stat } from 'node:fs/promises';
 import type Database from 'better-sqlite3';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { isTransientSqliteError } from '../core/sqlite-errors.ts';
 
 const execFileAsync = promisify(execFile);
 
@@ -67,6 +68,8 @@ export async function confirmLibraryMount(db: Database.Database, library: { id: 
   allowChange?: boolean; assertLease?: () => void; signal?: AbortSignal;
 }): Promise<{ available: boolean; identity: string | null; reason: string | null; changed: boolean }> {
   const unavailable = (reason: string) => ({ available: false, identity: null, reason, changed: false });
+  let leaseLost = false;
+  const assertLease = () => { try { options.assertLease?.(); } catch (error) { leaseLost = true; throw error; } };
   try {
     const actual = await realpath(library.root);
     const allowed = await Promise.all(options.allowedRoots.map((root) => realpath(root).catch(() => null)));
@@ -98,7 +101,7 @@ export async function confirmLibraryMount(db: Database.Database, library: { id: 
       if (sample.length && matches / sample.length < 0.9) return unavailable('媒体库挂载内容抽样不符，等待恢复');
       const accepted = db.transaction(() => {
         options.signal?.throwIfAborted();
-        options.assertLease?.();
+        assertLease();
         const current = db.prepare('SELECT l.root,s.mount_root,s.mount_identity FROM libraries l LEFT JOIN library_watch_state s ON s.library_id=l.id WHERE l.id=?').get(library.id) as typeof saved;
         if (!current || current.root !== saved.root || current.mount_root !== saved.mount_root || current.mount_identity !== saved.mount_identity) return false;
         db.prepare('INSERT OR IGNORE INTO library_watch_state(library_id) VALUES (?)').run(library.id);
@@ -108,7 +111,11 @@ export async function confirmLibraryMount(db: Database.Database, library: { id: 
       if (!accepted) return unavailable('媒体库挂载状态已改变，等待重试');
     }
     return { available: true, identity, reason: null, changed };
-  } catch { return unavailable('媒体库根目录不可用或挂载身份无法确认'); }
+  } catch (error) {
+    // 作业被中止、租约失效或数据库暂时繁忙都与挂载无关，原样抛出，不能据此把媒体库标为降级（降级会重启监控并重新全量对账）
+    if (options.signal?.aborted || leaseLost || isTransientSqliteError(error)) throw error;
+    return unavailable('媒体库根目录不可用或挂载身份无法确认');
+  }
 }
 export class RootGuard {
   private baseline: string | null | undefined;

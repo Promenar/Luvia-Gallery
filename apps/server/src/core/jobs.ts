@@ -7,6 +7,8 @@ const leaseSeconds = 30;
 // 租约过期只表示作业可被接管（claim 会把它放回队列并换新令牌）；在被接管之前，原持有者凭 owner 与令牌仍可续租和收尾。
 // 主线程或数据库短暂卡住超过租期时，不因此把仍在正常执行的作业判为失败。
 const seconds = () => Math.floor(Date.now() / 1000);
+/** 本进程内仍在执行的作业（按 owner）。进程活着时由同一进程的其它槽位接管只会重复执行、并让原执行失败，所以只允许其它进程接管。 */
+const running = new Map<string, Set<string>>();
 
 export class JobQueue {
   private db: Database.Database;
@@ -22,16 +24,25 @@ export class JobQueue {
   claim(at = seconds()): JobRow | null {
     return this.db.transaction(() => {
       this.db.prepare(`UPDATE jobs SET status='queued', owner=NULL, heartbeat_at=NULL, lease_expires_at=NULL,lease_token=NULL
-        WHERE status='running' AND COALESCE(lease_expires_at,0)<=?`).run(at);
+        WHERE status='running' AND COALESCE(lease_expires_at,0)<=? AND NOT (COALESCE(owner,'')=? AND id IN (SELECT value FROM json_each(?)))`)
+        .run(at, this.owner, JSON.stringify([...(running.get(this.owner) ?? [])]));
       const job = this.db.prepare("SELECT id,type,checkpoint,payload FROM jobs WHERE status='queued' ORDER BY CASE WHEN dedupe_key LIKE 'media:%' OR dedupe_key LIKE 'hls:%' THEN 0 WHEN type IN ('metadata','previews') THEN 2 ELSE 1 END,created_at,id LIMIT 1").get() as Omit<JobRow, 'leaseToken'> | undefined;
       if (!job) return null;
       if (this.leases.has(job.id)) throw new Error('作业队列实例不可重复领取相同作业');
       const leaseToken = randomUUID();
       const changed = this.db.prepare(`UPDATE jobs SET status='running', owner=?, heartbeat_at=?, lease_expires_at=?,
         lease_token=?,started_at=COALESCE(started_at,?) WHERE id=? AND status='queued'`).run(this.owner, at, at + leaseSeconds, leaseToken, at, job.id);
-      if (changed.changes === 1) { this.leases.set(job.id, leaseToken); publishJob(this.db, job.id); }
+      if (changed.changes === 1) {
+        this.leases.set(job.id, leaseToken); publishJob(this.db, job.id);
+        let ids = running.get(this.owner); if (!ids) running.set(this.owner, ids = new Set()); ids.add(job.id);
+      }
       return changed.changes === 1 ? { ...job, leaseToken } : null;
     }).immediate();
+  }
+
+  /** 本次执行结束（无论结果）后调用，之后该作业的过期租约才可被本进程重新领取。 */
+  settle(id: string): void {
+    const ids = running.get(this.owner); ids?.delete(id); if (ids && !ids.size) running.delete(this.owner);
   }
 
   renew(id: string, at = seconds()): boolean {

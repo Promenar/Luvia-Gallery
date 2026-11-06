@@ -463,7 +463,7 @@ test('过期扫描者恢复后不能覆盖已经接管的扫描结果', async ()
   } finally { release(); db.close(); await rm(root, { recursive: true, force: true }); }
 });
 
-test('同一 worker 接管过期扫描时旧执行不能删除新锁', async () => {
+test('同一 worker 暂停恢复后重新领取扫描时旧执行不能删除新锁', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'luvia-scan-same-owner-')); const db = openDatabase(':memory:');
   let time = 100; let enteredA!: () => void; let enteredB!: () => void; let releaseA!: () => void; let releaseB!: () => void;
   const startedA = new Promise<void>((resolve) => { enteredA = resolve; }); const startedB = new Promise<void>((resolve) => { enteredB = resolve; });
@@ -477,6 +477,8 @@ test('同一 worker 接管过期扫描时旧执行不能删除新锁', async () 
     const first = scanLibrary(db, { id: 'lib1', root }, { allowedRoots: [root], owner: 'same-worker', jobId: 'scan', jobLeaseToken: claimA.leaseToken, clock: () => time,
       openDir: async (p, options) => { enteredA(); await blockedA; return opendir(p, options); } });
     await startedA; time = 131;
+    // 按接口的暂停、恢复状态迁移放回队列（旧执行仍在运行），再由同一 worker 的另一个槽位领取
+    db.prepare("UPDATE jobs SET status='queued',owner=NULL,heartbeat_at=NULL,lease_expires_at=NULL,lease_token=NULL,finished_at=NULL WHERE id='scan'").run();
     const claimB = b.claim(time)!;
     const second = scanLibrary(db, { id: 'lib1', root }, { allowedRoots: [root], owner: 'same-worker', jobId: 'scan', jobLeaseToken: claimB.leaseToken, clock: () => time,
       openDir: async (p, options) => { enteredB(); await blockedB; return opendir(p, options); } });

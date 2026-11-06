@@ -244,19 +244,26 @@ export async function runNextJob(db: Database.Database, options: WorkerOptions):
       // 日志上下文只保留白名单字段：code 记 SQLite 错误代码或错误名，消息不含路径分隔符时才附上
       const sqliteCode = (error as { code?: unknown } | null)?.code;
       const detail = error instanceof Error && !/[\\/]/.test(error.message) ? `: ${error.message}` : '';
-      options.log?.('warn', '作业失败', { type: job.type, code: `${typeof sqliteCode === 'string' ? sqliteCode : error instanceof Error ? error.name : 'unknown'}${detail}`.slice(0, 200) });
-      db.transaction(() => {
-        if (!queue.fail(job.id, message)) return;
+      const code = `${typeof sqliteCode === 'string' ? sqliteCode : error instanceof Error ? error.name : 'unknown'}${detail}`.slice(0, 200);
+      const failed = db.transaction(() => {
+        if (!queue.fail(job.id, message)) return false;
         if (watchScan) finishWatchReconcile(db, job.id, false);
         if (job.type === 'scan') {
           const run = db.prepare('SELECT library_id FROM scan_runs WHERE job_id=?').get(job.id) as { library_id: string } | undefined;
           if (run) publishScanChanges(db, job.id, run.library_id, false);
         }
+        return true;
       }).immediate();
-      if (watchScan) options.log?.('warn', message, { type: job.type });
+      // 作业已被暂停、取消或由其它 worker 接管时，本次执行的错误只是失去租约的后果，不记为作业失败
+      if (!failed) options.log?.('info', '作业已不归本次执行，放弃', { type: job.type, code });
+      else {
+        options.log?.('warn', '作业失败', { type: job.type, code });
+        if (watchScan) options.log?.('warn', message, { type: job.type });
+      }
     }
   } finally {
     clearInterval(timer); if (waiterTimer) clearInterval(waiterTimer); options.signal?.removeEventListener('abort', stop);
+    queue.settle(job.id);
     const final = db.prepare('SELECT status FROM jobs WHERE id=?').get(job.id) as { status: string } | undefined;
     if (final?.status === 'succeeded' || final?.status === 'failed') options.log?.(final.status === 'failed' ? 'warn' : 'info', '作业结束', { type: job.type, status: final.status });
   }
