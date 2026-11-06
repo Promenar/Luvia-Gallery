@@ -6,6 +6,18 @@ import { createApp } from '../src/api/app.ts';
 
 const header = { 'x-luvia-request': '1' };
 
+test('重试与现有活跃作业冲突时返回 409 并保留两条记录', async () => {
+  const db = openDatabase(':memory:'); const app = await createApp({ db, legacyPending: false });
+  try {
+    const setup = await app.inject({ method: 'POST', url: '/api/v2/auth/setup', headers: header, payload: { username: 'admin', password: 'test password' } });
+    const cookie = (setup.headers['set-cookie'] as string).split(';')[0]!;
+    db.prepare("INSERT INTO jobs(id,type,label,status,trigger,created_at,dedupe_key) VALUES ('old','previews','预览','failed','system',1,'media:same'),('new','previews','预览','queued','system',2,'media:same')").run();
+    const response = await app.inject({ method: 'POST', url: '/api/v2/admin/jobs/old/retry', headers: { ...header, cookie } });
+    assert.equal(response.statusCode, 409);
+    assert.deepEqual(db.prepare("SELECT id,status FROM jobs WHERE id IN ('old','new') ORDER BY id").all(), [{ id: 'new', status: 'queued' }, { id: 'old', status: 'failed' }]);
+  } finally { await app.close(); db.close(); }
+});
+
 test('管理员可以排队、暂停、恢复、取消作业，非法状态变更返回冲突', async () => {
   const db = openDatabase(':memory:');
   const app = await createApp({ db, legacyPending: false });

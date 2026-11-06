@@ -103,8 +103,7 @@ export function JobRow({ job }: { job: Job }) {
   );
 }
 
-export function JobsPanel({ filter, title = '任务', empty = '没有任务。扫描、缩略图和元数据处理会显示在这里。', limit = 8 }: { filter?: (j: Job) => boolean; title?: string; empty?: string; limit?: number }) {
-  const jobs = useJobs();
+export function JobsPanel({ jobs, filter, title = '任务', empty = '没有任务。扫描、缩略图和元数据处理会显示在这里。', limit = 8 }: { jobs: ReturnType<typeof useJobs>; filter?: (j: Job) => boolean; title?: string; empty?: string; limit?: number }) {
   const list = (jobs.data?.jobs ?? []).filter(filter ?? (() => true)).slice(0, limit);
   return (
     <Panel title={title} aside={<><LiveDot />实时</>}>
@@ -126,7 +125,7 @@ export default function OverviewTab() {
         <>
           <Kpis o={o.data} graceDays={s.data?.libraries.missingGraceDays} thumbFixing={thumbFixing} />
           <div className="grid grid-cols-1 gap-[18px] lg:grid-cols-[1.5fr_1fr]">
-            <JobsPanel />
+            <JobsPanel jobs={jobs} />
             <Health o={o.data} />
           </div>
         </>

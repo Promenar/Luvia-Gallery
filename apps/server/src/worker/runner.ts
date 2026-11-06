@@ -58,7 +58,7 @@ function enqueuePreviews(db: Database.Database, libraryId?: string | null) {
 
 export async function runNextJob(db: Database.Database, options: WorkerOptions): Promise<boolean> {
   const queue = new JobQueue(db, options.owner);
-  const job = queue.claim();
+  const job = queue.claim(undefined, { maxActivePreviews: () => readSettings(db).workers.ffmpegConcurrency });
   if (!job) return false;
   const controller = new AbortController();
   const stop = () => controller.abort();
@@ -172,11 +172,16 @@ export async function runNextJob(db: Database.Database, options: WorkerOptions):
       } else {
         const checkpoint = job.checkpoint ? JSON.parse(job.checkpoint) as { lastId?: string; queued?: number } : {};
         let lastId = checkpoint.lastId ?? ''; let queued = checkpoint.queued ?? 0;
-        const rows = db.prepare(`SELECT f.id,f.size,f.modified_at,f.cache_generation FROM files f JOIN libraries l ON l.id=f.library_id AND l.enabled=1
-          WHERE f.media_type='video' AND f.has_preview=0 AND f.missing_at_ms IS NULL AND f.id>?
-          ${payload.libraryId ? 'AND f.library_id=?' : ''} ORDER BY f.id LIMIT 32`).all(...(payload.libraryId ? [lastId, payload.libraryId] : [lastId])) as { id: string; size: number; modified_at: number; cache_generation: number }[];
+        // 限制每次扫描的文件数，即使没有待处理视频也能及时让出事件循环。
+        const rows = db.prepare(`SELECT f.id,f.size,f.modified_at,f.cache_generation,f.media_type,f.has_preview,f.missing_at_ms,f.library_id,l.enabled
+          FROM files f INDEXED BY sqlite_autoindex_files_1 CROSS JOIN libraries l ON l.id=f.library_id
+          WHERE f.id>? ORDER BY f.id LIMIT 512`).all(lastId) as { id: string; size: number; modified_at: number; cache_generation: number; media_type: string; has_preview: number; missing_at_ms: number | null; library_id: string; enabled: number }[];
+        let eligible = 0; let scanned = 0;
         for (const row of rows) {
           controller.signal.throwIfAborted();
+          scanned++; lastId = row.id;
+          if (!row.enabled || row.media_type !== 'video' || row.has_preview || row.missing_at_ms !== null || (payload.libraryId && row.library_id !== payload.libraryId)) continue;
+          eligible++;
           db.transaction(() => {
             assertLease();
             const variants: Variant[] = [{ kind: 'preview' }];
@@ -187,18 +192,25 @@ export async function runNextJob(db: Database.Database, options: WorkerOptions):
               enqueueMediaTask(db, row, variant);
               if (!existing) queued++;
             }
-            lastId = row.id;
             db.prepare('UPDATE jobs SET checkpoint=?,progress_done=? WHERE id=?').run(JSON.stringify({ lastId, queued }), queued, job.id);
           }).immediate();
+          if (eligible >= 32) break;
         }
-        if (rows.length < 32) {
+        db.transaction(() => {
+          assertLease();
+          db.prepare('UPDATE jobs SET checkpoint=?,progress_done=? WHERE id=?').run(JSON.stringify({ lastId, queued }), queued, job.id);
+        }).immediate();
+        if (rows.length < 512 && scanned === rows.length) {
           if (!queue.finish(job.id, { queued })) throw new Error('作业租约已失效');
-        } else if (!queue.release(job.id)) throw new Error('作业租约已失效');
+        } else {
+          if (!queue.release(job.id)) throw new Error('作业租约已失效');
+          await new Promise<void>((resolve) => setImmediate(resolve));
+        }
       }
     } else if (job.type === 'thumbnails' || job.type === 'previews') {
       const key = (db.prepare('SELECT dedupe_key FROM jobs WHERE id=?').get(job.id) as { dedupe_key: string | null }).dedupe_key ?? `job:${job.id}`;
       const cacheDir = options.cacheDir ?? path.resolve(process.env.CACHE_DIR ?? 'cache');
-      const generated = await withMediaGenerationLock(db, options.owner, key, async (signal) => {
+      const generated = await withMediaGenerationLock(db, options.owner, key, async (signal, assertMediaLease) => {
         if (payload.mediaId && payload.sourceSize !== undefined && payload.sourceModified !== undefined && payload.variant) {
           const source = { id: payload.mediaId, size: payload.sourceSize, modified_at: payload.sourceModified, cache_generation: payload.sourceGeneration ?? 0 };
           const cached = db.prepare(`SELECT 1 FROM cache_entries c JOIN files f ON f.id=c.media_id JOIN libraries l ON l.id=f.library_id AND l.enabled=1
@@ -208,8 +220,8 @@ export async function runNextJob(db: Database.Database, options: WorkerOptions):
             if (info?.isFile() && !info.isSymbolicLink()) return false;
           }
         }
-        const generate = (inner: AbortSignal) => generateMediaCache(db, payload, { owner: options.owner, cacheDir, allowedRoots: options.allowedRoots, assertLease, signal: inner });
-        if (job.type === 'thumbnails') await withThumbnailSlot(db, options.owner, generate, { signal, assertLease });
+        const generate = (inner: AbortSignal, guard = assertMediaLease) => generateMediaCache(db, payload, { owner: options.owner, cacheDir, allowedRoots: options.allowedRoots, assertLease: guard, signal: inner });
+        if (job.type === 'thumbnails') await withThumbnailSlot(db, options.owner, generate, { signal, assertLease: assertMediaLease });
         else await generate(signal);
         return true;
       }, { signal: controller.signal, assertLease });

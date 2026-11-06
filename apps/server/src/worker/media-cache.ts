@@ -1,4 +1,5 @@
-import { mkdir, realpath, rename, stat, unlink } from 'node:fs/promises';
+import { mkdir, realpath, stat, unlink } from 'node:fs/promises';
+import { renameSync } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
@@ -119,11 +120,13 @@ export async function generateMediaCache(db: Database.Database, payload: unknown
     if (sourceAfter.size !== row.size || Math.floor(sourceAfter.mtimeMs / 1000) !== row.modified_at || (row.mtime_ms !== null && sourceAfter.mtimeMs !== row.mtime_ms)) throw new Error('媒体已变化');
     const current = db.prepare('SELECT size,modified_at,cache_generation FROM files WHERE id=? AND missing_at_ms IS NULL').get(row.id) as { size: number; modified_at: number; cache_generation: number } | undefined;
     if (!current || current.size !== row.size || current.modified_at !== row.modified_at || current.cache_generation !== row.cache_generation) throw new Error('媒体已变化');
-    await rename(temp, destination);
-    const output = await stat(destination);
+    const output = await stat(temp);
     db.transaction(() => {
+      options.signal?.throwIfAborted();
       options.assertLease();
       if (!db.prepare('SELECT 1 FROM files WHERE id=? AND size=? AND modified_at=? AND cache_generation=? AND missing_at_ms IS NULL').get(row.id, row.size, row.modified_at, row.cache_generation)) throw new Error('媒体已变化');
+      // 写事务阻止其它 worker 在校验租约与发布文件之间接管。
+      renameSync(temp, destination);
       db.prepare(`INSERT INTO cache_entries(cache_key,relative_path,bytes,last_access_at,media_id,variant,source_size,source_modified) VALUES (?,?,?,?,?,?,?,?)
         ON CONFLICT(cache_key) DO UPDATE SET bytes=excluded.bytes,last_access_at=excluded.last_access_at,media_id=excluded.media_id,variant=excluded.variant,source_size=excluded.source_size,source_modified=excluded.source_modified`)
         .run(cacheKey(row, task.variant), path.relative(cacheRoot, destination), output.size, Date.now(), row.id, task.variant.kind, row.size, row.modified_at);

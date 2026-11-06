@@ -1366,6 +1366,10 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
       };
       const next = transitions[action]?.[row.status];
       if (!next) fail(409, 'CONFLICT', '当前状态不支持该操作');
+      const dedupe = (row as JobRecord & { dedupe_key: string | null }).dedupe_key;
+      if (action === 'retry' && dedupe && db.prepare("SELECT 1 FROM jobs WHERE id<>? AND dedupe_key=? AND status IN ('queued','running','paused')").get(id, dedupe)) {
+        fail(409, 'CONFLICT', '相同作业已在队列中');
+      }
       if (action === 'retry' && row.type === 'scan') {
         const removed = db.prepare('DELETE FROM scan_runs WHERE job_id=? AND complete=1 AND errors>0').run(id);
         if (removed.changes) db.prepare('UPDATE jobs SET checkpoint=NULL,progress_done=0,progress_total=NULL WHERE id=?').run(id);

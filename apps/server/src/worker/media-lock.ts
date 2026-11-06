@@ -3,7 +3,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import type Database from 'better-sqlite3';
 import { renewLease } from '../core/sqlite-errors.ts';
 
-export async function withMediaGenerationLock<T>(db: Database.Database, owner: string, key: string, operation: (signal: AbortSignal) => Promise<T>, options: { signal?: AbortSignal; assertLease?: () => void } = {}): Promise<T> {
+export async function withMediaGenerationLock<T>(db: Database.Database, owner: string, key: string, operation: (signal: AbortSignal, assertMediaLease: () => void) => Promise<T>, options: { signal?: AbortSignal; assertLease?: () => void } = {}): Promise<T> {
   const token = randomUUID();
   while (true) {
     options.signal?.throwIfAborted(); options.assertLease?.();
@@ -15,14 +15,21 @@ export async function withMediaGenerationLock<T>(db: Database.Database, owner: s
   }
   const local = new AbortController();
   const signal = options.signal ? AbortSignal.any([options.signal, local.signal]) : local.signal;
+  const assertMediaLease = () => {
+    options.assertLease?.();
+    if (!db.prepare('SELECT 1 FROM media_generation_locks WHERE cache_key=? AND owner=? AND lease_token=?').get(key, owner, token)) {
+      local.abort(); throw new Error('媒体生成锁租约已失效');
+    }
+  };
   const heartbeat = setInterval(() => renewLease(
-    () => db.prepare('UPDATE media_generation_locks SET lease_expires_at=unixepoch()+30 WHERE cache_key=? AND owner=? AND lease_token=? AND lease_expires_at>unixepoch()').run(key, owner, token).changes > 0,
+    // 到期只允许其它持有者接管；尚未被接管时，原令牌仍可续租。
+    () => db.prepare('UPDATE media_generation_locks SET lease_expires_at=unixepoch()+30 WHERE cache_key=? AND owner=? AND lease_token=?').run(key, owner, token).changes > 0,
     () => local.abort()), 5000);
   heartbeat.unref();
   try {
-    signal.throwIfAborted(); options.assertLease?.();
-    const result = await operation(signal);
-    signal.throwIfAborted(); options.assertLease?.();
+    signal.throwIfAborted(); assertMediaLease();
+    const result = await operation(signal, assertMediaLease);
+    signal.throwIfAborted(); assertMediaLease();
     return result;
   } finally {
     clearInterval(heartbeat);

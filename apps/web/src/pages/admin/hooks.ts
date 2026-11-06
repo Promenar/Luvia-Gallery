@@ -5,7 +5,7 @@ import type { z } from 'zod';
 import type { AdminSettings, AdminSettingsPatch, Job } from '@luvia/contracts';
 import { call, type CallOptions, type EndpointName } from '@/lib/api';
 import { useServerEvents } from '@/lib/events';
-import { invalidate, q, queryClient } from '@/lib/query';
+import { invalidate, q, queryClient, scheduleRefresh } from '@/lib/query';
 import { deepMerge } from '@/stores/session';
 import { errMsg, isActiveJob } from './format';
 
@@ -79,7 +79,7 @@ export function useJobs() {
       if (before && isActiveJob({ status: before }) && !isActiveJob(j)) finished = true;
       prevStatus.current.set(j.id, j.status);
     }
-    if (finished) void invalidate('adminOverview', 'listLibraries', 'mounts');
+    if (finished) scheduleRefresh('adminOverview', 'listLibraries', 'mounts');
   }, [query.data]);
   return query;
 }

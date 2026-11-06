@@ -14,6 +14,7 @@ import { scheduleScans } from './schedule.ts';
 import { createWorkerLogger } from '../core/observability.ts';
 import { cleanupHls } from './hls.ts';
 import { runWorkerPool } from './pool.ts';
+import { writeWorkerHeartbeat } from './telemetry.ts';
 import { flushMetadataFolders } from './metadata.ts';
 import { runSqliteMaintenance } from './sqlite-maintenance.ts';
 import { startWalCheckpointer } from './wal-checkpoint.ts';
@@ -58,8 +59,7 @@ loop.enable();
 const heartbeat = () => {
   const p99 = loop.percentile(99) / 1e6;
   loop.reset();
-  runtime.db.prepare("INSERT INTO settings(key,value) VALUES('worker.heartbeat',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
-    .run(JSON.stringify({ at: Date.now() / 1000, healthy: p99 <= 50, eventLoopP99Ms: p99 }));
+  writeWorkerHeartbeat(runtime.db, p99);
 };
 heartbeat();
 const heartbeatTimer = setInterval(heartbeat, 5000);

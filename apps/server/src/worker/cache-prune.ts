@@ -1,5 +1,6 @@
 import type Database from 'better-sqlite3';
-import { realpath, unlink } from 'node:fs/promises';
+import { realpath } from 'node:fs/promises';
+import { unlinkSync } from 'node:fs';
 import path from 'node:path';
 import { replaceEvictedThumbnailCovers } from '../core/folder-covers.ts';
 import { withMediaGenerationLock } from './media-lock.ts';
@@ -17,19 +18,27 @@ export async function cleanupDeletedMediaCache(db: Database.Database, cacheDir: 
     if (!entries.length) return;
     for (const entry of entries) {
       cursor = entry.cache_key;
-      await withMediaGenerationLock(db, options.owner, `media:${entry.cache_key}`, async (signal) => {
+      await withMediaGenerationLock(db, options.owner, `media:${entry.cache_key}`, async (signal, assertMediaLease) => {
         const stillUsed = db.prepare('SELECT 1 FROM cache_entries WHERE cache_key=? OR relative_path=?').get(entry.cache_key, entry.relative_path);
+        let filename: string | undefined;
         if (!stillUsed) {
-          const filename = path.resolve(root, entry.relative_path);
+          filename = path.resolve(root, entry.relative_path);
           if (!within(root, filename)) return;
           let safe = false;
           try { const actualRoot = await realpath(root); const parent = await realpath(path.dirname(filename)); safe = parent === actualRoot || within(actualRoot, parent); } catch { return; }
           if (!safe) return;
-          try { await unlink(filename); }
-          catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return; }
         }
-        signal.throwIfAborted(); options.assertLease?.();
-        db.prepare('DELETE FROM cache_gc WHERE cache_key=? AND relative_path=?').run(entry.cache_key, entry.relative_path);
+        db.transaction(() => {
+          signal.throwIfAborted(); assertMediaLease();
+          const inUse = db.prepare('SELECT 1 FROM cache_entries WHERE cache_key=? OR relative_path=?').get(entry.cache_key, entry.relative_path);
+          if (!inUse) {
+            if (!filename) return;
+            // 在同一写事务内校验所有权、复查引用并删除，阻止并发接管与登记。
+            try { unlinkSync(filename); }
+            catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return; }
+          }
+          db.prepare('DELETE FROM cache_gc WHERE cache_key=? AND relative_path=?').run(entry.cache_key, entry.relative_path);
+        }).immediate();
       }, options);
     }
     await new Promise<void>((resolve) => setImmediate(resolve));
@@ -58,13 +67,17 @@ export async function pruneCache(db: Database.Database, cacheDir: string, limitB
         try { safe = within(actualRoot, await realpath(path.dirname(filename))); }
         catch { safe = false; }
       }
-      let deleted = false; let missing = false;
-      if (safe) {
-        try { await unlink(filename); deleted = true; }
-        catch (error) { missing = (error as NodeJS.ErrnoException).code === 'ENOENT'; if (!missing) continue; }
-      }
-      assertLease();
-      const changed = db.transaction(() => {
+      const outcome = db.transaction(() => {
+        assertLease();
+        const current = db.prepare(`SELECT 1 FROM cache_entries WHERE cache_key=? AND last_access_at=?
+          AND (variant IS NULL OR variant<>'hls' OR NOT EXISTS(SELECT 1 FROM hls_sessions h WHERE h.id=cache_entries.hls_session_id AND h.last_access_at>?))`)
+          .get(entry.cache_key, entry.last_access_at, Date.now() - 60_000);
+        if (!current) return { changed: 0, deleted: false };
+        let deleted = false;
+        if (safe) {
+          try { unlinkSync(filename); deleted = true; }
+          catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return { changed: 0, deleted: false }; }
+        }
         const result = db.prepare('DELETE FROM cache_entries WHERE cache_key=? AND last_access_at=?').run(entry.cache_key, entry.last_access_at).changes;
         if (result && entry.media_id && entry.variant === 'preview') db.prepare(`UPDATE files SET has_preview=0 WHERE id=?
           AND NOT EXISTS(SELECT 1 FROM cache_entries c WHERE c.media_id=files.id AND c.variant='preview' AND c.source_size=files.size AND c.source_modified=files.modified_at)`).run(entry.media_id);
@@ -73,11 +86,11 @@ export async function pruneCache(db: Database.Database, cacheDir: string, limitB
             AND NOT EXISTS(SELECT 1 FROM cache_entries c WHERE c.media_id=files.id AND c.variant='thumb' AND c.source_size=files.size AND c.source_modified=files.modified_at)`).run(entry.media_id);
           if (changed.changes) replaceEvictedThumbnailCovers(db, entry.media_id);
         }
-        return result;
+        return { changed: result, deleted };
       }).immediate();
-      if (changed) {
+      if (outcome.changed) {
         total -= entry.bytes;
-        if (deleted) { removed++; bytes += entry.bytes; }
+        if (outcome.deleted) { removed++; bytes += entry.bytes; }
       }
     }
     await new Promise<void>((resolve) => setImmediate(resolve));
