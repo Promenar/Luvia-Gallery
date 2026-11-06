@@ -1,5 +1,6 @@
 import { lstat } from 'node:fs/promises';
 import type Database from 'better-sqlite3';
+import { findLegacyThumbnail } from '../core/legacy-thumbnail.ts';
 import { cacheKey, cachePath, type Variant } from '../core/media-cache.ts';
 import type { JobRow } from '../core/jobs.ts';
 import { readSettings } from '../core/settings.ts';
@@ -14,8 +15,8 @@ export const BACKFILL_VARIANTS: Variant[] = [{ kind: 'thumb', size: 's' }, { kin
 /** 全库生成时为浏览中的按需生成保留的缩略图并发数。 */
 const INTERACTIVE_RESERVE = 2;
 
-type Checkpoint = { lastId: string; total: number; done: number; generated: number; repaired: number; dimensions: number; failed: number };
-type Row = { id: string; size: number; modified_at: number; cache_generation: number; media_type: string; width: number | null; height: number | null; metadata_status: string };
+type Checkpoint = { lastId: string; total: number; done: number; generated: number; repaired: number; dimensions: number; failed: number; legacy: number };
+type Row = { id: string; size: number; modified_at: number; cache_generation: number; media_type: string; width: number | null; height: number | null; metadata_status: string; root: string; relative_path: string };
 type Task = { kind: 'thumb'; row: Row; variant: Variant; key: string } | { kind: 'dimensions'; row: Row };
 
 function backfillWhere(byLibrary: boolean, dimensionsOnly: boolean): string {
@@ -27,7 +28,7 @@ function backfillWhere(byLibrary: boolean, dimensionsOnly: boolean): string {
  * 约 94 万文件时每轮要 5 秒以上并卡住 worker 主线程。
  */
 export function backfillRowsSql(byLibrary: boolean, dimensionsOnly: boolean): string {
-  return `SELECT f.id,f.size,f.modified_at,f.cache_generation,f.media_type,f.width,f.height,f.metadata_status
+  return `SELECT f.id,f.size,f.modified_at,f.cache_generation,f.media_type,f.width,f.height,f.metadata_status,l.root,f.relative_path
     FROM files f INDEXED BY sqlite_autoindex_files_1 CROSS JOIN libraries l ON l.id=f.library_id AND l.enabled=1
     WHERE ${backfillWhere(byLibrary, dimensionsOnly)} AND f.id>? ORDER BY f.id LIMIT ?`;
 }
@@ -35,6 +36,7 @@ export function backfillRowsSql(byLibrary: boolean, dimensionsOnly: boolean): st
 /**
  * 全库生成、补全与修复缩略图：按 id 顺序分轮遍历图片与视频，缺少的尺寸直接生成（生成时顺带记录原始宽高）；
  * 缓存记录存在但文件已丢失的先删除记录再生成；缩略图齐全但没有宽高的单独读取宽高。
+ * 有可用的 1.x 缩略图时，小尺寸直接从它缩放（不读原文件内容），中尺寸跳过：浏览时由 1.x 缩略图顶替并按需生成。
  * dimensionsOnly 时只为没有宽高的文件读取宽高，不生成缩略图。每轮处理一批后返回，由调用方释放作业以便其它作业被领取。
  */
 export async function processThumbnailBackfill(db: Database.Database, job: JobRow, options: {
@@ -43,7 +45,7 @@ export async function processThumbnailBackfill(db: Database.Database, job: JobRo
   const libraryArgs = options.libraryId ? [options.libraryId] : [];
   const where = backfillWhere(!!options.libraryId, !!options.dimensionsOnly);
   const saved = job.checkpoint ? JSON.parse(job.checkpoint) as Partial<Checkpoint> : {};
-  const state: Checkpoint = { lastId: saved.lastId ?? '', total: saved.total ?? -1, done: saved.done ?? 0, generated: saved.generated ?? 0, repaired: saved.repaired ?? 0, dimensions: saved.dimensions ?? 0, failed: saved.failed ?? 0 };
+  const state: Checkpoint = { lastId: saved.lastId ?? '', total: saved.total ?? -1, done: saved.done ?? 0, generated: saved.generated ?? 0, repaired: saved.repaired ?? 0, dimensions: saved.dimensions ?? 0, failed: saved.failed ?? 0, legacy: saved.legacy ?? 0 };
   if (state.total < 0) {
     state.total = (db.prepare(`SELECT count(*) AS n FROM files f JOIN libraries l ON l.id=f.library_id AND l.enabled=1 WHERE ${where}`).get(...libraryArgs) as { n: number }).n;
     db.prepare('UPDATE jobs SET progress_total=?,checkpoint=? WHERE id=?').run(state.total, JSON.stringify(state), job.id);
@@ -70,8 +72,29 @@ export async function processThumbnailBackfill(db: Database.Database, job: JobRo
     }
     if (tasks.length === before && (!row.width || !row.height)) tasks.push({ kind: 'dimensions', row });
   }
+  // 同一文件的两个尺寸共用一次查找
+  const legacyLookups = new Map<string, Promise<string | undefined>>();
+  const legacyOf = (row: Row) => {
+    let lookup = legacyLookups.get(row.id);
+    if (!lookup) { lookup = findLegacyThumbnail(options.cacheDir, row); legacyLookups.set(row.id, lookup); }
+    return lookup;
+  };
   const stop = new AbortController();
   const signal = AbortSignal.any([options.signal, stop.signal]);
+  const readDimensions = async (row: Row) => {
+    if (row.metadata_status === 'pending') {
+      // 读取宽高的磁盘开销与读取全部拍摄信息相同，直接读取全部；先认领，避免与后台拍摄信息作业重复读取同一文件
+      const claimed = db.prepare('INSERT OR IGNORE INTO metadata_claims(file_id,job_id,owner,lease_expires_at) VALUES (?,?,?,?)')
+        .run(row.id, job.id, options.owner, Math.floor(Date.now() / 1000) + 60).changes;
+      if (!claimed) return;
+      try { if (await extractMetadataNow(db, row.id, signal)) state.dimensions++; }
+      finally { db.prepare('DELETE FROM metadata_claims WHERE file_id=? AND job_id=?').run(row.id, job.id); }
+    } else if (row.media_type === 'image') {
+      const source = { mediaId: row.id, sourceSize: row.size, sourceModified: row.modified_at, sourceGeneration: row.cache_generation };
+      await generateMediaCache(db, { ...source, variant: { kind: 'dimensions' } }, { owner: options.owner, cacheDir: options.cacheDir, allowedRoots: options.allowedRoots, assertLease: options.assertLease, signal });
+      state.dimensions++;
+    }
+  };
   let next = 0;
   const lane = async () => {
     while (next < tasks.length) {
@@ -81,27 +104,20 @@ export async function processThumbnailBackfill(db: Database.Database, job: JobRo
       signal.throwIfAborted(); options.assertLease();
       const source = { mediaId: task.row.id, sourceSize: task.row.size, sourceModified: task.row.modified_at, sourceGeneration: task.row.cache_generation };
       try {
-        if (task.kind === 'dimensions') {
-          if (task.row.metadata_status === 'pending') {
-            // 读取宽高的磁盘开销与读取全部拍摄信息相同，直接读取全部；先认领，避免与后台拍摄信息作业重复读取同一文件
-            const claimed = db.prepare('INSERT OR IGNORE INTO metadata_claims(file_id,job_id,owner,lease_expires_at) VALUES (?,?,?,?)')
-              .run(task.row.id, job.id, options.owner, Math.floor(Date.now() / 1000) + 60).changes;
-            if (!claimed) continue;
-            try { if (await extractMetadataNow(db, task.row.id, signal)) state.dimensions++; }
-            finally { db.prepare('DELETE FROM metadata_claims WHERE file_id=? AND job_id=?').run(task.row.id, job.id); }
-          } else if (task.row.media_type === 'image') {
-            await generateMediaCache(db, { ...source, variant: { kind: 'dimensions' } }, { owner: options.owner, cacheDir: options.cacheDir, allowedRoots: options.allowedRoots, assertLease: options.assertLease, signal });
-            state.dimensions++;
-          }
-          continue;
-        }
+        if (task.kind === 'dimensions') { await readDimensions(task.row); continue; }
+        const legacyInput = task.variant.kind === 'thumb' ? await legacyOf(task.row) : undefined;
+        if (legacyInput && task.variant.kind === 'thumb' && task.variant.size === 'm') continue;
+        let usedLegacy = false;
         await withMediaGenerationLock(db, options.owner, `media:${task.key}`, async (lockSignal) => {
           if (entry.get(task.key)) return;
           const payload = { ...source, variant: task.variant };
-          await withThumbnailSlot(db, options.owner, (inner) => generateMediaCache(db, payload, { owner: options.owner, cacheDir: options.cacheDir, allowedRoots: options.allowedRoots, assertLease: options.assertLease, signal: inner }),
+          const { fromLegacy } = await withThumbnailSlot(db, options.owner, (inner) => generateMediaCache(db, payload, { owner: options.owner, cacheDir: options.cacheDir, allowedRoots: options.allowedRoots, assertLease: options.assertLease, signal: inner, legacyInput }),
             { signal: lockSignal, assertLease: options.assertLease });
           state.generated++;
+          if (fromLegacy) { state.legacy++; usedLegacy = true; }
         }, { signal, assertLease: options.assertLease });
+        // 从 1.x 缩略图缩放时不知道原始宽高，单独读取（图片只读文件头）
+        if (usedLegacy && (!task.row.width || !task.row.height)) await readDimensions(task.row);
       } catch (error) {
         // 取消、租约失效向上抛出；单个文件损坏或变化只计入失败
         if (signal.aborted) throw error;

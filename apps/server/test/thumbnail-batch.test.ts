@@ -26,7 +26,7 @@ test('全库缩略图作业直接生成网格两种尺寸并记录宽高，可�
     const options = { owner: 'worker', allowedRoots: [root], legacyDir: root, systemRoots: [], cacheDir: cache };
     const size = () => db.prepare('SELECT width,height FROM files').get();
     assert.deepEqual(size(), { width: null, height: null });
-    assert.deepEqual(await run('bulk'), { total: 1, done: 1, generated: 2, repaired: 0, dimensions: 0, failed: 0 });
+    assert.deepEqual(await run('bulk'), { total: 1, done: 1, generated: 2, repaired: 0, dimensions: 0, failed: 0, legacy: 0 });
     // 生成缩略图时顺带记录原始宽高
     assert.deepEqual(size(), { width: 2400, height: 1800 });
     // 不再为每个文件、每个尺寸单独排队作业
@@ -38,25 +38,25 @@ test('全库缩略图作业直接生成网格两种尺寸并记录宽高，可�
     }
     assert.equal((db.prepare("SELECT count(*) AS n FROM cache_entries WHERE variant='thumb'").get() as { n: number }).n, 2);
     assert.equal((db.prepare('SELECT thumb_ready FROM files').get() as { thumb_ready: number }).thumb_ready, 1);
-    assert.deepEqual(await run('again'), { total: 1, done: 1, generated: 0, repaired: 0, dimensions: 0, failed: 0 });
+    assert.deepEqual(await run('again'), { total: 1, done: 1, generated: 0, repaired: 0, dimensions: 0, failed: 0, legacy: 0 });
     await rm(cachePath(cache, source, { kind: 'thumb', size: 'm' }));
-    assert.deepEqual(await run('repair'), { total: 1, done: 1, generated: 1, repaired: 1, dimensions: 0, failed: 0 });
+    assert.deepEqual(await run('repair'), { total: 1, done: 1, generated: 1, repaired: 1, dimensions: 0, failed: 0, legacy: 0 });
     assert.ok((await sharp(cachePath(cache, source, { kind: 'thumb', size: 'm' })).metadata()).width);
     // 缩略图齐全但没有宽高（例如更早生成的）：全库作业与只补宽高作业都只读取宽高，不重新生成
     db.prepare("UPDATE files SET width=NULL,height=NULL,metadata_status='done'").run();
-    assert.deepEqual(await run('fill'), { total: 1, done: 1, generated: 0, repaired: 0, dimensions: 1, failed: 0 });
+    assert.deepEqual(await run('fill'), { total: 1, done: 1, generated: 0, repaired: 0, dimensions: 1, failed: 0, legacy: 0 });
     assert.deepEqual(size(), { width: 2400, height: 1800 });
     db.prepare('UPDATE files SET width=NULL,height=NULL').run();
-    assert.deepEqual(await run('dims', true), { total: 1, done: 1, generated: 0, repaired: 0, dimensions: 1, failed: 0 });
+    assert.deepEqual(await run('dims', true), { total: 1, done: 1, generated: 0, repaired: 0, dimensions: 1, failed: 0, legacy: 0 });
     assert.deepEqual(size(), { width: 2400, height: 1800 });
     // 尚未读取拍摄信息的文件：后台拍摄信息作业正在读取时跳过，否则读取全部拍摄信息
     db.prepare("UPDATE files SET width=NULL,height=NULL,metadata_status='pending'").run();
     db.prepare("INSERT INTO jobs(id,type,label,status,trigger,payload,created_at) VALUES ('meta','metadata','提取元数据','running','system','{}',1)").run();
     db.prepare("INSERT INTO metadata_claims(file_id,job_id,owner,lease_expires_at) VALUES (?,'meta','other',?)").run(source.id, Math.floor(Date.now() / 1000) + 60);
-    assert.deepEqual(await run('claimed', true), { total: 1, done: 1, generated: 0, repaired: 0, dimensions: 0, failed: 0 });
+    assert.deepEqual(await run('claimed', true), { total: 1, done: 1, generated: 0, repaired: 0, dimensions: 0, failed: 0, legacy: 0 });
     assert.deepEqual(size(), { width: null, height: null });
     db.prepare('DELETE FROM metadata_claims').run();
-    assert.deepEqual(await run('pending', true), { total: 1, done: 1, generated: 0, repaired: 0, dimensions: 1, failed: 0 });
+    assert.deepEqual(await run('pending', true), { total: 1, done: 1, generated: 0, repaired: 0, dimensions: 1, failed: 0, legacy: 0 });
     assert.deepEqual(db.prepare('SELECT width,height,metadata_status FROM files').get(), { width: 2400, height: 1800, metadata_status: 'done' });
     assert.equal((db.prepare('SELECT count(*) AS n FROM metadata_claims').get() as { n: number }).n, 0);
   } finally { db.close(); await rm(root, { recursive: true, force: true }); await rm(cache, { recursive: true, force: true }); }
@@ -104,4 +104,38 @@ test('多个通道同时在 WAL 让路处等待时不会争抢到空任务，作
     assert.equal(JSON.parse(job.result).failed, 0);
     assert.equal((db.prepare('SELECT count(*) AS n FROM files WHERE width IS NULL').get() as { n: number }).n, 0);
   } finally { setWalPressure(false); db.close(); await rm(root, { recursive: true, force: true }); await rm(cache, { recursive: true, force: true }); }
+});
+
+test('全库缩略图有 1.x 缩略图时小尺寸从它缩放、跳过中尺寸并单独读取原始宽高，太小的 1.x 缩略图不使用', async () => {
+  const { createHash } = await import('node:crypto');
+  const { mkdir, access } = await import('node:fs/promises');
+  const root = await mkdtemp(path.join(tmpdir(), 'luvia-thumb-legacy-')); const cache = await mkdtemp(path.join(tmpdir(), 'luvia-thumb-legacy-cache-'));
+  const db = openDatabase(':memory:');
+  try {
+    // 原图为蓝色，1.x 缩略图为红色，据此判断小尺寸的来源
+    for (const name of ['a.jpg', 'b.jpg', 'c.jpg']) await sharp({ create: { width: 2400, height: 1800, channels: 3, background: '#0000ff' } }).jpeg().toFile(path.join(root, name));
+    const legacy = async (name: string, width: number, height: number) => {
+      const hash = createHash('md5').update(Buffer.from(path.join(root, name)).toString('base64')).digest('hex');
+      const dir = path.join(cache, hash.slice(0, 2), hash.slice(2, 4)); await mkdir(dir, { recursive: true });
+      await sharp({ create: { width, height, channels: 3, background: '#ff0000' } }).webp().toFile(path.join(dir, `${hash}.webp`));
+    };
+    await legacy('a.jpg', 300, 225); await legacy('c.jpg', 150, 112);
+    db.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib','照片',?)").run(root);
+    await scanLibrary(db, { id: 'lib', root }, { allowedRoots: [root] });
+    db.prepare("INSERT INTO jobs(id,type,label,status,trigger,payload,created_at) VALUES ('bulk','thumbnails','生成缩略图','queued','manual',?,1)").run(JSON.stringify({ libraryId: 'lib' }));
+    await runNextJob(db, { owner: 'worker', allowedRoots: [root], legacyDir: root, systemRoots: [], cacheDir: cache });
+    const job = db.prepare("SELECT status,result FROM jobs WHERE id='bulk'").get() as { status: string; result: string };
+    assert.equal(job.status, 'succeeded');
+    // a：小尺寸来自 1.x、中尺寸跳过、宽高另读；b：照常生成两种尺寸；c：1.x 太小，小尺寸从原图生成，中尺寸仍由 1.x 顶替
+    assert.deepEqual(JSON.parse(job.result), { total: 3, done: 3, generated: 4, repaired: 0, dimensions: 1, failed: 0, legacy: 1 });
+    const files = db.prepare('SELECT id,name,size,modified_at,width,height FROM files ORDER BY name').all() as { id: string; name: string; size: number; modified_at: number; width: number; height: number }[];
+    for (const file of files) assert.deepEqual([file.width, file.height], [2400, 1800], file.name);
+    const exists = (file: typeof files[number], size: 's' | 'm') => access(cachePath(cache, file, { kind: 'thumb', size })).then(() => true, () => false);
+    const red = async (file: typeof files[number]) => { const { channels } = await sharp(cachePath(cache, file, { kind: 'thumb', size: 's' })).stats(); return channels[0]!.mean > channels[2]!.mean; };
+    const [a, b, c] = files as [typeof files[number], typeof files[number], typeof files[number]];
+    assert.equal(await red(a), true); assert.equal(await exists(a, 'm'), false);
+    assert.equal(await red(b), false); assert.equal(await exists(b, 'm'), true);
+    assert.equal(await red(c), false); assert.equal(await exists(c, 'm'), false);
+    assert.equal((await sharp(cachePath(cache, c, { kind: 'thumb', size: 's' })).metadata()).height, 256);
+  } finally { db.close(); await rm(root, { recursive: true, force: true }); await rm(cache, { recursive: true, force: true }); }
 });

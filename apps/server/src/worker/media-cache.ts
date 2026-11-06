@@ -23,7 +23,14 @@ const within = (root: string, target: string) => {
   const relative = path.relative(root, target);
   return relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
 };
-export async function generateMediaCache(db: Database.Database, payload: unknown, options: { owner: string; cacheDir: string; allowedRoots: string[]; assertLease: () => void; signal?: AbortSignal }): Promise<void> {
+/** 1.x 缩略图短边不小于该值时才用来生成小尺寸（256），略低于 256 的横图（约 300×225）显示差别很小。 */
+export const LEGACY_MIN_SIDE = 192;
+
+/**
+ * 生成缓存文件。legacyInput 为已校验的 1.x 缩略图时，小尺寸缩略图直接从它缩放，不读原文件（原文件只做变化校验）。
+ * 返回是否使用了 1.x 缩略图。
+ */
+export async function generateMediaCache(db: Database.Database, payload: unknown, options: { owner: string; cacheDir: string; allowedRoots: string[]; assertLease: () => void; signal?: AbortSignal; legacyInput?: string }): Promise<{ fromLegacy: boolean }> {
   const task = Task.parse(payload);
   const row = db.prepare(`SELECT f.id,f.size,f.modified_at,f.cache_generation,f.mtime_ms,f.relative_path,f.media_type,f.width,f.height,l.root FROM files f
     JOIN libraries l ON l.id=f.library_id WHERE f.id=? AND l.enabled=1 AND f.missing_at_ms IS NULL`).get(task.mediaId) as
@@ -50,7 +57,7 @@ export async function generateMediaCache(db: Database.Database, payload: unknown
   };
   if (task.variant.kind === 'dimensions') {
     if (!recordDimensions(await sharp(filename).metadata(), false)) throw new Error('图片尺寸不可用');
-    return;
+    return { fromLegacy: false };
   }
   const cacheRoot = path.resolve(options.cacheDir);
   const destination = cachePath(cacheRoot, row, task.variant);
@@ -61,12 +68,17 @@ export async function generateMediaCache(db: Database.Database, payload: unknown
   let hash: string | null = null;
   try {
     let input = filename;
-    if (row.media_type === 'image' && ['.heic', '.heif'].includes(path.extname(row.relative_path).toLowerCase())) {
+    let fromLegacy = false;
+    if (options.legacyInput && task.variant.kind === 'thumb' && task.variant.size === 's') {
+      const legacy = await sharp(options.legacyInput).metadata().catch(() => null);
+      if (legacy?.width && legacy.height && Math.min(legacy.width, legacy.height) >= LEGACY_MIN_SIDE) { input = options.legacyInput; fromLegacy = true; }
+    }
+    if (!fromLegacy && row.media_type === 'image' && ['.heic', '.heif'].includes(path.extname(row.relative_path).toLowerCase())) {
       await runFfmpeg(db, options.owner, ['-n', '-i', filename, '-map', '0:v:0', '-frames:v', '1', '-threads', '1', '-f', 'image2', '-vcodec', 'png', decoded], options);
       input = decoded;
     }
     if (task.variant.kind === 'thumb') {
-      if (row.media_type === 'video') {
+      if (row.media_type === 'video' && !fromLegacy) {
         await runFfmpeg(db, options.owner, ['-n', '-i', filename, '-map', '0:v:0', '-frames:v', '1', '-threads', '1', '-f', 'image2', '-vcodec', 'mjpeg', frame], options);
         input = frame;
       }
@@ -75,7 +87,7 @@ export async function generateMediaCache(db: Database.Database, payload: unknown
       const placeholder = await sharp(input).rotate().resize({ width: 100, height: 100, fit: 'inside', withoutEnlargement: true }).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
       hash = Buffer.from(rgbaToThumbHash(placeholder.info.width, placeholder.info.height, placeholder.data)).toString('base64');
       // 生成缩略图时顺带记录原始宽高，供网格按原始比例排布；视频帧已由 FFmpeg 按显示方向旋转
-      if (!row.width || !row.height) recordDimensions(await sharp(input).metadata(), true);
+      if (!fromLegacy && (!row.width || !row.height)) recordDimensions(await sharp(input).metadata(), true);
     } else if (task.variant.kind === 'preview') {
       if (!readSettings(db).previews.enabled) throw new Error('视频预览已关闭');
       const setting = readSettings(db).transcode.hwaccel;
@@ -120,5 +132,6 @@ export async function generateMediaCache(db: Database.Database, payload: unknown
       if (hash) noteThumbnail(db, row.id);
       if (task.variant.kind === 'preview') db.prepare('UPDATE files SET has_preview=1 WHERE id=? AND size=? AND modified_at=? AND cache_generation=?').run(row.id, row.size, row.modified_at, row.cache_generation);
     }).immediate();
+    return { fromLegacy };
   } finally { await unlink(temp).catch(() => {}); await unlink(frame).catch(() => {}); await unlink(decoded).catch(() => {}); }
 }
