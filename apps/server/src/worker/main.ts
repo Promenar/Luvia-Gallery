@@ -6,9 +6,7 @@ import { newWorkerOwner } from './runner.ts';
 import { discoverNewMounts } from './discover.ts';
 import type { Mount } from '../core/mounts.ts';
 import { sampleMounts } from './mount-estimate.ts';
-import { randomUUID } from 'node:crypto';
-import { readSettings } from '../core/settings.ts';
-import { publishJob } from '../core/job-view.ts';
+import { scheduleCachePrune } from './cache-prune-scheduler.ts';
 import { withFfmpegSlot } from './ffmpeg-slots.ts';
 import { scheduleScans } from './schedule.ts';
 import { createWorkerLogger } from '../core/observability.ts';
@@ -65,14 +63,13 @@ const heartbeat = () => {
 heartbeat();
 const heartbeatTimer = setInterval(heartbeat, 5000);
 heartbeatTimer.unref();
+let pruning = false; let pruneTask: Promise<void> = Promise.resolve();
 const schedulePrune = () => {
-  const used = (runtime.db.prepare('SELECT COALESCE(sum(bytes),0) AS n FROM cache_entries').get() as { n: number }).n;
-  if (used <= readSettings(runtime.db).cache.limitGB * 1024 ** 3) return;
-  runtime.db.transaction(() => {
-    const id = randomUUID();
-    const result = runtime.db.prepare("INSERT OR IGNORE INTO jobs(id,type,label,status,trigger,created_at,dedupe_key) VALUES (?,'cache_prune','清理缓存','queued','system',unixepoch(),'system:cache-prune')").run(id);
-    if (result.changes) publishJob(runtime.db, id);
-  }).immediate();
+  if (pruning || stopController.signal.aborted) return;
+  pruning = true;
+  pruneTask = scheduleCachePrune(runtime.db, stopController.signal)
+    .catch(() => { if (!stopController.signal.aborted) logger.warn('缓存清理调度失败，将在下一轮重试'); })
+    .finally(() => { pruning = false; });
 };
 const pruneTimer = setInterval(schedulePrune, 60_000);
 pruneTimer.unref();
@@ -129,6 +126,8 @@ try {
     log: (level, message, ctx) => logger[level]({ ctx }, message) });
 } finally {
   stopController.abort();
+  clearInterval(pruneTimer);
+  await pruneTask;
   await watchLoop.stop();
   await Promise.all([sampling, backfill, cacheCleanup, timelineRebuild]);
   clearInterval(heartbeatTimer); clearInterval(pruneTimer); clearInterval(scanTimer); clearInterval(reconcileTimer); clearInterval(eventTimer); clearInterval(priorityTimer); clearInterval(folderTimer); clearInterval(hlsTimer); clearInterval(maintenanceTimer);
