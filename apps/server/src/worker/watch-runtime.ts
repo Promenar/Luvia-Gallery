@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { realpath } from 'node:fs/promises';
-import { fork, type ChildProcess } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import type Database from 'better-sqlite3';
 import type { LibraryWatch } from '@luvia/contracts';
 import { openDatabase } from '../core/database.ts';
@@ -14,6 +14,15 @@ import type { Watcher } from '../watch/watcher.ts';
 import { readProcessWatchCount } from '../watch/watcher.ts';
 import { requestWatchReconcile, flushWatchReconciles } from './watch-reconcile-queue.ts';
 import { publishLibraryEvent } from './watch-events.ts';
+import { runProcess } from './process-runner.ts';
+import { isTransientSqliteError } from '../core/sqlite-errors.ts';
+
+/**
+ * 根目录检查的默认时限。检查本身约 0.1 秒，但磁盘繁忙时 worker 主线程会停顿数秒；
+ * 超时按根目录不可用处理，恢复后会排一次全量对账，时限太短会把停顿误判成不可用、反复全量对账。
+ */
+export const ROOT_CHECK_TIMEOUT_MS = 20_000;
+const rootChildPath = fileURLToPath(new URL('./watch-root-child.ts', import.meta.url));
 
 type LibraryRow = { id: string; root: string; exclude: string; watch_mode: LibraryWatch['mode']; watch_poll_interval_sec: number };
 type Running = { coordinator: WatchCoordinator; port: SqliteLibraryIndex; db: Database.Database; token: string; config: string };
@@ -34,12 +43,14 @@ export class WatchRuntime {
   private readonly db: Database.Database;
   private readonly options: RuntimeOptions;
   private readonly heartbeat: NodeJS.Timeout;
-  private readonly rootChildren = new Map<string, ChildProcess>();
+  private readonly rootChildren = new Map<string, AbortController>();
   private readonly rootChecks = new Map<string, Promise<unknown>>();
   constructor(db: Database.Database, options: RuntimeOptions) {
     this.db = db; this.options = options;
     this.heartbeat = setInterval(() => {
-      try { this.db.prepare('UPDATE watch_leases SET lease_expires_at=unixepoch()+30 WHERE owner=? AND lease_expires_at>unixepoch()').run(this.options.owner); } catch { /* 下次检查处理失效租约。 */ }
+      // 按 owner 续期，不要求尚未过期：主线程停顿或数据库繁忙使续期晚于到期时，只要没被其它 worker 接管就继续持有，
+      // 不必停止监控再重启（重启会排一次全量对账）。被接管时 owner 已改变，这里不会续上。
+      try { this.db.prepare('UPDATE watch_leases SET lease_expires_at=unixepoch()+30 WHERE owner=?').run(this.options.owner); } catch { /* 下次检查处理失效租约。 */ }
     }, options.heartbeatMs ?? 5000);
     this.heartbeat.unref();
   }
@@ -48,24 +59,26 @@ export class WatchRuntime {
     let timer: NodeJS.Timeout | undefined;
     try {
       return await Promise.race([work(controller.signal), new Promise<T>((resolve) => {
-        timer = setTimeout(() => { controller.abort(); resolve(fallback); }, this.options.rootTimeoutMs ?? 2000);
+        timer = setTimeout(() => { controller.abort(); resolve(fallback); }, this.options.rootTimeoutMs ?? ROOT_CHECK_TIMEOUT_MS);
       })]);
     } finally { if (timer) clearTimeout(timer); }
   }
   private async rootChild<T>(key: string, request: Record<string, unknown>, fallback: T): Promise<T> {
     const existing = this.rootChecks.get(key);
     if (existing) return existing as Promise<T>;
-    if (this.rootChildren.has(key)) return fallback;
-    const pending = this.bounded((signal) => new Promise<T>((resolve) => {
-      const child = fork(new URL('./watch-root-child.ts', import.meta.url), [], { execArgv: [], stdio: ['ignore', 'ignore', 'ignore', 'ipc'], env: {} });
-      this.rootChildren.set(key, child);
-      const finish = () => { if (this.rootChildren.get(key) === child) this.rootChildren.delete(key); };
-      child.once('exit', () => { finish(); resolve(fallback); });
-      child.once('error', () => { finish(); resolve(fallback); });
-      child.once('message', (value: { result?: T }) => { if (!signal.aborted && value.result !== undefined) { finish(); resolve(value.result); } });
-      signal.addEventListener('abort', () => { child.kill('SIGKILL'); if (child.connected) child.disconnect(); child.unref(); }, { once: true });
-      child.send(request);
-    }), fallback);
+    // 经常驻代理启动检查进程：worker 内存数 GB 时直接 fork 要在主线程复制页表，一次卡住 1～2 秒
+    const pending = this.bounded(async (signal) => {
+      const controller = new AbortController(); this.rootChildren.set(key, controller);
+      const abort = () => controller.abort(); signal.addEventListener('abort', abort, { once: true });
+      try {
+        const run = await runProcess(process.execPath, [rootChildPath, JSON.stringify(request)],
+          { timeoutMs: this.options.rootTimeoutMs ?? ROOT_CHECK_TIMEOUT_MS, maxBuffer: 64 * 1024, capture: true, signal: controller.signal });
+        if (run.error || run.code !== 0) return fallback;
+        const value = JSON.parse(run.stdout) as { result?: T };
+        return value.result === undefined ? fallback : value.result;
+      } catch { return fallback; }
+      finally { signal.removeEventListener('abort', abort); if (this.rootChildren.get(key) === controller) this.rootChildren.delete(key); }
+    }, fallback);
     this.rootChecks.set(key, pending);
     try { return await pending; }
     finally { if (this.rootChecks.get(key) === pending) this.rootChecks.delete(key); }
@@ -84,11 +97,13 @@ export class WatchRuntime {
       if (current) {
         try {
           const at = Math.floor(Date.now() / 1000);
-          const renewed = this.db.prepare('UPDATE watch_leases SET lease_expires_at=? WHERE library_id=? AND owner=? AND token=? AND lease_expires_at>?')
-            .run(at + 30, row.id, this.options.owner, current.token, at);
+          const renewed = this.db.prepare('UPDATE watch_leases SET lease_expires_at=? WHERE library_id=? AND owner=? AND token=?')
+            .run(at + 30, row.id, this.options.owner, current.token);
           if (!renewed.changes || this.config(row, grace) !== current.config) await this.stopLibrary(row.id);
           else { await current.coordinator.checkRoot(); await this.writeStatus(row.id, current); }
-        } catch {
+        } catch (error) {
+          // 数据库暂时繁忙时下一轮再检查；停止并重启监控会排一次全量对账
+          if (isTransientSqliteError(error)) return;
           if (!this.stopped) {
             await this.stopLibrary(row.id);
             this.db.prepare("UPDATE library_watch_state SET state='degraded',degraded_reason='实时监控检查失败，等待重试' WHERE library_id=?").run(row.id);
@@ -186,5 +201,5 @@ export class WatchRuntime {
       try { current.port.close(); } finally { current.db.close(); }
     }
   }
-  async stop(): Promise<void> { this.stopped = true; clearInterval(this.heartbeat); for (const child of this.rootChildren.values()) { child.kill('SIGKILL'); if (child.connected) child.disconnect(); child.unref(); } await Promise.allSettled([...this.running.keys()].map((id) => this.stopLibrary(id))); this.db.prepare('DELETE FROM watch_leases WHERE owner=?').run(this.options.owner); this.db.prepare('DELETE FROM watch_worker_usage WHERE owner=?').run(this.options.owner); }
+  async stop(): Promise<void> { this.stopped = true; clearInterval(this.heartbeat); for (const controller of this.rootChildren.values()) controller.abort(); await Promise.allSettled([...this.running.keys()].map((id) => this.stopLibrary(id))); this.db.prepare('DELETE FROM watch_leases WHERE owner=?').run(this.options.owner); this.db.prepare('DELETE FROM watch_worker_usage WHERE owner=?').run(this.options.owner); }
 }

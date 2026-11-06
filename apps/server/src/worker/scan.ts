@@ -271,6 +271,8 @@ async function scanWithLock(db: Database.Database, library: { id: string; root: 
     }).immediate();
   };
   let writeFailure: unknown;
+  // 已检查的目录数写入作业说明，界面据此显示进度（目录总数随遍历增长，不作为百分比）
+  let checkedDirs = jobId ? (db.prepare('SELECT count(*) AS n FROM scan_directories WHERE job_id=? AND done=1').get(jobId) as { n: number }).n : 0;
   while (true) {
     signal?.throwIfAborted();
     assertLease();
@@ -391,8 +393,10 @@ async function scanWithLock(db: Database.Database, library: { id: string; root: 
         for (const child of children) insert.run(jobId, child);
         db.prepare('UPDATE scan_directories SET done=1 WHERE job_id=? AND relative_path=?').run(jobId, relativeDir);
         db.prepare('UPDATE scan_runs SET errors=? WHERE job_id=?').run(result.errors, jobId);
+        db.prepare('UPDATE jobs SET message=? WHERE id=?').run(`已检查 ${(checkedDirs + 1).toLocaleString('en-US')} 个目录`, jobId);
       }
     }).immediate();
+    checkedDirs++;
     if (!jobId) queue.push(...children);
   }
   const rootAvailable = async () => {
