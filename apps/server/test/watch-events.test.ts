@@ -85,3 +85,26 @@ test('事件合并时保留受限子目录，SSE 向有权用户发送变化', a
     assert.deepEqual([received.added, received.removed, received.updated, received.moved], [0, 0, 0, 0]);
   } finally { if (timer) clearTimeout(timer); await app.close(); db.close(); }
 });
+
+test('目录时间通知与媒体计数隔离，受限用户仍收到自身目录的计数', async () => {
+  const { publishLibraryEvent, flushLibraryEvents } = await import('../src/worker/watch-events.ts');
+  const { createApp } = await import('../src/api/app.ts');
+  const db = openDatabase(':memory:'); const app = await createApp({ db, legacyPending: false }); let timer: NodeJS.Timeout | undefined;
+  try {
+    db.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib','照片','/lib')").run();
+    const setup = await app.inject({ method: 'POST', url: '/api/v2/auth/setup', payload: { username: 'admin', password: 'test password' } });
+    const admin = (setup.headers['set-cookie'] as string).split(';')[0]!;
+    await app.inject({ method: 'POST', url: '/api/v2/admin/users', headers: { cookie: admin, 'x-luvia-request': '1' }, payload: { username: 'limited', password: 'test password', allowedPaths: ['lib/allowed'] } });
+    const login = await app.inject({ method: 'POST', url: '/api/v2/auth/login', payload: { username: 'limited', password: 'test password' } });
+    const cookie = (login.headers['set-cookie'] as string).split(';')[0]!;
+    const base = { libraryId: 'lib', source: 'watch' as const, added: 0, removed: 0, updated: 0, moved: 0 };
+    publishLibraryEvent(db, { ...base, folders: ['lib/private'] }, 1000);
+    publishLibraryEvent(db, { ...base, folders: ['lib', 'lib/allowed'] }, 1100, 'folder-time');
+    publishLibraryEvent(db, { ...base, folders: ['lib/allowed'], added: 1 }, 1200);
+    flushLibraryEvents(db, 3000); flushLibraryEvents(db, 5000);
+    timer = setTimeout(() => db.prepare('DELETE FROM sessions').run(), 800);
+    const response = await app.inject({ method: 'GET', url: '/api/v2/events', headers: { cookie, 'last-event-id': '0' } });
+    const received = [...response.body.matchAll(/event: library\ndata: (.+)/g)].map((match) => LibraryChangedEvent.parse(JSON.parse(match[1]!)));
+    assert.ok(received.some((event) => event.folders.includes('lib/allowed') && event.added === 1));
+  } finally { if (timer) clearTimeout(timer); await app.close(); db.close(); }
+});

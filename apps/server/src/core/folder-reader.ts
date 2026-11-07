@@ -4,7 +4,7 @@ import { pathAllowed } from './paths.ts';
 import { MediaReader } from './media-query.ts';
 
 type Context = { id: string; allowedPaths: string[] | null; isAdmin: boolean };
-type Row = { path: string; name: string; parent: string | null; library_id: string; media_count: number; direct_media_count: number; child_count: number; latest_at: number | null; cover_file_id: string | null; host_root: string | null; favorite: number };
+type Row = { path: string; name: string; parent: string | null; library_id: string; media_count: number; direct_media_count: number; child_count: number; latest_at: number | null; mtime_ms: number | null; cover_file_id: string | null; host_root: string | null; favorite: number };
 
 export class FolderReader {
   private db: Database.Database;
@@ -53,7 +53,8 @@ export class FolderReader {
     }
     return { path: row.path, name: row.name, mediaCount: count, childCount: children,
       cover: accessible && row.cover_file_id ? this.media.one(row.cover_file_id, context) : null,
-      favorite: !!row.favorite, latestAt: latest === null ? null : new Date(latest * 1000).toISOString(), hostPath: this.host(row, context) };
+      favorite: !!row.favorite, latestAt: latest === null ? null : new Date(latest * 1000).toISOString(),
+      modifiedAt: accessible && row.mtime_ms !== null ? new Date(row.mtime_ms).toISOString() : null, hostPath: this.host(row, context) };
   }
   list(folder: string, context: Context) {
     const current = folder ? this.row(folder, context) : undefined;

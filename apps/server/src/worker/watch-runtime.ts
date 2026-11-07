@@ -149,9 +149,9 @@ export class WatchRuntime {
         port = new SqliteLibraryIndex(connection, { libraryId: row.id,
           assertLease: () => { if (!owned.prepare('SELECT 1 FROM watch_leases WHERE library_id=? AND owner=? AND token=? AND lease_expires_at>unixepoch()').get(row.id, this.options.owner, token)) throw new Error('监控租约已失效'); },
           requestFullReconcile: async (reason) => { requestWatchReconcile(this.db, row.id, reason); },
-          publishEvent: async (event) => { this.db.transaction(() => {
+          publishEvent: async (event, channel) => { this.db.transaction(() => {
             if (!this.owns(row.id, token)) return;
-            publishLibraryEvent(this.db, event);
+            publishLibraryEvent(this.db, event, Date.now(), channel);
           }).immediate(); },
         });
         const fsType = filesystemType(saved.mount_identity);

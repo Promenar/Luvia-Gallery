@@ -15,7 +15,7 @@ import { ScanLockedError } from './scan-lock-error.ts';
 type Options = {
   libraryId: string;
   requestFullReconcile: (reason: string) => Promise<void>;
-  publishEvent: (event: LibraryChangedEvent) => Promise<void>;
+  publishEvent: (event: LibraryChangedEvent, channel?: 'folder-time') => Promise<void>;
   now?: () => number;
   assertLease?: () => void;
 };
@@ -70,6 +70,23 @@ export class SqliteLibraryIndex implements LibraryIndexPort {
     const virtual = virtualPath(this.libraryId, directory);
     return (this.db.prepare('SELECT path FROM folders WHERE library_id=? AND path>=? AND path<?').all(this.libraryId, `${virtual}/`, `${virtual}0`) as {path:string}[])
       .map((row) => row.path.slice(this.libraryId.length + 1));
+  }
+  async writeDirectoryMtime(entry: MoveCandidate): Promise<boolean> {
+    if (!entry.isDir) throw new Error('目录时间更新目标无效');
+    if (this.pending || this.db.inTransaction) throw new Error('索引端口已有未提交事务');
+    const folderPath = virtualPath(this.libraryId, entry.path);
+    const current = this.db.prepare('SELECT mtime_ms,dev,ino FROM folders WHERE path=? AND library_id=? AND missing_at_ms IS NULL')
+      .get(folderPath, this.libraryId) as { mtime_ms: number | null; dev: string | null; ino: string | null } | undefined;
+    if (!current || current.mtime_ms === entry.mtimeMs || (current.dev !== null && current.dev !== identity(entry.dev)) || (current.ino !== null && current.ino !== identity(entry.ino))) return false;
+    return this.db.transaction(() => {
+      this.options.assertLease?.();
+      if (this.db.prepare('SELECT 1 FROM scan_locks WHERE library_id=? AND lease_expires_at>unixepoch()').get(this.libraryId)) throw new ScanLockedError();
+      return this.db.prepare(`UPDATE folders SET mtime_ms=?,dev=COALESCE(dev,?),ino=COALESCE(ino,?)
+        WHERE path=? AND library_id=? AND missing_at_ms IS NULL AND (mtime_ms IS NULL OR mtime_ms<>?)
+        AND (dev IS NULL OR dev=?) AND (ino IS NULL OR ino=?)`)
+        .run(entry.mtimeMs, identity(entry.dev), identity(entry.ino), folderPath, this.libraryId,
+          entry.mtimeMs, identity(entry.dev), identity(entry.ino)).changes > 0;
+    }).immediate();
   }
   async findMissingCandidates(candidate: MoveCandidate): Promise<IndexedRecord[]> {
     const values = new Map<string, IndexedRecord>();
@@ -350,6 +367,6 @@ export class SqliteLibraryIndex implements LibraryIndexPort {
     if (this.pending) { this.db.exec('ROLLBACK'); this.pending = null; this.duplicate = null; }
     await this.options.requestFullReconcile(reason);
   }
-  async publishEvent(event: LibraryChangedEvent): Promise<void> { await this.options.publishEvent(event); }
+  async publishEvent(event: LibraryChangedEvent, channel?: 'folder-time'): Promise<void> { await this.options.publishEvent(event, channel); }
   close(): void { if (this.pending) { this.db.exec('ROLLBACK'); this.pending = null; } }
 }

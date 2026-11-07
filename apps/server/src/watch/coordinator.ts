@@ -28,6 +28,8 @@ export interface LibraryIndexPort {
   /** 路径均为媒体库内相对路径；目录读取包含缺失记录。 */
   readDirectory(directory: string): Promise<IndexedRecord[]>;
   readSubdirectories(directory: string): Promise<string[]>;
+  /** 更新已核验身份的目录自身修改时间。 */
+  writeDirectoryMtime(entry: MoveCandidate): Promise<boolean>;
   findMissingCandidates(candidate: MoveCandidate): Promise<IndexedRecord[]>;
   writeAdded(entry: MoveCandidate): Promise<string | null>;
   writeUpdated(old: IndexedRecord, entry: MoveCandidate): Promise<void>;
@@ -41,7 +43,7 @@ export interface LibraryIndexPort {
   writeRemoved(old: IndexedRecord): Promise<void>;
   appendChange(change: WatchLibraryChange): Promise<void>;
   requestFullReconcile(reason: string): Promise<void>;
-  publishEvent(event: LibraryChangedEvent): Promise<void>;
+  publishEvent(event: LibraryChangedEvent, channel?: 'folder-time'): Promise<void>;
 }
 
 type Source = WatchLibraryChange['source'];
@@ -66,6 +68,7 @@ export class WatchCoordinator {
   private readonly stable: StabilityTracker;
   private readonly matcher: MoveMatcher;
   private readonly throttle: ChangeThrottle;
+  private readonly folderTimeThrottle: ChangeThrottle;
   private tail: Promise<void> = Promise.resolve();
   private diskTail: Promise<void> = Promise.resolve();
   private started = false;
@@ -104,6 +107,9 @@ export class WatchCoordinator {
     this.throttle = new ChangeThrottle({ libraryId: options.libraryId, clock: this.clock,
       publish: (event) => { void this.run(() => this.options.port.publishEvent(event)).catch(() => {}); },
     });
+    this.folderTimeThrottle = new ChangeThrottle({ libraryId: options.libraryId, clock: this.clock,
+      publish: (event) => { void this.run(() => this.options.port.publishEvent(event, 'folder-time')).catch(() => {}); },
+    });
   }
 
   async start(): Promise<void> {
@@ -124,7 +130,7 @@ export class WatchCoordinator {
   async stop(): Promise<void> {
     this.stopping = true; this.watcher.stop(); this.watcherActive = false;
     await this.idle();
-    this.dirty.stop(); this.stable.stop(); this.matcher.stop(); this.throttle.stop();
+    this.dirty.stop(); this.stable.stop(); this.matcher.stop(); this.throttle.stop(); this.folderTimeThrottle.stop();
     if (this.pollTimer !== null) this.clock.clearTimeout(this.pollTimer); this.pollTimer = null;
     this.pendingSources.clear(); this.provisionalRetries.clear(); this.started = false;
   }
@@ -296,6 +302,18 @@ export class WatchCoordinator {
         throw error;
       }
       if (!(await this.checkRoot())) return;
+      const currentDirectory = await this.statEntry(current);
+      if (currentDirectory?.isDir) {
+        try {
+          if (await this.options.port.writeDirectoryMtime(currentDirectory)) {
+            const parent = parentOf(current);
+            this.folderTimeThrottle.add({ source, folders: [current, parent].map((dir) => dir ? `${this.options.libraryId}/${dir}` : this.options.libraryId) });
+          }
+        } catch (error) {
+          if (!(error instanceof ScanLockedError)) throw error;
+          this.dirty.add(current, true);
+        }
+      }
       indexed = indexed.filter((item) => !excluded(item.path, this.options.exclude, item.isDir));
       const known = indexed.map((item) => ({ ...item, name: path.posix.basename(item.path) }));
       const diff = diffDirectory(entries, known);
@@ -437,9 +455,11 @@ export class WatchCoordinator {
   private async applyAdded(item: Candidate): Promise<void> {
     if (!(await this.checkRoot())) return;
     const current = await this.statEntry(item.path); if (!current || current.isDir !== item.isDir) return;
+    if (current.isDir && (current.dev !== item.dev || current.ino !== item.ino)) { this.dirty.add(item.path, false); return; }
     if (!current.isDir && (current.size !== item.size || current.mtimeMs !== item.mtimeMs || current.dev !== item.dev || current.ino !== item.ino)) {
       this.pendingSources.set(item.path, item.source); this.stable.track(item.path, current); return;
     }
+    if (current.isDir) item = { ...item, mtimeMs: current.mtimeMs };
     const old = (await this.options.port.readDirectory(parentOf(item.path))).find((value) => value.path === item.path);
     if (old) { await this.reconcile(parentOf(item.path), item.source); return; }
     const restored = await this.findMissingMatch(item);

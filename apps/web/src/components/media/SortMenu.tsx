@@ -24,15 +24,15 @@ export function useMediaSort(): MediaSort {
 }
 
 /** 媒体网格的排序菜单，选择后写入用户偏好，文件夹、相册、收藏一起生效。 */
-export function SortMenu({ className, small = true }: { className?: string; small?: boolean }) {
+export function SortMenu({ className, small = true, scopeLabel }: { className?: string; small?: boolean; scopeLabel?: string }) {
   const sort = useMediaSort();
   const update = useUpdatePreferences();
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
         render={
-          <button type="button" className={cn(chip(false, small), className)} aria-label={`排序：${SORT_LABEL[sort]}`}>
-            <ArrowDownUp />{SHORT_LABEL[sort]}
+          <button type="button" className={cn(chip(false, small), className)} aria-label={`${scopeLabel ?? ''}排序：${SORT_LABEL[sort]}`}>
+            <ArrowDownUp />{scopeLabel ? `${scopeLabel}：` : ''}{SHORT_LABEL[sort]}
           </button>
         }
       />
@@ -43,6 +43,29 @@ export function SortMenu({ className, small = true }: { className?: string; smal
             {(Object.keys(SORT_LABEL) as MediaSort[]).map((k) => (
               <DropdownMenuRadioItem key={k} value={k}>{SORT_LABEL[k]}</DropdownMenuRadioItem>
             ))}
+          </DropdownMenuRadioGroup>
+        </DropdownMenuGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/** 文件夹自身时间与媒体的拍摄时间、大小是不同维度。 */
+export function FolderSortMenu() {
+  const sort = usePreferences().folderSort;
+  const update = useUpdatePreferences();
+  const labels = { modified_desc: '修改时间', name_asc: '名称' } as const;
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger render={<button type="button" className={chip(false, false)} aria-label={`文件夹排序：${labels[sort]}`}>
+        <ArrowDownUp />文件夹：{labels[sort]}
+      </button>} />
+      <DropdownMenuContent align="end" className="w-48">
+        <DropdownMenuGroup>
+          <DropdownMenuLabel>文件夹排序</DropdownMenuLabel>
+          <DropdownMenuRadioGroup value={sort} onValueChange={(v) => update.mutate({ folderSort: v as typeof sort })}>
+            <DropdownMenuRadioItem value="modified_desc">文件夹修改时间，最新在前</DropdownMenuRadioItem>
+            <DropdownMenuRadioItem value="name_asc">文件夹名称，A 到 Z</DropdownMenuRadioItem>
           </DropdownMenuRadioGroup>
         </DropdownMenuGroup>
       </DropdownMenuContent>
