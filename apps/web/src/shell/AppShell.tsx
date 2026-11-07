@@ -7,7 +7,7 @@ import { useIsAdmin, useUser } from '@/stores/session';
 import { useViewer } from '@/stores/viewer';
 import { Viewer } from '@/viewer/Viewer';
 import { AppearanceStudio } from '@/pages/appearance/AppearanceStudio';
-import { ADMIN_NAV, AppearanceIcon, PRIMARY_NAV, type NavItem } from './nav';
+import { ADMIN_NAV, AppearanceIcon, EDITOR_NAV, PRIMARY_NAV, type NavItem } from './nav';
 import { thumbMemory } from '@/components/media/thumb-memory';
 
 /** 外观面板开关（右侧抽屉，不是独立页面）。 */
@@ -46,6 +46,7 @@ export function AppShell() {
   const user = useUser();
   const viewerOpen = useViewer((s) => s.open);
   const setStudio = useStudio((s) => s.setOpen);
+  const EditorIcon = EDITOR_NAV.icon;
 
   useEffect(() => { startEvents(); return stopEvents; }, []);
   useEffect(() => () => { thumbMemory.clear(); }, [user?.id]);
@@ -56,6 +57,7 @@ export function AppShell() {
         <div aria-hidden className="relative mb-3.5 size-[34px] rounded-[11px] bg-[conic-gradient(from_210deg,var(--accent),color-mix(in_oklab,var(--accent)_30%,var(--bg)),var(--accent))] after:absolute after:inset-[9px] after:rounded-full after:bg-surface" />
         {PRIMARY_NAV.map((n) => <RailButton key={n.to} item={n} active={isActive(pathname, n.to)} />)}
         <div className="flex-1" />
+        {isAdmin && <RailButton item={EDITOR_NAV} active={isActive(pathname, EDITOR_NAV.to)} />}
         {isAdmin && <RailButton item={ADMIN_NAV} active={isActive(pathname, ADMIN_NAV.to)} />}
         <button
           type="button"
@@ -85,6 +87,12 @@ export function AppShell() {
             </Link>
           );
         })}
+        {isAdmin && (
+          <Link to={EDITOR_NAV.to} aria-current={isActive(pathname, EDITOR_NAV.to) ? 'page' : undefined}
+            className={cn('flex h-14 flex-1 flex-col items-center justify-center gap-0.5 text-[11px] text-muted', isActive(pathname, EDITOR_NAV.to) && 'text-accent')}>
+            <EditorIcon className="size-5" strokeWidth={1.7} />{EDITOR_NAV.label}
+          </Link>
+        )}
         <button type="button" onClick={() => setStudio(true)} className="flex h-14 flex-1 flex-col items-center justify-center gap-0.5 text-[11px] text-muted">
           <AppearanceIcon className="size-5" strokeWidth={1.7} />外观
         </button>

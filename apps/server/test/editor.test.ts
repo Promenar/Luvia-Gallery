@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { chmod, mkdtemp, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
+import { chmod, link, mkdir, mkdtemp, readFile, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -9,8 +9,9 @@ import sharp from 'sharp';
 import { openDatabase } from '../src/core/database.ts';
 import { scanLibrary } from '../src/worker/scan.ts';
 import { extractMetadataNow } from '../src/worker/metadata.ts';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { editorConfig, runInference } from '../src/editor/service.ts';
+import { EditorQueue } from '../src/editor/queue.ts';
 
 type FileRow = { id: string; size: number; modified_at: number; cache_generation: number };
 
@@ -606,4 +607,176 @@ test('默认响应大小限制允许超过 64 MiB 的修复结果', async () => 
     if (previous === undefined) delete process.env.EDITOR_MAX_RESULT_BYTES; else process.env.EDITOR_MAX_RESULT_BYTES = previous;
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
+});
+
+test('未入库图片上传、修复并幂等导入新文件夹', async () => {
+  const stub = await startStub();
+  stub.setEchoSource();
+  const { root, cache, db, app, headers } = await setup(stub.url);
+  try {
+    const source = await sharp({ create: { width: 10, height: 8, channels: 3, background: '#345678' } }).png().toBuffer();
+    const unauthorized = await app.inject({ method: 'POST', url: '/api/v2/editor/uploads?name=outside.png',
+      headers: { 'content-type': 'application/octet-stream' }, payload: source });
+    assert.equal(unauthorized.statusCode, 401);
+    const noCsrf = await app.inject({ method: 'POST', url: '/api/v2/editor/uploads?name=outside.png',
+      headers: { cookie: headers.cookie, 'content-type': 'application/octet-stream' }, payload: source });
+    assert.equal(noCsrf.statusCode, 403);
+    const invalid = await app.inject({ method: 'POST', url: '/api/v2/editor/uploads?name=invalid.png',
+      headers: { ...headers, 'content-type': 'application/octet-stream' }, payload: Buffer.from('不是图片') });
+    assert.equal(invalid.statusCode, 400);
+    const uploaded = await app.inject({ method: 'POST', url: '/api/v2/editor/uploads?name=outside.png',
+      headers: { ...headers, 'content-type': 'application/octet-stream' }, payload: source });
+    assert.equal(uploaded.statusCode, 200, uploaded.body);
+    const upload = uploaded.json();
+    assert.deepEqual([upload.name, upload.width, upload.height, upload.mime], ['outside.png', 10, 8, 'image/png']);
+    assert.equal((await app.inject({ method: 'GET', url: upload.sourceUrl })).statusCode, 401);
+    const preview = await app.inject({ method: 'GET', url: upload.sourceUrl, headers });
+    assert.equal(preview.statusCode, 200, preview.body);
+    assert.deepEqual(preview.rawPayload, source);
+    const other = await app.inject({ method: 'POST', url: '/api/v2/admin/users', headers,
+      payload: { username: 'other', password: 'other test password', role: 'admin' } });
+    assert.equal(other.statusCode, 200, other.body);
+    const login = await app.inject({ method: 'POST', url: '/api/v2/auth/login', payload: { username: 'other', password: 'other test password' } });
+    const otherHeaders = { cookie: (login.headers['set-cookie'] as string).split(';')[0]!, 'x-luvia-request': '1' };
+    assert.equal((await app.inject({ method: 'GET', url: upload.sourceUrl, headers: otherHeaders })).statusCode, 404);
+    assert.equal((await app.inject({ method: 'POST', url: '/api/v2/editor/jobs', headers: otherHeaders,
+      payload: { uploadId: upload.id, model: 'migan', mask: await maskOf() } })).statusCode, 404);
+    const created = await app.inject({ method: 'POST', url: '/api/v2/editor/jobs', headers,
+      payload: { uploadId: upload.id, model: 'migan', mask: await maskOf() } });
+    assert.equal(created.statusCode, 200, created.body);
+    const job = await waitForJob(app, headers, created.json().id);
+    assert.equal(job.status, 'succeeded', JSON.stringify(job));
+    const body = { libraryId: 'lib', folder: '新文件夹/子文件夹', name: 'fixed.png', operationId: 'external-import-12345' };
+    const outside = await mkdtemp(path.join(tmpdir(), 'luvia-outside-'));
+    try {
+      await symlink(outside, path.join(root, 'link'));
+      const escaped = await app.inject({ method: 'POST', url: `/api/v2/editor/jobs/${job.id}/import`, headers,
+        payload: { ...body, folder: 'link/escape', operationId: 'external-symlink-123' } });
+      assert.equal(escaped.statusCode, 403, escaped.body);
+      await mkdir(path.join(root, body.folder), { recursive: true });
+      await writeFile(path.join(root, body.folder, body.name), '已有文件');
+      const conflictOp = 'external-collision-123';
+      const stage = `.luvia-import-${createHash('sha256').update(conflictOp).digest('hex')}.tmp`;
+      await writeFile(path.join(root, body.folder, stage), '已有暂存文件');
+      const conflict = await app.inject({ method: 'POST', url: `/api/v2/editor/jobs/${job.id}/import`, headers,
+        payload: { ...body, name: '其他.png', operationId: conflictOp } });
+      assert.equal(conflict.statusCode, 200, conflict.body);
+      assert.equal(await readFile(path.join(root, body.folder, stage), 'utf8'), '已有暂存文件');
+    } finally { await rm(outside, { recursive: true, force: true }); }
+    const first = await app.inject({ method: 'POST', url: `/api/v2/editor/jobs/${job.id}/import`, headers, payload: body });
+    assert.equal(first.statusCode, 200, first.body);
+    assert.equal(first.json().status, 'saved');
+    assert.equal(first.json().folder, body.folder);
+    assert.equal(first.json().name, 'fixed (1).png');
+    assert.equal(await readFile(path.join(root, body.folder, body.name), 'utf8'), '已有文件');
+    assert.equal((await stat(path.join(root, body.folder, first.json().name))).isFile(), true);
+    assert.ok(db.prepare('SELECT id FROM files WHERE id=?').get(first.json().mediaId));
+    const retry = await app.inject({ method: 'POST', url: `/api/v2/editor/jobs/${job.id}/import`, headers, payload: body });
+    assert.deepEqual(retry.json(), first.json());
+    const nested = await app.inject({ method: 'POST', url: `/api/v2/editor/jobs/${job.id}/import`, headers,
+      payload: { ...body, folder: '自动创建/多层', operationId: 'external-create-dir-123' } });
+    assert.equal(nested.statusCode, 200, nested.body);
+    assert.equal((await stat(path.join(root, '自动创建/多层', nested.json().name))).isFile(), true);
+    const concurrent = await Promise.all(['external-concurrent-1', 'external-concurrent-2'].map((operationId) =>
+      app.inject({ method: 'POST', url: `/api/v2/editor/jobs/${job.id}/import`, headers,
+        payload: { libraryId: 'lib', folder: '', name: 'concurrent.png', operationId } })));
+    assert.ok(concurrent.every((response) => response.statusCode === 200), concurrent.map((response) => response.body).join(';'));
+    assert.deepEqual(new Set(concurrent.map((response) => response.json().name)), new Set(['concurrent.png', 'concurrent (1).png']));
+
+    // 模拟另一个实例仍持有租约；过期接管应使用新暂存目录，不能截断旧实例的数据。
+    const leaseOp = 'external-lease-12345';
+    const leaseStage = `.luvia-import-${createHash('sha256').update(leaseOp).digest('hex')}-11111111-1111-4111-8111-111111111111.tmp`;
+    await mkdir(path.join(root, leaseStage), { mode: 0o700 });
+    await writeFile(path.join(root, leaseStage, 'image'), '旧实例正在写入');
+    const leaseIdentity = await stat(path.join(root, leaseStage, 'image'), { bigint: true });
+    const leaseParent = await stat(root, { bigint: true });
+    const admin = db.prepare("SELECT id FROM users WHERE username='admin'").get() as { id: string };
+    db.prepare(`INSERT INTO editor_imports(operation_id,user_id,job_id,library_id,folder,requested_name,stage_name,stage_dev,stage_ino,parent_dev,parent_ino,owner,lease_until,created_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(leaseOp, admin.id, job.id, 'lib', '', 'lease.png', leaseStage,
+        leaseIdentity.dev.toString(), leaseIdentity.ino.toString(), leaseParent.dev.toString(), leaseParent.ino.toString(), 'other-instance', Math.floor(Date.now() / 1000) + 60, Math.floor(Date.now() / 1000));
+    const leaseBody = { libraryId: 'lib', folder: '', name: 'lease.png', operationId: leaseOp };
+    assert.equal((await app.inject({ method: 'POST', url: `/api/v2/editor/jobs/${job.id}/import`, headers, payload: leaseBody })).statusCode, 409);
+    db.prepare('UPDATE editor_imports SET lease_until=0 WHERE operation_id=?').run(leaseOp);
+    const takeover = await app.inject({ method: 'POST', url: `/api/v2/editor/jobs/${job.id}/import`, headers, payload: leaseBody });
+    assert.equal(takeover.statusCode, 200, takeover.body);
+    assert.equal(await readFile(path.join(root, leaseStage, 'image'), 'utf8'), '旧实例正在写入');
+
+    // 模拟已经原子发布文件但尚未写入索引时进程中断，同一操作编号应恢复而不生成副本。
+    const recoveryOp = 'external-recover-123';
+    const recoveryName = 'recovered.png';
+    const alreadyLinked = 'recovered (1).png';
+    const recoveryStage = `.luvia-import-${createHash('sha256').update(recoveryOp).digest('hex')}-00000000-0000-4000-8000-000000000000.tmp`;
+    const resultRow = db.prepare('SELECT result_path FROM editor_jobs WHERE id=?').get(job.id) as { result_path: string };
+    await mkdir(path.join(root, recoveryStage), { mode: 0o700 });
+    await writeFile(path.join(root, recoveryStage, 'image'), await readFile(resultRow.result_path));
+    const identity = await stat(path.join(root, recoveryStage, 'image'), { bigint: true });
+    const parentIdentity = await stat(root, { bigint: true });
+    await link(path.join(root, recoveryStage, 'image'), path.join(root, alreadyLinked));
+    const user = db.prepare("SELECT id FROM users WHERE username='admin'").get() as { id: string };
+    db.prepare(`INSERT INTO editor_imports(operation_id,user_id,job_id,library_id,folder,requested_name,final_name,stage_ready,stage_dev,stage_ino,stage_name,parent_dev,parent_ino,created_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(recoveryOp, user.id, job.id, 'lib', '', recoveryName, alreadyLinked, 1,
+        identity.dev.toString(), identity.ino.toString(), recoveryStage, parentIdentity.dev.toString(), parentIdentity.ino.toString(), Math.floor(Date.now() / 1000));
+    const recovered = await app.inject({ method: 'POST', url: `/api/v2/editor/jobs/${job.id}/import`, headers,
+      payload: { libraryId: 'lib', folder: '', name: recoveryName, operationId: recoveryOp } });
+    assert.equal(recovered.statusCode, 200, recovered.body);
+    assert.equal(recovered.json().name, alreadyLinked);
+    await assert.rejects(stat(path.join(root, recoveryName)), { code: 'ENOENT' });
+    assert.equal(recovered.json().status, 'saved');
+    assert.ok(db.prepare('SELECT 1 FROM files WHERE id=?').get(recovered.json().mediaId));
+    await assert.rejects(stat(path.join(root, recoveryStage)), { code: 'ENOENT' });
+
+
+    assert.equal((await app.inject({ method: 'POST', url: `/api/v2/editor/jobs/${job.id}/import`, headers,
+      payload: { ...body, folder: '../escape' } })).statusCode, 409);
+    assert.equal((await app.inject({ method: 'POST', url: `/api/v2/editor/jobs/${job.id}/import`, headers,
+      payload: { ...body, folder: 'different' } })).statusCode, 409);
+    // 已预留的名字被外部文件占用时，保留该文件与待核验暂存，停止自动重试。
+    const attentionOp = 'external-attention-12345';
+    const attentionStage = `.luvia-import-${createHash('sha256').update(attentionOp).digest('hex')}-22222222-2222-4222-8222-222222222222.tmp`;
+    await mkdir(path.join(root, attentionStage), { mode: 0o700 });
+    const resultForAttention = db.prepare('SELECT result_path FROM editor_jobs WHERE id=?').get(job.id) as { result_path: string };
+    await writeFile(path.join(root, attentionStage, 'image'), await readFile(resultForAttention.result_path));
+    const attentionIdentity = await stat(path.join(root, attentionStage, 'image'), { bigint: true });
+    const attentionParent = await stat(root, { bigint: true });
+    await writeFile(path.join(root, 'reserved.png'), '外部文件');
+    db.prepare(`INSERT INTO editor_imports(operation_id,user_id,job_id,library_id,folder,requested_name,final_name,stage_ready,stage_dev,stage_ino,stage_name,parent_dev,parent_ino,created_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(attentionOp, admin.id, job.id, 'lib', '', 'reserved.png', 'reserved.png', 1,
+        attentionIdentity.dev.toString(), attentionIdentity.ino.toString(), attentionStage, attentionParent.dev.toString(), attentionParent.ino.toString(), Math.floor(Date.now() / 1000));
+    const attention = await app.inject({ method: 'POST', url: `/api/v2/editor/jobs/${job.id}/import`, headers,
+      payload: { libraryId: 'lib', folder: '', name: 'reserved.png', operationId: attentionOp } });
+    assert.equal(attention.statusCode, 500, attention.body);
+    assert.equal(attention.json().error.code, 'OPERATION_PARTIAL');
+    assert.equal((db.prepare('SELECT status FROM editor_imports WHERE operation_id=?').get(attentionOp) as { status: string }).status, 'attention');
+    assert.equal(await readFile(path.join(root, 'reserved.png'), 'utf8'), '外部文件');
+    const changedOp = 'external-changed-12345';
+    const changedStage = `.luvia-import-${createHash('sha256').update(changedOp).digest('hex')}-33333333-3333-4333-8333-333333333333.tmp`;
+    await mkdir(path.join(root, changedStage), { mode: 0o700 });
+    await writeFile(path.join(root, changedStage, 'image'), await readFile(resultForAttention.result_path));
+    const changedIdentity = await stat(path.join(root, changedStage, 'image'), { bigint: true });
+    db.prepare(`INSERT INTO editor_imports(operation_id,user_id,job_id,library_id,folder,requested_name,stage_ready,stage_dev,stage_ino,stage_name,parent_dev,parent_ino,created_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(changedOp, admin.id, job.id, 'lib', '', 'changed.png', 1,
+        changedIdentity.dev.toString(), changedIdentity.ino.toString(), changedStage, '0', '0', Math.floor(Date.now() / 1000));
+    const changed = await app.inject({ method: 'POST', url: `/api/v2/editor/jobs/${job.id}/import`, headers,
+      payload: { libraryId: 'lib', folder: '', name: 'changed.png', operationId: changedOp } });
+    assert.equal(changed.statusCode, 500, changed.body);
+    assert.deepEqual(db.prepare('SELECT status FROM editor_imports WHERE operation_id=?').get(changedOp), { status: 'attention' });
+
+    // 模拟落盘成功但索引失败，后台在结果过期后继续完成索引，原操作仍保持幂等。
+    db.exec("CREATE TRIGGER test_import_failure BEFORE INSERT ON files WHEN NEW.name='pending.png' BEGIN SELECT RAISE(FAIL,'synthetic failure'); END");
+    const pendingBody = { libraryId: 'lib', folder: '', name: 'pending.png', operationId: 'external-pending-12345' };
+    const pending = await app.inject({ method: 'POST', url: `/api/v2/editor/jobs/${job.id}/import`, headers, payload: pendingBody });
+    assert.equal(pending.statusCode, 200, pending.body);
+    assert.equal(pending.json().status, 'pending');
+    db.exec('DROP TRIGGER test_import_failure');
+    db.prepare('UPDATE editor_jobs SET expires_at=? WHERE id=?').run(Math.floor(Date.now() / 1000) - 1, job.id);
+    const queue = new EditorQueue(db, cache, editorConfig());
+    try { await queue.sweep(); } finally { await queue.close(); }
+    await assert.rejects(stat(path.join(root, leaseStage)), { code: 'ENOENT' });
+    assert.ok(db.prepare('SELECT id FROM editor_jobs WHERE id=?').get(job.id), '身份不明的导入应保护结果');
+    const resumed = await app.inject({ method: 'POST', url: `/api/v2/editor/jobs/${job.id}/import`, headers, payload: pendingBody });
+    assert.equal(resumed.statusCode, 200, resumed.body);
+    assert.equal(resumed.json().status, 'saved');
+    assert.equal(resumed.json().name, 'pending.png');
+
+  } finally { await app.close(); db.close(); await stub.close(); await rm(root, { recursive: true, force: true }); await rm(cache, { recursive: true, force: true }); }
 });

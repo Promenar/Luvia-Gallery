@@ -1,7 +1,7 @@
-import { Album, Folder, Gauge, Heart, History, Image, Palette, type LucideIcon } from 'lucide-react';
+import { Album, Brush, Folder, Gauge, Heart, History, Image, Palette, type LucideIcon } from 'lucide-react';
 
 export interface NavItem {
-  to: '/' | '/photos' | '/folders' | '/albums' | '/favorites' | '/admin';
+  to: '/' | '/photos' | '/folders' | '/albums' | '/favorites' | '/editor' | '/admin';
   label: string;
   icon: LucideIcon;
   adminOnly?: boolean;
@@ -14,5 +14,6 @@ export const PRIMARY_NAV: NavItem[] = [
   { to: '/albums', label: '相册', icon: Album },
   { to: '/favorites', label: '收藏', icon: Heart },
 ];
+export const EDITOR_NAV: NavItem = { to: '/editor', label: '修复', icon: Brush, adminOnly: true };
 export const ADMIN_NAV: NavItem = { to: '/admin', label: '控制台', icon: Gauge, adminOnly: true };
 export const AppearanceIcon = Palette;

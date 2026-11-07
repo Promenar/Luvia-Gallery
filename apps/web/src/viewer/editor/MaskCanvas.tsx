@@ -20,7 +20,7 @@ export interface MaskCanvasHandle {
  * 画布只画可见的高亮层；导出时把同一组笔画重放到黑底白字的二值 PNG。
  */
 export const MaskCanvas = forwardRef<MaskCanvasHandle, {
-  item: MediaItem;
+  item: Pick<MediaItem, 'id' | 'width' | 'height'>;
   rotation: Rotation;
   brush: number;
   erase: boolean;

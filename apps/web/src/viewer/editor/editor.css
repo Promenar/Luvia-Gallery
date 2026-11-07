@@ -48,7 +48,6 @@
 .lv-mask { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 2; touch-action: none; }
 .lv-viewer.is-edit .lv-frame { cursor: default; }
 .lv-viewer.is-edit :is(.lv-vn, .lv-film, .lv-sspill, .lv-zhud, .lv-mini, .lv-sheet, .lv-prog) { display: none; }
-.lv-ed-done { width: auto !important; padding: 0 14px; border-radius: 999px; font-size: 13px; }
 
 .lv-confirm-field { display: grid; gap: 6px; margin-top: 14px; font-size: 12.5px; color: rgb(255 255 255 / .7); }
 .lv-confirm-input { height: 36px; width: 100%; padding: 0 10px; border-radius: 8px; border: 1px solid rgb(255 255 255 / .16); background: rgb(255 255 255 / .06); color: #fff; font: inherit; font-size: 13px; outline: none; }

@@ -818,12 +818,11 @@ function ViewerDialog({ scope }: { scope: ViewerScope }) {
 
         {editorOpen ? (
           <div className="lv-vt">
-            <button type="button" className="lv-vb" aria-label="退出修复编辑" onClick={closeEditor}><Icon name="close" /></button>
+            <button type="button" className="lv-vb" aria-label="退出修复编辑" title="退出修复编辑（Esc）" onClick={closeEditor}><Icon name="close" /></button>
             <div className="lv-nm">
               <b>{item.name}</b>
               <small>修复编辑</small>
             </div>
-            <button type="button" className="lv-vb lv-ed-done" onClick={closeEditor}>完成</button>
           </div>
         ) : (
           <div className="lv-vt">

@@ -1,5 +1,5 @@
 /**
- * 修复编辑器的模拟接口：能力、作业轮询、结果与保存副本。
+ * 修复编辑器的模拟接口：能力、上传、作业轮询、结果、保存副本与外部图片导入。
  * 真实后端在没有推理服务时会返回模型不可用；这里用参考结果让界面可联调/出可视稿。
  */
 import { delay } from 'msw';
@@ -9,9 +9,24 @@ import { db, svgFor } from '../db';
 
 const err = (status: number, code: string, message: string) => HttpResponse.json({ error: { code, message } }, { status });
 
-type MockJob = { id: string; mediaId: string; model: EditorModelId; createdAt: number; cancelled: boolean };
+type MockUpload = {
+  id: string; name: string; mime: string; width: number; height: number;
+  bytes: ArrayBuffer; expiresAt: number;
+};
+type MockJob = { id: string; mediaId?: string; uploadId?: string; model: EditorModelId; createdAt: number; cancelled: boolean };
+
+const uploads = new Map<string, MockUpload>();
 const jobs = new Map<string, MockJob>();
 let seq = 0;
+
+function mimeOf(name: string): string {
+  const ext = (/\.[^.]+$/.exec(name)?.[0] ?? '').toLowerCase();
+  if (ext === '.png') return 'image/png';
+  if (ext === '.webp') return 'image/webp';
+  if (ext === '.gif') return 'image/gif';
+  if (ext === '.heic' || ext === '.heif') return 'image/heic';
+  return 'image/jpeg';
+}
 
 function jobView(job: MockJob): EditorJob {
   const elapsed = Date.now() - job.createdAt;
@@ -46,15 +61,53 @@ export const editorHandlers = [
       mask: { maxBytes: 8 * 1024 * 1024, maxEdge: 2048 },
     });
   }),
+
+  // 外部图片上传：仅保存在内存，刷新页面即清空。
+  http.post('/api/v2/editor/uploads', async ({ request }) => {
+    const name = new URL(request.url).searchParams.get('name') ?? 'image';
+    const bytes = await request.arrayBuffer();
+    if (!bytes.byteLength) return err(400, 'VALIDATION', '图片内容为空');
+    const mime = mimeOf(name);
+    let width = 1600;
+    let height = 1200;
+    if (typeof createImageBitmap === 'function') {
+      try {
+        const bitmap = await createImageBitmap(new Blob([bytes], { type: mime }));
+        width = bitmap.width;
+        height = bitmap.height;
+        bitmap.close();
+      } catch { /* 无法解码时使用默认尺寸，界面仍可联调。 */ }
+    }
+    const id = `mock-upload-${++seq}`;
+    const expiresAt = Date.now() + 60 * 60_000;
+    uploads.set(id, { id, name, mime, width, height, bytes, expiresAt });
+    await delay(180);
+    return HttpResponse.json({ id, name, width, height, mime, sourceUrl: `/api/v2/editor/uploads/${id}/source`, expiresAt: new Date(expiresAt).toISOString() });
+  }),
+  http.get('/api/v2/editor/uploads/:id/source', ({ params }) => {
+    const upload = uploads.get(String(params.id ?? ''));
+    if (!upload) return err(404, 'NOT_FOUND', '上传已过期');
+    return new HttpResponse(upload.bytes, { headers: { 'content-type': upload.mime, 'cache-control': 'private, no-store' } });
+  }),
+
   http.post('/api/v2/editor/jobs', async ({ request }) => {
-    let body: { mediaId?: string; model?: EditorModelId; mask?: unknown } = {};
+    let body: { mediaId?: string; uploadId?: string; model?: EditorModelId; mask?: unknown } = {};
     try { body = await request.json() as typeof body; } catch { return err(400, 'VALIDATION', '提交的内容不符合要求'); }
-    if (!body.mediaId || !body.model || !body.mask) return err(400, 'VALIDATION', '提交的内容不符合要求');
-    const media = db.media.find((item) => item.id === body.mediaId);
-    if (!media) return err(404, 'NOT_FOUND', '媒体不存在或不可访问');
+    if ((!body.mediaId && !body.uploadId) || !body.model || !body.mask) return err(400, 'VALIDATION', '提交的内容不符合要求');
     if (!['migan', 'lama', 'slbr'].includes(body.model)) return err(409, 'MODEL_UNAVAILABLE', '该修复模型不可用');
+    let mediaId: string | undefined;
+    let uploadId: string | undefined;
+    if (body.uploadId) {
+      const upload = uploads.get(body.uploadId);
+      if (!upload || upload.expiresAt < Date.now()) return err(404, 'NOT_FOUND', '上传已过期，请重新上传');
+      uploadId = upload.id;
+    } else {
+      const media = db.media.find((item) => item.id === body.mediaId);
+      if (!media) return err(404, 'NOT_FOUND', '媒体不存在或不可访问');
+      mediaId = media.id;
+    }
     const id = `mock-editor-${++seq}`;
-    const job: MockJob = { id, mediaId: media.id, model: body.model, createdAt: Date.now(), cancelled: false };
+    const job: MockJob = { id, mediaId, uploadId, model: body.model, createdAt: Date.now(), cancelled: false };
     jobs.set(id, job);
     await delay(160);
     return HttpResponse.json(jobView(job));
@@ -74,9 +127,14 @@ export const editorHandlers = [
   http.get('/api/v2/editor/jobs/:id/result', ({ params }) => {
     const job = jobs.get(String(params.id ?? ''));
     if (!job || job.cancelled || Date.now() - job.createdAt < 1500) return err(404, 'NOT_FOUND', '修复结果不存在或已过期');
+    if (job.uploadId) {
+      const upload = uploads.get(job.uploadId);
+      if (!upload) return err(404, 'NOT_FOUND', '上传已过期');
+      // 外部图片的参考结果直接返回原图；界面负责展示“未导入”的结果状态。
+      return new HttpResponse(upload.bytes, { headers: { 'content-type': upload.mime } });
+    }
     const media = db.media.find((item) => item.id === job.mediaId);
     if (!media) return err(404, 'NOT_FOUND', '原图已不存在');
-    // 参考结果：原图叠一块半透明修复区域，便于区分原图与结果。
     const svg = svgFor(media, 4200).replace('</svg>',
       '<rect x="26%" y="32%" width="38%" height="28%" rx="18" fill="#62c08f" opacity=".28"/>'
       + '<text x="45%" y="48%" font-family="sans-serif" font-size="48" fill="#ffffff" opacity=".62" text-anchor="middle">修复预览</text></svg>');
@@ -86,7 +144,7 @@ export const editorHandlers = [
     const job = jobs.get(String(params.id ?? ''));
     if (!job) return err(404, 'NOT_FOUND', '修复作业不存在');
     if (job.cancelled || Date.now() - job.createdAt < 1500) return err(409, 'OPERATION_FAILED', '修复结果尚未就绪');
-    const media = db.media.find((item) => item.id === job.mediaId);
+    const media = job.mediaId ? db.media.find((item) => item.id === job.mediaId) : undefined;
     if (!media) return err(404, 'NOT_FOUND', '原图已不存在');
     let body: { name?: string } = {};
     try { body = await request.json() as typeof body; } catch { return err(400, 'VALIDATION', '提交的内容不符合要求'); }
@@ -96,5 +154,15 @@ export const editorHandlers = [
     db.media.push(copy);
     await delay(240);
     return HttpResponse.json({ status: 'saved', mediaId: copy.id, name, folder: copy.folder });
+  }),
+  http.post('/api/v2/editor/jobs/:id/import', async ({ params, request }) => {
+    const job = jobs.get(String(params.id ?? ''));
+    if (!job) return err(404, 'NOT_FOUND', '修复作业不存在');
+    if (job.cancelled || Date.now() - job.createdAt < 1500) return err(409, 'OPERATION_FAILED', '修复结果尚未就绪');
+    let body: { libraryId?: string; folder?: string; name?: string; operationId?: string } = {};
+    try { body = await request.json() as typeof body; } catch { return err(400, 'VALIDATION', '提交的内容不符合要求'); }
+    if (!body.libraryId || !body.name || !body.operationId) return err(400, 'VALIDATION', '提交的内容不符合要求');
+    await delay(320);
+    return HttpResponse.json({ status: 'saved', mediaId: `mock-import-${++seq}`, name: body.name, folder: body.folder ?? '' });
   }),
 ];

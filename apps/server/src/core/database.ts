@@ -689,6 +689,30 @@ export function openDatabase(filename: string, options: { readonly?: boolean; bo
         );
         CREATE INDEX IF NOT EXISTS editor_jobs_user ON editor_jobs(user_id, created_at DESC);
         CREATE INDEX IF NOT EXISTS editor_jobs_expiry ON editor_jobs(expires_at)`);
+        const editorJobColumns = new Set((db.pragma('table_info(editor_jobs)') as { name: string }[]).map((column) => column.name));
+        if (!editorJobColumns.has('result_state')) db.exec("ALTER TABLE editor_jobs ADD COLUMN result_state TEXT NOT NULL DEFAULT 'ready'");
+        // 外部修复暂存与导入记录为增量表，旧版仍可打开数据库。
+        db.exec(`CREATE TABLE IF NOT EXISTS editor_uploads (
+          id TEXT PRIMARY KEY, user_id TEXT NOT NULL, name TEXT NOT NULL, mime TEXT NOT NULL,
+          width INTEGER NOT NULL, height INTEGER NOT NULL, size INTEGER NOT NULL,
+          created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, state TEXT NOT NULL DEFAULT 'ready'
+        );
+        CREATE INDEX IF NOT EXISTS editor_uploads_expiry ON editor_uploads(expires_at);
+        CREATE TABLE IF NOT EXISTS editor_imports (
+          operation_id TEXT PRIMARY KEY, user_id TEXT NOT NULL, job_id TEXT NOT NULL,
+          library_id TEXT NOT NULL, folder TEXT NOT NULL, requested_name TEXT NOT NULL,
+          final_name TEXT, stage_ready INTEGER NOT NULL DEFAULT 0, stage_dev TEXT, stage_ino TEXT, stage_name TEXT, parent_dev TEXT, parent_ino TEXT, owner TEXT, lease_until INTEGER, status TEXT NOT NULL DEFAULT 'pending',
+          media_id TEXT, created_at INTEGER NOT NULL
+        )`);
+        db.exec("CREATE UNIQUE INDEX IF NOT EXISTS editor_imports_target ON editor_imports(library_id,folder,final_name) WHERE status='pending' AND final_name IS NOT NULL");
+        db.exec(`CREATE TABLE IF NOT EXISTS editor_import_stage_gc (
+          stage_name TEXT PRIMARY KEY, operation_id TEXT NOT NULL, library_id TEXT NOT NULL, folder TEXT NOT NULL,
+          parent_dev TEXT, parent_ino TEXT, stage_dev TEXT, stage_ino TEXT, created_at INTEGER NOT NULL
+        )`);
+        const uploadColumns = new Set((db.pragma('table_info(editor_uploads)') as { name: string }[]).map((column) => column.name));
+        if (!uploadColumns.has('state')) db.exec("ALTER TABLE editor_uploads ADD COLUMN state TEXT NOT NULL DEFAULT 'ready'");
+        const importColumns = new Set((db.pragma('table_info(editor_imports)') as { name: string }[]).map((column) => column.name));
+        for (const name of ['stage_dev', 'stage_ino', 'stage_name', 'parent_dev', 'parent_ino', 'owner', 'lease_until']) if (!importColumns.has(name)) db.exec(`ALTER TABLE editor_imports ADD COLUMN ${name} ${name === 'lease_until' ? 'INTEGER' : 'TEXT'}`);
         // 元数据作业按媒体库认领：待处理文件在 id 上跨库交错，只靠 files_metadata 需要逐条跳过其它库的记录。
         // 纯增量索引不提升版本号，回滚到旧镜像时旧代码仍能打开数据库。
         db.exec('CREATE INDEX IF NOT EXISTS media_waiters_expiry ON media_waiters(lease_expires_at,job_id)');

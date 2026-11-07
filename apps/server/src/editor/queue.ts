@@ -12,6 +12,8 @@ import { materializeFolders } from '../worker/scan.ts';
 import { publishLibraryEvent } from '../worker/watch-events.ts';
 import { statFields } from '../watch/file-info.ts';
 import { planEditorTiles } from './tiles.ts';
+import { EditorUploads } from './uploads.ts';
+import { cleanupRetiredImport, cleanupSavedImport, importExternalResult } from './external-import.ts';
 import {
   cancelInference, probeModels, probeWrite, runInference, type EditorServiceConfig,
 } from './service.ts';
@@ -21,7 +23,7 @@ type JobRow = {
   id: string; user_id: string; media_id: string; library_id: string;
   source_size: number; source_modified: number; source_generation: number; model: string;
   status: JobStatus; progress: number; stage: string | null; error: string | null;
-  mask_path: string; result_path: string | null; result_mime: string | null; result_bytes: number | null;
+  mask_path: string; result_path: string | null; result_mime: string | null; result_bytes: number | null; result_state: string;
   created_at: number; started_at: number | null; finished_at: number | null; expires_at: number | null;
 };
 type FileRow = {
@@ -81,20 +83,27 @@ export class EditorQueue {
   private db: Database.Database;
   private cacheDir: string;
   private editorDir: string;
+  uploads: EditorUploads;
   private config: EditorServiceConfig;
   private pending: string[] = [];
   private active = new Map<string, AbortController>();
   private activeCount = 0;
   private running = new Set<Promise<void>>();
+  private imports = new Set<Promise<unknown>>();
   private closed = false;
   private timer: NodeJS.Timeout;
+  private sweepTask: Promise<void> | null = null;
+  private recoverCursor = '';
+  private cleanupCursor = '';
+  private stageCursor = '';
 
   constructor(db: Database.Database, cacheDir: string, config: EditorServiceConfig) {
     this.db = db;
     this.cacheDir = path.resolve(cacheDir);
     this.editorDir = path.join(this.cacheDir, 'editor');
     this.config = config;
-    this.timer = setInterval(() => { void this.sweep(); }, 10 * 60_000);
+    this.uploads = new EditorUploads(db, this.editorDir, config.maxImagePixels, config.jobTtlSeconds);
+    this.timer = setInterval(() => this.scheduleSweep(), 10 * 60_000);
     this.timer.unref();
   }
 
@@ -103,7 +112,11 @@ export class EditorQueue {
     // 进程重启后内存队列已丢失；把未完成作业明确标成失败，避免前端无限轮询。
     this.db.prepare("UPDATE editor_jobs SET status='failed',error='服务重启，请重新生成',finished_at=?,progress=0,stage=NULL WHERE status IN ('queued','running')")
       .run(now());
-    await this.sweep();
+    this.scheduleSweep();
+  }
+
+  private scheduleSweep(): void {
+    if (!this.closed && !this.sweepTask) this.sweepTask = this.sweep().catch(() => {}).finally(() => { this.sweepTask = null; });
   }
 
   async close(): Promise<void> {
@@ -111,7 +124,7 @@ export class EditorQueue {
     clearInterval(this.timer);
     for (const controller of this.active.values()) controller.abort();
     // 等运行中的作业收尾，避免 API 关闭后异步任务再访问已经关闭的数据库。
-    await Promise.allSettled([...this.running]);
+    await Promise.allSettled([...this.running, ...this.imports, this.uploads.close(), ...(this.sweepTask ? [this.sweepTask] : [])]);
     this.active.clear();
   }
 
@@ -147,15 +160,17 @@ export class EditorQueue {
   }
 
   async create(input: {
-    userId: string; mediaId: string; source: { size: number; modifiedAt: number; generation: number };
+    userId: string; mediaId?: string; source?: { size: number; modifiedAt: number; generation: number }; uploadId?: string;
     model: EditorModel['id']; mask: { data: string; width: number; height: number };
   }): Promise<EditorJob> {
     const models = await probeModels(this.config);
     const model = models.find((item) => item.id === input.model);
     if (!model?.available) throw new EditorError(409, 'MODEL_UNAVAILABLE', model?.reason ?? '该修复模型不可用');
-    const file = this.fileRow(input.mediaId);
+    const upload = input.uploadId ? this.uploads.get(input.uploadId, input.userId) : null;
+    const file = upload ? { id: `upload:${upload.id}`, library_id: '', media_type: 'image', width: upload.width, height: upload.height,
+      size: upload.size, modified_at: 0, cache_generation: 0, enabled: 1, missing_at_ms: null } : this.fileRow(input.mediaId ?? '');
     if (!file || !file.enabled || file.missing_at_ms !== null) throw new EditorError(404, 'NOT_FOUND', '媒体不存在或不可访问');
-    if (!sourceMatches(file, input.source)) throw new EditorError(409, 'MEDIA_CHANGED', '媒体已发生变化，请刷新后重试');
+    if (!upload && (!input.source || !sourceMatches(file, input.source))) throw new EditorError(409, 'MEDIA_CHANGED', '媒体已发生变化，请刷新后重试');
     if (file.media_type !== 'image') throw new EditorError(400, 'INVALID_MASK', '只有图片可以修复');
     if (!file.width || !file.height) throw new EditorError(409, 'INVALID_MASK', '原图尺寸未知，无法校验蒙版');
     const maxPixels = model.maxPixels && model.maxPixels >= TILE_MAX_PIXELS ? this.config.maxImagePixels
@@ -186,9 +201,16 @@ export class EditorQueue {
     const maskPath = path.join(dir, 'mask.png');
     await writeFile(maskPath, maskPng);
     try {
-      this.db.prepare(`INSERT INTO editor_jobs(id,user_id,media_id,library_id,source_size,source_modified,source_generation,model,status,progress,mask_path,created_at)
-        VALUES (?,?,?,?,?,?,?,?,'queued',0,?,?)`).run(id, input.userId, file.id, file.library_id,
-        input.source.size, input.source.modifiedAt, input.source.generation, input.model, maskPath, now());
+      this.db.transaction(() => {
+        if (upload) {
+          const changed = this.db.prepare("UPDATE editor_uploads SET expires_at=MAX(expires_at,?) WHERE id=? AND user_id=? AND state='ready' AND expires_at>?")
+            .run(now() + this.config.jobTtlSeconds, upload.id, input.userId, now());
+          if (!changed.changes) throw new EditorError(404, 'NOT_FOUND', '上传图片不存在或已过期');
+        }
+        this.db.prepare(`INSERT INTO editor_jobs(id,user_id,media_id,library_id,source_size,source_modified,source_generation,model,status,progress,mask_path,created_at)
+          VALUES (?,?,?,?,?,?,?,?,'queued',0,?,?)`).run(id, input.userId, file.id, file.library_id,
+          file.size, file.modified_at, file.cache_generation, input.model, maskPath, now());
+      }).immediate();
     } catch (error) {
       await rm(dir, { recursive: true, force: true });
       throw error;
@@ -227,17 +249,19 @@ export class EditorQueue {
     if (!started.changes) { this.active.delete(job.id); return; }
     const dir = this.jobDir(job.id);
     try {
-      const file = this.fileRow(job.media_id);
+      const upload = job.media_id.startsWith('upload:') ? this.uploads.get(job.media_id.slice(7), job.user_id, true) : null;
+      const file = upload ? { width: upload.width, height: upload.height, size: upload.size, modified_at: 0,
+        cache_generation: 0, mtime_ms: null, enabled: 1, missing_at_ms: null, root: '', relative_path: '' } : this.fileRow(job.media_id);
       if (!file || !file.enabled || file.missing_at_ms !== null) throw new EditorError(404, 'NOT_FOUND', '媒体不存在或不可访问');
       if (!sourceMatches(file, { size: job.source_size, modifiedAt: job.source_modified, generation: job.source_generation })) {
         throw new EditorError(409, 'MEDIA_CHANGED', '媒体已发生变化，请重新生成');
       }
-      const original = await secureMediaPath(file.root, file.relative_path).catch(() => { throw new EditorError(404, 'NOT_FOUND', '原图不可访问'); });
+      const original = upload ? this.uploads.sourcePath(upload.id)
+        : await secureMediaPath(file.root, file.relative_path).catch(() => { throw new EditorError(404, 'NOT_FOUND', '原图不可访问'); });
       const info = await stat(original).catch(() => { throw new EditorError(404, 'NOT_FOUND', '原图不可访问'); });
       if (!info.isFile() || info.size > MAX_IMAGE_BYTES) throw new EditorError(409, 'OPERATION_FAILED', '原图过大或不可读');
-      // 扫描后文件可能在磁盘上变化；推理前再核对一次真实大小与修改时间。
-      if (info.size !== job.source_size || Math.floor(info.mtimeMs / 1000) !== job.source_modified ||
-          (file.mtime_ms !== null && info.mtimeMs !== file.mtime_ms)) {
+      if (info.size !== job.source_size || (!upload && (Math.floor(info.mtimeMs / 1000) !== job.source_modified ||
+          (file.mtime_ms !== null && info.mtimeMs !== file.mtime_ms)))) {
         throw new EditorError(409, 'MEDIA_CHANGED', '原图已发生变化，请重新生成');
       }
       const [originalBytes, maskBytes] = await Promise.all([readFile(original), readFile(job.mask_path)]);
@@ -385,13 +409,34 @@ export class EditorQueue {
   /** 结果文件；调用方已经完成归属校验。 */
   async result(id: string, userId: string): Promise<{ path: string; mime: string; bytes: number }> {
     const row = this.owned(id, userId);
-    if (row.status !== 'succeeded' || !row.result_path || !row.result_mime || row.expires_at === null || row.expires_at < now()) {
+    if (row.status !== 'succeeded' || row.result_state !== 'ready' || !row.result_path || !row.result_mime || row.expires_at === null || row.expires_at < now()) {
       throw new EditorError(404, 'NOT_FOUND', '修复结果不存在或已过期');
     }
     if (!safeUnder(this.editorDir, row.result_path)) throw new EditorError(404, 'NOT_FOUND', '修复结果不可访问');
     const info = await stat(row.result_path).catch(() => { throw new EditorError(404, 'NOT_FOUND', '修复结果已过期'); });
     if (!info.isFile()) throw new EditorError(404, 'NOT_FOUND', '修复结果不可访问');
     return { path: row.result_path, mime: row.result_mime, bytes: info.size };
+  }
+
+  async importExternal(id: string, userId: string, body: { libraryId: string; folder: string; name: string; operationId: string }) {
+    const saved = this.db.prepare("SELECT user_id,job_id,library_id,folder,requested_name,final_name,media_id FROM editor_imports WHERE operation_id=? AND status='saved'")
+      .get(body.operationId) as { user_id: string; job_id: string; library_id: string; folder: string; requested_name: string; final_name: string; media_id: string } | undefined;
+    if (saved) {
+      if (saved.user_id !== userId || saved.job_id !== id || saved.library_id !== body.libraryId || saved.folder !== body.folder || saved.requested_name !== body.name) {
+        throw new EditorError(409, 'OPERATION_CONFLICT', '操作编号已用于其他导入');
+      }
+      return { status: 'saved' as const, mediaId: saved.media_id, name: saved.final_name, folder: saved.folder };
+    }
+    const job = this.owned(id, userId);
+    if (!job.result_path || !safeUnder(this.editorDir, job.result_path)) throw new EditorError(404, 'NOT_FOUND', '修复结果不存在');
+    if (this.closed) throw new EditorError(503, 'MODEL_UNAVAILABLE', '图像修复服务正在关闭');
+    const task = importExternalResult(this.db, userId, job, body).then(async (result) => {
+      if (result.status === 'saved') await cleanupSavedImport(this.db, body.operationId).catch(() => {});
+      return result;
+    });
+    this.imports.add(task);
+    void task.then(() => this.imports.delete(task), () => this.imports.delete(task));
+    return task;
   }
 
   async saveCopy(id: string, userId: string, body: { name: string; source: { size: number; modifiedAt: number; generation: number } }): Promise<SaveEditorCopyResult> {
@@ -476,12 +521,30 @@ export class EditorQueue {
     return { status: 'saved', mediaId: newId, name, folder };
   }
 
+  private async removeExpiredResult(id: string): Promise<boolean> {
+    const claimed = this.db.prepare(`UPDATE editor_jobs SET result_state='deleting' WHERE id=? AND result_state IN ('ready','deleting') AND NOT EXISTS
+      (SELECT 1 FROM editor_imports i WHERE i.job_id=editor_jobs.id AND i.status IN ('pending','attention'))`).run(id);
+    if (!claimed.changes) return false;
+    try { await rm(this.jobDir(id), { recursive: true, force: true }); } catch { return false; }
+    this.db.prepare("DELETE FROM editor_jobs WHERE id=? AND result_state='deleting'").run(id);
+    return true;
+  }
+
   async sweep(): Promise<void> {
-    const expired = this.db.prepare('SELECT id,mask_path,result_path FROM editor_jobs WHERE expires_at IS NOT NULL AND expires_at<?').all(now()) as { id: string; mask_path: string; result_path: string | null }[];
-    for (const row of expired) {
-      await rm(this.jobDir(row.id), { recursive: true, force: true }).catch(() => {});
-      this.db.prepare('DELETE FROM editor_jobs WHERE id=?').run(row.id);
-    }
+    await this.uploads.sweep();
+    const recover = this.db.prepare("SELECT operation_id,user_id,job_id,library_id,folder,requested_name FROM editor_imports WHERE status='pending' AND operation_id>? ORDER BY operation_id LIMIT 20").all(this.recoverCursor) as
+      { operation_id: string; user_id: string; job_id: string; library_id: string; folder: string; requested_name: string }[];
+    this.recoverCursor = recover.at(-1)?.operation_id ?? '';
+    for (const row of recover) await this.importExternal(row.job_id, row.user_id, { libraryId: row.library_id, folder: row.folder, name: row.requested_name, operationId: row.operation_id }).catch(() => {});
+    const cleanup = this.db.prepare("SELECT operation_id FROM editor_imports WHERE status='saved' AND stage_name IS NOT NULL AND operation_id>? ORDER BY operation_id LIMIT 20").all(this.cleanupCursor) as { operation_id: string }[];
+    this.cleanupCursor = cleanup.at(-1)?.operation_id ?? '';
+    for (const row of cleanup) await cleanupSavedImport(this.db, row.operation_id).catch(() => {});
+    const stages = this.db.prepare('SELECT stage_name FROM editor_import_stage_gc WHERE stage_name>? ORDER BY stage_name LIMIT 20').all(this.stageCursor) as { stage_name: string }[];
+    this.stageCursor = stages.at(-1)?.stage_name ?? '';
+    for (const row of stages) await cleanupRetiredImport(this.db, row.stage_name).catch(() => {});
+
+    const expired = this.db.prepare("SELECT id,mask_path,result_path FROM editor_jobs j WHERE expires_at IS NOT NULL AND (expires_at<? OR result_state='deleting') AND NOT EXISTS (SELECT 1 FROM editor_imports i WHERE i.job_id=j.id AND i.status IN ('pending','attention'))").all(now()) as { id: string; mask_path: string; result_path: string | null }[];
+    for (const row of expired) await this.removeExpiredResult(row.id);
     const stale = this.db.prepare("SELECT id FROM editor_jobs WHERE status IN ('failed','cancelled') AND finished_at IS NOT NULL AND finished_at<?").all(now() - 86_400) as { id: string }[];
     for (const row of stale) {
       await rm(this.jobDir(row.id), { recursive: true, force: true }).catch(() => {});
@@ -491,12 +554,10 @@ export class EditorQueue {
     const total = (this.db.prepare("SELECT COALESCE(sum(result_bytes),0) AS n FROM editor_jobs WHERE status='succeeded'").get() as { n: number }).n;
     if (total <= RESULT_BUDGET_BYTES) return;
     let over = total - RESULT_BUDGET_BYTES;
-    const rows = this.db.prepare("SELECT id,result_bytes FROM editor_jobs WHERE status='succeeded' ORDER BY created_at ASC LIMIT 200").all() as { id: string; result_bytes: number | null }[];
+    const rows = this.db.prepare("SELECT id,result_bytes FROM editor_jobs j WHERE status='succeeded' AND NOT EXISTS (SELECT 1 FROM editor_imports i WHERE i.job_id=j.id AND i.status IN ('pending','attention')) ORDER BY created_at ASC LIMIT 200").all() as { id: string; result_bytes: number | null }[];
     for (const row of rows) {
       if (over <= 0) break;
-      await rm(this.jobDir(row.id), { recursive: true, force: true }).catch(() => {});
-      this.db.prepare('DELETE FROM editor_jobs WHERE id=?').run(row.id);
-      over -= row.result_bytes ?? 0;
+      if (await this.removeExpiredResult(row.id)) over -= row.result_bytes ?? 0;
     }
   }
 }
