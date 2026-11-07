@@ -50,6 +50,25 @@ class Tests(unittest.TestCase):
                 wrong = {'image': files['image'], 'mask': ('mask.png', png(mask[:8]), 'image/png')}
                 self.assertEqual(client.post('/v1/inpaint', data={'model': 'migan', 'jobId': 'job-2'}, files=wrong, headers=headers).status_code, 400)
 
+    def test_transparency_and_concurrent_admission(self):
+        image = np.full((16, 16, 4), 60, dtype=np.uint8)
+        image[:, :, 3] = np.arange(16, dtype=np.uint8)[None, :] * 16
+        mask = np.zeros((16, 16), dtype=np.uint8); mask[4:12, 4:12] = 255
+        with patch.object(service, 'TOKEN', ''), patch.object(service, 'available', return_value=(True, None)), \
+             patch.object(service, 'run_serial', side_effect=lambda _model, source, _mask: source):
+            with TestClient(service.app) as client:
+                files = {'image': ('image.png', png(image), 'image/png'), 'mask': ('mask.png', png(mask), 'image/png')}
+                response = client.post('/v1/inpaint', data={'model': 'migan', 'jobId': 'alpha'}, files=files)
+                self.assertEqual(response.status_code, 200, response.text)
+                result = np.asarray(Image.open(io.BytesIO(response.content)).convert('RGBA'))
+                np.testing.assert_array_equal(result, image)
+                service.lane = service.asyncio.Semaphore(0)
+                try:
+                    response = client.post('/v1/inpaint', data={'model': 'migan', 'jobId': 'busy'}, files=files)
+                    self.assertEqual(response.status_code, 429, response.text)
+                finally:
+                    service.lane = service.asyncio.Semaphore(1)
+
 
 if __name__ == '__main__':
     unittest.main()
