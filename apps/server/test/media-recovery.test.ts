@@ -89,6 +89,25 @@ test('可宽松解码的截断 JPEG 能生成缩略图，原文件保持不变',
   } finally { db.close(); await rm(root, { recursive: true, force: true }); await rm(cache, { recursive: true, force: true }); }
 });
 
+test('多个截断 JPEG 并发恢复时保留原图并发布缩略图', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'luvia-recovery-parallel-'));
+  const cache = await mkdtemp(path.join(tmpdir(), 'luvia-recovery-cache-'));
+  const db = openDatabase(':memory:');
+  try {
+    const full = await sharp({ create: { width: 512, height: 384, channels: 3, background: '#8456ba' } }).jpeg().toBuffer();
+    const truncated = full.subarray(0, full.length - 2);
+    await Promise.all(Array.from({ length: 24 }, (_, i) => writeFile(path.join(root, `${i}.jpg`), truncated)));
+    db.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib','测试',?)").run(root);
+    await scanLibrary(db, { id: 'lib', root }, { allowedRoots: [root] });
+    const rows = db.prepare('SELECT id,name,size,modified_at,cache_generation FROM files').all() as { id: string; name: string; size: number; modified_at: number; cache_generation: number }[];
+    const variant = { kind: 'thumb', size: 's' } as const;
+    await Promise.all(rows.map((row) => generateMediaCache(db, { mediaId: row.id, sourceSize: row.size, sourceModified: row.modified_at, sourceGeneration: row.cache_generation, variant },
+      { owner: 'test', cacheDir: cache, allowedRoots: [root], assertLease: () => {} })));
+    assert.equal((db.prepare('SELECT count(*) AS n FROM cache_entries').get() as { n: number }).n, 24);
+    assert.deepEqual(await readFile(path.join(root, rows[0]!.name)), truncated);
+  } finally { db.close(); await rm(root, { recursive: true, force: true }); await rm(cache, { recursive: true, force: true }); }
+});
+
 test('无法解码的图片报告可理解的失败原因，且不发布缓存', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'luvia-recovery-empty-'));
   const cache = await mkdtemp(path.join(tmpdir(), 'luvia-recovery-cache-'));
