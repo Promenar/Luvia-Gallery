@@ -48,7 +48,6 @@ export function enqueueMetadata(db: Database.Database, libraryId: string) {
   const result = db.prepare("INSERT OR IGNORE INTO jobs(id,type,label,status,trigger,payload,created_at,dedupe_key) VALUES (?,'metadata','提取元数据','queued','system',?,?,?)")
     .run(id, JSON.stringify({ libraryId }), now(), `metadata:${libraryId}`);
   if (result.changes) publishJob(db, id);
-  else db.prepare("UPDATE jobs SET payload=json_set(payload,'$.deferredScan',json('true')) WHERE dedupe_key=? AND status IN ('queued','running','paused') AND json_extract(payload,'$.recovery')=1").run(`metadata:${libraryId}`);
 }
 function enqueuePreviews(db: Database.Database, libraryId?: string | null) {
   if (!readSettings(db).previews.enabled) return;
@@ -153,10 +152,8 @@ export async function runNextJob(db: Database.Database, options: WorkerOptions):
       const result = await processMetadataBatch(db, job, { owner: options.owner, allowedRoots: options.allowedRoots, libraryId: payload.libraryId, recoveryIds: payload.recoveryIds, assertLease, signal: controller.signal });
       if (result.complete) {
         db.transaction(() => {
-          const deferredScan = payload.recovery && !!db.prepare("SELECT 1 FROM jobs WHERE id=? AND json_extract(payload,'$.deferredScan')=1").get(job.id);
           if (!queue.finish(job.id, result.counts)) throw new Error('作业租约已失效');
           if (!payload.recovery) enqueuePreviews(db, payload.libraryId);
-          else if (deferredScan && payload.libraryId) enqueueMetadata(db, payload.libraryId);
         }).immediate();
       } else if (!queue.release(job.id)) throw new Error('作业租约已失效');
     } else if (job.type === 'previews' && payload.hlsSessionId) {
