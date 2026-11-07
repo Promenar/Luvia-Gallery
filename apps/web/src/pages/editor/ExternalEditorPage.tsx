@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { useNavigate } from '@tanstack/react-router';
+import { useNavigate, useSearch } from '@tanstack/react-router';
 import { Folder as FolderIcon, FolderInput, ImagePlus, RefreshCw, Upload, X } from 'lucide-react';
 import { toast } from 'sonner';
-import type { EditorModelId, FolderListing } from '@luvia/contracts';
+import type { EditorJob, EditorModelId, FolderListing } from '@luvia/contracts';
 import { ApiError } from '@/lib/api';
 import { cn } from '@/lib/cn';
 import { q, queryClient } from '@/lib/query';
@@ -16,6 +16,7 @@ import { errMsg, formatWhen } from '@/pages/admin/format';
 import { importExternalResult, uploadExternalImage, type ExternalImportResult, type ExternalUpload } from './external-api';
 import { defaultImportName, folderProblem, isImageFile, normalizeFolder } from './format';
 import { useExternalJob } from './useExternalJob';
+import { BatchAutomationPanel } from './BatchAutomation';
 import './editor-page.css';
 
 function FolderPickerDialog({ library, initialPath, onClose, onPick }: {
@@ -82,6 +83,8 @@ function FolderPickerDialog({ library, initialPath, onClose, onPick }: {
 export default function ExternalEditorPage() {
   const isAdmin = useIsAdmin();
   const navigate = useNavigate();
+  const search = useSearch({ strict: false }) as { tab?: 'single' | 'batches' };
+  const tab = search.tab ?? 'single';
   const caps = useQuery({ ...q('editorCapabilities'), enabled: isAdmin });
   const librariesQuery = useQuery({ ...q('listLibraries'), enabled: isAdmin });
   const libraries = (librariesQuery.data?.libraries ?? []).filter((library) => library.enabled);
@@ -103,6 +106,7 @@ export default function ExternalEditorPage() {
   const [brush, setBrush] = useState(18);
   const [erase, setErase] = useState(false);
   const [hasMask, setHasMask] = useState(false);
+  const [adjustBase, setAdjustBase] = useState<EditorJob | null>(null);
   const [comparing, setComparing] = useState(false);
   const maskRef = useRef<MaskCanvasHandle>(null);
   const editor = useExternalJob();
@@ -121,13 +125,16 @@ export default function ExternalEditorPage() {
   const stageRef = useRef<HTMLDivElement>(null);
   const [stageBox, setStageBox] = useState({ w: 0, h: 0 });
 
-  const resultUrl = editor.job?.status === 'succeeded' ? editor.job.resultUrl : null;
+  const resultUrl = !adjustBase && editor.job?.status === 'succeeded' ? editor.job.resultUrl : null;
+  const autoModel = models.find((item) => item.id === 'slbr' && item.available && item.features.includes('detect'));
   const library = libraries.find((item) => item.id === libraryId) ?? null;
   const normalizedFolder = normalizeFolder(folder);
   const folderError = folderProblem(normalizedFolder);
   const trimmedName = name.trim();
   const nameError = !trimmedName ? '请输入文件名' : /[\\/\0]/.test(trimmedName) ? '文件名不能包含路径分隔符' : null;
   const uploadExpired = upload ? Date.parse(upload.expiresAt) <= Date.now() : false;
+  const canAuto = !!upload && !uploadExpired && !!autoModel &&
+    (!autoModel.maxPixels || upload.width * upload.height <= autoModel.maxPixels);
   const jobError = editor.createError ?? editor.queryError ?? editor.job?.error ?? null;
   const canGenerate = !!upload && !uploadExpired && !!maskLimit && hasMask && !editor.busy;
   const generateHint = !upload ? null
@@ -189,6 +196,7 @@ export default function ExternalEditorPage() {
     setUploadProgress(0);
     setUploadError(null);
     setHasMask(false);
+    setAdjustBase(null);
     setComparing(false);
     setImportResult(null);
     setImportOpen(false);
@@ -212,6 +220,7 @@ export default function ExternalEditorPage() {
     setUpload(null);
     setFileSize(file.size);
     setHasMask(false);
+    setAdjustBase(null);
     setComparing(false);
     setImportResult(null);
     setImportOpen(false);
@@ -234,6 +243,7 @@ export default function ExternalEditorPage() {
 
   useEffect(() => {
     const onPaste = (event: ClipboardEvent) => {
+      if (tab !== 'single') return;
       const items = Array.from(event.clipboardData?.items ?? []);
       const file = items.find((item) => item.kind === 'file' && item.type.startsWith('image/'))?.getAsFile();
       if (!file) return;
@@ -242,12 +252,12 @@ export default function ExternalEditorPage() {
     };
     document.addEventListener('paste', onPaste);
     return () => document.removeEventListener('paste', onPaste);
-  }, [acceptFile]);
+  }, [acceptFile, tab]);
 
   const generate = useCallback(async () => {
     const mask = maskRef.current;
     if (!upload || !mask || !maskLimit) return;
-    const data = mask.exportPng();
+    const data = adjustBase ? mask.exportChanges() : mask.exportPng();
     if (!data) { toast.error('先涂抹要修复的区域'); return; }
     if (Math.floor((data.length * 3) / 4) > maskLimit.maxBytes) {
       toast.error('蒙版文件过大，请减少涂抹范围或换更小的笔刷');
@@ -255,11 +265,21 @@ export default function ExternalEditorPage() {
     }
     setComparing(false);
     setImportResult(null);
-    await editor.create(upload.id, model, { data, width: mask.width, height: mask.height });
-  }, [editor, maskLimit, model, upload]);
+    const created = await editor.create(upload.id, model, adjustBase
+      ? { mode: 'adjust', baseJobId: adjustBase.id, changes: { data, width: mask.width, height: mask.height } }
+      : { data, width: mask.width, height: mask.height });
+    if (created) setAdjustBase(null);
+  }, [adjustBase, editor, maskLimit, model, upload]);
+
+  const autoRepair = useCallback(async () => {
+    if (!upload) return;
+    setComparing(false); setImportResult(null); setModel('slbr');
+    await editor.create(upload.id, 'slbr', { mode: 'auto', threshold: 128 });
+  }, [editor, upload]);
 
   const resetResult = useCallback(() => {
     editor.reset();
+    setAdjustBase(null);
     setComparing(false);
     setImportResult(null);
   }, [editor]);
@@ -307,12 +327,12 @@ export default function ExternalEditorPage() {
   return (
     <div
       className="h-full overflow-y-auto"
-      onDragOver={(event) => { event.preventDefault(); if (!uploading) setDragActive(true); }}
+      onDragOver={(event) => { event.preventDefault(); if (tab === 'single' && !uploading) setDragActive(true); }}
       onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragActive(false); }}
       onDrop={(event) => {
         event.preventDefault();
         setDragActive(false);
-        if (uploading) return;
+        if (uploading || tab !== 'single') return;
         const file = Array.from(event.dataTransfer.files).find(isImageFile);
         if (file) void acceptFile(file);
         else if (event.dataTransfer.files.length) toast.error('请拖入图片文件');
@@ -337,14 +357,20 @@ export default function ExternalEditorPage() {
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2.5">
               <h1 className="m-0 text-[28px] font-semibold tracking-[-0.02em] md:text-[34px]">修复</h1>
-              <Pill tone="accent">未入库图片</Pill>
+              <Pill tone="accent">{tab === 'single' ? '未入库图片' : '批量处理'}</Pill>
             </div>
             <p className="mt-1 mb-0 max-w-[72ch] text-[13px] text-muted">
-              拖入、粘贴或选择图片，涂抹要去掉的内容；生成预览可对比，确认后导入媒体库。原图不会被修改。
+              {tab === 'single' ? '拖入、粘贴或选择图片，涂抹要去掉的内容；生成预览可对比，确认后导入媒体库。原图不会被修改。'
+                : '查看和管理批量自动修复任务，处理结果保存为新副本。'}
             </p>
+          </div>
+          <div className="flex gap-2" role="group" aria-label="修复方式">
+            <Chip variant={tab === 'single' ? 'primary' : 'outline'} onClick={() => void navigate({ to: '/editor', search: { tab: 'single' } })}>单张修复</Chip>
+            <Chip variant={tab === 'batches' ? 'primary' : 'outline'} onClick={() => void navigate({ to: '/editor', search: { tab: 'batches' } })}>批量队列</Chip>
           </div>
         </header>
 
+        {tab === 'batches' ? <BatchAutomationPanel /> : <>
         {uploadError && (
           <div role="alert" className="flex flex-wrap items-center gap-3 rounded-[var(--r2)] border border-[color-mix(in_oklab,var(--bad)_35%,transparent)] bg-[color-mix(in_oklab,var(--bad)_8%,transparent)] px-4 py-3 text-[13px]">
             <span className="min-w-0 flex-1 text-bad">{uploadError}</span>
@@ -415,6 +441,7 @@ export default function ExternalEditorPage() {
                     erase={erase}
                     active={!resultUrl && !editor.busy}
                     maxEdge={maskLimit?.maxEdge ?? 2048}
+                    baseMaskUrl={adjustBase?.maskUrl}
                     onChange={setHasMask}
                   />
                   {comparing && <span className="ue-compare">原图</span>}
@@ -431,12 +458,17 @@ export default function ExternalEditorPage() {
                 hasMask={hasMask}
                 onUndo={() => maskRef.current?.undo()}
                 onClear={() => maskRef.current?.clear()}
-                job={editor.job}
+                job={adjustBase ? null : editor.job}
                 createPending={editor.createPending}
                 error={jobError}
                 canGenerate={canGenerate}
                 generateHint={generateHint}
                 onGenerate={() => void generate()}
+                onAuto={autoModel ? () => void autoRepair() : undefined}
+                canAuto={canAuto}
+                onAdjust={editor.job?.maskUrl ? () => { setAdjustBase(editor.job); setComparing(false); } : undefined}
+                adjusting={!!adjustBase}
+                onCancelAdjust={() => setAdjustBase(null)}
                 onCancel={() => void editor.cancel()}
                 onReset={resetResult}
                 onSave={() => { setImportError(null); setImportOpen(true); }}
@@ -559,6 +591,7 @@ export default function ExternalEditorPage() {
             </aside>
           </div>
         )}
+        </>}
       </div>
 
       {folderPickerOpen && library && (

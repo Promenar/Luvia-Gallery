@@ -50,6 +50,9 @@ export const EditorJob = z.object({
   error: z.string().nullable(),
   /** 结果地址；未成功时为 null。 */
   resultUrl: z.string().nullable(),
+  /** 自动检测作业可返回蒙版和未检出状态。 */
+  maskUrl: z.string().nullable().optional(),
+  outcome: z.enum(['detected', 'no_detection']).nullable().optional(),
   createdAt: IsoDateTime,
   startedAt: IsoDateTime.nullable(),
   finishedAt: IsoDateTime.nullable(),
@@ -64,9 +67,18 @@ export const EditorMask = z.object({
 });
 export type EditorMask = z.infer<typeof EditorMask>;
 
+export const AutomaticEditorMask = z.object({
+  mode: z.literal('auto'),
+  threshold: z.number().int().min(1).max(254).default(128),
+}).strict();
+/** 修正图中红色表示增加区域、蓝色表示擦除区域；黑色区域保留原始检测结果。 */
+export const AdjustedEditorMask = z.object({ mode: z.literal('adjust'), baseJobId: z.string().min(1), changes: EditorMask }).strict();
+export const EditorMaskInput = z.union([EditorMask, AutomaticEditorMask, AdjustedEditorMask]);
+export type EditorMaskInput = z.infer<typeof EditorMaskInput>;
+
 export const CreateEditorJobBody = z.union([
-  z.object({ mediaId: z.string().min(1), source: MediaSourceVersion, model: EditorModelId, mask: EditorMask }).strict(),
-  z.object({ uploadId: z.string().min(1), model: EditorModelId, mask: EditorMask }).strict(),
+  z.object({ mediaId: z.string().min(1), source: MediaSourceVersion, model: EditorModelId, mask: EditorMaskInput }).strict(),
+  z.object({ uploadId: z.string().min(1), model: EditorModelId, mask: EditorMaskInput }).strict(),
 ]);
 export type CreateEditorJobBody = z.infer<typeof CreateEditorJobBody>;
 
@@ -86,6 +98,32 @@ export const SaveEditorCopyResult = z.object({
 export type SaveEditorCopyResult = z.infer<typeof SaveEditorCopyResult>;
 
 export const editorResultUrl = (id: string) => `/api/v2/editor/jobs/${encodeURIComponent(id)}/result`;
+export const editorMaskUrl = (id: string) => `/api/v2/editor/jobs/${encodeURIComponent(id)}/mask`;
+
+export const CreateEditorBatchBody = z.object({
+  mode: z.enum(['review', 'auto']),
+  threshold: z.number().int().min(1).max(254).default(128),
+  destination: z.object({ libraryId: z.string().min(1), folder: z.string().max(4096) }).strict(),
+  items: z.array(z.object({ mediaId: z.string().min(1), source: MediaSourceVersion }).strict()).min(1).max(1000),
+}).strict();
+export type CreateEditorBatchBody = z.infer<typeof CreateEditorBatchBody>;
+
+export const EditorBatchItem = z.object({
+  id: z.string(), mediaId: z.string(), name: z.string(),
+  status: z.enum(['pending', 'generating', 'review', 'saving', 'saved', 'skipped', 'no_detection', 'failed', 'cancelled']),
+  attempts: z.number().int().nonnegative(), jobId: z.string().nullable(), error: z.string().nullable(),
+  resultMediaId: z.string().nullable(), resultName: z.string().nullable(),
+});
+export const EditorBatch = z.object({
+  id: z.string(), mode: z.enum(['review', 'auto']), status: z.enum(['running', 'paused', 'cancelled', 'completed']),
+  threshold: z.number().int(), destination: z.object({ libraryId: z.string(), folder: z.string() }),
+  createdAt: IsoDateTime, items: z.array(EditorBatchItem),
+});
+export type EditorBatch = z.infer<typeof EditorBatch>;
+export const EditorBatchList = z.object({ batches: z.array(EditorBatch), nextCursor: z.number().int().positive().nullable() });
+export const EditorBatchActionBody = z.object({ action: z.enum(['pause', 'resume', 'cancel']) }).strict();
+export const EditorBatchItemActionBody = z.object({ action: z.enum(['approve', 'skip', 'retry', 'resolve']) }).strict();
+export const ReplaceEditorBatchJobBody = z.object({ jobId: z.string().min(1) }).strict();
 
 export const EditorUpload = z.object({
   id: z.string(), name: z.string(), width: z.number().int().positive(), height: z.number().int().positive(),

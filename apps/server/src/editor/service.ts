@@ -15,6 +15,7 @@ import type { EditorModel } from '@luvia/contracts';
  * 推理服务契约（见 docs/MEDIA_FAILURE_AND_EDITOR_DESIGN.md）：
  *   GET  {EDITOR_SERVICE_URL}/v1/models
  *   POST {EDITOR_SERVICE_URL}/v1/inpaint   multipart: model, jobId, image, mask
+ *   POST {EDITOR_SERVICE_URL}/v1/detect    multipart: jobId, image
  *   POST {EDITOR_SERVICE_URL}/v1/cancel/:jobId
  */
 
@@ -46,6 +47,8 @@ export type EditorServiceConfig = {
   jobTtlSeconds: number;
   maxConcurrency: number;
   probeTimeoutMs: number;
+  inferenceTimeoutMs: number;
+  batchPendingBytes: number;
 };
 
 const positive = (value: string | undefined, fallback: number) => {
@@ -65,11 +68,13 @@ export function editorConfig(): EditorServiceConfig {
     jobTtlSeconds: positive(process.env.EDITOR_JOB_TTL_SECONDS, 3600),
     maxConcurrency: positive(process.env.EDITOR_MAX_CONCURRENCY, 1),
     probeTimeoutMs: positive(process.env.EDITOR_PROBE_TIMEOUT_MS, 2500),
+    inferenceTimeoutMs: positive(process.env.EDITOR_INFERENCE_TIMEOUT_MS, 600_000),
+    batchPendingBytes: positive(process.env.EDITOR_BATCH_PENDING_BYTES, 2 * 1024 * 1024 * 1024),
   };
 }
 
 const unavailable = (reason: string): EditorModel[] =>
-  EDITOR_MODELS.map(({ id }) => ({ id, available: false, reason, device: null, maxPixels: null, features: id === 'slbr' ? ['mask', 'detect'] : ['mask'] }));
+  EDITOR_MODELS.map(({ id }) => ({ id, available: false, reason, device: null, maxPixels: null, features: ['mask'] }));
 
 type ProbeCache = { key: string; at: number; models: EditorModel[]; ok: boolean };
 let probeCache: ProbeCache | null = null;
@@ -84,14 +89,14 @@ async function fetchModels(config: EditorServiceConfig): Promise<EditorModel[]> 
   const byId = new Map(payload.models.map((model) => [model.id, model]));
   return EDITOR_MODELS.map(({ id }) => {
     const model = byId.get(id);
-    if (!model) return { id, available: false, reason: '推理服务未返回该模型', device: null, maxPixels: null, features: id === 'slbr' ? ['mask', 'detect'] : ['mask'] };
+    if (!model) return { id, available: false, reason: '推理服务未返回该模型', device: null, maxPixels: null, features: ['mask'] };
     return {
       id,
       available: model.available,
       reason: model.reason ?? null,
       device: model.device ?? null,
       maxPixels: model.maxPixels ?? null,
-      features: model.features ?? (id === 'slbr' ? ['mask', 'detect'] : ['mask']),
+      features: model.features ?? ['mask'],
     };
   });
 }
@@ -151,6 +156,30 @@ async function readResponseLimited(response: Response, limit: number): Promise<B
   return Buffer.concat(chunks, total);
 }
 
+/** 调用 SLBR 检测接口，返回与输入等尺寸的灰度概率蒙版。 */
+export async function runDetection(config: EditorServiceConfig, input: {
+  jobId: string; image: Buffer; signal: AbortSignal;
+}): Promise<Buffer> {
+  if (!config.url) throw new Error('未配置图像修复推理服务');
+  const boundary = `----luvia-${randomUUID()}`;
+  const body = Buffer.concat([
+    Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="jobId"\r\n\r\n${input.jobId}\r\n`),
+    Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="image"; filename="source"\r\nContent-Type: application/octet-stream\r\n\r\n`),
+    input.image,
+    Buffer.from(`\r\n--${boundary}--\r\n`),
+  ]);
+  const headers: Record<string, string> = { 'Content-Type': `multipart/form-data; boundary=${boundary}` };
+  if (config.token) headers.Authorization = `Bearer ${config.token}`;
+  const response = await fetch(`${config.url}/v1/detect`, {
+    method: 'POST', body: new Uint8Array(body), headers, signal: AbortSignal.any([input.signal, AbortSignal.timeout(config.inferenceTimeoutMs)]),
+  });
+  if (!response.ok) throw new Error(`水印检测服务返回 ${response.status}`);
+  if (!(response.headers.get('content-type') ?? '').toLowerCase().startsWith('image/png')) throw new Error('检测蒙版格式不正确');
+  const data = await readResponseLimited(response, config.maxResultBytes);
+  if (!data.length) throw new Error('检测蒙版为空');
+  return data;
+}
+
 /** 把原图与蒙版交给推理服务。signal 用于取消；响应不是图片或超限时拒绝。 */
 export async function runInference(config: EditorServiceConfig, input: {
   jobId: string; model: string; image: Buffer; mask: Buffer; signal: AbortSignal;
@@ -173,7 +202,8 @@ export async function runInference(config: EditorServiceConfig, input: {
   const headers: Record<string, string> = { 'Content-Type': `multipart/form-data; boundary=${boundary}` };
   if (config.token) headers.Authorization = `Bearer ${config.token}`;
   const response = await fetch(`${config.url}/v1/inpaint`, {
-    method: 'POST', body: new Uint8Array(Buffer.concat(chunks)), headers, signal: input.signal,
+    method: 'POST', body: new Uint8Array(Buffer.concat(chunks)), headers,
+    signal: AbortSignal.any([input.signal, AbortSignal.timeout(config.inferenceTimeoutMs)]),
   });
   if (!response.ok) {
     const text = (await readResponseLimited(response, 8192).catch(() => Buffer.alloc(0))).toString('utf8').slice(0, 400);

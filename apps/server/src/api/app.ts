@@ -38,6 +38,7 @@ import { cacheKey, cachePath, enqueueMediaTask, releaseMediaWaiter } from '../co
 import { MediaIgnoredError, mediaIgnored } from '../core/media-failures.ts';
 import { deleteMediaFile, MediaDeleteError } from '../core/media-delete.ts';
 import { createEditorQueue, EditorError, type EditorQueue } from '../editor/queue.ts';
+import { EditorBatches } from '../editor/batches.ts';
 import { editorConfig } from '../editor/service.ts';
 import { extractMetadataNow } from '../worker/metadata.ts';
 import { listLibraryChanges } from '../core/library-changes.ts';
@@ -655,10 +656,13 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
   }
   const cacheDir = options.cacheDir ?? path.resolve(process.env.CACHE_DIR ?? 'cache');
   // 编辑器不可用不应阻断浏览；缓存目录不可写或初始化失败时，能力接口会返回明确原因。
+  const editorSettings = editorConfig();
   let editorQueue: EditorQueue | null = null;
-  try { editorQueue = await createEditorQueue(db, cacheDir, editorConfig()); } catch { editorQueue = null; }
-  app.addHook('onClose', async () => { await editorQueue?.close(); });
+  try { editorQueue = await createEditorQueue(db, cacheDir, editorSettings); } catch { editorQueue = null; }
+  const editorBatches = editorQueue ? new EditorBatches(db, editorQueue, editorSettings) : null;
+  app.addHook('onClose', async () => { await editorBatches?.close(); await editorQueue?.close(); });
   const requireEditor = (): EditorQueue => editorQueue ?? fail(503, 'MODEL_UNAVAILABLE', '图像修复服务暂不可用');
+  const requireEditorBatches = (): EditorBatches => editorBatches ?? fail(503, 'MODEL_UNAVAILABLE', '批量修复服务暂不可用');
   const exists = async (filename: string) => { try { await access(filename); return true; } catch { return false; } };
   async function cachedMedia(req: FastifyRequest, reply: FastifyReply, row: BinaryRow, variant: Variant, wait: boolean, authorize?: () => unknown) {
     const filename = cachePath(cacheDir, row, variant);
@@ -1443,6 +1447,29 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     }
   });
   register('editorCapabilities', async () => requireEditor().capabilities());
+  register('createEditorBatch', async (req, _reply, body) => {
+    try { return await requireEditorBatches().create(requireUser(req).user.id, body); }
+    catch (error) { if (error instanceof EditorError) return fail(error.statusCode, error.code, error.message); throw error; }
+  });
+  register('listEditorBatches', async (req) => requireEditorBatches().list(requireUser(req).user.id, endpoints.listEditorBatches.query.parse(req.query)));
+  register('getEditorBatch', async (req) => {
+    try { return requireEditorBatches().get((req.params as { id: string }).id, requireUser(req).user.id); }
+    catch (error) { if (error instanceof EditorError) return fail(error.statusCode, error.code, error.message); throw error; }
+  });
+  register('editorBatchAction', async (req, _reply, body) => {
+    try { return await requireEditorBatches().action((req.params as { id: string }).id, requireUser(req).user.id, body.action); }
+    catch (error) { if (error instanceof EditorError) return fail(error.statusCode, error.code, error.message); throw error; }
+  });
+  register('editorBatchItemAction', async (req) => {
+    const { id, itemId, action } = req.params as { id: string; itemId: string; action: string };
+    try { return await requireEditorBatches().itemAction(id, itemId, requireUser(req).user.id, action); }
+    catch (error) { if (error instanceof EditorError) return fail(error.statusCode, error.code, error.message); throw error; }
+  });
+  register('replaceEditorBatchJob', async (req, _reply, body) => {
+    const { id, itemId } = req.params as { id: string; itemId: string };
+    try { return requireEditorBatches().replaceJob(id, itemId, requireUser(req).user.id, body.jobId); }
+    catch (error) { if (error instanceof EditorError) return fail(error.statusCode, error.code, error.message); throw error; }
+  });
   register('createEditorJob', async (req, _reply, body) => {
     const user = requireUser(req).user;
     try {
@@ -1495,12 +1522,32 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     catch (error) { if (error instanceof EditorError) return fail(error.statusCode, error.code, error.message); throw error; }
   });
   app.get('/api/v2/editor/jobs/:id/result', async (req, reply) => {
-    const user = requireUser(req).user;
-    if (user.role !== 'admin') return fail(403, 'FORBIDDEN', '需要管理员会话');
+    const identity = identities.get(req);
+    if (!identity) return fail(401, 'UNAUTHORIZED', '请先登录');
+    if (identity.kind !== 'session' || identity.user.role !== 'admin') return fail(403, 'FORBIDDEN', '需要管理员会话');
+    const user = identity.user;
     const { id } = req.params as { id: string };
     try {
       const result = await requireEditor().result(id, user.id);
       return reply.header('Cache-Control', 'private, no-store').header('Content-Length', String(result.bytes)).type(result.mime).send(createReadStream(result.path));
+    } catch (error) {
+      if (error instanceof EditorError) return fail(error.statusCode, error.code, error.message);
+      throw error;
+    }
+  });
+  app.get('/api/v2/editor/jobs/:id/mask', async (req, reply) => {
+    const identity = identities.get(req);
+    if (!identity) return fail(401, 'UNAUTHORIZED', '请先登录');
+    if (identity.kind !== 'session' || identity.user.role !== 'admin') return fail(403, 'FORBIDDEN', '需要管理员会话');
+    const user = identity.user;
+    const { id } = req.params as { id: string };
+    try {
+      const mask = await requireEditor().mask(id, user.id);
+      if ((req.query as { preview?: string }).preview === '1') {
+        const preview = await sharp(mask.path).resize({ width: 2048, height: 2048, fit: 'inside', withoutEnlargement: true }).png().toBuffer();
+        return reply.header('Cache-Control', 'private, no-store').type('image/png').send(preview);
+      }
+      return reply.header('Cache-Control', 'private, no-store').header('Content-Length', String(mask.bytes)).type('image/png').send(createReadStream(mask.path));
     } catch (error) {
       if (error instanceof EditorError) return fail(error.statusCode, error.code, error.message);
       throw error;

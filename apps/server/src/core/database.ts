@@ -691,6 +691,25 @@ export function openDatabase(filename: string, options: { readonly?: boolean; bo
         CREATE INDEX IF NOT EXISTS editor_jobs_expiry ON editor_jobs(expires_at)`);
         const editorJobColumns = new Set((db.pragma('table_info(editor_jobs)') as { name: string }[]).map((column) => column.name));
         if (!editorJobColumns.has('result_state')) db.exec("ALTER TABLE editor_jobs ADD COLUMN result_state TEXT NOT NULL DEFAULT 'ready'");
+        if (!editorJobColumns.has('mask_mode')) db.exec("ALTER TABLE editor_jobs ADD COLUMN mask_mode TEXT NOT NULL DEFAULT 'manual'");
+        if (!editorJobColumns.has('mask_threshold')) db.exec('ALTER TABLE editor_jobs ADD COLUMN mask_threshold INTEGER');
+        if (!editorJobColumns.has('outcome')) db.exec('ALTER TABLE editor_jobs ADD COLUMN outcome TEXT');
+        if (!editorJobColumns.has('mask_bytes')) db.exec('ALTER TABLE editor_jobs ADD COLUMN mask_bytes INTEGER NOT NULL DEFAULT 0');
+        db.exec(`CREATE TABLE IF NOT EXISTS editor_batches (
+          id TEXT PRIMARY KEY, user_id TEXT NOT NULL, mode TEXT NOT NULL, status TEXT NOT NULL,
+          threshold INTEGER NOT NULL, library_id TEXT NOT NULL, folder TEXT NOT NULL, created_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS editor_batches_user ON editor_batches(user_id,created_at DESC);
+        CREATE TABLE IF NOT EXISTS editor_batch_items (
+          id TEXT PRIMARY KEY, batch_id TEXT NOT NULL, position INTEGER NOT NULL, media_id TEXT NOT NULL,
+          source_size INTEGER NOT NULL, source_modified INTEGER NOT NULL, source_generation INTEGER NOT NULL,
+          source_name TEXT NOT NULL, status TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
+          job_id TEXT, operation_id TEXT NOT NULL, result_media_id TEXT, result_name TEXT, error TEXT,
+          next_attempt_at INTEGER NOT NULL DEFAULT 0,
+          UNIQUE(batch_id,media_id), FOREIGN KEY(batch_id) REFERENCES editor_batches(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS editor_batch_items_work ON editor_batch_items(batch_id,status,position);
+        CREATE INDEX IF NOT EXISTS editor_batch_items_job ON editor_batch_items(job_id,status)`);
         // 外部修复暂存与导入记录为增量表，旧版仍可打开数据库。
         db.exec(`CREATE TABLE IF NOT EXISTS editor_uploads (
           id TEXT PRIMARY KEY, user_id TEXT NOT NULL, name TEXT NOT NULL, mime TEXT NOT NULL,

@@ -1,0 +1,2272 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>SLBR 自动修复 · 交互原型</title>
+<style>
+/* =========================================================
+   Luvia Gallery · SLBR 自动修复交互原型
+   视觉令牌沿用 apps/web/src/styles/app.css；
+   版面与组件参考 pages/editor/editor-page.css 与 pages/admin/ui.tsx。
+   仅使用示例数据，不发起任何网络请求。
+   ========================================================= */
+
+:root {
+  --bg: #121213; --surface: #19191b; --raised: #212124; --sunken: #0c0c0d;
+  --fg: #f1f1ef; --fg-2: #c4c4c1; --muted: #8d8d8a;
+  --line: rgb(255 255 255 / .08); --line-2: rgb(255 255 255 / .15);
+  --accent: #bfbfbf; --accent-fg: #111; --accent-soft: rgb(191 191 191 / .16);
+  --ok: #62c08f; --warn: #e0a948; --bad: #ec6a5e;
+  --r1: 6px; --r2: 10px; --r3: 16px;
+  --font: "Geist Variable", "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", "Microsoft YaHei", system-ui, sans-serif;
+  color-scheme: dark;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0; min-height: 100dvh; background: var(--bg); color: var(--fg);
+  font-family: var(--font); font-size: 14px; line-height: 1.5;
+  -webkit-font-smoothing: antialiased; font-variant-numeric: tabular-nums;
+}
+h1, h2, h3, p, dl, dd, dt { margin: 0; }
+button, input, select { font: inherit; color: inherit; }
+button { background: none; border: 0; padding: 0; cursor: pointer; }
+svg { display: block; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+::selection { background: var(--accent-soft); }
+body.has-modal { overflow: hidden; }
+
+.ico { width: 16px; height: 16px; flex: none; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+
+/* ---------- 外壳 ---------- */
+.app { display: grid; grid-template-columns: 236px minmax(0, 1fr); min-height: 100dvh; }
+
+.rail {
+  position: sticky; top: 0; z-index: 30; display: flex; flex-direction: column; gap: 24px;
+  height: 100dvh; padding: 20px 14px;
+  border-right: 1px solid var(--line);
+  background: color-mix(in oklab, var(--surface) 45%, var(--bg));
+}
+.brand { display: flex; align-items: center; gap: 10px; padding: 2px 8px; }
+.brand-mark {
+  position: relative; display: grid; place-items: center; width: 30px; height: 30px; border-radius: 9px;
+  background: linear-gradient(145deg, #e9e9e6, #9a9a96 52%, #4c4c49);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / .45), 0 6px 18px -8px rgb(0 0 0 / .8);
+}
+.brand-mark::before {
+  content: ""; width: 12px; height: 12px; border-radius: 50%;
+  border: 3px solid #161617; border-right-color: transparent; transform: rotate(-28deg);
+}
+.brand-word { font-size: 14px; font-weight: 600; letter-spacing: .16em; line-height: 1.1; }
+.brand-word small { display: block; margin-top: 3px; font-size: 8.5px; font-weight: 500; letter-spacing: .28em; color: var(--muted); }
+
+.rail-group { display: grid; gap: 7px; }
+.rail-label { padding: 0 10px; font-size: 10.5px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
+.nav { display: grid; gap: 3px; }
+.nav-item {
+  display: flex; align-items: center; gap: 9px; height: 38px; min-width: 0; padding: 0 10px;
+  border-radius: var(--r2); color: var(--fg-2); font-size: 13px; text-align: left;
+  transition: background .16s ease, color .16s ease;
+}
+.nav-item:hover { background: var(--accent-soft); color: var(--fg); }
+.nav-item.is-active { background: var(--accent-soft); color: var(--fg); }
+.nav-item .ico { color: var(--muted); }
+.nav-item.is-active .ico { color: var(--fg); }
+.nav-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nav-label .sm { display: none; }
+.nav-count {
+  display: grid; place-items: center; margin-left: auto; min-width: 18px; height: 18px; padding: 0 5px;
+  border-radius: 999px; background: color-mix(in oklab, var(--warn) 20%, transparent);
+  color: var(--warn); font-size: 10.5px; font-weight: 600;
+}
+.nav-live { margin-left: auto; width: 7px; height: 7px; border-radius: 50%; background: var(--ok); }
+
+.rail-card {
+  margin-top: auto; padding: 13px 14px; border: 1px solid var(--line);
+  border-radius: var(--r2); background: var(--sunken);
+}
+.rail-status { display: flex; align-items: center; gap: 7px; font-size: 12.5px; }
+.rail-status b { font-weight: 600; }
+.rail-card > p { margin-top: 3px; font-size: 11.5px; color: var(--muted); }
+.rail-rows { display: grid; gap: 6px; margin-top: 11px; padding-top: 11px; border-top: 1px solid var(--line); }
+.rail-rows > div { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; font-size: 11.5px; color: var(--muted); }
+.rail-rows b { font-weight: 500; color: var(--fg-2); }
+.rail-note { padding: 0 10px; font-size: 10.5px; line-height: 1.5; color: var(--muted); }
+
+.live { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--tone, var(--ok)); animation: pulse 2s infinite; }
+@keyframes pulse {
+  0% { box-shadow: 0 0 0 0 color-mix(in oklab, var(--tone, var(--ok)) 60%, transparent); }
+  70% { box-shadow: 0 0 0 8px transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+
+.main { min-width: 0; }
+.page { max-width: 1220px; margin: 0 auto; padding: 34px 40px 88px; }
+
+/* ---------- 页头 ---------- */
+.page-head { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 18px; margin-bottom: 22px; }
+.page-title { min-width: 0; flex: 1 1 320px; }
+.title-line { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.title-line h1 { font-size: 32px; font-weight: 600; letter-spacing: -.025em; line-height: 1.15; }
+.page-desc { max-width: 72ch; margin-top: 7px; font-size: 13px; line-height: 1.6; color: var(--muted); }
+.page-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
+/* ---------- 基础组件 ---------- */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  height: 34px; padding: 0 13px; border: 1px solid var(--line-2); border-radius: 999px;
+  background: transparent; color: var(--fg-2); font-size: 13px; font-weight: 500;
+  white-space: nowrap; transition: background .16s ease, color .16s ease, border-color .16s ease, filter .16s ease;
+}
+.btn:hover { background: var(--accent-soft); color: var(--fg); }
+.btn.primary { border-color: transparent; background: var(--accent); color: var(--accent-fg); font-weight: 600; }
+.btn.primary:hover { background: var(--accent); filter: brightness(1.08); }
+.btn.danger { border-color: color-mix(in oklab, var(--bad) 45%, transparent); color: var(--bad); }
+.btn.danger:hover { background: color-mix(in oklab, var(--bad) 14%, transparent); }
+.btn.ghost { border-color: transparent; color: var(--fg-2); }
+.btn.sm { height: 30px; padding: 0 11px; font-size: 12.5px; }
+.btn.sm .ico { width: 15px; height: 15px; }
+.btn.block { width: 100%; }
+.btn:disabled { opacity: .45; pointer-events: none; }
+
+.pill {
+  display: inline-flex; align-items: center; gap: 4px; padding: 3px 9px;
+  border-radius: 999px; font-size: 11.5px; font-weight: 600; line-height: 1.25; white-space: nowrap;
+}
+.pill.accent { background: var(--accent-soft); color: var(--fg); }
+.pill.ok { background: color-mix(in oklab, var(--ok) 18%, transparent); color: var(--ok); }
+.pill.warn { background: color-mix(in oklab, var(--warn) 18%, transparent); color: var(--warn); }
+.pill.bad { background: color-mix(in oklab, var(--bad) 18%, transparent); color: var(--bad); }
+.pill.muted { background: var(--line); color: var(--muted); }
+.pill .live { width: 6px; height: 6px; }
+
+.card { min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: var(--r3); background: var(--surface); }
+.card-head {
+  display: flex; flex-wrap: wrap; align-items: flex-start; gap: 12px;
+  padding: 15px 18px; border-bottom: 1px solid var(--line);
+}
+.card-head > div { min-width: 0; flex: 1 1 220px; }
+.card-head h2 { font-size: 15px; font-weight: 600; }
+.card-head p { margin-top: 3px; max-width: 72ch; font-size: 12.5px; color: var(--muted); }
+.card-body { display: grid; gap: 14px; padding: 16px 18px 18px; }
+
+.stack { display: grid; gap: 16px; }
+.btn-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.hint { font-size: 12px; line-height: 1.55; color: var(--muted); }
+.hint strong { color: var(--fg-2); font-weight: 500; }
+
+.seg {
+  display: inline-grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 3px;
+  min-width: 0; padding: 3px; border: 1px solid var(--line); border-radius: calc(var(--r2) + 2px); background: var(--sunken);
+}
+.seg button {
+  height: 30px; min-width: 0; padding: 0 12px; border-radius: var(--r2);
+  background: transparent; color: var(--muted); font-size: 12.5px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: background .16s ease, color .16s ease;
+}
+.seg button:hover { color: var(--fg); }
+.seg button[aria-pressed="true"] { background: var(--raised); color: var(--fg); box-shadow: 0 1px 0 var(--line-2), 0 0 0 1px var(--line); }
+.seg.full { display: grid; width: 100%; }
+
+.bar { height: 6px; overflow: hidden; border-radius: 999px; background: var(--line); }
+.bar > i { display: block; height: 100%; border-radius: inherit; background: var(--accent); transition: width .5s cubic-bezier(.2, .8, .2, 1); }
+.bar.ok > i { background: var(--ok); }
+.bar.warn > i { background: var(--warn); }
+.bar.bad > i { background: var(--bad); }
+.bar.muted > i { background: var(--muted); }
+.bar.indeterminate > i { width: 34% !important; animation: indeterminate 1.6s ease-in-out infinite; }
+@keyframes indeterminate { 0% { transform: translateX(-110%); } 100% { transform: translateX(320%); } }
+
+.spinner { width: 16px; height: 16px; flex: none; border: 2px solid var(--line-2); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ---------- 单图布局 ---------- */
+.single-layout { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 16px; align-items: start; }
+.single-main { display: grid; gap: 10px; min-width: 0; }
+.single-side { display: grid; gap: 14px; min-width: 0; }
+
+.stage {
+  position: relative; height: min(64vh, 640px); min-height: 420px; overflow: hidden;
+  border: 1px solid var(--line); border-radius: var(--r3); background: #0b0c0e;
+  isolation: isolate;
+}
+.stage-top, .stage-bottom {
+  position: absolute; left: 12px; right: 12px; z-index: 7;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px; pointer-events: none;
+}
+.stage-top { top: 12px; }
+.stage-bottom { bottom: 12px; justify-content: space-between; }
+.stage-chip {
+  display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px;
+  background: rgb(0 0 0 / .52); border: 1px solid rgb(255 255 255 / .12);
+  color: #ececea; font-size: 11.5px; line-height: 1.35; backdrop-filter: blur(10px);
+}
+.stage-chip.dim { color: #c8c8c4; }
+.stage-chip.accent { color: #fff; border-color: color-mix(in oklab, var(--accent) 45%, transparent); }
+
+.scene-wrap, .scene-wrap > .scene { position: absolute; inset: 0; }
+.scene { position: absolute; inset: 0; overflow: hidden; background: linear-gradient(180deg, #2c3a46 0%, #5c6d72 38%, #9d8f7a 58%, #6d5c48 74%, #2f2a26 100%); }
+.scene-sky { position: absolute; inset: 0 0 44%; background: radial-gradient(120% 90% at 73% 8%, #efd9b2 0%, rgb(239 217 178 / 0) 55%), linear-gradient(180deg, #26333e, #6d7c80); }
+.scene-sun {
+  position: absolute; top: 10%; left: 61%; width: 27%; aspect-ratio: 1; border-radius: 50%;
+  background: radial-gradient(circle, #f5dfb7 0%, rgb(245 223 183 / .35) 42%, transparent 70%);
+  filter: blur(1px); opacity: .95;
+}
+.scene-ridge {
+  position: absolute; left: -5%; right: -5%; bottom: 31%; height: 37%;
+  background: linear-gradient(180deg, #46545a, #2b3439);
+  clip-path: polygon(0 68%, 12% 44%, 24% 58%, 38% 26%, 52% 50%, 63% 34%, 78% 56%, 90% 40%, 100% 58%, 100% 100%, 0 100%);
+}
+.scene-ridge.near {
+  bottom: 22%; height: 32%; background: linear-gradient(180deg, #364246, #1d2428); opacity: .96;
+  clip-path: polygon(0 74%, 16% 52%, 30% 66%, 46% 42%, 60% 62%, 74% 48%, 88% 66%, 100% 54%, 100% 100%, 0 100%);
+}
+.scene-water {
+  position: absolute; left: 0; right: 0; bottom: 0; height: 34%;
+  background:
+    repeating-linear-gradient(180deg, rgb(255 255 255 / .035) 0 1px, transparent 1px 8px),
+    linear-gradient(180deg, #746a58, #433d33 55%, #262320);
+}
+.scene-shore { position: absolute; left: 0; right: 0; bottom: 29%; height: 9%; background: linear-gradient(180deg, #8c7d64, #5a4e3d); opacity: .85; }
+.scene-grain {
+  position: absolute; inset: 0; opacity: .28; mix-blend-mode: overlay;
+  background-image: radial-gradient(rgb(255 255 255 / .5) .6px, transparent .6px);
+  background-size: 3px 3px;
+}
+.scene-wm {
+  position: absolute; right: 7%; bottom: 15%; padding: 4px 6px;
+  font-size: clamp(22px, 4.2vw, 46px); font-weight: 600; line-height: 1.05;
+  letter-spacing: .16em; text-align: right; color: rgb(255 255 255 / .38);
+  text-shadow: 0 1px 10px rgb(0 0 0 / .25); transform: rotate(-7deg);
+  white-space: nowrap;
+}
+.scene-stamp {
+  position: absolute; left: 6%; bottom: 10%; padding: 2px 5px;
+  font-size: clamp(9px, 1.2vw, 12px); letter-spacing: .12em; color: rgb(255 255 255 / .42);
+  background: rgb(0 0 0 / .14); border: 1px solid rgb(255 255 255 / .1);
+}
+.scene.clean { filter: saturate(1.06) brightness(1.025); }
+.scene.clean .scene-wm, .scene.clean .scene-stamp { display: none; }
+
+.mask { position: absolute; inset: 0; z-index: 3; pointer-events: none; transition: opacity .2s ease; }
+.mask.is-hidden { opacity: 0; }
+.mask > span {
+  position: absolute; border-radius: 6px;
+  background: color-mix(in oklab, var(--bad) 34%, transparent);
+  border: 1px solid color-mix(in oklab, var(--bad) 55%, transparent);
+  box-shadow: inset 0 0 26px color-mix(in oklab, var(--bad) 30%, transparent);
+  backdrop-filter: blur(1px);
+}
+
+.rbox {
+  position: absolute; z-index: 5; display: flex; align-items: flex-start; padding: 4px;
+  border: 1px dashed color-mix(in oklab, var(--accent) 72%, transparent);
+  border-radius: 4px; background: transparent; cursor: pointer;
+  transition: opacity .18s ease, border-color .18s ease, background .18s ease;
+}
+.rbox:hover { background: rgb(255 255 255 / .06); }
+.rbox > span {
+  padding: 1px 5px; border-radius: 3px; background: rgb(0 0 0 / .55);
+  color: #f0f0ed; font-size: 9.5px; line-height: 1.5; white-space: nowrap;
+}
+.rbox.is-off { opacity: .38; border-color: rgb(255 255 255 / .35); border-style: solid; }
+.rbox.is-stale { opacity: .45; }
+
+.scan { position: absolute; inset: 0; z-index: 6; display: grid; place-items: center; pointer-events: none; overflow: hidden; background: rgb(0 0 0 / .12); }
+.scan::before {
+  content: ""; position: absolute; left: 0; right: 0; top: 0; height: 2px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  box-shadow: 0 0 26px 8px color-mix(in oklab, var(--accent) 30%, transparent);
+  animation: scanline 1.5s ease-in-out infinite alternate;
+}
+@keyframes scanline { from { transform: translateY(8vh); } to { transform: translateY(56vh); } }
+.scan-label {
+  display: inline-flex; align-items: center; gap: 8px; padding: 9px 14px; border-radius: 999px;
+  background: rgb(15 15 17 / .82); border: 1px solid rgb(255 255 255 / .14);
+  font-size: 12.5px; color: #f1f1ef; backdrop-filter: blur(12px);
+}
+.busy-chip {
+  position: absolute; left: 50%; bottom: 56px; z-index: 6; transform: translateX(-50%);
+  display: inline-flex; align-items: center; gap: 8px; padding: 8px 13px; border-radius: 999px;
+  background: rgb(15 15 17 / .82); border: 1px solid rgb(255 255 255 / .14);
+  font-size: 12px; color: #f1f1ef; backdrop-filter: blur(12px); white-space: nowrap;
+}
+
+.compare {
+  position: absolute; inset: 0; z-index: 4; overflow: hidden; cursor: ew-resize; touch-action: pan-y;
+  --split: 56%;
+}
+.compare .layer { position: absolute; inset: 0; }
+.compare .after { clip-path: inset(0 0 0 var(--split)); }
+.compare .handle {
+  position: absolute; top: 0; bottom: 0; left: var(--split); width: 2px;
+  background: rgb(255 255 255 / .88); transform: translateX(-1px); pointer-events: none;
+  box-shadow: 0 0 20px rgb(0 0 0 / .55);
+}
+.compare .handle i {
+  position: absolute; top: 50%; left: 50%; display: grid; place-items: center;
+  width: 34px; height: 34px; border-radius: 50%; transform: translate(-50%, -50%);
+  background: rgb(12 12 13 / .72); border: 1px solid rgb(255 255 255 / .55);
+  color: #fff; font-size: 12px; font-style: normal; backdrop-filter: blur(8px);
+}
+.cmp-tag {
+  position: absolute; top: 52px; z-index: 2; padding: 3px 9px; border-radius: 999px;
+  background: rgb(0 0 0 / .5); color: #f0f0ed; font-size: 10.5px;
+  border: 1px solid rgb(255 255 255 / .12); pointer-events: none;
+}
+.cmp-tag.left { left: 12px; }
+.cmp-tag.right { right: 12px; }
+
+.drop-hint {
+  display: flex; width: 100%; align-items: center; gap: 10px; padding: 11px 14px;
+  border: 1px dashed var(--line-2); border-radius: var(--r2); background: var(--surface);
+  color: var(--muted); font-size: 12px; text-align: left; transition: border-color .18s ease, background .18s ease;
+}
+.drop-hint:hover { border-color: color-mix(in oklab, var(--accent) 55%, var(--line-2)); background: color-mix(in oklab, var(--accent) 5%, var(--surface)); color: var(--fg-2); }
+.drop-hint .ico { width: 17px; height: 17px; color: var(--accent); }
+.drop-hint b { font-weight: 500; color: var(--fg-2); }
+
+/* ---------- 单图侧栏 ---------- */
+.thr { display: grid; gap: 7px; }
+.thr-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; font-size: 12.5px; color: var(--fg-2); }
+.thr-head label { font-weight: 500; }
+.thr-head output { font-size: 16px; font-weight: 600; color: var(--fg); letter-spacing: -.01em; }
+input[type="range"] { width: 100%; height: 20px; margin: 0; background: transparent; accent-color: var(--accent); cursor: pointer; }
+input[type="range"]:disabled { opacity: .45; cursor: default; }
+.thr-scale { display: flex; justify-content: space-between; gap: 8px; font-size: 10.5px; color: var(--muted); }
+
+.region-list { display: grid; gap: 6px; }
+.region {
+  display: flex; align-items: center; gap: 9px; padding: 9px 10px;
+  border: 1px solid var(--line); border-radius: var(--r2); background: var(--sunken);
+  font-size: 12.5px; cursor: pointer; transition: border-color .16s ease, opacity .16s ease;
+}
+.region:hover { border-color: var(--line-2); }
+.region input { width: 14px; height: 14px; margin: 0; accent-color: var(--accent); flex: none; }
+.region-main { display: grid; gap: 1px; min-width: 0; flex: 1; }
+.region-main b { font-weight: 500; color: var(--fg-2); }
+.region-main small { font-size: 10.5px; color: var(--muted); }
+.region-score { font-size: 12px; color: var(--muted); }
+.region.is-below { opacity: .55; }
+.region-note { padding: 0 2px; font-size: 10.5px; line-height: 1.55; color: var(--muted); }
+
+.switch-row {
+  display: flex; align-items: center; gap: 12px; padding: 10px 11px;
+  border: 1px solid var(--line); border-radius: var(--r2); background: var(--sunken); cursor: pointer;
+}
+.switch-copy { display: grid; gap: 1px; min-width: 0; flex: 1; font-size: 12.5px; }
+.switch-copy b { font-weight: 500; color: var(--fg-2); }
+.switch-copy small { font-size: 10.5px; color: var(--muted); }
+.switch-row input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.switch { position: relative; width: 34px; height: 20px; flex: none; border-radius: 999px; background: var(--line-2); transition: background .18s ease; }
+.switch::after {
+  content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%;
+  background: #d6d6d2; transition: transform .18s ease, background .18s ease;
+}
+.switch-row input:checked + .switch { background: var(--accent); }
+.switch-row input:checked + .switch::after { transform: translateX(14px); background: #111; }
+.switch-row input:focus-visible + .switch { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.status-line { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--fg-2); }
+.prog-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; font-size: 12.5px; color: var(--muted); }
+.prog-head b { font-size: 19px; font-weight: 600; color: var(--fg); letter-spacing: -.02em; }
+.prog-sub { font-size: 11.5px; color: var(--muted); }
+.prog-block { display: grid; gap: 7px; }
+
+.steps { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
+.step { position: relative; display: grid; gap: 5px; font-size: 10.5px; color: var(--muted); }
+.step::before { content: ""; height: 3px; border-radius: 3px; background: var(--line); }
+.step.is-done::before { background: color-mix(in oklab, var(--accent) 55%, var(--line)); }
+.step.is-active::before { background: var(--accent); }
+.step.is-active { color: var(--fg-2); }
+.step.is-done { color: var(--fg-2); }
+.steps.all-done .step::before { background: var(--ok); }
+
+.done-line { display: flex; align-items: center; gap: 11px; padding: 11px 12px; border-radius: var(--r2); background: color-mix(in oklab, var(--ok) 8%, var(--sunken)); border: 1px solid color-mix(in oklab, var(--ok) 28%, transparent); }
+.ok-ring { display: grid; place-items: center; width: 26px; height: 26px; flex: none; border-radius: 50%; background: color-mix(in oklab, var(--ok) 18%, transparent); color: var(--ok); }
+.ok-ring .ico { width: 15px; height: 15px; }
+.done-line > div { display: grid; gap: 1px; min-width: 0; }
+.done-line b { font-size: 13px; font-weight: 600; }
+.done-line small { font-size: 11px; color: var(--muted); }
+
+.field-line { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--line); font-size: 12px; }
+.field-line span { color: var(--muted); }
+.field-line b { font-weight: 500; color: var(--fg-2); overflow-wrap: anywhere; text-align: right; }
+.field { display: grid; gap: 6px; font-size: 12px; }
+.field > span, .field > label { color: var(--muted); }
+.input {
+  width: 100%; min-width: 0; height: 34px; padding: 0 10px;
+  border: 1px solid var(--line-2); border-radius: var(--r2); background: var(--sunken);
+  color: var(--fg); font-size: 13px;
+}
+.input:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
+.input:disabled { opacity: .5; }
+select.input { appearance: auto; }
+.save-note { display: flex; align-items: flex-start; gap: 7px; font-size: 11px; line-height: 1.5; color: var(--muted); }
+.save-note .ico { width: 14px; height: 14px; margin-top: 1px; color: var(--muted); }
+
+/* ---------- 批次 ---------- */
+.meta-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 13px 18px; }
+.meta { min-width: 0; }
+.meta dt { font-size: 10.5px; letter-spacing: .02em; color: var(--muted); }
+.meta dd { margin-top: 3px; font-size: 13px; color: var(--fg-2); overflow-wrap: anywhere; }
+.meta dd b { font-weight: 600; color: var(--fg); }
+.meta dd .muted { color: var(--muted); font-weight: 400; }
+
+.stats { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
+.stat { display: grid; gap: 2px; padding: 9px 11px; border: 1px solid var(--line); border-radius: var(--r2); background: var(--sunken); }
+.stat b { font-size: 17px; font-weight: 600; letter-spacing: -.02em; }
+.stat span { display: flex; align-items: center; gap: 5px; font-size: 10.5px; color: var(--muted); white-space: nowrap; }
+.dot { width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--muted); }
+.dot.ok { background: var(--ok); }
+.dot.warn { background: var(--warn); }
+.dot.bad { background: var(--bad); }
+.dot.accent { background: var(--accent); }
+
+.callout {
+  display: flex; align-items: center; gap: 12px; padding: 12px 14px;
+  border: 1px solid var(--line); border-radius: var(--r2); background: var(--sunken);
+}
+.callout.warn { border-color: color-mix(in oklab, var(--warn) 34%, transparent); background: color-mix(in oklab, var(--warn) 7%, var(--sunken)); }
+.callout.ok { border-color: color-mix(in oklab, var(--ok) 30%, transparent); background: color-mix(in oklab, var(--ok) 6%, var(--sunken)); }
+.callout.bad { border-color: color-mix(in oklab, var(--bad) 34%, transparent); background: color-mix(in oklab, var(--bad) 7%, var(--sunken)); }
+.callout-main { display: grid; gap: 2px; min-width: 0; flex: 1; }
+.callout-main b { font-size: 13.5px; font-weight: 600; }
+.callout-main small { font-size: 11.5px; line-height: 1.5; color: var(--muted); }
+.callout > .btn { margin-left: auto; }
+.callout-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-left: auto; }
+.callout-actions .btn { margin-left: 0; }
+
+.overview-foot {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px;
+  padding-top: 12px; border-top: 1px solid var(--line);
+}
+.overview-foot .hint { max-width: 68ch; }
+
+.thumb {
+  position: relative; width: 52px; height: 52px; flex: none; overflow: hidden;
+  border: 1px solid var(--line); border-radius: 9px;
+  background: linear-gradient(145deg, var(--a, #6f8493), var(--b, #2c343c));
+}
+.thumb::before { content: ""; position: absolute; inset: 0; background: radial-gradient(120% 90% at 72% 12%, rgb(255 255 255 / .22), transparent 55%); }
+.thumb::after {
+  content: "©"; position: absolute; right: 5px; bottom: 2px;
+  color: rgb(255 255 255 / .34); font-size: 10px; letter-spacing: .04em;
+}
+.thumb.lg { width: 44px; height: 44px; border-radius: 8px; }
+.thumb.xs { width: 34px; height: 34px; border-radius: 7px; }
+
+.items { display: grid; }
+.item {
+  display: grid; grid-template-columns: 52px minmax(0, 1fr) 88px 104px 96px;
+  gap: 14px; align-items: center; padding: 12px 18px;
+  border-bottom: 1px solid var(--line); transition: background .16s ease;
+}
+.item:last-child { border-bottom: 0; }
+.item:hover { background: color-mix(in oklab, var(--accent) 3%, transparent); }
+.item-main { display: grid; gap: 2px; min-width: 0; }
+.item-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; font-weight: 500; }
+.item-sub { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; font-size: 11.5px; color: var(--muted); overflow-wrap: anywhere; }
+.item-sub .sep { opacity: .45; }
+.item-error { font-size: 11.5px; color: var(--bad); overflow-wrap: anywhere; }
+.sub-status { display: none; font-weight: 600; }
+.item-conf { display: grid; justify-items: end; gap: 1px; }
+.item-conf b { font-size: 12.5px; font-weight: 500; color: var(--fg-2); }
+.item-conf small { font-size: 10px; color: var(--muted); white-space: nowrap; }
+.item-state { display: flex; justify-content: flex-end; }
+.item-act { display: flex; justify-content: flex-end; }
+.empty { padding: 26px 18px; text-align: center; font-size: 12.5px; color: var(--muted); }
+
+.log { display: grid; margin: 0; padding: 4px 0; list-style: none; }
+.log li { display: grid; grid-template-columns: 8px minmax(0, 1fr) auto; gap: 10px; align-items: baseline; padding: 8px 18px; border-bottom: 1px solid var(--line); font-size: 12px; color: var(--fg-2); }
+.log li:last-child { border-bottom: 0; }
+.log li time { font-size: 10.5px; color: var(--muted); }
+.log-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); align-self: center; }
+.log-dot.ok { background: var(--ok); }
+.log-dot.bad { background: var(--bad); }
+.log-dot.warn { background: var(--warn); }
+.log-dot.accent { background: var(--accent); }
+.log-dot.muted { background: var(--muted); }
+
+/* ---------- 弹层 ---------- */
+.modal-layer { position: fixed; inset: 0; z-index: 80; display: grid; place-items: center; padding: 24px; }
+.scrim { position: absolute; inset: 0; background: rgb(0 0 0 / .58); backdrop-filter: blur(5px); }
+.modal {
+  position: relative; display: flex; flex-direction: column; width: min(520px, 100%);
+  max-height: min(86dvh, 900px); overflow: hidden;
+  border: 1px solid var(--line-2); border-radius: calc(var(--r3) + 2px);
+  background: var(--raised); box-shadow: 0 40px 80px -24px rgb(0 0 0 / .72);
+  animation: modal-in .18s ease;
+}
+.modal.wide { width: min(640px, 100%); }
+@keyframes modal-in { from { opacity: 0; transform: translateY(8px) scale(.99); } to { opacity: 1; transform: none; } }
+.modal-head { display: flex; align-items: flex-start; gap: 12px; padding: 20px 22px 0; }
+.modal-head > div { min-width: 0; flex: 1; }
+.modal-head h2 { font-size: 17px; font-weight: 600; line-height: 1.3; }
+.modal-head p { margin-top: 4px; font-size: 12.5px; line-height: 1.55; color: var(--muted); }
+.icon-btn {
+  display: grid; place-items: center; width: 30px; height: 30px; margin: -4px -6px 0 0;
+  border-radius: var(--r2); color: var(--fg-2); flex: none;
+}
+.icon-btn:hover { background: var(--accent-soft); color: var(--fg); }
+.modal-body { display: grid; gap: 16px; padding: 16px 22px 6px; overflow-y: auto; }
+.modal-foot { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; padding: 16px 22px 20px; }
+.modal-body .meta-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.review-compare { position: relative; height: 240px; overflow: hidden; border: 1px solid var(--line); border-radius: var(--r2); background: #0b0c0e; }
+.note {
+  padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--r2);
+  background: var(--sunken); font-size: 11.5px; line-height: 1.55; color: var(--muted);
+}
+.note b { color: var(--fg-2); font-weight: 500; }
+
+/* ---------- 新建批次 ---------- */
+.pick-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.pick-head span { font-size: 12px; color: var(--muted); }
+.pick-head b { color: var(--fg-2); font-weight: 500; }
+.pick-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.pick {
+  position: relative; aspect-ratio: 1.25; overflow: hidden; border: 1px solid var(--line);
+  border-radius: 8px; background: linear-gradient(145deg, var(--a), var(--b));
+  transition: border-color .16s ease, box-shadow .16s ease;
+}
+.pick::before { content: ""; position: absolute; inset: 0; background: radial-gradient(120% 90% at 70% 10%, rgb(255 255 255 / .2), transparent 55%); }
+.pick::after { content: "©"; position: absolute; right: 5px; bottom: 3px; font-size: 9px; color: rgb(255 255 255 / .32); }
+.pick[aria-pressed="true"] { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.pick .pick-name { position: absolute; left: 4px; right: 4px; bottom: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 9px; color: rgb(255 255 255 / .82); text-shadow: 0 1px 4px rgb(0 0 0 / .6); }
+.pick .tick {
+  position: absolute; top: 5px; right: 5px; display: grid; place-items: center;
+  width: 17px; height: 17px; border-radius: 50%; background: rgb(0 0 0 / .5);
+  border: 1px solid rgb(255 255 255 / .35); color: transparent;
+}
+.pick[aria-pressed="true"] .tick { background: var(--accent); border-color: transparent; color: var(--accent-fg); }
+.pick .tick .ico { width: 11px; height: 11px; }
+.field-block { display: grid; gap: 8px; }
+.field-block > label, .field-block > .field-label { font-size: 12px; font-weight: 500; color: var(--fg-2); }
+.field-block .thr-head { font-size: 12px; }
+
+/* ---------- Toast ---------- */
+#toast-root {
+  position: fixed; left: 50%; bottom: max(22px, env(safe-area-inset-bottom)); z-index: 100;
+  display: grid; gap: 8px; width: min(390px, calc(100% - 28px)); transform: translateX(-50%); pointer-events: none;
+}
+.toast {
+  display: flex; align-items: flex-start; gap: 9px; padding: 11px 13px;
+  border: 1px solid var(--line-2); border-radius: 12px; background: var(--raised);
+  box-shadow: 0 18px 44px -18px rgb(0 0 0 / .8); font-size: 12.5px; line-height: 1.5; color: var(--fg-2);
+  animation: toast-in .2s ease;
+}
+.toast .ico { margin-top: 1px; }
+.toast.ok .ico { color: var(--ok); }
+.toast.warn .ico { color: var(--warn); }
+.toast.bad .ico { color: var(--bad); }
+.toast.accent .ico { color: var(--accent); }
+.toast.out { opacity: 0; transform: translateY(6px); transition: opacity .2s ease, transform .2s ease; }
+@keyframes toast-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
+/* ---------- 响应式 ---------- */
+@media (max-width: 1023px) {
+  .app { display: block; }
+  .rail {
+    position: sticky; top: 0; z-index: 40; display: flex; flex-direction: row; align-items: center;
+    gap: 10px; width: auto; height: auto; padding: 9px 14px;
+    border-right: 0; border-bottom: 1px solid var(--line);
+    background: color-mix(in oklab, var(--bg) 84%, transparent); backdrop-filter: blur(18px) saturate(1.2);
+  }
+  .brand { flex: none; padding: 0; }
+  .brand-word { font-size: 12px; letter-spacing: .12em; }
+  .brand-word small { display: none; }
+  .rail-group { margin-left: auto; }
+  .rail-label, .rail-card, .rail-note { display: none; }
+  .nav { display: flex; gap: 3px; }
+  .nav-item { height: 34px; padding: 0 10px; font-size: 12.5px; gap: 6px; }
+  .nav-item .ico { width: 15px; height: 15px; }
+  .nav-label .lg { display: none; }
+  .nav-label .sm { display: inline; }
+
+  .page { padding: 24px 18px 76px; }
+  .title-line h1 { font-size: 27px; }
+  .single-layout { grid-template-columns: minmax(0, 1fr); }
+  .single-side { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
+  .single-side > .card:first-child { grid-column: 1 / -1; }
+  .stage { height: min(56vh, 520px); min-height: 340px; }
+  .meta-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .item { grid-template-columns: 48px minmax(0, 1fr) 100px 92px; gap: 12px; }
+  .item-conf { display: none; }
+  .sub-status { display: inline; }
+}
+
+@media (max-width: 759px) {
+  .page { padding: 18px 14px 72px; }
+  .page-head { gap: 13px; margin-bottom: 18px; }
+  .title-line h1 { font-size: 24px; }
+  .page-desc { font-size: 12.5px; }
+  .page-actions { width: 100%; }
+  .page-actions .btn { flex: 1 1 auto; }
+  .single-side { grid-template-columns: minmax(0, 1fr); }
+  .stage { height: min(46vh, 400px); min-height: 300px; border-radius: 14px; }
+  .stage-chip.dim { display: none; }
+  .cmp-tag { top: 48px; }
+  .meta-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .stat { padding: 8px 9px; }
+  .stat b { font-size: 16px; }
+  .card-head { padding: 13px 14px; }
+  .card-body { padding: 14px; }
+  .seg button { padding: 0 8px; font-size: 12px; }
+  .item { grid-template-columns: 44px minmax(0, 1fr) auto; gap: 10px; padding: 11px 14px; }
+  .item-state { display: none; }
+  .item-act .btn { height: 28px; padding: 0 9px; font-size: 12px; }
+  .item-name { font-size: 13px; }
+  .item-sub { font-size: 10.5px; }
+  .callout { flex-wrap: wrap; align-items: flex-start; }
+  .callout > .btn, .callout-actions { width: 100%; margin-left: 0; }
+  .callout-actions .btn { flex: 1; }
+  .callout .thumb.lg { width: 38px; height: 38px; }
+  .log li { padding: 8px 14px; }
+  .modal-layer { align-items: end; padding: 0; }
+  .modal, .modal.wide {
+    width: 100%; max-height: 92dvh; border-radius: 20px 20px 0 0;
+    border-bottom: 0; animation: sheet-in .22s ease; padding-bottom: env(safe-area-inset-bottom);
+  }
+  .modal-head { padding: 18px 18px 0; }
+  .modal-body { padding: 14px 18px 4px; gap: 14px; }
+  .modal-foot { padding: 14px 18px 18px; }
+  .modal-foot .btn { flex: 1; }
+  .modal-body .meta-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .review-compare { height: 200px; }
+  @keyframes sheet-in { from { opacity: .6; transform: translateY(24px); } to { opacity: 1; transform: none; } }
+  #toast-root { bottom: max(14px, env(safe-area-inset-bottom)); }
+}
+
+@media (max-width: 389px) {
+  .brand-word { display: none; }
+  .nav-item { padding: 0 8px; }
+  .page-actions .btn { flex: 1 1 100%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+}
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2.5"/><circle cx="8.5" cy="8.5" r="1.7"/><path d="M21 15.5 16 10.5 5 21"/></symbol>
+  <symbol id="i-layers" viewBox="0 0 24 24"><path d="m12 3 9 5-9 5-9-5 9-5Z"/><path d="m3 12.5 9 5 9-5"/><path d="m3 17 9 5 9-5"/></symbol>
+  <symbol id="i-zap" viewBox="0 0 24 24"><path d="M13 2 4.5 13.5H11l-1 8.5 8.5-11.5H12l1-8.5Z"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24"><rect x="7" y="5" width="3.5" height="14" rx="1"/><rect x="13.5" y="5" width="3.5" height="14" rx="1"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.5v13l11-6.5-11-6.5Z"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="m4.5 12.5 5 5 10-11"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 3.5 22 20H2L12 3.5Z"/><path d="M12 9v5"/><path d="M12 17.5h.01"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.5 6.5"/><path d="M20 4v7h-7"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 6.5A2.5 2.5 0 0 1 5.5 4H9l2 2.5h7.5A2.5 2.5 0 0 1 21 9v8.5a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17.5v-11Z"/></symbol>
+  <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8L12 3Z"/><path d="M19 15.5l.9 2.6 2.6.9-2.6.9-.9 2.6-.9-2.6-2.6-.9 2.6-.9.9-2.6Z"/></symbol>
+  <symbol id="i-save" viewBox="0 0 24 24"><path d="M5 3h11l3 3v15H5V3Z"/><path d="M8 3v6h8V3"/><path d="M8 21v-7h8v7"/></symbol>
+  <symbol id="i-scan" viewBox="0 0 24 24"><path d="M4 9V5.5A1.5 1.5 0 0 1 5.5 4H9M15 4h3.5A1.5 1.5 0 0 1 20 5.5V9M20 15v3.5a1.5 1.5 0 0 1-1.5 1.5H15M9 20H5.5A1.5 1.5 0 0 1 4 18.5V15"/><path d="M8 12h8"/></symbol>
+  <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h9M17 18h3"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="15" cy="18" r="2"/></symbol>
+  <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 8h.01"/></symbol>
+  <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></symbol>
+  <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V4"/><path d="m7 9 5-5 5 5"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></symbol>
+</svg>
+
+<div id="app"></div>
+<div id="modal-root"></div>
+<div id="toast-root" role="status" aria-live="polite" aria-atomic="false"></div>
+
+<script>
+(function () {
+  'use strict';
+
+  /* =========================================================
+     示例数据
+     ========================================================= */
+
+  var PALETTE = [
+    ['#6f8493', '#2c343c'], ['#8d7a63', '#372e25'], ['#5f8079', '#283b39'],
+    ['#7d6f8f', '#322b3c'], ['#8a6f6a', '#3c2b2a'], ['#5f7d94', '#283440'],
+    ['#94815f', '#3d3424'], ['#67837a', '#2a3934'], ['#766a86', '#302a3a'],
+    ['#7c8a6a', '#303826'], ['#8d7c74', '#382d29'], ['#667b8c', '#2b3640']
+  ];
+
+  var PHOTOS = [
+    { name: 'DSC_0402.jpg', size: '4096×2731', bytes: '4.1 MB', out: 'DSC_0402 - 已修复.png' },
+    { name: 'IMG_1190.jpg', size: '3024×4032', bytes: '3.1 MB', out: 'IMG_1190 - 已修复.png' }
+  ];
+
+  var REVIEW_SEED = [
+    ['DSC_0402.jpg', '4096×2731', '4.1 MB', 'saved', 0.96],
+    ['DSC_0407.jpg', '4096×2731', '3.8 MB', 'saved', 0.93],
+    ['IMG_1188.jpg', '3024×4032', '2.9 MB', 'saved', 0.91],
+    ['DSC_0411.jpg', '4096×2731', '4.4 MB', 'review', 0.88],
+    ['IMG_1190.jpg', '3024×4032', '3.1 MB', 'pending', null],
+    ['DSC_0416.jpg', '4096×2731', '3.5 MB', 'pending', null],
+    ['IMG_1203.jpg', '3024×4032', '2.7 MB', 'pending', null],
+    ['DSC_0421.jpg', '4096×2731', '4.0 MB', 'pending', null],
+    ['IMG_1208.jpg', '3024×4032', '3.3 MB', 'no_detection', null],
+    ['DSC_0425.jpg', '4096×2731', '3.9 MB', 'failed', null],
+    ['IMG_1211.jpg', '3024×4032', '2.8 MB', 'pending', null],
+    ['DSC_0429.jpg', '4096×2731', '4.2 MB', 'pending', null]
+  ];
+
+  var AUTO_SEED = [
+    ['DSC_0512.jpg', '4096×2731', '4.0 MB', 'saved', 0.95],
+    ['DSC_0518.jpg', '4096×2731', '3.6 MB', 'saved', 0.92],
+    ['DSC_0530.jpg', '4096×2731', '4.3 MB', 'no_detection', null],
+    ['IMG_2201.jpg', '3024×4032', '3.0 MB', 'pending', null],
+    ['DSC_0536.jpg', '4096×2731', '3.8 MB', 'pending', null],
+    ['IMG_2207.jpg', '3024×4032', '2.9 MB', 'pending', null],
+    ['DSC_0541.jpg', '4096×2731', '4.1 MB', 'pending', null],
+    ['IMG_2214.jpg', '3024×4032', '3.2 MB', 'pending', null],
+    ['DSC_0548.jpg', '4096×2731', '3.7 MB', 'pending', null]
+  ];
+
+  var PICK_POOL = [
+    { id: 'p1', name: '海边日落.jpg', size: '4096×2731', bytes: '4.1 MB' },
+    { id: 'p2', name: '旧城街角.jpg', size: '3024×4032', bytes: '3.0 MB' },
+    { id: 'p3', name: '湖边清晨.jpg', size: '4096×2731', bytes: '3.7 MB' },
+    { id: 'p4', name: '展览海报.jpg', size: '2560×1440', bytes: '2.2 MB' },
+    { id: 'p5', name: '山谷公路.jpg', size: '4096×2731', bytes: '4.4 MB' },
+    { id: 'p6', name: '咖啡店招牌.jpg', size: '3024×4032', bytes: '2.8 MB' },
+    { id: 'p7', name: '雨后站台.jpg', size: '4096×2731', bytes: '3.9 MB' },
+    { id: 'p8', name: '建筑立面.jpg', size: '3024×4032', bytes: '3.3 MB' }
+  ];
+
+  function seedBatch(mode) {
+    var rows = mode === 'review' ? REVIEW_SEED : AUTO_SEED;
+    var items = rows.map(function (row, index) {
+      var p = PALETTE[index % PALETTE.length];
+      var planned = 'saved';
+      if (mode === 'auto' && index === 6) planned = 'no_detection';
+      if (mode === 'auto' && index === 8) planned = 'failed';
+      if (mode === 'review' && index === 8) planned = 'no_detection';
+      if (mode === 'review' && index === 9) planned = 'failed';
+      return {
+        id: mode + '-' + index,
+        name: row[0], size: row[1], bytes: row[2],
+        a: p[0], b: p[1],
+        status: row[3],
+        score: row[4],
+        error: row[3] === 'failed' ? '推理服务超时，已重试 3 次' : null,
+        planned: planned,
+        plannedScore: Math.round((0.83 + ((index * 5) % 13) / 100) * 100) / 100
+      };
+    });
+    return {
+      mode: mode,
+      status: 'running',
+      threshold: 128,
+      destination: '旅行相册 / 自动修复',
+      created: mode === 'review' ? '今天 14:32' : '今天 15:08',
+      items: items,
+      logs: mode === 'auto' ? [
+        { t: '15:08', text: '批次开始 · 9 张 · 阈值 128', tone: 'accent' },
+        { t: '15:07', text: '已保存 DSC_0518 - 已修复.png', tone: 'ok' },
+        { t: '15:06', text: '已保存 DSC_0512 - 已修复.png', tone: 'ok' },
+        { t: '15:05', text: 'DSC_0530.jpg 未检出可修复区域', tone: 'muted' }
+      ] : [],
+      filter: 'all',
+      autoApprove: false
+    };
+  }
+
+  var state = {
+    view: 'single',
+    single: {
+      phase: 'detected',
+      threshold: 128,
+      progress: 0,
+      showMask: true,
+      saved: false,
+      split: 58,
+      photoIndex: 0,
+      startedAt: 0,
+      regions: [
+        { id: 'wm', label: '右下角水印', score: 0.94, left: 58, top: 66, width: 35, height: 18, on: true },
+        { id: 'stamp', label: '左下角日期', score: 0.71, left: 6, top: 76, width: 22, height: 12, on: true }
+      ]
+    },
+    review: seedBatch('review'),
+    auto: seedBatch('auto'),
+    modal: null
+  };
+
+  var detectTimer = null;
+  var repairTimer = null;
+  var toastSeq = 0;
+
+  /* =========================================================
+     工具
+     ========================================================= */
+
+  function icon(name, cls) {
+    return '<svg class="ico' + (cls ? ' ' + cls : '') + '" aria-hidden="true"><use href="#i-' + name + '"></use></svg>';
+  }
+
+  function esc(value) {
+    return String(value).replace(/[&<>"']/g, function (ch) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch];
+    });
+  }
+
+  function nowTime() {
+    var d = new Date();
+    var h = String(d.getHours()).padStart(2, '0');
+    var m = String(d.getMinutes()).padStart(2, '0');
+    return h + ':' + m;
+  }
+
+  function outName(name) {
+    return name.replace(/\.[^.]+$/, '') + ' - 已修复.png';
+  }
+
+  function fmtDuration(seconds) {
+    var s = Math.max(0, Math.round(seconds));
+    if (s < 60) return s + ' 秒';
+    var m = Math.floor(s / 60);
+    var rest = s % 60;
+    return m + ' 分' + (rest ? ' ' + rest + ' 秒' : '');
+  }
+
+  function activeRegions() {
+    var s = state.single;
+    return s.regions.filter(function (region) {
+      return region.on && Math.round(region.score * 255) >= s.threshold;
+    });
+  }
+
+  function tally(items) {
+    var t = { saved: 0, review: 0, pending: 0, working: 0, no_detection: 0, failed: 0, skipped: 0, cancelled: 0 };
+    items.forEach(function (item) {
+      if (item.status === 'saved') t.saved++;
+      else if (item.status === 'review') t.review++;
+      else if (item.status === 'pending') t.pending++;
+      else if (item.status === 'generating' || item.status === 'saving') t.working++;
+      else if (item.status === 'no_detection') t.no_detection++;
+      else if (item.status === 'failed') t.failed++;
+      else if (item.status === 'skipped') t.skipped++;
+      else if (item.status === 'cancelled') t.cancelled++;
+    });
+    return t;
+  }
+
+  function progressOf(batch) {
+    var t = tally(batch.items);
+    var processed = t.saved + t.skipped + t.no_detection + t.failed + t.cancelled;
+    var total = batch.items.length || 1;
+    return { done: processed, total: batch.items.length, pct: Math.round((processed / total) * 100) };
+  }
+
+  var ITEM_STATUS = {
+    pending: ['排队中', 'muted'],
+    generating: ['检测中', 'accent'],
+    review: ['待审核', 'warn'],
+    saving: ['保存中', 'accent'],
+    saved: ['已保存', 'ok'],
+    skipped: ['已跳过', 'muted'],
+    no_detection: ['未检出', 'muted'],
+    failed: ['失败', 'bad'],
+    cancelled: ['已取消', 'muted']
+  };
+
+  function statusPill(status, live) {
+    var meta = ITEM_STATUS[status] || ['未知', 'muted'];
+    return '<span class="pill ' + meta[1] + '">' + (live ? '<i class="live" style="--tone:currentColor"></i>' : '') + meta[0] + '</span>';
+  }
+
+  function batchStatusPill(batch) {
+    if (batch.status === 'running') {
+      if (batch.mode === 'review' && batch.items.some(function (item) { return item.status === 'review'; })) {
+        return '<span class="pill warn">等待审核</span>';
+      }
+      return '<span class="pill ok"><i class="live"></i>运行中</span>';
+    }
+    if (batch.status === 'paused') return '<span class="pill warn">已暂停</span>';
+    if (batch.status === 'cancelled') return '<span class="pill muted">已取消</span>';
+    return '<span class="pill ok">已完成</span>';
+  }
+
+  function toast(text, tone) {
+    var root = document.getElementById('toast-root');
+    if (!root) return;
+    var item = document.createElement('div');
+    item.className = 'toast ' + (tone || 'accent');
+    item.innerHTML = icon(tone === 'ok' ? 'check' : tone === 'bad' || tone === 'warn' ? 'alert' : 'info') + '<span>' + esc(text) + '</span>';
+    root.appendChild(item);
+    var id = ++toastSeq;
+    item.dataset.id = String(id);
+    window.setTimeout(function () {
+      item.classList.add('out');
+      window.setTimeout(function () {
+        if (item.parentNode) item.parentNode.removeChild(item);
+      }, 220);
+    }, 3000);
+  }
+
+  /* =========================================================
+     渲染
+     ========================================================= */
+
+  function render() {
+    var app = document.getElementById('app');
+    if (!app) return;
+    app.innerHTML = rail() + '<main class="main">' + page() + '</main>';
+    initCompare();
+  }
+
+  function rail() {
+    var reviewPending = state.review.items.filter(function (item) { return item.status === 'review'; }).length;
+    var autoRunning = state.auto.status === 'running';
+    return '' +
+      '<aside class="rail">' +
+        '<div class="brand">' +
+          '<span class="brand-mark" aria-hidden="true"></span>' +
+          '<span class="brand-word">LUVIA<small>GALLERY</small></span>' +
+        '</div>' +
+        '<div class="rail-group">' +
+          '<div class="rail-label">图片修复</div>' +
+          '<nav class="nav" aria-label="修复工作台">' +
+            navItem('single', 'image', '单图自动修复', '单图', '') +
+            navItem('review', 'layers', '待审核批次', '待审核', reviewPending ? '<span class="nav-count">' + reviewPending + '</span>' : '') +
+            navItem('auto', 'zap', '全自动批量', '全自动', autoRunning ? '<i class="nav-live"></i>' : '') +
+          '</nav>' +
+        '</div>' +
+        '<div class="rail-card">' +
+          '<div class="rail-status"><i class="live"></i><b>SLBR 检测在线</b></div>' +
+          '<p>GPU · 约 8.2 秒/张</p>' +
+          '<div class="rail-rows">' +
+            '<div><span>今日修复</span><b>37 张</b></div>' +
+            '<div><span>模型</span><b>SLBR + LaMa</b></div>' +
+            '<div><span>默认阈值</span><b>128</b></div>' +
+          '</div>' +
+        '</div>' +
+        '<p class="rail-note">示例数据 · 交互评审原型<br>不调用真实接口</p>' +
+      '</aside>';
+  }
+
+  function navItem(view, iconName, longLabel, shortLabel, extra) {
+    var active = state.view === view;
+    return '<button type="button" class="nav-item' + (active ? ' is-active' : '') + '" data-action="view" data-view="' + view + '"' +
+      (active ? ' aria-current="page"' : '') + '>' +
+      icon(iconName) +
+      '<span class="nav-label"><span class="lg">' + longLabel + '</span><span class="sm">' + shortLabel + '</span></span>' +
+      extra +
+    '</button>';
+  }
+
+  function page() {
+    if (state.view === 'review') return batchPage('review');
+    if (state.view === 'auto') return batchPage('auto');
+    return singlePage();
+  }
+
+  function pageHead(title, desc, pills, actions) {
+    return '<div class="page">' +
+      '<header class="page-head">' +
+        '<div class="page-title">' +
+          '<div class="title-line"><h1>' + title + '</h1>' + (pills || '') + '</div>' +
+          '<p class="page-desc">' + desc + '</p>' +
+        '</div>' +
+        '<div class="page-actions">' + (actions || '') + '</div>' +
+      '</header>' +
+      '<div class="view">' + viewBody() + '</div>' +
+    '</div>';
+  }
+
+  function viewBody() {
+    if (state.view === 'review') return batchBody('review');
+    if (state.view === 'auto') return batchBody('auto');
+    return singleBody();
+  }
+
+  /* =========================================================
+     单图
+     ========================================================= */
+
+  function singlePage() {
+    var s = state.single;
+    var photo = PHOTOS[s.photoIndex];
+    var usable = activeRegions();
+    var status = '';
+    if (s.phase === 'detected') status = '<span class="pill accent">' + usable.length + ' 处待修复</span>';
+    else if (s.phase === 'stale') status = '<span class="pill warn">阈值已调整</span>';
+    else if (s.phase === 'detecting') status = '<span class="pill accent"><i class="live"></i>检测中</span>';
+    else if (s.phase === 'repairing') status = '<span class="pill accent"><i class="live"></i>修复中</span>';
+    else if (s.phase === 'done') status = '<span class="pill ok">可保存副本</span>';
+    else if (s.phase === 'empty') status = '<span class="pill muted">未检出</span>';
+    else status = '<span class="pill muted">已取消</span>';
+
+    var actions = '<button type="button" class="btn" data-action="single-swap">' + icon('refresh') + '换一张</button>' +
+      '<button type="button" class="btn primary" data-action="new-batch">' + icon('plus') + '新建批量</button>';
+
+    return pageHead(
+      '自动修复',
+      '检测画面中的水印与文字区域，可在蒙版上取舍后生成修复副本。原图不会被修改。',
+      '<span class="pill accent">单图</span>' + status,
+      actions
+    ).replace('<div class="view">', '<div class="view single-layout">')
+      .replace('</div></header>', '</div></header>')
+      .replace('<div class="view single-layout"><div class="single-layout">', '<div class="view single-layout">');
+  }
+
+  function singleBody() {
+    var s = state.single;
+    return '<div class="single-main">' + stageMarkup() +
+      '<button type="button" class="drop-hint" data-action="drop-hint">' + icon('upload') +
+        '<span><b>拖入或粘贴图片</b> 可替换当前示例 · JPG / PNG / WebP，单张不超过 40 MP</span>' +
+      '</button>' +
+    '</div>' +
+    '<div class="single-side">' + detectCard() + taskCard() + outputCard() + '</div>';
+  }
+
+  function sceneMarkup(clean) {
+    return '<div class="scene' + (clean ? ' clean' : '') + '">' +
+      '<span class="scene-sky"></span>' +
+      '<span class="scene-sun"></span>' +
+      '<span class="scene-ridge"></span>' +
+      '<span class="scene-ridge near"></span>' +
+      '<span class="scene-shore"></span>' +
+      '<span class="scene-water"></span>' +
+      '<span class="scene-grain"></span>' +
+      '<span class="scene-wm">LUVIA<br>STUDIO</span>' +
+      '<span class="scene-stamp">2026.10.24 17:32</span>' +
+    '</div>';
+  }
+
+  function stageMarkup() {
+    var s = state.single;
+    var photo = PHOTOS[s.photoIndex];
+    var done = s.phase === 'done' || (s.phase === 'done' && s.saved);
+    var top = '<div class="stage-top">' +
+      '<span class="stage-chip">' + icon('image') + esc(photo.name) + '</span>' +
+      '<span class="stage-chip dim">' + photo.size + ' · ' + photo.bytes + '</span>' +
+    '</div>';
+
+    if (done) {
+      return '<div class="stage">' +
+        '<div class="compare" data-compare role="slider" tabindex="0" aria-label="原图与修复结果对比，拖动分割线" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + s.split + '" style="--split:' + s.split + '%">' +
+          '<div class="layer">' + sceneMarkup(false) + '</div>' +
+          '<div class="layer after">' + sceneMarkup(true) + '</div>' +
+          '<span class="cmp-tag left">原图</span>' +
+          '<span class="cmp-tag right">修复后</span>' +
+          '<span class="handle" aria-hidden="true"><i>⇄</i></span>' +
+        '</div>' +
+        top +
+        '<div class="stage-bottom">' +
+          '<span class="stage-chip dim">拖动分割线对比 · 修复 ' + activeRegions().length + ' 处</span>' +
+          '<span class="stage-chip accent">阈值 ' + s.threshold + '</span>' +
+        '</div>' +
+      '</div>';
+    }
+
+    var regionBoxes = '';
+    if (s.phase === 'detected' || s.phase === 'stale') {
+      regionBoxes = s.regions.map(function (region) {
+        var below = Math.round(region.score * 255) < s.threshold;
+        var on = region.on && !below;
+        return '<button type="button" class="rbox' + (on ? '' : ' is-off') + (s.phase === 'stale' ? ' is-stale' : '') + '"' +
+          ' style="left:' + region.left + '%;top:' + region.top + '%;width:' + region.width + '%;height:' + region.height + '%"' +
+          ' data-action="toggle-region" data-id="' + region.id + '" aria-pressed="' + on + '"' +
+          ' title="' + esc(region.label) + ' · 检测分数 ' + region.score.toFixed(2) + '">' +
+          '<span>' + esc(region.label) + ' · ' + region.score.toFixed(2) + '</span>' +
+        '</button>';
+      }).join('');
+    }
+
+    var mask = '';
+    var maskVisible = s.showMask && (s.phase === 'detected' || s.phase === 'stale' || s.phase === 'repairing');
+    if (maskVisible) {
+      mask = '<div class="mask">' + s.regions.filter(function (region) {
+        return region.on && Math.round(region.score * 255) >= s.threshold;
+      }).map(function (region) {
+        return '<span style="left:' + region.left + '%;top:' + region.top + '%;width:' + region.width + '%;height:' + region.height + '%"></span>';
+      }).join('') + '</div>';
+    }
+
+    var overlay = '';
+    if (s.phase === 'detecting') {
+      overlay = '<div class="scan"><span class="scan-label"><i class="spinner"></i>正在分析水印概率…</span></div>';
+    } else if (s.phase === 'repairing') {
+      overlay = '<div class="busy-chip"><i class="spinner"></i><span data-stage-working>正在重建细节…</span><b data-stage-pct>' + Math.round(s.progress) + '%</b></div>';
+    } else if (s.phase === 'empty') {
+      overlay = '<div class="busy-chip">' + icon('info') + '当前阈值下没有区域超过阈值</div>';
+    }
+
+    var bottomText = s.phase === 'detected' ? '检测分数仅用于排序，未经验证' :
+      s.phase === 'stale' ? '阈值已更改 · 需要重新检测' :
+      s.phase === 'repairing' ? '任务进行中 · 可随时取消' :
+      s.phase === 'empty' ? '降低阈值可找回淡色水印' : '原图保持不变';
+
+    return '<div class="stage">' +
+      '<div class="scene-wrap">' + sceneMarkup(false) + '</div>' +
+      mask + regionBoxes + overlay + top +
+      '<div class="stage-bottom">' +
+        '<span class="stage-chip dim">' + bottomText + '</span>' +
+        '<span class="stage-chip accent">阈值 ' + s.threshold + '</span>' +
+      '</div>' +
+    '</div>';
+  }
+
+  function detectCard() {
+    var s = state.single;
+    var busy = s.phase === 'detecting' || s.phase === 'repairing';
+    var headPill = '';
+    if (s.phase === 'detected') headPill = '<span class="pill accent">' + activeRegions().length + ' 处</span>';
+    else if (s.phase === 'stale') headPill = '<span class="pill warn">待重新检测</span>';
+    else if (s.phase === 'detecting') headPill = '<span class="pill accent"><i class="live"></i>检测中</span>';
+    else if (s.phase === 'repairing') headPill = '<span class="pill accent"><i class="live"></i>修复中</span>';
+    else if (s.phase === 'empty') headPill = '<span class="pill muted">未检出</span>';
+    else if (s.phase === 'done') headPill = '<span class="pill ok">已完成</span>';
+    else headPill = '<span class="pill muted">已取消</span>';
+
+    var primary = '';
+    var secondary = '';
+    if (s.phase === 'detected') {
+      primary = '<button type="button" class="btn primary" data-action="single-start"' + (activeRegions().length ? '' : ' disabled') + '>' + icon('spark') + '开始自动修复</button>';
+      secondary = '<button type="button" class="btn" data-action="single-detect">' + icon('scan') + '重新检测</button>';
+    } else if (s.phase === 'stale') {
+      primary = '<button type="button" class="btn primary" data-action="single-detect">' + icon('scan') + '用新阈值重新检测</button>';
+    } else if (s.phase === 'empty') {
+      primary = '<button type="button" class="btn primary" data-action="single-lower">' + icon('sliders') + '降低阈值并重试</button>';
+      secondary = '<button type="button" class="btn" data-action="single-detect">' + icon('refresh') + '重新检测</button>';
+    } else if (s.phase === 'detecting') {
+      primary = '<button type="button" class="btn primary" disabled>检测中…</button>';
+      secondary = '<button type="button" class="btn danger" data-action="single-cancel">' + icon('x') + '取消检测</button>';
+    } else if (s.phase === 'repairing') {
+      primary = '<button type="button" class="btn primary" disabled>修复中 ' + Math.round(s.progress) + '%</button>';
+      secondary = '<button type="button" class="btn danger" data-action="single-cancel">' + icon('x') + '取消修复</button>';
+    } else if (s.phase === 'done') {
+      primary = '<button type="button" class="btn primary" data-action="single-detect">' + icon('refresh') + '重新检测</button>';
+    } else {
+      primary = '<button type="button" class="btn primary" data-action="single-reset">' + icon('refresh') + '重新开始</button>';
+    }
+
+    return '<section class="card">' +
+      '<div class="card-head">' +
+        '<div><h2>自动检测</h2><p>SLBR 概率蒙版 · 可逐项取舍误检区域</p></div>' + headPill +
+      '</div>' +
+      '<div class="card-body">' +
+        '<div class="thr" data-thr-scope>' +
+          '<div class="thr-head"><label for="single-thr">检测阈值</label><output data-thr-out>' + s.threshold + '</output></div>' +
+          '<input id="single-thr" type="range" min="1" max="254" value="' + s.threshold + '" data-range="single"' + (busy ? ' disabled' : '') + '>' +
+          '<div class="thr-scale"><span>1 · 更敏感</span><span>254 · 更保守</span></div>' +
+          '<p class="hint">提高阈值可减少误检，也会漏掉淡色水印。阈值只影响蒙版生成。</p>' +
+        '</div>' +
+        regionListMarkup() +
+        '<label class="switch-row">' +
+          '<span class="switch-copy"><b>蒙版叠加</b><small>在画面上显示已启用的修复区域</small></span>' +
+          '<input type="checkbox" data-change="mask"' + (s.showMask ? ' checked' : '') + ' aria-label="显示蒙版叠加">' +
+          '<span class="switch" aria-hidden="true"></span>' +
+        '</label>' +
+        '<div class="btn-row">' + primary + secondary + '</div>' +
+      '</div>' +
+    '</section>';
+  }
+
+  function regionListMarkup() {
+    var s = state.single;
+    if (s.phase === 'detecting') {
+      return '<div class="region-list"><div class="hint">正在分析画面，请稍候…</div></div>';
+    }
+    if (s.phase === 'empty') {
+      return '<div class="region-list"><div class="hint">当前阈值 <strong>' + s.threshold + '</strong> 下没有区域超过阈值。可降低阈值再试。</div></div>';
+    }
+    if (s.phase === 'repairing' || s.phase === 'done') {
+      return '<div class="region-list"><div class="hint">已处理 <strong>' + activeRegions().length + '</strong> 处区域 · 蒙版只用于生成副本。</div></div>';
+    }
+    if (s.phase === 'cancelled') {
+      return '<div class="region-list"><div class="hint">任务已取消，没有修改任何图片。</div></div>';
+    }
+    return '<div class="region-list">' + s.regions.map(function (region) {
+      var below = Math.round(region.score * 255) < s.threshold;
+      return '<label class="region' + (below ? ' is-below' : '') + '">' +
+        '<input type="checkbox" data-change="region" data-id="' + region.id + '"' + (region.on && !below ? ' checked' : '') + (below ? ' disabled' : '') + '>' +
+        '<span class="region-main"><b>' + esc(region.label) + '</b><small>' + (below ? '低于当前阈值' : '已加入修复区域') + '</small></span>' +
+        '<span class="region-score">' + region.score.toFixed(2) + '</span>' +
+      '</label>';
+    }).join('') +
+    '<p class="region-note">数字为检测分数（区域模型概率均值），仅用于排序参考，尚未验证准确率。</p>' +
+    '</div>';
+  }
+
+  function taskCard() {
+    var s = state.single;
+    var body = '';
+    var sub = '单图任务只在当前会话中运行';
+    var pill = '';
+
+    if (s.phase === 'detected') {
+      pill = '<span class="pill muted">未开始</span>';
+      body = '<div class="status-line"><i class="live" style="--tone:var(--ok)"></i>准备就绪，等待开始</div>' +
+        '<p class="hint">预计 8–12 秒 · 生成 1 个副本预览，不写入原图。</p>' + stepsMarkup();
+    } else if (s.phase === 'stale') {
+      pill = '<span class="pill warn">待检测</span>';
+      body = '<div class="status-line">阈值改为 ' + s.threshold + '，需要重新检测后才能修复。</div>' + stepsMarkup();
+    } else if (s.phase === 'detecting') {
+      sub = '正在生成检测蒙版';
+      pill = '<span class="pill accent"><i class="live"></i>进行中</span>';
+      body = '<div class="prog-head"><span>正在分析画面</span><b>…</b></div>' +
+        '<div class="bar indeterminate"><i></i></div>' + stepsMarkup() +
+        '<div class="btn-row"><button type="button" class="btn sm danger" data-action="single-cancel">' + icon('x') + '取消检测</button></div>';
+    } else if (s.phase === 'repairing') {
+      sub = '正在重建蒙版区域';
+      pill = '<span class="pill accent"><i class="live"></i>修复中</span>';
+      body = '<div class="prog-head"><span data-single-status>正在生成蒙版…</span><b data-single-pct>' + Math.round(s.progress) + '%</b></div>' +
+        '<div class="bar"><i data-single-bar style="width:' + Math.round(s.progress) + '%"></i></div>' +
+        stepsMarkup() +
+        '<div class="btn-row"><button type="button" class="btn sm danger" data-action="single-cancel">' + icon('x') + '取消修复</button></div>';
+    } else if (s.phase === 'done') {
+      sub = '可对比并保存副本';
+      pill = '<span class="pill ok">完成</span>';
+      body = '<div class="done-line"><span class="ok-ring">' + icon('check') + '</span><div><b>修复完成 · 用时 6.4 秒</b><small>已处理 ' + activeRegions().length + ' 处区域，原图未改动</small></div></div>' +
+        '<p class="hint">拖动画面分割线对比；确认后保存为新的图片副本。</p>';
+    } else if (s.phase === 'empty') {
+      sub = '当前阈值下未检出';
+      pill = '<span class="pill muted">未检出</span>';
+      body = '<div class="status-line">阈值 ' + s.threshold + ' 下没有区域超过阈值，未生成副本。</div>' +
+        '<p class="hint">水印颜色较淡时可降低阈值；提高阈值则更保守。</p>';
+    } else {
+      sub = '任务已取消';
+      pill = '<span class="pill muted">已取消</span>';
+      body = '<div class="status-line">已取消，未生成任何副本。</div>' +
+        '<div class="btn-row"><button type="button" class="btn sm" data-action="single-reset">' + icon('refresh') + '重新开始</button></div>';
+    }
+
+    return '<section class="card">' +
+      '<div class="card-head"><div><h2>任务</h2><p>' + sub + '</p></div>' + pill + '</div>' +
+      '<div class="card-body">' + body + '</div>' +
+    '</section>';
+  }
+
+  function stepsMarkup() {
+    var s = state.single;
+    var active = -1;
+    if (s.phase === 'detecting') active = 0;
+    else if (s.phase === 'repairing') active = s.progress < 45 ? 1 : s.progress < 84 ? 2 : 3;
+    var complete = s.phase === 'done';
+    var labels = ['检测', '蒙版', '修复', '合成'];
+    return '<div class="steps' + (complete ? ' all-done' : '') + '">' + labels.map(function (label, index) {
+      var cls = complete || index < active ? ' is-done' : index === active ? ' is-active' : '';
+      return '<span class="step' + cls + '" data-step="' + index + '">' + label + '</span>';
+    }).join('') + '</div>';
+  }
+
+  function outputCard() {
+    var s = state.single;
+    var photo = PHOTOS[s.photoIndex];
+    var ready = s.phase === 'done';
+    var saved = s.saved;
+    return '<section class="card">' +
+      '<div class="card-head"><div><h2>输出副本</h2><p>默认保存为新图片，原图始终保留</p></div></div>' +
+      '<div class="card-body">' +
+        '<div class="field-line"><span>媒体库</span><b>旅行相册</b></div>' +
+        '<div class="field-line"><span>文件夹</span><b>自动修复</b></div>' +
+        '<label class="field"><span>文件名</span><input class="input" data-out-name value="' + esc(photo.out) + '"' + (ready && !saved ? '' : ' disabled') + ' aria-label="副本文件名"></label>' +
+        (saved
+          ? '<div class="done-line"><span class="ok-ring">' + icon('check') + '</span><div><b>副本已保存</b><small>旅行相册 / 自动修复 · ' + esc(photo.out) + '</small></div></div>'
+          : '<button type="button" class="btn primary block" data-action="single-save"' + (ready ? '' : ' disabled') + '>' + icon('save') + (ready ? '保存副本' : '修复完成后可保存') + '</button>') +
+        '<p class="save-note">' + icon('info') + '<span>重名时自动编号；保存失败会提示并保留当前结果。</span></p>' +
+      '</div>' +
+    '</section>';
+  }
+
+  /* =========================================================
+     批次
+     ========================================================= */
+
+  function batchOf(mode) {
+    return mode === 'auto' ? state.auto : state.review;
+  }
+
+  function batchPage(mode) {
+    var batch = batchOf(mode);
+    var t = tally(batch.items);
+    var isReview = mode === 'review';
+    var actions = '';
+
+    if (batch.status === 'running' || batch.status === 'paused') {
+      actions += '<button type="button" class="btn" data-action="toggle-pause" data-batch="' + mode + '">' +
+        (batch.status === 'paused' ? icon('play') + '继续' : icon('pause') + '暂停') + '</button>';
+      actions += '<button type="button" class="btn danger" data-action="cancel-batch" data-batch="' + mode + '">' + icon('x') + '取消</button>';
+    } else {
+      actions += '<button type="button" class="btn" data-action="replay" data-batch="' + mode + '">' + icon('refresh') + '重新演示</button>';
+    }
+    actions += '<button type="button" class="btn primary" data-action="new-batch">' + icon('plus') + '新建批量</button>';
+
+    var pills = '<span class="pill accent">' + (isReview ? '待人工确认' : '全自动') + '</span>' +
+      batchStatusPill(batch) +
+      '<span class="pill muted">阈值 ' + batch.threshold + '</span>';
+
+    var title = isReview ? '待人工确认的批量' : '全自动批量';
+    var desc = isReview
+      ? '逐张查看检测结果，通过后才保存副本；批次会等待审核，不自动跳过。原图始终保留。'
+      : '检测到水印即保存新副本，无需逐张确认；未检出与失败会记录在项目列表。原图始终保留。';
+
+    return pageHead(title, desc, pills, actions);
+  }
+
+  function batchBody(mode) {
+    var batch = batchOf(mode);
+    return '<div class="stack">' +
+      overviewCard(batch) +
+      (mode === 'auto' ? logCard(batch) : '') +
+      itemsCard(batch) +
+    '</div>';
+  }
+
+  function overviewCard(batch) {
+    var t = tally(batch.items);
+    var p = progressOf(batch);
+    var isReview = batch.mode === 'review';
+    var remaining = batch.items.length - p.done;
+    var estimate = remaining > 0 && batch.status === 'running' ? fmtDuration(remaining * 8.2) : '—';
+    var tone = batch.status === 'completed' ? 'ok' : batch.status === 'paused' ? 'warn' : batch.status === 'cancelled' ? 'muted' : '';
+
+    return '<section class="card">' +
+      '<div class="card-head">' +
+        '<div><h2>批次概览</h2><p>' + (isReview ? '串行处理，每次一张；等待审核时队列暂停。' : '串行处理，成功后自动保存副本。') + '</p></div>' +
+        batchStatusPill(batch) +
+      '</div>' +
+      '<div class="card-body">' +
+        '<dl class="meta-grid">' +
+          '<div class="meta"><dt>处理模式</dt><dd>' + (isReview ? '待人工确认' : '全自动') + '</dd></div>' +
+          '<div class="meta"><dt>检测阈值</dt><dd><b>' + batch.threshold + '</b> <span class="muted">/ 255</span></dd></div>' +
+          '<div class="meta"><dt>保存到</dt><dd>' + esc(batch.destination) + '</dd></div>' +
+          '<div class="meta"><dt>创建时间</dt><dd>' + esc(batch.created) + '</dd></div>' +
+          '<div class="meta"><dt>项目</dt><dd><b>' + batch.items.length + '</b> 张</dd></div>' +
+        '</dl>' +
+        '<div class="prog-block">' +
+          '<div class="prog-head"><span>处理进度</span><b>' + p.pct + '%</b></div>' +
+          '<div class="bar ' + tone + '"><i style="width:' + p.pct + '%"></i></div>' +
+          '<div class="prog-sub">' + p.done + ' / ' + p.total + ' 已处理 · 预计剩余 ' + estimate + '</div>' +
+        '</div>' +
+        '<div class="stats">' +
+          stat(t.saved, '已保存', 'ok') +
+          stat(t.review, '待审核', 'warn') +
+          stat(t.pending + t.working, '处理中', 'accent') +
+          stat(t.no_detection, '未检出', 'muted') +
+          stat(t.failed, '失败', 'bad') +
+        '</div>' +
+        batchCallout(batch) +
+        '<div class="overview-foot">' +
+          '<span class="hint">' + (isReview ? '通过审核才写入副本；跳过与失败不会产生文件。' : '自动保存到目标文件夹；重名自动编号。') + '</span>' +
+          ((isReview && batch.status === 'running' && !batch.autoApprove)
+            ? '<button type="button" class="btn ghost sm" data-action="auto-approve" data-batch="review">演示：自动通过剩余</button>'
+            : (isReview && batch.autoApprove ? '<span class="pill accent">演示自动通过已开启</span>' : '')) +
+        '</div>' +
+      '</div>' +
+    '</section>';
+  }
+
+  function stat(value, label, tone) {
+    return '<div class="stat"><b>' + value + '</b><span><i class="dot ' + tone + '"></i>' + label + '</span></div>';
+  }
+
+  function batchCallout(batch) {
+    var t = tally(batch.items);
+    var isReview = batch.mode === 'review';
+
+    if (batch.status === 'cancelled') {
+      return '<div class="callout">' + icon('info') +
+        '<div class="callout-main"><b>批次已取消</b><small>已保存的 ' + t.saved + ' 张副本保留；其余项目已停止。原图未受影响。</small></div>' +
+        '<button type="button" class="btn sm" data-action="replay" data-batch="' + batch.mode + '">' + icon('refresh') + '重新演示</button>' +
+      '</div>';
+    }
+
+    if (batch.status === 'completed') {
+      var parts = [];
+      if (t.saved) parts.push('已保存 ' + t.saved + ' 张');
+      if (t.no_detection) parts.push('未检出 ' + t.no_detection + ' 张');
+      if (t.failed) parts.push('失败 ' + t.failed + ' 张');
+      if (t.skipped) parts.push('跳过 ' + t.skipped + ' 张');
+      return '<div class="callout ok">' + icon('check') +
+        '<div class="callout-main"><b>批次已完成</b><small>' + (parts.join('，') || '没有可保存的结果') + '。原图均未修改。</small></div>' +
+        '<div class="callout-actions">' +
+          (t.failed ? '<button type="button" class="btn sm" data-action="retry-failed" data-batch="' + batch.mode + '">重试失败项</button>' : '') +
+          '<button type="button" class="btn sm" data-action="replay" data-batch="' + batch.mode + '">' + icon('refresh') + '重新演示</button>' +
+        '</div>' +
+      '</div>';
+    }
+
+    if (batch.status === 'paused') {
+      return '<div class="callout warn">' + icon('pause') +
+        '<div class="callout-main"><b>批次已暂停</b><small>排队中的图片不会开始；当前审核结果仍保留。</small></div>' +
+        '<button type="button" class="btn primary sm" data-action="toggle-pause" data-batch="' + batch.mode + '">' + icon('play') + '继续</button>' +
+      '</div>';
+    }
+
+    if (isReview) {
+      var review = batch.items.filter(function (item) { return item.status === 'review'; })[0];
+      if (review) {
+        return '<div class="callout warn">' +
+          '<span class="thumb lg" style="--a:' + review.a + ';--b:' + review.b + '"></span>' +
+          '<div class="callout-main"><b>' + esc(review.name) + ' 等待确认</b><small>检测到 1 处区域 · 检测分数 ' + (review.score == null ? '—' : review.score.toFixed(2)) + ' · 阈值 ' + batch.threshold + '</small></div>' +
+          '<button type="button" class="btn primary sm" data-action="review-open" data-batch="review" data-id="' + review.id + '">' + icon('eye') + '审核</button>' +
+        '</div>';
+      }
+    }
+
+    var working = batch.items.filter(function (item) { return item.status === 'generating' || item.status === 'saving'; })[0];
+    if (working) {
+      return '<div class="callout">' +
+        '<span class="spinner"></span>' +
+        '<div class="callout-main"><b>正在处理 ' + esc(working.name) + '</b><small>' + (working.status === 'saving' ? '正在写入新副本…' : 'SLBR 检测与蒙版生成…') + '</small></div>' +
+        '<span class="pill accent">约 8 秒</span>' +
+      '</div>';
+    }
+
+    return '<div class="callout">' + icon('clock') +
+      '<div class="callout-main"><b>等待下一张</b><small>队列将自动继续。</small></div>' +
+    '</div>';
+  }
+
+  function itemsCard(batch) {
+    var filters = batch.mode === 'review'
+      ? [['all', '全部'], ['review', '待审核'], ['failed', '失败'], ['saved', '已保存']]
+      : null;
+    var activeFilter = batch.filter || 'all';
+    var items = batch.items.filter(function (item) {
+      if (!filters || activeFilter === 'all') return true;
+      if (activeFilter === 'review') return item.status === 'review';
+      if (activeFilter === 'failed') return item.status === 'failed';
+      if (activeFilter === 'saved') return item.status === 'saved';
+      return true;
+    });
+
+    var filterMarkup = filters
+      ? '<div class="seg" role="group" aria-label="筛选项目">' + filters.map(function (pair) {
+          return '<button type="button" data-action="filter" data-filter="' + pair[0] + '" aria-pressed="' + (activeFilter === pair[0]) + '">' + pair[1] + '</button>';
+        }).join('') + '</div>'
+      : '';
+
+    return '<section class="card">' +
+      '<div class="card-head">' +
+        '<div><h2>项目</h2><p>' + (batch.mode === 'review' ? '逐项查看检测结果与审核状态' : '自动处理结果与失败记录') + '</p></div>' +
+        filterMarkup +
+      '</div>' +
+      '<div class="items">' + (items.length ? items.map(function (item) { return itemRow(item, batch); }).join('') : '<div class="empty">当前筛选下没有项目。</div>') + '</div>' +
+    '</section>';
+  }
+
+  function itemRow(item, batch) {
+    var meta = ITEM_STATUS[item.status] || ['未知', 'muted'];
+    var action = '';
+    if (item.status === 'review') {
+      action = '<button type="button" class="btn primary sm" data-action="review-open" data-batch="' + batch.mode + '" data-id="' + item.id + '">审核</button>';
+    } else if (item.status === 'failed') {
+      action = '<button type="button" class="btn sm" data-action="retry" data-batch="' + batch.mode + '" data-id="' + item.id + '">重试</button>';
+    } else if (item.status === 'saved' || item.status === 'no_detection' || item.status === 'skipped' || item.status === 'cancelled') {
+      action = '<button type="button" class="btn ghost sm" data-action="item-info" data-batch="' + batch.mode + '" data-id="' + item.id + '">查看</button>';
+    }
+
+    return '<div class="item">' +
+      '<span class="thumb" style="--a:' + item.a + ';--b:' + item.b + '" aria-hidden="true"></span>' +
+      '<div class="item-main">' +
+        '<div class="item-name" title="' + esc(item.name) + '">' + esc(item.name) + '</div>' +
+        '<div class="item-sub">' +
+          '<span>' + item.size + '</span><span class="sep">·</span><span>' + item.bytes + '</span>' +
+          '<span class="sub-status" style="color:var(--' + (meta[1] === 'ok' ? 'ok' : meta[1] === 'warn' ? 'warn' : meta[1] === 'bad' ? 'bad' : 'muted') + ')">' + meta[0] + '</span>' +
+        '</div>' +
+        (item.error ? '<div class="item-error">' + esc(item.error) + '</div>' : '') +
+      '</div>' +
+      '<div class="item-conf"><b>' + (item.score == null ? '—' : item.score.toFixed(2)) + '</b><small>检测分数</small></div>' +
+      '<div class="item-state">' + statusPill(item.status, item.status === 'generating' || item.status === 'saving') + '</div>' +
+      '<div class="item-act">' + action + '</div>' +
+    '</div>';
+  }
+
+  function logCard(batch) {
+    var logs = batch.logs.slice(0, 8);
+    return '<section class="card">' +
+      '<div class="card-head"><div><h2>处理记录</h2><p>自动保存与跳过原因</p></div><span class="pill muted">最近 ' + logs.length + ' 条</span></div>' +
+      (logs.length
+        ? '<ul class="log">' + logs.map(function (entry) {
+            return '<li><i class="log-dot ' + entry.tone + '"></i><span>' + esc(entry.text) + '</span><time>' + esc(entry.t) + '</time></li>';
+          }).join('') + '</ul>'
+        : '<div class="empty">还没有处理记录。</div>') +
+    '</section>';
+  }
+
+  /* =========================================================
+     弹层
+     ========================================================= */
+
+  function renderModal() {
+    var root = document.getElementById('modal-root');
+    if (!root) return;
+    if (!state.modal) {
+      root.innerHTML = '';
+      document.body.classList.remove('has-modal');
+      return;
+    }
+    root.innerHTML = '<div class="modal-layer"><div class="scrim" data-action="close-modal"></div>' + modalMarkup(state.modal) + '</div>';
+    document.body.classList.add('has-modal');
+    initCompare();
+    window.requestAnimationFrame(function () {
+      var modal = root.querySelector('.modal');
+      if (modal) {
+        modal.setAttribute('tabindex', '-1');
+        modal.focus({ preventScroll: true });
+      }
+    });
+  }
+
+  function modalMarkup(modal) {
+    if (modal.type === 'create') return createModal(modal);
+    if (modal.type === 'cancel') return cancelModal(modal);
+    if (modal.type === 'review') return reviewModal(modal);
+    return '';
+  }
+
+  function closeModal() {
+    state.modal = null;
+    renderModal();
+  }
+
+  function createModal(modal) {
+    var selected = modal.selected.length;
+    var isReview = modal.mode === 'review';
+    return '<div class="modal wide" role="dialog" aria-modal="true" aria-labelledby="modal-title">' +
+      '<div class="modal-head">' +
+        '<div><h2 id="modal-title">新建批量修复</h2><p>示例数据演示媒体选择、保存位置与处理模式；不会调用真实接口。</p></div>' +
+        '<button type="button" class="icon-btn" data-action="close-modal" aria-label="关闭">' + icon('x') + '</button>' +
+      '</div>' +
+      '<div class="modal-body">' +
+        '<div class="field-block">' +
+          '<span class="field-label">处理模式</span>' +
+          '<div class="seg full" role="group" aria-label="处理模式">' +
+            '<button type="button" data-action="create-mode" data-mode="review" aria-pressed="' + isReview + '">待人工确认</button>' +
+            '<button type="button" data-action="create-mode" data-mode="auto" aria-pressed="' + !isReview + '">全自动</button>' +
+          '</div>' +
+          '<p class="hint">' + (isReview ? '每张检测完成后等待审核，通过后才写入副本。' : '检测到水印即保存副本，未检出与失败会记录在列表中。') + '</p>' +
+        '</div>' +
+        '<div class="field-block">' +
+          '<div class="pick-head"><span>选择图片 · <b>' + selected + '</b> / ' + PICK_POOL.length + '</span>' +
+            '<button type="button" class="btn ghost sm" data-action="pick-all">' + (selected === PICK_POOL.length ? '清空' : '全选') + '</button>' +
+          '</div>' +
+          '<div class="pick-grid">' + PICK_POOL.map(function (item, index) {
+            var on = modal.selected.indexOf(item.id) >= 0;
+            var p = PALETTE[index % PALETTE.length];
+            return '<button type="button" class="pick" data-action="pick" data-id="' + item.id + '" aria-pressed="' + on + '" aria-label="' + esc(item.name) + '">' +
+              '<span class="tick">' + icon('check') + '</span>' +
+              '<span class="pick-name">' + esc(item.name) + '</span>' +
+            '</button>';
+          }).join('') + '</div>' +
+        '</div>' +
+        '<div class="field-block" data-thr-scope>' +
+          '<div class="thr-head"><label for="create-thr">检测阈值</label><output data-thr-out>' + modal.threshold + '</output></div>' +
+          '<input id="create-thr" type="range" min="1" max="254" value="' + modal.threshold + '" data-range="create">' +
+          '<div class="thr-scale"><span>1 · 更敏感</span><span>254 · 更保守</span></div>' +
+        '</div>' +
+        '<div class="field-block">' +
+          '<label for="create-dest">保存位置</label>' +
+          '<select id="create-dest" class="input" data-change="destination">' +
+            '<option' + (modal.destination === '旅行相册 / 自动修复' ? ' selected' : '') + '>旅行相册 / 自动修复</option>' +
+            '<option' + (modal.destination === '旅行相册 / 待整理' ? ' selected' : '') + '>旅行相册 / 待整理</option>' +
+            '<option' + (modal.destination === '家庭相册 / 修复副本' ? ' selected' : '') + '>家庭相册 / 修复副本</option>' +
+          '</select>' +
+        '</div>' +
+        '<div class="note"><b>示例说明：</b>批次串行处理，任一时刻只有一张在推理或等待审核；原始图片不会被覆盖。模型分数仅用于区域排序，不代表准确率。</div>' +
+      '</div>' +
+      '<div class="modal-foot">' +
+        '<button type="button" class="btn ghost" data-action="close-modal">取消</button>' +
+        '<button type="button" class="btn primary" data-action="create-batch"' + (selected ? '' : ' disabled') + '>' + icon('plus') + '创建批次</button>' +
+      '</div>' +
+    '</div>';
+  }
+
+  function cancelModal(modal) {
+    var batch = batchOf(modal.batch);
+    var t = tally(batch.items);
+    return '<div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">' +
+      '<div class="modal-head">' +
+        '<div><h2 id="modal-title">取消这个批次？</h2>' +
+        '<p>已保存的 ' + t.saved + ' 张副本会保留；排队、处理中和待审核的项目将停止，不再产生新副本。原图不受影响。</p></div>' +
+        '<button type="button" class="icon-btn" data-action="close-modal" aria-label="关闭">' + icon('x') + '</button>' +
+      '</div>' +
+      '<div class="modal-body">' +
+        '<div class="note">取消后可以重新演示或新建批次；原型不会写入任何文件。</div>' +
+      '</div>' +
+      '<div class="modal-foot">' +
+        '<button type="button" class="btn ghost" data-action="close-modal">返回</button>' +
+        '<button type="button" class="btn danger" data-action="confirm-cancel" data-batch="' + modal.batch + '">' + icon('x') + '确认取消</button>' +
+      '</div>' +
+    '</div>';
+  }
+
+  function reviewModal(modal) {
+    var batch = batchOf(modal.batch);
+    var item = batch.items.filter(function (row) { return row.id === modal.itemId; })[0];
+    if (!item) return '';
+    return '<div class="modal wide" role="dialog" aria-modal="true" aria-labelledby="modal-title">' +
+      '<div class="modal-head">' +
+        '<div><h2 id="modal-title">审核这一张</h2><p>通过后会保存为新副本；跳过不会产生文件，原图保持不变。</p></div>' +
+        '<button type="button" class="icon-btn" data-action="close-modal" aria-label="关闭">' + icon('x') + '</button>' +
+      '</div>' +
+      '<div class="modal-body">' +
+        '<div class="review-compare">' +
+          '<div class="compare" data-compare role="slider" tabindex="0" aria-label="原图与修复预览对比，拖动分割线" aria-valuemin="0" aria-valuemax="100" aria-valuenow="56" style="--split:56%">' +
+            '<div class="layer">' + sceneMarkup(false) + '</div>' +
+            '<div class="layer after">' + sceneMarkup(true) + '</div>' +
+            '<span class="cmp-tag left">原图</span>' +
+            '<span class="cmp-tag right">修复预览</span>' +
+            '<span class="handle" aria-hidden="true"><i>⇄</i></span>' +
+          '</div>' +
+        '</div>' +
+        '<dl class="meta-grid">' +
+          '<div class="meta"><dt>文件</dt><dd>' + esc(item.name) + '</dd></div>' +
+          '<div class="meta"><dt>尺寸</dt><dd>' + item.size + '</dd></div>' +
+          '<div class="meta"><dt>检测分数</dt><dd>' + (item.score == null ? '—' : item.score.toFixed(2)) + '</dd></div>' +
+          '<div class="meta"><dt>检测阈值</dt><dd>' + batch.threshold + '</dd></div>' +
+        '</dl>' +
+        '<div class="note">检测分数来自 SLBR 概率蒙版，仅用于区域排序；尚未验证准确率，不代表最终修复质量。</div>' +
+      '</div>' +
+      '<div class="modal-foot">' +
+        '<button type="button" class="btn ghost" data-action="close-modal">稍后</button>' +
+        '<button type="button" class="btn" data-action="skip" data-batch="review" data-id="' + item.id + '">' + icon('x') + '跳过</button>' +
+        '<button type="button" class="btn primary" data-action="approve" data-batch="review" data-id="' + item.id + '">' + icon('check') + '通过并保存</button>' +
+      '</div>' +
+    '</div>';
+  }
+
+  /* =========================================================
+     对比分割线
+     ========================================================= */
+
+  function initCompare() {
+    document.querySelectorAll('[data-compare]').forEach(function (root) {
+      if (root.dataset.bound) return;
+      root.dataset.bound = '1';
+      var apply = function (clientX) {
+        var rect = root.getBoundingClientRect();
+        if (rect.width < 10) return;
+        var pct = Math.min(96, Math.max(4, ((clientX - rect.left) / rect.width) * 100));
+        root.style.setProperty('--split', pct.toFixed(1) + '%');
+        root.setAttribute('aria-valuenow', String(Math.round(pct)));
+        if (root.closest('.stage')) state.single.split = Math.round(pct);
+      };
+      root.addEventListener('pointerdown', function (event) {
+        if (event.button !== undefined && event.button !== 0) return;
+        root.classList.add('dragging');
+        if (root.setPointerCapture) root.setPointerCapture(event.pointerId);
+        apply(event.clientX);
+        event.preventDefault();
+      });
+      root.addEventListener('pointermove', function (event) {
+        if (!root.classList.contains('dragging')) return;
+        apply(event.clientX);
+      });
+      var end = function () { root.classList.remove('dragging'); };
+      root.addEventListener('pointerup', end);
+      root.addEventListener('pointercancel', end);
+      root.addEventListener('keydown', function (event) {
+        if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+        event.preventDefault();
+        var current = parseFloat(getComputedStyle(root).getPropertyValue('--split')) || 56;
+        var next = Math.min(96, Math.max(4, current + (event.key === 'ArrowRight' ? 4 : -4)));
+        root.style.setProperty('--split', next + '%');
+        root.setAttribute('aria-valuenow', String(Math.round(next)));
+      });
+    });
+  }
+
+  /* =========================================================
+     单图逻辑
+     ========================================================= */
+
+  function resetSingle(keepPhoto) {
+    var s = state.single;
+    window.clearTimeout(detectTimer);
+    window.clearInterval(repairTimer);
+    s.phase = 'detected';
+    s.progress = 0;
+    s.saved = false;
+    s.showMask = true;
+    s.split = 58;
+    s.regions.forEach(function (region) { region.on = true; });
+    if (!keepPhoto) s.photoIndex = 0;
+    render();
+  }
+
+  function runDetection() {
+    var s = state.single;
+    window.clearTimeout(detectTimer);
+    window.clearInterval(repairTimer);
+    s.phase = 'detecting';
+    s.progress = 0;
+    s.saved = false;
+    s.regions.forEach(function (region) { region.on = true; });
+    render();
+    detectTimer = window.setTimeout(function () {
+      if (s.phase !== 'detecting') return;
+      var found = s.regions.filter(function (region) {
+        return Math.round(region.score * 255) >= s.threshold;
+      });
+      if (!found.length) {
+        s.phase = 'empty';
+        render();
+        toast('阈值 ' + s.threshold + ' 下没有区域超过阈值，未生成副本。', 'warn');
+      } else {
+        s.phase = 'detected';
+        render();
+        toast('检测完成，找到 ' + found.length + ' 处可能的修复区域。', 'ok');
+      }
+    }, 1600);
+  }
+
+  function startRepair() {
+    var s = state.single;
+    if (!activeRegions().length) {
+      toast('没有启用的修复区域，请调整阈值或区域开关。', 'warn');
+      return;
+    }
+    s.phase = 'repairing';
+    s.progress = 0;
+    s.saved = false;
+    s.startedAt = Date.now();
+    render();
+    repairTimer = window.setInterval(function () {
+      if (s.phase !== 'repairing') {
+        window.clearInterval(repairTimer);
+        return;
+      }
+      s.progress = Math.min(100, s.progress + 3 + Math.random() * 5);
+      if (s.progress >= 100) {
+        s.progress = 100;
+        s.phase = 'done';
+        window.clearInterval(repairTimer);
+        render();
+        toast('修复完成，拖动对比后保存副本。', 'ok');
+      } else {
+        paintSingleProgress();
+      }
+    }, 200);
+  }
+
+  function paintSingleProgress() {
+    var s = state.single;
+    var pct = Math.round(s.progress);
+    var pctNode = document.querySelector('[data-single-pct]');
+    var barNode = document.querySelector('[data-single-bar]');
+    var statusNode = document.querySelector('[data-single-status]');
+    var stageNode = document.querySelector('[data-stage-working]');
+    var stagePct = document.querySelector('[data-stage-pct]');
+    if (pctNode) pctNode.textContent = pct + '%';
+    if (barNode) barNode.style.width = pct + '%';
+    if (statusNode) statusNode.textContent = pct < 40 ? '正在生成蒙版…' : pct < 82 ? '正在重建细节…' : '正在合成色彩…';
+    if (stageNode) stageNode.textContent = pct < 40 ? '正在生成蒙版…' : pct < 82 ? '正在重建细节…' : '正在合成色彩…';
+    if (stagePct) stagePct.textContent = pct + '%';
+    var active = pct < 45 ? 1 : pct < 84 ? 2 : 3;
+    document.querySelectorAll('[data-step]').forEach(function (node, index) {
+      node.classList.toggle('is-done', index < active);
+      node.classList.toggle('is-active', index === active);
+    });
+  }
+
+  function cancelSingle() {
+    window.clearTimeout(detectTimer);
+    window.clearInterval(repairTimer);
+    var s = state.single;
+    s.phase = 'cancelled';
+    s.progress = 0;
+    s.saved = false;
+    render();
+    toast('已取消，未生成任何副本。', 'warn');
+  }
+
+  function saveSingle() {
+    var s = state.single;
+    if (s.phase !== 'done' || s.saved) return;
+    var input = document.querySelector('[data-out-name]');
+    var name = input && input.value.trim() ? input.value.trim() : PHOTOS[s.photoIndex].out;
+    s.saved = true;
+    render();
+    toast('已保存副本「' + name + '」到 旅行相册 / 自动修复。', 'ok');
+  }
+
+  /* =========================================================
+     批次逻辑
+     ========================================================= */
+
+  function addLog(batch, text, tone) {
+    batch.logs.unshift({ t: nowTime(), text: text, tone: tone || 'muted' });
+    if (batch.logs.length > 12) batch.logs.length = 12;
+  }
+
+  function checkComplete(batch) {
+    if (batch.status !== 'running') return;
+    var active = batch.items.some(function (item) {
+      return item.status === 'pending' || item.status === 'generating' || item.status === 'review' || item.status === 'saving';
+    });
+    if (active) return;
+    batch.status = 'completed';
+    var t = tally(batch.items);
+    var parts = [];
+    if (t.saved) parts.push('已保存 ' + t.saved + ' 张');
+    if (t.no_detection) parts.push('未检出 ' + t.no_detection + ' 张');
+    if (t.failed) parts.push('失败 ' + t.failed + ' 张');
+    if (t.skipped) parts.push('跳过 ' + t.skipped + ' 张');
+    addLog(batch, '批次完成 · ' + (parts.join('，') || '无结果'), 'ok');
+    toast('批次已完成 · ' + (parts.join('，') || '没有可保存的结果'), 'ok');
+  }
+
+  function tickReview() {
+    var batch = state.review;
+    if (batch.status !== 'running') return false;
+    var items = batch.items;
+    var changed = false;
+    var saving = items.filter(function (item) { return item.status === 'saving'; })[0];
+    if (saving) {
+      saving.status = 'saved';
+      changed = true;
+    } else {
+      var generating = items.filter(function (item) { return item.status === 'generating'; })[0];
+      if (generating) {
+        if (generating.planned === 'no_detection') {
+          generating.status = 'no_detection';
+        } else if (generating.planned === 'failed') {
+          generating.status = 'failed';
+          generating.error = '推理服务超时，已重试 3 次';
+        } else {
+          generating.status = 'review';
+          generating.score = generating.plannedScore;
+        }
+        changed = true;
+      } else {
+        var waiting = items.filter(function (item) { return item.status === 'review'; })[0];
+        if (waiting && batch.autoApprove) {
+          waiting.status = 'saving';
+          changed = true;
+        } else if (!waiting) {
+          var pending = items.filter(function (item) { return item.status === 'pending'; })[0];
+          if (pending) {
+            pending.status = 'generating';
+            changed = true;
+          }
+        }
+      }
+    }
+    if (changed) checkComplete(batch);
+    return changed;
+  }
+
+  function tickAuto() {
+    var batch = state.auto;
+    if (batch.status !== 'running') return false;
+    var items = batch.items;
+    var saving = items.filter(function (item) { return item.status === 'saving'; })[0];
+    if (saving) {
+      saving.status = 'saved';
+      addLog(batch, '已保存 ' + outName(saving.name), 'ok');
+      checkComplete(batch);
+      return true;
+    }
+    var generating = items.filter(function (item) { return item.status === 'generating'; })[0];
+    if (generating) {
+      if (generating.planned === 'no_detection') {
+        generating.status = 'no_detection';
+        addLog(batch, generating.name + ' 未检出可修复区域', 'muted');
+      } else if (generating.planned === 'failed') {
+        generating.status = 'failed';
+        generating.error = '推理服务超时，已重试 3 次';
+        addLog(batch, generating.name + ' 失败：推理服务超时', 'bad');
+      } else {
+        generating.status = 'saving';
+        generating.score = generating.plannedScore;
+      }
+      checkComplete(batch);
+      return true;
+    }
+    var pending = items.filter(function (item) { return item.status === 'pending'; })[0];
+    if (pending) {
+      pending.status = 'generating';
+      return true;
+    }
+    checkComplete(batch);
+    return false;
+  }
+
+  function togglePause(mode) {
+    var batch = batchOf(mode);
+    if (batch.status === 'running') {
+      batch.status = 'paused';
+      toast('批次已暂停，排队中的图片不会开始。', 'warn');
+    } else if (batch.status === 'paused') {
+      batch.status = 'running';
+      toast('已继续处理批次。', 'ok');
+    }
+    render();
+  }
+
+  function cancelBatch(mode) {
+    var batch = batchOf(mode);
+    batch.items.forEach(function (item) {
+      if (item.status === 'pending' || item.status === 'generating' || item.status === 'review' || item.status === 'saving') {
+        item.status = 'cancelled';
+      }
+    });
+    batch.status = 'cancelled';
+    if (state.modal && state.modal.type === 'cancel') state.modal = null;
+    render();
+    renderModal();
+    toast('批次已取消，已保存的副本保留。', 'warn');
+  }
+
+  function replay(mode) {
+    if (mode === 'auto') state.auto = seedBatch('auto');
+    else state.review = seedBatch('review');
+    render();
+    toast('已重置演示批次。', 'ok');
+  }
+
+  function approveItem(id) {
+    var item = state.review.items.filter(function (row) { return row.id === id; })[0];
+    if (!item || item.status !== 'review') return;
+    item.status = 'saving';
+    closeModal();
+    render();
+    toast('已通过审核，正在保存副本…', 'ok');
+  }
+
+  function skipItem(id) {
+    var item = state.review.items.filter(function (row) { return row.id === id; })[0];
+    if (!item || item.status !== 'review') return;
+    item.status = 'skipped';
+    closeModal();
+    render();
+    toast('已跳过这一张，未生成副本。', 'warn');
+  }
+
+  function retryItem(mode, id) {
+    var batch = batchOf(mode);
+    var item = batch.items.filter(function (row) { return row.id === id; })[0];
+    if (!item) return;
+    item.status = 'pending';
+    item.error = null;
+    item.planned = 'saved';
+    if (batch.status === 'completed') batch.status = 'running';
+    render();
+    toast('已重新排队，将再试一次。', 'accent');
+  }
+
+  function retryAllFailed(mode) {
+    var batch = batchOf(mode);
+    batch.items.forEach(function (item) {
+      if (item.status === 'failed') {
+        item.status = 'pending';
+        item.error = null;
+        item.planned = 'saved';
+      }
+    });
+    batch.status = 'running';
+    render();
+    toast('失败项目已重新排队。', 'accent');
+  }
+
+  function openReview(mode, id) {
+    state.modal = { type: 'review', batch: mode, itemId: id };
+    renderModal();
+  }
+
+  function createBatch() {
+    var modal = state.modal;
+    if (!modal || modal.type !== 'create' || !modal.selected.length) return;
+    var chosen = PICK_POOL.filter(function (item) { return modal.selected.indexOf(item.id) >= 0; });
+    var items = chosen.map(function (item, index) {
+      var p = PALETTE[index % PALETTE.length];
+      return {
+        id: modal.mode + '-' + Date.now() + '-' + index,
+        name: item.name, size: item.size, bytes: item.bytes, a: p[0], b: p[1],
+        status: 'pending', score: null, error: null,
+        planned: index === 5 ? 'no_detection' : index === 7 ? 'failed' : 'saved',
+        plannedScore: Math.round((0.83 + ((index * 3) % 12) / 100) * 100) / 100
+      };
+    });
+    var batch = {
+      mode: modal.mode,
+      status: 'running',
+      threshold: modal.threshold,
+      destination: modal.destination,
+      created: '刚刚',
+      items: items,
+      logs: modal.mode === 'auto' ? [{ t: nowTime(), text: '批次开始 · ' + items.length + ' 张 · 阈值 ' + modal.threshold, tone: 'accent' }] : [],
+      filter: 'all',
+      autoApprove: false
+    };
+    if (modal.mode === 'auto') state.auto = batch;
+    else state.review = batch;
+    state.view = modal.mode;
+    state.modal = null;
+    render();
+    renderModal();
+    toast('已创建 ' + items.length + ' 张的' + (modal.mode === 'review' ? '待审核' : '全自动') + '批次。', 'ok');
+  }
+
+  /* =========================================================
+     事件
+     ========================================================= */
+
+  document.addEventListener('click', function (event) {
+    var el = event.target.closest('[data-action]');
+    if (!el) return;
+    var action = el.dataset.action;
+
+    if (action === 'view') {
+      state.view = el.dataset.view;
+      closeModal();
+      render();
+      window.scrollTo(0, 0);
+      return;
+    }
+    if (action === 'new-batch') {
+      state.modal = {
+        type: 'create',
+        mode: 'review',
+        threshold: 128,
+        selected: PICK_POOL.map(function (item) { return item.id; }),
+        destination: '旅行相册 / 自动修复'
+      };
+      renderModal();
+      return;
+    }
+    if (action === 'close-modal') {
+      closeModal();
+      return;
+    }
+    if (action === 'create-mode') {
+      if (state.modal && state.modal.type === 'create') {
+        state.modal.mode = el.dataset.mode;
+        renderModal();
+      }
+      return;
+    }
+    if (action === 'pick') {
+      if (!state.modal || state.modal.type !== 'create') return;
+      var id = el.dataset.id;
+      var index = state.modal.selected.indexOf(id);
+      if (index >= 0) state.modal.selected.splice(index, 1);
+      else state.modal.selected.push(id);
+      renderModal();
+      return;
+    }
+    if (action === 'pick-all') {
+      if (!state.modal || state.modal.type !== 'create') return;
+      state.modal.selected = state.modal.selected.length === PICK_POOL.length
+        ? []
+        : PICK_POOL.map(function (item) { return item.id; });
+      renderModal();
+      return;
+    }
+    if (action === 'create-batch') {
+      createBatch();
+      return;
+    }
+    if (action === 'toggle-pause') {
+      togglePause(el.dataset.batch);
+      return;
+    }
+    if (action === 'cancel-batch') {
+      state.modal = { type: 'cancel', batch: el.dataset.batch };
+      renderModal();
+      return;
+    }
+    if (action === 'confirm-cancel') {
+      cancelBatch(el.dataset.batch);
+      return;
+    }
+    if (action === 'replay') {
+      replay(el.dataset.batch);
+      return;
+    }
+    if (action === 'auto-approve') {
+      var batch = batchOf(el.dataset.batch);
+      batch.autoApprove = true;
+      render();
+      toast('演示模式：后续待审核项将自动通过。', 'warn');
+      return;
+    }
+    if (action === 'review-open') {
+      openReview(el.dataset.batch, el.dataset.id);
+      return;
+    }
+    if (action === 'approve') {
+      approveItem(el.dataset.id);
+      return;
+    }
+    if (action === 'skip') {
+      skipItem(el.dataset.id);
+      return;
+    }
+    if (action === 'retry') {
+      retryItem(el.dataset.batch, el.dataset.id);
+      return;
+    }
+    if (action === 'retry-failed') {
+      retryAllFailed(el.dataset.batch);
+      return;
+    }
+    if (action === 'filter') {
+      state.review.filter = el.dataset.filter;
+      render();
+      return;
+    }
+    if (action === 'item-info') {
+      var infoBatch = batchOf(el.dataset.batch);
+      var infoItem = infoBatch.items.filter(function (row) { return row.id === el.dataset.id; })[0];
+      if (!infoItem) return;
+      if (infoItem.status === 'saved') toast('副本已保存：' + outName(infoItem.name), 'ok');
+      else if (infoItem.status === 'no_detection') toast(infoItem.name + ' 未检出可修复区域。', 'warn');
+      else if (infoItem.status === 'skipped') toast(infoItem.name + ' 已跳过，未生成副本。', 'warn');
+      else toast(infoItem.name + ' 当前状态：' + (ITEM_STATUS[infoItem.status] ? ITEM_STATUS[infoItem.status][0] : '未知'), 'accent');
+      return;
+    }
+    if (action === 'toggle-region') {
+      var region = state.single.regions.filter(function (row) { return row.id === el.dataset.id; })[0];
+      if (!region) return;
+      if (Math.round(region.score * 255) < state.single.threshold) {
+        toast('该区域低于当前阈值，提高敏感度后才能启用。', 'warn');
+        return;
+      }
+      region.on = !region.on;
+      render();
+      return;
+    }
+    if (action === 'single-detect') {
+      runDetection();
+      return;
+    }
+    if (action === 'single-start') {
+      startRepair();
+      return;
+    }
+    if (action === 'single-cancel') {
+      cancelSingle();
+      return;
+    }
+    if (action === 'single-reset') {
+      resetSingle(true);
+      return;
+    }
+    if (action === 'single-lower') {
+      var s = state.single;
+      s.threshold = Math.max(24, s.threshold - 48);
+      runDetection();
+      return;
+    }
+    if (action === 'single-save') {
+      saveSingle();
+      return;
+    }
+    if (action === 'single-swap') {
+      var single = state.single;
+      single.photoIndex = (single.photoIndex + 1) % PHOTOS.length;
+      window.clearTimeout(detectTimer);
+      window.clearInterval(repairTimer);
+      single.phase = 'detected';
+      single.progress = 0;
+      single.saved = false;
+      single.regions.forEach(function (row) { row.on = true; });
+      render();
+      toast('已切换示例图片。', 'accent');
+      return;
+    }
+    if (action === 'drop-hint') {
+      toast('原型使用示例图片；接入后这里支持拖放与粘贴。', 'accent');
+      return;
+    }
+  });
+
+  document.addEventListener('change', function (event) {
+    var el = event.target;
+
+    if (el.matches('[data-change="mask"]')) {
+      state.single.showMask = el.checked;
+      render();
+      return;
+    }
+    if (el.matches('[data-change="region"]')) {
+      var region = state.single.regions.filter(function (row) { return row.id === el.dataset.id; })[0];
+      if (region) region.on = el.checked;
+      render();
+      return;
+    }
+    if (el.matches('[data-change="destination"]')) {
+      if (state.modal && state.modal.type === 'create') state.modal.destination = el.value;
+      return;
+    }
+    if (el.matches('[data-range="single"]')) {
+      var s = state.single;
+      s.threshold = Number(el.value);
+      if (s.phase === 'detected' || s.phase === 'done' || s.phase === 'empty') {
+        s.phase = 'stale';
+        s.saved = false;
+      }
+      render();
+      return;
+    }
+  });
+
+  document.addEventListener('input', function (event) {
+    var el = event.target;
+    if (!el.matches('input[type="range"]')) return;
+    var scope = el.closest('[data-thr-scope]');
+    if (scope) {
+      scope.querySelectorAll('[data-thr-out]').forEach(function (out) {
+        out.textContent = el.value;
+      });
+    }
+    if (el.matches('[data-range="single"]')) state.single.threshold = Number(el.value);
+    if (el.matches('[data-range="create"]') && state.modal && state.modal.type === 'create') {
+      state.modal.threshold = Number(el.value);
+    }
+  });
+
+  document.addEventListener('keydown', function (event) {
+    if (event.key === 'Escape' && state.modal) {
+      closeModal();
+      return;
+    }
+    if ((event.key === 'Enter' || event.key === ' ') && event.target.classList && event.target.classList.contains('drop-hint')) {
+      event.preventDefault();
+      toast('原型使用示例图片；接入后这里支持拖放与粘贴。', 'accent');
+    }
+  });
+
+  window.addEventListener('resize', function () {
+    initCompare();
+  });
+
+  /* =========================================================
+     定时推进（仅示例模拟）
+     ========================================================= */
+
+  window.setInterval(function () {
+    var reviewChanged = tickReview();
+    var autoChanged = tickAuto();
+
+    if (state.modal && state.modal.type === 'review') {
+      var modalItem = state.review.items.filter(function (row) { return row.id === state.modal.itemId; })[0];
+      if (!modalItem || modalItem.status !== 'review') {
+        state.modal = null;
+        renderModal();
+      }
+    }
+
+    if ((reviewChanged && state.view === 'review') || (autoChanged && state.view === 'auto')) {
+      render();
+    }
+  }, 1100);
+
+  /* ---------- 初始渲染 ---------- */
+  render();
+  renderModal();
+})();
+</script>
+</body>
+</html>

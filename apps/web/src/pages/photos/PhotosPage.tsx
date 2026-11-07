@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, use
 import { useQuery } from '@tanstack/react-query';
 import { Link, useNavigate, useSearch } from '@tanstack/react-router';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { Check, CircleCheck, Download, Funnel, Heart, HeartOff, LoaderCircle, Play, RotateCw, X } from 'lucide-react';
+import { Check, CircleCheck, Download, Funnel, Heart, HeartOff, LoaderCircle, Play, RotateCw, WandSparkles, X } from 'lucide-react';
 import { toast } from 'sonner';
 import type { MediaItem, MediaType } from '@luvia/contracts';
 import { call, ApiError } from '@/lib/api';
@@ -25,6 +25,7 @@ import { createTimelineStore, type TimelineFilter, type TimelineSnapshot, type T
 import { TimelineTile, type TileApi } from './TimelineTile';
 import { MobileScrubber, TimeRuler } from './TimeRuler';
 import { monthLabel } from './ruler';
+import { BatchCreateDialog } from '@/pages/editor/BatchAutomation';
 
 type TypeFilter = 'all' | 'image' | 'video';
 const TYPE_LABEL: Record<TypeFilter, string> = { all: '全部', image: '照片', video: '视频' };
@@ -74,6 +75,8 @@ export default function PhotosPage() {
   const navigate = useNavigate();
   const prefs = usePreferences();
   const isAdmin = useIsAdmin();
+  const editorCaps = useQuery({ ...q('editorCapabilities'), enabled: isAdmin, staleTime: 30_000 });
+  const canBatch = !!editorCaps.data?.models.some((model) => model.id === 'slbr' && model.available && model.features.includes('detect'));
   const narrow = useNarrow();
 
   const typeFilter: TypeFilter = search.type ?? 'all';
@@ -315,7 +318,8 @@ export default function PhotosPage() {
   }, [topSeg]);
 
   /* ---------- 批量操作 ---------- */
-  const [busy, setBusy] = useState<null | 'favorite' | 'download'>(null);
+  const [busy, setBusy] = useState<null | 'favorite' | 'download' | 'batch'>(null);
+  const [batchItems, setBatchItems] = useState<MediaItem[] | null>(null);
   const selectedItems = useMemo(() => [...selected].map((id) => itemsById.get(id)).filter(Boolean) as MediaItem[], [selected, itemsById]);
   const allFavorite = selectedItems.length > 0 && selectedItems.every((m) => m.favorite);
 
@@ -361,6 +365,29 @@ export default function PhotosPage() {
     } finally {
       setBusy(null);
     }
+  };
+
+  const openBatch = async () => {
+    if (!selected.size) return;
+    if (selected.size > 1000) { toast.error('一次最多选择 1000 项，请减少选择后重试'); return; }
+    setBusy('batch');
+    try {
+      const ids = [...selected];
+      const resolved: MediaItem[] = [];
+      for (let i = 0; i < ids.length; i += 8) {
+        const group = await Promise.all(ids.slice(i, i + 8).map(async (id) => {
+          const known = itemsById.get(id);
+          return known?.source ? known : call('mediaDetail', { params: { id } });
+        }));
+        resolved.push(...group);
+      }
+      const images = resolved.filter((item) => item.mediaType === 'image');
+      if (!images.length) { toast.error('请选择图片'); return; }
+      if (images.some((item) => !item.source)) { toast.error('部分图片缺少源版本，请刷新后重试'); return; }
+      if (images.length < resolved.length) toast.info(`已跳过 ${resolved.length - images.length} 项非图片媒体`);
+      setBatchItems(images);
+    } catch (error) { toast.error(error instanceof ApiError ? error.message : '无法读取所选图片，请重试'); }
+    finally { setBusy(null); }
   };
 
   const play = () => {
@@ -581,8 +608,13 @@ export default function PhotosPage() {
         busy={busy}
         onFavorite={() => void runFavorite()}
         onDownload={() => void runDownload()}
+        canBatch={canBatch}
+        onBatch={() => void openBatch()}
         onClear={clearSelection}
       />
+      {batchItems && <BatchCreateDialog items={batchItems} onClose={() => setBatchItems(null)} onCreated={() => {
+        setBatchItems(null); clearSelection(); void navigate({ to: '/editor', search: { tab: 'batches' } });
+      }} />}
     </div>
   );
 }
@@ -659,8 +691,9 @@ function GapRow({ rowHeight, gap, error, onRetry }: { rowHeight: number; gap: nu
   );
 }
 
-function SelectionBar({ count, allFavorite, busy, onFavorite, onDownload, onClear }: {
-  count: number; allFavorite: boolean; busy: null | 'favorite' | 'download'; onFavorite: () => void; onDownload: () => void; onClear: () => void;
+function SelectionBar({ count, allFavorite, busy, onFavorite, onDownload, onClear, canBatch, onBatch }: {
+  count: number; allFavorite: boolean; busy: null | 'favorite' | 'download' | 'batch'; onFavorite: () => void; onDownload: () => void; onClear: () => void;
+  canBatch: boolean; onBatch: () => void;
 }) {
   const show = count > 0;
   return (
@@ -675,12 +708,15 @@ function SelectionBar({ count, allFavorite, busy, onFavorite, onDownload, onClea
       )}
     >
       <span className="pr-3 pl-2.5 font-semibold" aria-live="polite">已选 {count.toLocaleString('zh-CN')} 项</span>
-      <CommandButton icon={busy === 'favorite' ? <LoaderCircle className="animate-spin" /> : allFavorite ? <HeartOff /> : <Heart />} onClick={onFavorite} disabled={!!busy}>
-        {allFavorite ? '取消收藏' : '收藏'}
+      <CommandButton icon={busy === 'favorite' ? <LoaderCircle className="animate-spin" /> : allFavorite ? <HeartOff /> : <Heart />} onClick={onFavorite} disabled={!!busy} aria-label={allFavorite ? '取消收藏' : '收藏'}>
+        <span className="max-md:hidden">{allFavorite ? '取消收藏' : '收藏'}</span>
       </CommandButton>
-      <CommandButton icon={busy === 'download' ? <LoaderCircle className="animate-spin" /> : <Download />} onClick={onDownload} disabled={!!busy}>
-        下载
+      <CommandButton icon={busy === 'download' ? <LoaderCircle className="animate-spin" /> : <Download />} onClick={onDownload} disabled={!!busy} aria-label="下载">
+        <span className="max-md:hidden">下载</span>
       </CommandButton>
+      {canBatch && <CommandButton icon={busy === 'batch' ? <LoaderCircle className="animate-spin" /> : <WandSparkles />} onClick={onBatch} disabled={!!busy} aria-label="自动修复">
+        <span className="max-md:hidden">自动修复</span>
+      </CommandButton>}
       <CommandButton icon={<X />} onClick={onClear} aria-label="取消选择" />
     </div>
   );

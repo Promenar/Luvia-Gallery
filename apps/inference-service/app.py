@@ -58,7 +58,7 @@ def authenticate(value):
 async def limit_requests(request: Request, call_next):
     if TOKEN and not hmac.compare_digest(request.headers.get('authorization', ''), 'Bearer ' + TOKEN):
         return JSONResponse({'detail': '未授权'}, status_code=401)
-    if request.method != 'POST' or request.url.path != '/v1/inpaint':
+    if request.method != 'POST' or request.url.path not in ('/v1/inpaint', '/v1/detect'):
         return await call_next(request)
     try:
         length = int(request.headers.get('content-length', ''))
@@ -286,6 +286,21 @@ def run_serial(model_id, image, mask):
         return run_model(model_id, image, mask)
 
 
+def detect_serial(image):
+    """返回与输入尺寸一致的 SLBR 检测图；使用与修复相同的 GPU 锁。"""
+    with gpu_lock:
+        height, width = image.shape[:2]
+        resized = np.asarray(Image.fromarray(image).resize((256, 256), Image.Resampling.LANCZOS)).copy()
+        target = device()
+        model = get_cached_model('slbr', target)
+        x = torch.from_numpy(resized.transpose(2, 0, 1)).unsqueeze(0).float().to(target) / 255
+        with torch.inference_mode():
+            _, detected, _ = model(x)
+        scores = detected[0][0, 0].clamp(0, 1).cpu().numpy()
+        output = Image.fromarray((scores * 255).astype(np.uint8)).resize((width, height), Image.Resampling.BILINEAR)
+        return np.asarray(output).copy()
+
+
 @app.on_event('startup')
 async def initialize():
     # 权重存在不等于模型能执行；用小图实际加载并运行后才公布可用。
@@ -310,9 +325,45 @@ async def models(authorization: str | None = Header(default=None)):
     models = []
     for name in MODEL_FILES:
         ready, reason = available(name)
+        features = ['mask', 'detect'] if name == 'slbr' and ready else ['mask']
         models.append({'id': name, 'available': ready, 'reason': reason, 'device': device() if ready else None,
-                       'maxPixels': MAX_PIXELS, 'features': ['mask']})
+                       'maxPixels': MAX_PIXELS, 'features': features})
     return {'models': models}
+
+
+@app.post('/v1/detect')
+async def detect(jobId: str = Form(...), image: UploadFile = File(...), authorization: str | None = Header(default=None)):
+    authenticate(authorization)
+    if not available('slbr')[0]:
+        raise HTTPException(409, '模型不可用')
+    with cancel_lock:
+        if jobId in active_jobs:
+            raise HTTPException(409, '作业编号已在使用')
+        active_jobs.add(jobId)
+    try:
+        image_data = await image.read(MAX_BYTES + 1)
+        original, _ = await run_blocking(read_source, image_data)
+        with cancel_lock:
+            if jobId in cancelled:
+                raise HTTPException(409, '作业已取消')
+        scores = await run_blocking(detect_serial, original[:, :, :3].copy())
+        if scores.shape != original.shape[:2]:
+            raise ValueError('检测蒙版尺寸与原图不一致')
+        def encode():
+            output = io.BytesIO()
+            Image.fromarray(scores).save(output, format='PNG')
+            return output.getvalue()
+        data = await run_blocking(encode)
+        with cancel_lock:
+            if jobId in cancelled:
+                raise HTTPException(409, '作业已取消')
+        return Response(data, media_type='image/png')
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error
+    finally:
+        with cancel_lock:
+            active_jobs.discard(jobId)
+            cancelled.discard(jobId)
 
 
 @app.post('/v1/inpaint')

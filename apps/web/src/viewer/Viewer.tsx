@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
-import { mediaUrls, type EditorModelId, type MediaItem } from '@luvia/contracts';
+import { mediaUrls, type EditorJob, type EditorModelId, type MediaItem } from '@luvia/contracts';
 import { call, ApiError, type CallOptions } from '@/lib/api';
 import { invalidate, q, queryClient } from '@/lib/query';
 import { useIsAdmin, usePreferences, useUpdatePreferences } from '@/stores/session';
@@ -88,6 +88,7 @@ function ViewerDialog({ scope }: { scope: ViewerScope }) {
   const [brush, setBrush] = useState(18);
   const [erase, setErase] = useState(false);
   const [hasMask, setHasMask] = useState(false);
+  const [adjustBase, setAdjustBase] = useState<EditorJob | null>(null);
   const [comparing, setComparing] = useState(false);
   const [saveOpen, setSaveOpen] = useState(false);
   const [savePending, setSavePending] = useState(false);
@@ -116,7 +117,10 @@ function ViewerDialog({ scope }: { scope: ViewerScope }) {
   const activeModel = models.find((model) => model.id === editorModel) ?? null;
   const maskLimit = capsQuery.data?.mask ?? null;
   const modelTooLarge = !!(activeModel?.maxPixels && item.width && item.height && item.width * item.height > activeModel.maxPixels);
-  const resultUrl = editorJob?.status === 'succeeded' ? editorJob.resultUrl : null;
+  const resultUrl = !adjustBase && editorJob?.status === 'succeeded' ? editorJob.resultUrl : null;
+  const autoModel = models.find((model) => model.id === 'slbr' && model.available && model.features.includes('detect'));
+  const canAuto = !!item.source && !!item.width && !!item.height && !!autoModel &&
+    (!autoModel.maxPixels || item.width * item.height <= autoModel.maxPixels);
   const editorError = editorCreateError ?? editorQueryError ?? editorJob?.error ?? null;
   const canGenerate = !!item.width && !!item.height && !!maskLimit && hasMask && !modelTooLarge;
   const generateHint = !item.width || !item.height ? '原图尺寸未知，暂时无法修复'
@@ -138,6 +142,7 @@ function ViewerDialog({ scope }: { scope: ViewerScope }) {
     deleteOpRef.current = null;
     setEditorOpen(false);
     setHasMask(false);
+    setAdjustBase(null);
     setComparing(false);
     setSaveOpen(false);
     setSaveError(null);
@@ -634,6 +639,7 @@ function ViewerDialog({ scope }: { scope: ViewerScope }) {
     setEditorOpen(false);
     setComparing(false);
     setHasMask(false);
+    setAdjustBase(null);
     setSaveOpen(false);
     setSaveError(null);
     resetEditorJob();
@@ -644,7 +650,7 @@ function ViewerDialog({ scope }: { scope: ViewerScope }) {
     const it = itemRef.current;
     const mask = maskRef.current;
     if (!it.source || !mask || !maskLimit) return;
-    const data = mask.exportPng();
+    const data = adjustBase ? mask.exportChanges() : mask.exportPng();
     if (!data) { say('先涂抹要修复的区域'); return; }
     if (Math.floor((data.length * 3) / 4) > maskLimit.maxBytes) {
       say('蒙版文件过大，请减少涂抹范围或换更小的笔刷');
@@ -652,16 +658,27 @@ function ViewerDialog({ scope }: { scope: ViewerScope }) {
     }
     setComparing(false);
     setSavedCopy(null);
-    await createEditorJob({
+    const created = await createEditorJob({
       mediaId: it.id,
       source: it.source,
       model: editorModel,
-      mask: { data, width: mask.width, height: mask.height },
+      mask: adjustBase
+        ? { mode: 'adjust', baseJobId: adjustBase.id, changes: { data, width: mask.width, height: mask.height } }
+        : { data, width: mask.width, height: mask.height },
     });
-  }, [createEditorJob, editorModel, maskLimit, say]);
+    if (created) setAdjustBase(null);
+  }, [adjustBase, createEditorJob, editorModel, maskLimit, say]);
+
+  const autoRepair = useCallback(async () => {
+    const current = itemRef.current;
+    if (!current.source) return;
+    setComparing(false); setSavedCopy(null); setEditorModel('slbr');
+    await createEditorJob({ mediaId: current.id, source: current.source, model: 'slbr', mask: { mode: 'auto', threshold: 128 } });
+  }, [createEditorJob]);
 
   const resetEditorResult = useCallback(() => {
     resetEditorJob();
+    setAdjustBase(null);
     setComparing(false);
     setSavedCopy(null);
   }, [resetEditorJob]);
@@ -804,6 +821,7 @@ function ViewerDialog({ scope }: { scope: ViewerScope }) {
             erase={erase}
             active={!resultUrl && !editorBusy}
             maxEdge={maskLimit?.maxEdge ?? 2048}
+            baseMaskUrl={adjustBase?.maskUrl}
             onChange={setHasMask}
           />
         ) : undefined}
@@ -966,12 +984,17 @@ function ViewerDialog({ scope }: { scope: ViewerScope }) {
             hasMask={hasMask}
             onUndo={() => maskRef.current?.undo()}
             onClear={() => maskRef.current?.clear()}
-            job={editorJob}
+            job={adjustBase ? null : editorJob}
             createPending={editorPending}
             error={editorError}
             canGenerate={canGenerate}
             generateHint={generateHint}
             onGenerate={() => void generate()}
+            onAuto={autoModel ? () => void autoRepair() : undefined}
+            canAuto={canAuto}
+            onAdjust={editorJob?.maskUrl ? () => { setAdjustBase(editorJob); setComparing(false); } : undefined}
+            adjusting={!!adjustBase}
+            onCancelAdjust={() => setAdjustBase(null)}
             onCancel={() => void cancelEditorJob()}
             onReset={resetEditorResult}
             onSave={() => { setSaveError(null); setSaveOpen(true); }}

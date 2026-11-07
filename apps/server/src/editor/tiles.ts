@@ -1,6 +1,28 @@
 type Rect = { left: number; top: number; width: number; height: number };
 export type EditorTile = { core: Rect; region: Rect };
 
+/** 自动检测尚无蒙版，逐块覆盖整张方向校正后的图片。 */
+export function planDetectionTiles(width: number, height: number, coreEdge = 1024, context = 128): EditorTile[] {
+  if (![width, height, coreEdge, context].every(Number.isInteger) || Math.min(width, height, coreEdge) <= 0 || context < 0) {
+    throw new Error('图片尺寸或分块参数无效');
+  }
+  const tiles: EditorTile[] = [];
+  for (let top = 0; top < height; top += coreEdge) {
+    for (let left = 0; left < width; left += coreEdge) {
+      const right = Math.min(width, left + coreEdge);
+      const bottom = Math.min(height, top + coreEdge);
+      const regionLeft = Math.max(0, left - context);
+      const regionTop = Math.max(0, top - context);
+      tiles.push({
+        core: { left, top, width: right - left, height: bottom - top },
+        region: { left: regionLeft, top: regionTop, width: Math.min(width, right + context) - regionLeft,
+          height: Math.min(height, bottom + context) - regionTop },
+      });
+    }
+  }
+  return tiles;
+}
+
 /** 仅规划被蒙版覆盖的核心块；输入蒙版与输出坐标均为方向校正后的空间。 */
 export function planEditorTiles(mask: Uint8Array, maskWidth: number, maskHeight: number,
   width: number, height: number, coreEdge = 1024, context = 128): EditorTile[] {

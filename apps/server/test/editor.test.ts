@@ -19,6 +19,9 @@ async function startStub() {
   let delayInpaint = false;
   let echoSource = false;
   let lossyEcho = false;
+  let detectWatermark = true;
+  let failInpaint = false;
+  let inpaintCount = 0;
   let nativeMaxPixels = 40_000_000;
   const inputSizes: Array<{ width: number; height: number }> = [];
   let requestBody = Buffer.alloc(0);
@@ -34,11 +37,33 @@ async function startStub() {
       ] }));
       return;
     }
+    if (req.url === '/v1/detect') {
+      const chunks: Buffer[] = [];
+      req.on('data', (chunk: Buffer) => chunks.push(chunk));
+      req.on('end', async () => {
+        const body = Buffer.concat(chunks);
+        const marker = Buffer.from('Content-Disposition: form-data; name="image"; filename="source"\r\nContent-Type: application/octet-stream\r\n\r\n');
+        const start = body.indexOf(marker) + marker.length;
+        const boundary = req.headers['content-type']!.split('boundary=')[1]!;
+        const end = body.indexOf(Buffer.from(`\r\n--${boundary}`), start);
+        const meta = await sharp(body.subarray(start, end)).metadata();
+        const pixels = Buffer.alloc(meta.width! * meta.height!);
+        if (detectWatermark) {
+          for (let y = 2; y < Math.min(5, meta.height!); y++) for (let x = 3; x < Math.min(6, meta.width!); x++) pixels[y * meta.width! + x] = 255;
+        }
+        const mask = await sharp(pixels, { raw: { width: meta.width!, height: meta.height!, channels: 1 } }).png().toBuffer();
+        res.setHeader('content-type', 'image/png');
+        res.end(mask);
+      });
+      return;
+    }
     if (req.url?.startsWith('/v1/inpaint')) {
+      inpaintCount++;
       const chunks: Buffer[] = [];
       req.on('data', (chunk: Buffer) => chunks.push(chunk));
       req.on('end', async () => {
         requestBody = Buffer.concat(chunks);
+        if (failInpaint) { res.writeHead(500); res.end('inference error'); return; }
         let response = result;
         if (echoSource) {
           const marker = Buffer.from('Content-Disposition: form-data; name="image"; filename="source"\r\nContent-Type: application/octet-stream\r\n\r\n');
@@ -74,6 +99,9 @@ async function startStub() {
     getRequest: () => requestBody,
     getResponse: () => lastResponse,
     setDelay: (value: boolean) => { delayInpaint = value; },
+    setDetectWatermark: (value: boolean) => { detectWatermark = value; },
+    setInpaintFailure: (value: boolean) => { failInpaint = value; },
+    inpaintCount: () => inpaintCount,
     setResult: (value: Buffer) => { result = value; },
     setEchoSource: () => { echoSource = true; },
     setLossyEcho: () => { echoSource = true; lossyEcho = true; },
@@ -129,6 +157,215 @@ test('能力探测只暴露真实可用的模型', async () => {
     assert.equal(caps.models.find((m: { id: string }) => m.id === 'lama').reason, '未安装权重');
     assert.equal(caps.models.find((m: { id: string }) => m.id === 'slbr').features.includes('detect'), true);
     assert.equal(caps.mask.maxEdge > 0, true);
+  } finally { await app.close(); db.close(); await stub.close(); await rm(root, { recursive: true, force: true }); await rm(cache, { recursive: true, force: true }); }
+});
+
+test('SLBR 自动检测生成可查看蒙版和副本预览，保留原图与非蒙版像素', async () => {
+  const stub = await startStub();
+  stub.setEchoSource();
+  const { root, cache, db, app, headers, row } = await setup(stub.url);
+  try {
+    const original = await readFile(path.join(root, 'photo.jpg'));
+    const created = await app.inject({ method: 'POST', url: '/api/v2/editor/jobs', headers,
+      payload: { mediaId: row.id, source: sourceOf(row), model: 'slbr', mask: { mode: 'auto', threshold: 128 } } });
+    assert.equal(created.statusCode, 200, created.body);
+    const job = await waitForJob(app, headers, created.json().id);
+    assert.equal(job.status, 'succeeded', JSON.stringify(job));
+    assert.equal(job.outcome, 'detected');
+    assert.ok(job.maskUrl);
+    const mask = await app.inject({ method: 'GET', url: job.maskUrl, headers });
+    assert.equal(mask.statusCode, 200);
+    const maskPixels = await sharp(mask.rawPayload).greyscale().raw().toBuffer();
+    assert.equal(maskPixels[2 * 10 + 3], 255);
+    assert.equal(maskPixels[0], 0);
+    const result = await app.inject({ method: 'GET', url: job.resultUrl, headers });
+    assert.equal(result.statusCode, 200);
+    const unchanged = await sharp(result.rawPayload).extract({ left: 0, top: 0, width: 1, height: 1 }).removeAlpha().raw().toBuffer();
+    const expected = await sharp(original).extract({ left: 0, top: 0, width: 1, height: 1 }).removeAlpha().raw().toBuffer();
+    assert.deepEqual(unchanged, expected);
+    assert.deepEqual(await readFile(path.join(root, 'photo.jpg')), original);
+  } finally { await app.close(); db.close(); await stub.close(); await rm(root, { recursive: true, force: true }); await rm(cache, { recursive: true, force: true }); }
+});
+
+test('SLBR 未检测到水印时明确返回未检出，不生成误导性的修复副本', async () => {
+  const stub = await startStub();
+  stub.setDetectWatermark(false);
+  const { root, cache, db, app, headers, row } = await setup(stub.url);
+  try {
+    const created = await app.inject({ method: 'POST', url: '/api/v2/editor/jobs', headers,
+      payload: { mediaId: row.id, source: sourceOf(row), model: 'slbr', mask: { mode: 'auto', threshold: 128 } } });
+    assert.equal(created.statusCode, 200, created.body);
+    const job = await waitForJob(app, headers, created.json().id);
+    assert.equal(job.status, 'succeeded', JSON.stringify(job));
+    assert.equal(job.outcome, 'no_detection');
+    assert.equal(job.resultUrl, null);
+  } finally { await app.close(); db.close(); await stub.close(); await rm(root, { recursive: true, force: true }); await rm(cache, { recursive: true, force: true }); }
+});
+
+test('修正自动蒙版时保留未编辑的原分辨率区域', async () => {
+  const stub = await startStub();
+  stub.setEchoSource();
+  const { root, cache, db, app, headers, row } = await setup(stub.url);
+  try {
+    const created = await app.inject({ method: 'POST', url: '/api/v2/editor/jobs', headers,
+      payload: { mediaId: row.id, source: sourceOf(row), model: 'slbr', mask: { mode: 'auto', threshold: 128 } } });
+    const detected = await waitForJob(app, headers, created.json().id);
+    assert.equal(detected.status, 'succeeded');
+    const pixels = Buffer.alloc(10 * 8 * 3);
+    pixels[0] = 255;
+    pixels[(2 * 10 + 3) * 3 + 2] = 255;
+    const changes = await sharp(pixels, { raw: { width: 10, height: 8, channels: 3 } }).png().toBuffer();
+    const adjusted = await app.inject({ method: 'POST', url: '/api/v2/editor/jobs', headers, payload: {
+      mediaId: row.id, source: sourceOf(row), model: 'slbr',
+      mask: { mode: 'adjust', baseJobId: detected.id, changes: { data: changes.toString('base64'), width: 10, height: 8 } },
+    } });
+    assert.equal(adjusted.statusCode, 200, adjusted.body);
+    const job = await waitForJob(app, headers, adjusted.json().id);
+    assert.equal(job.status, 'succeeded', JSON.stringify(job));
+    const mask = await app.inject({ method: 'GET', url: job.maskUrl, headers });
+    const result = await sharp(mask.rawPayload).removeAlpha().greyscale().raw().toBuffer();
+    assert.equal(result[0], 255);
+    assert.equal(result[2 * 10 + 3], 0);
+    assert.equal(result[2 * 10 + 4], 255);
+  } finally { await app.close(); db.close(); await stub.close(); await rm(root, { recursive: true, force: true }); await rm(cache, { recursive: true, force: true }); }
+});
+
+async function waitForBatchItem(app: Awaited<ReturnType<typeof setup>>['app'], headers: Record<string, string>, batchId: string, status: string) {
+  for (let i = 0; i < 160; i++) {
+    const response = await app.inject({ method: 'GET', url: `/api/v2/editor/batches/${batchId}`, headers });
+    assert.equal(response.statusCode, 200, response.body);
+    const batch = response.json();
+    if (batch.items.some((item: { status: string }) => item.status === status)) return batch;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`等待批量项目 ${status} 超时`);
+}
+
+test('审核批次等待确认并幂等保存副本，原图保持不变', async () => {
+  const stub = await startStub();
+  stub.setEchoSource();
+  const { root, cache, db, app, headers, row } = await setup(stub.url);
+  try {
+    const original = await readFile(path.join(root, 'photo.jpg'));
+    const response = await app.inject({ method: 'POST', url: '/api/v2/editor/batches', headers, payload: {
+      mode: 'review', threshold: 128, destination: { libraryId: 'lib', folder: '修复副本' },
+      items: [{ mediaId: row.id, source: sourceOf(row) }],
+    } });
+    assert.equal(response.statusCode, 200, response.body);
+    const review = await waitForBatchItem(app, headers, response.json().id, 'review');
+    assert.equal((db.prepare("SELECT count(*) AS n FROM editor_imports").get() as { n: number }).n, 0);
+    const item = review.items[0];
+    assert.ok(item.jobId);
+    const changes = await sharp({ create: { width: 10, height: 8, channels: 3, background: '#000' } }).png().toBuffer();
+    const adjusted = await app.inject({ method: 'POST', url: '/api/v2/editor/jobs', headers, payload: {
+      mediaId: row.id, source: sourceOf(row), model: 'slbr',
+      mask: { mode: 'adjust', baseJobId: item.jobId, changes: { data: changes.toString('base64'), width: 10, height: 8 } },
+    } });
+    assert.equal(adjusted.statusCode, 200, adjusted.body);
+    const updatedJob = await waitForJob(app, headers, adjusted.json().id);
+    assert.equal(updatedJob.status, 'succeeded', JSON.stringify(updatedJob));
+    const replaced = await app.inject({ method: 'PUT', url: `/api/v2/editor/batches/${review.id}/items/${item.id}/job`, headers,
+      payload: { jobId: updatedJob.id } });
+    assert.equal(replaced.statusCode, 200, replaced.body);
+    assert.equal(replaced.json().items[0].jobId, updatedJob.id);
+    const approve = await app.inject({ method: 'POST', url: `/api/v2/editor/batches/${review.id}/items/${item.id}/approve`, headers });
+    assert.equal(approve.statusCode, 200, approve.body);
+    const saved = await waitForBatchItem(app, headers, review.id, 'saved');
+    const retry = await app.inject({ method: 'POST', url: `/api/v2/editor/batches/${review.id}/items/${item.id}/approve`, headers });
+    assert.equal(retry.statusCode, 200, retry.body);
+    assert.equal((db.prepare("SELECT count(*) AS n FROM editor_imports WHERE status='saved'").get() as { n: number }).n, 1);
+    assert.ok(saved.items[0].resultMediaId);
+    assert.deepEqual(await readFile(path.join(root, 'photo.jpg')), original);
+    assert.ok((await stat(path.join(root, '修复副本', saved.items[0].resultName))).isFile());
+  } finally { await app.close(); db.close(); await stub.close(); await rm(root, { recursive: true, force: true }); await rm(cache, { recursive: true, force: true }); }
+});
+
+test('全自动批次无需逐张确认并按快照保存副本', async () => {
+  const stub = await startStub();
+  stub.setEchoSource();
+  const { root, cache, db, app, headers, row } = await setup(stub.url);
+  try {
+    const response = await app.inject({ method: 'POST', url: '/api/v2/editor/batches', headers, payload: {
+      mode: 'auto', threshold: 128, destination: { libraryId: 'lib', folder: '自动修复' },
+      items: [{ mediaId: row.id, source: sourceOf(row) }],
+    } });
+    assert.equal(response.statusCode, 200, response.body);
+    const saved = await waitForBatchItem(app, headers, response.json().id, 'saved');
+    assert.ok(saved.items[0].resultMediaId);
+    assert.ok((await stat(path.join(root, '自动修复', saved.items[0].resultName))).isFile());
+  } finally { await app.close(); db.close(); await stub.close(); await rm(root, { recursive: true, force: true }); await rm(cache, { recursive: true, force: true }); }
+});
+
+test('暂停批次不发布副本，恢复后继续', async () => {
+  const stub = await startStub();
+  stub.setEchoSource();
+  stub.setDelay(true);
+  const { root, cache, db, app, headers, row } = await setup(stub.url);
+  try {
+    const response = await app.inject({ method: 'POST', url: '/api/v2/editor/batches', headers, payload: {
+      mode: 'auto', threshold: 128, destination: { libraryId: 'lib', folder: '暂停验证' },
+      items: [{ mediaId: row.id, source: sourceOf(row) }],
+    } });
+    assert.equal(response.statusCode, 200, response.body);
+    const id = response.json().id;
+    const paused = await app.inject({ method: 'POST', url: `/api/v2/editor/batches/${id}/action`, headers, payload: { action: 'pause' } });
+    assert.equal(paused.json().status, 'paused');
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    assert.equal((db.prepare('SELECT count(*) AS n FROM editor_imports').get() as { n: number }).n, 0);
+    const resumed = await app.inject({ method: 'POST', url: `/api/v2/editor/batches/${id}/action`, headers, payload: { action: 'resume' } });
+    assert.equal(resumed.json().status, 'running');
+    await waitForBatchItem(app, headers, id, 'saved');
+  } finally { await app.close(); db.close(); await stub.close(); await rm(root, { recursive: true, force: true }); await rm(cache, { recursive: true, force: true }); }
+});
+
+test('推理连续失败达到上限后停止并允许人工重试', async () => {
+  const stub = await startStub();
+  stub.setEchoSource();
+  stub.setInpaintFailure(true);
+  const { root, cache, db, app, headers, row } = await setup(stub.url);
+  try {
+    const response = await app.inject({ method: 'POST', url: '/api/v2/editor/batches', headers, payload: {
+      mode: 'auto', threshold: 128, destination: { libraryId: 'lib', folder: '失败验证' },
+      items: [{ mediaId: row.id, source: sourceOf(row) }],
+    } });
+    assert.equal(response.statusCode, 200, response.body);
+    const failed = await waitForBatchItem(app, headers, response.json().id, 'failed');
+    assert.equal(failed.items[0].attempts, 3);
+    assert.equal(stub.inpaintCount(), 3);
+    stub.setInpaintFailure(false);
+    const retry = await app.inject({ method: 'POST', url: `/api/v2/editor/batches/${failed.id}/items/${failed.items[0].id}/retry`, headers });
+    assert.equal(retry.statusCode, 200, retry.body);
+    await waitForBatchItem(app, headers, failed.id, 'saved');
+    assert.equal(stub.inpaintCount(), 4);
+  } finally { await app.close(); db.close(); await stub.close(); await rm(root, { recursive: true, force: true }); await rm(cache, { recursive: true, force: true }); }
+});
+
+test('服务重启后恢复批次，已发布操作重复执行仍只生成一份文件', async () => {
+  const stub = await startStub();
+  stub.setEchoSource();
+  stub.setDelay(true);
+  const context = await setup(stub.url);
+  const { root, cache, db, headers, row } = context;
+  let app = context.app;
+  try {
+    const response = await app.inject({ method: 'POST', url: '/api/v2/editor/batches', headers, payload: {
+      mode: 'auto', threshold: 128, destination: { libraryId: 'lib', folder: '重启验证' },
+      items: [{ mediaId: row.id, source: sourceOf(row) }],
+    } });
+    assert.equal(response.statusCode, 200, response.body);
+    const id = response.json().id;
+    await waitForBatchItem(app, headers, id, 'generating');
+    await app.close();
+    stub.setDelay(false);
+    const { createApp } = await import('../src/api/app.ts');
+    app = await createApp({ db, legacyPending: false, cacheDir: cache });
+    const saved = await waitForBatchItem(app, headers, id, 'saved');
+    assert.equal((db.prepare("SELECT count(*) AS n FROM editor_imports WHERE status='saved'").get() as { n: number }).n, 1);
+    db.prepare("UPDATE editor_batch_items SET status='saving' WHERE id=?").run(saved.items[0].id);
+    db.prepare("UPDATE editor_batches SET status='running' WHERE id=?").run(id);
+    const recovered = await waitForBatchItem(app, headers, id, 'saved');
+    assert.equal(recovered.items[0].resultMediaId, saved.items[0].resultMediaId);
+    assert.equal((db.prepare("SELECT count(*) AS n FROM editor_imports WHERE status='saved'").get() as { n: number }).n, 1);
   } finally { await app.close(); db.close(); await stub.close(); await rm(root, { recursive: true, force: true }); await rm(cache, { recursive: true, force: true }); }
 });
 

@@ -9,6 +9,8 @@ export interface MaskCanvasHandle {
   clear: () => void;
   /** 返回不含 data URL 前缀的 PNG base64；没有有效蒙版时为 null。 */
   exportPng: () => string | null;
+  /** 返回红色增加、蓝色擦除的变更图，不改变原始检测蒙版。 */
+  exportChanges: () => string | null;
   /** 蒙版内部像素尺寸，随能力上限下采样。 */
   width: number;
   height: number;
@@ -26,9 +28,11 @@ export const MaskCanvas = forwardRef<MaskCanvasHandle, {
   erase: boolean;
   active: boolean;
   maxEdge: number;
+  baseMaskUrl?: string | null;
   onChange: (hasMask: boolean) => void;
-}>(function MaskCanvas({ item, rotation, brush, erase, active, maxEdge, onChange }, ref) {
+}>(function MaskCanvas({ item, rotation, brush, erase, active, maxEdge, baseMaskUrl, onChange }, ref) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const baseLayer = useRef<HTMLCanvasElement | null>(null);
   const strokes = useRef<Stroke[]>([]);
   const drawing = useRef<Stroke | null>(null);
   const lastReported = useRef(false);
@@ -92,6 +96,7 @@ export const MaskCanvas = forwardRef<MaskCanvasHandle, {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
+    if (baseLayer.current) ctx.drawImage(baseLayer.current, 0, 0, canvas.width, canvas.height);
     const color = accent();
     for (const stroke of strokes.current) drawVisible(ctx, stroke, color);
   }, [drawVisible]);
@@ -105,12 +110,42 @@ export const MaskCanvas = forwardRef<MaskCanvasHandle, {
   }, [width, height, redraw]);
 
   const notify = useCallback(() => {
-    const has = strokes.current.some((stroke) => !stroke.erase);
+    const has = baseMaskUrl ? strokes.current.length > 0 : strokes.current.some((stroke) => !stroke.erase);
     if (has !== lastReported.current) {
       lastReported.current = has;
       onChange(has);
     }
-  }, [onChange]);
+  }, [onChange, baseMaskUrl]);
+
+  useEffect(() => {
+    let cancelled = false;
+    baseLayer.current = null;
+    strokes.current = [];
+    lastReported.current = false;
+    onChange(false);
+    redraw();
+    if (!baseMaskUrl) return;
+    const image = new Image();
+    image.onload = () => {
+      if (cancelled) return;
+      const layer = document.createElement('canvas');
+      layer.width = width; layer.height = height;
+      const context = layer.getContext('2d');
+      if (!context) return;
+      context.drawImage(image, 0, 0, width, height);
+      const pixels = context.getImageData(0, 0, width, height);
+      for (let i = 0; i < pixels.data.length; i += 4) {
+        const opacity = pixels.data[i]!;
+        pixels.data[i] = 255; pixels.data[i + 1] = 255; pixels.data[i + 2] = 255;
+        pixels.data[i + 3] = Math.round(opacity * 0.48);
+      }
+      context.putImageData(pixels, 0, 0);
+      baseLayer.current = layer;
+      redraw();
+    };
+    image.src = `${baseMaskUrl}${baseMaskUrl.includes('?') ? '&' : '?'}preview=1`;
+    return () => { cancelled = true; };
+  }, [baseMaskUrl, width, height, onChange, redraw]);
 
   useEffect(() => {
     strokes.current = [];
@@ -228,6 +263,24 @@ export const MaskCanvas = forwardRef<MaskCanvasHandle, {
       ctx.fillStyle = '#000';
       ctx.fillRect(0, 0, width, height);
       for (const stroke of strokes.current) drawBinary(ctx, stroke);
+      return canvas.toDataURL('image/png').split(',')[1] ?? null;
+    },
+    exportChanges: () => {
+      if (!strokes.current.length) return null;
+      const canvas = document.createElement('canvas');
+      canvas.width = width; canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return null;
+      ctx.fillStyle = '#000'; ctx.fillRect(0, 0, width, height);
+      for (const stroke of strokes.current) {
+        ctx.save();
+        ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+        ctx.strokeStyle = stroke.erase ? '#0000ff' : '#ff0000';
+        ctx.fillStyle = ctx.strokeStyle; ctx.lineWidth = stroke.radius * 2;
+        if (stroke.points.length === 1) drawDot(ctx, stroke, stroke.points[0]!.x, stroke.points[0]!.y, ctx.fillStyle);
+        else { trace(ctx, stroke); ctx.stroke(); }
+        ctx.restore();
+      }
       return canvas.toDataURL('image/png').split(',')[1] ?? null;
     },
     width,
