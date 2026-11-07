@@ -42,6 +42,7 @@ export type EditorServiceConfig = {
   maskMaxBytes: number;
   maskMaxEdge: number;
   maxResultBytes: number;
+  maxImagePixels: number;
   jobTtlSeconds: number;
   maxConcurrency: number;
   probeTimeoutMs: number;
@@ -59,7 +60,8 @@ export function editorConfig(): EditorServiceConfig {
     token: (process.env.EDITOR_SERVICE_TOKEN ?? '').trim() || null,
     maskMaxBytes: positive(process.env.EDITOR_MASK_MAX_BYTES, 8 * 1024 * 1024),
     maskMaxEdge: positive(process.env.EDITOR_MASK_MAX_EDGE, 2048),
-    maxResultBytes: positive(process.env.EDITOR_MAX_RESULT_BYTES, 256 * 1024 * 1024),
+    maxResultBytes: positive(process.env.EDITOR_MAX_RESULT_BYTES, 512 * 1024 * 1024),
+    maxImagePixels: positive(process.env.EDITOR_MAX_IMAGE_PIXELS, 100_000_000),
     jobTtlSeconds: positive(process.env.EDITOR_JOB_TTL_SECONDS, 3600),
     maxConcurrency: positive(process.env.EDITOR_MAX_CONCURRENCY, 1),
     probeTimeoutMs: positive(process.env.EDITOR_PROBE_TIMEOUT_MS, 2500),

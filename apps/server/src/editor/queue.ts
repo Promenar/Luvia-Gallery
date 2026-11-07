@@ -11,6 +11,7 @@ import { appendLibraryChange } from '../core/library-changes.ts';
 import { materializeFolders } from '../worker/scan.ts';
 import { publishLibraryEvent } from '../worker/watch-events.ts';
 import { statFields } from '../watch/file-info.ts';
+import { planEditorTiles } from './tiles.ts';
 import {
   cancelInference, probeModels, probeWrite, runInference, type EditorServiceConfig,
 } from './service.ts';
@@ -46,6 +47,9 @@ const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const JOB_ID = /^[A-Za-z0-9_-]{8,80}$/;
 const MAX_IMAGE_BYTES = 128 * 1024 * 1024;
 const RESULT_BUDGET_BYTES = 2 * 1024 * 1024 * 1024;
+const TILE_CORE = 1024;
+const TILE_CONTEXT = 128;
+const TILE_MAX_PIXELS = (TILE_CORE + TILE_CONTEXT * 2) ** 2;
 
 function safeUnder(base: string, target: string): boolean {
   const rel = path.relative(base, target);
@@ -81,6 +85,7 @@ export class EditorQueue {
   private pending: string[] = [];
   private active = new Map<string, AbortController>();
   private activeCount = 0;
+  private running = new Set<Promise<void>>();
   private closed = false;
   private timer: NodeJS.Timeout;
 
@@ -106,10 +111,7 @@ export class EditorQueue {
     clearInterval(this.timer);
     for (const controller of this.active.values()) controller.abort();
     // 等运行中的作业收尾，避免 API 关闭后异步任务再访问已经关闭的数据库。
-    const deadline = Date.now() + 2500;
-    while (this.activeCount > 0 && Date.now() < deadline) {
-      await new Promise<void>((resolve) => setTimeout(resolve, 25));
-    }
+    await Promise.allSettled([...this.running]);
     this.active.clear();
   }
 
@@ -138,7 +140,10 @@ export class EditorQueue {
 
   async capabilities(): Promise<EditorCapabilities> {
     const [models, write] = await Promise.all([probeModels(this.config), probeWrite(this.db)]);
-    return { models, write, mask: { maxBytes: this.config.maskMaxBytes, maxEdge: this.config.maskMaxEdge } };
+    const advertised = models.map((model) => ({ ...model,
+      maxPixels: model.maxPixels && model.maxPixels >= TILE_MAX_PIXELS ? this.config.maxImagePixels
+        : model.maxPixels === null ? Math.min(40_000_000, this.config.maxImagePixels) : Math.min(model.maxPixels, this.config.maxImagePixels) }));
+    return { models: advertised, write, mask: { maxBytes: this.config.maskMaxBytes, maxEdge: this.config.maskMaxEdge } };
   }
 
   async create(input: {
@@ -153,7 +158,9 @@ export class EditorQueue {
     if (!sourceMatches(file, input.source)) throw new EditorError(409, 'MEDIA_CHANGED', '媒体已发生变化，请刷新后重试');
     if (file.media_type !== 'image') throw new EditorError(400, 'INVALID_MASK', '只有图片可以修复');
     if (!file.width || !file.height) throw new EditorError(409, 'INVALID_MASK', '原图尺寸未知，无法校验蒙版');
-    if (model.maxPixels && file.width * file.height > model.maxPixels) {
+    const maxPixels = model.maxPixels && model.maxPixels >= TILE_MAX_PIXELS ? this.config.maxImagePixels
+      : model.maxPixels === null ? Math.min(40_000_000, this.config.maxImagePixels) : Math.min(model.maxPixels, this.config.maxImagePixels);
+    if (file.width * file.height > maxPixels) {
       throw new EditorError(409, 'MODEL_UNAVAILABLE', '图片超过所选模型的输入上限');
     }
     if (input.mask.width > this.config.maskMaxEdge || input.mask.height > this.config.maskMaxEdge) {
@@ -172,7 +179,7 @@ export class EditorQueue {
       throw new EditorError(400, 'INVALID_MASK', '蒙版宽高比必须与原图一致');
     }
     // 统一转为单通道二值 PNG，避免前端导出的 RGBA/抗锯齿灰阶影响模型掩膜约定。
-    const maskPng = await sharp(raw).greyscale().threshold(128).png({ compressionLevel: 9 }).toBuffer();
+    const maskPng = await sharp(raw).flatten({ background: '#000000' }).greyscale().threshold(128).png({ compressionLevel: 9 }).toBuffer();
     const id = randomUUID();
     const dir = this.jobDir(id);
     await mkdir(dir, { recursive: true });
@@ -203,10 +210,12 @@ export class EditorQueue {
       const job = this.load(id);
       if (!job || job.status !== 'queued') continue;
       this.activeCount++;
-      void this.run(job).finally(() => {
+      const running = this.run(job).finally(() => {
         this.activeCount--;
         this.pump();
       });
+      this.running.add(running);
+      void running.then(() => this.running.delete(running), () => this.running.delete(running));
     }
   }
 
@@ -236,25 +245,92 @@ export class EditorQueue {
       if (originalMeta.depth !== 'uchar' || (originalMeta.bitsPerSample ?? 8) > 8) {
         throw new EditorError(409, 'OPERATION_FAILED', '暂不支持高位深图片修复');
       }
-      const image = originalMeta.orientation && originalMeta.orientation !== 1
-        ? await sharp(originalBytes).rotate().keepIccProfile().toBuffer() : originalBytes;
-      const maskMeta = await sharp(maskBytes).metadata();
-      const mask = maskMeta.width !== file.width || maskMeta.height !== file.height
-        ? await sharp(maskBytes).resize(file.width!, file.height!, { kernel: 'nearest' }).png().toBuffer() : maskBytes;
       this.db.prepare("UPDATE editor_jobs SET progress=0.25,stage='正在推理' WHERE id=? AND status='running'").run(job.id);
-      const result = await runInference(this.config, { jobId: job.id, model: job.model, image, mask, signal: controller.signal });
-      const resultMeta = await sharp(result.data).metadata().catch(() => null);
-      if (!resultMeta?.width || !resultMeta?.height) throw new EditorError(502, 'OPERATION_FAILED', '推理结果无法读取');
-      if (resultMeta.width !== file.width || resultMeta.height !== file.height) {
-        throw new EditorError(502, 'OPERATION_FAILED', '推理结果尺寸与原图不一致');
+      const model = (await probeModels(this.config)).find((item) => item.id === job.model);
+      if (!model?.available) throw new EditorError(409, 'MODEL_UNAVAILABLE', '模型当前不可用');
+      let resultPath: string;
+      let resultMime: string;
+      if (model.maxPixels && file.width! * file.height! > model.maxPixels) {
+        if (model.maxPixels < TILE_MAX_PIXELS) throw new EditorError(409, 'MODEL_UNAVAILABLE', '模型输入上限不足以分块处理');
+        const rawMask = await sharp(maskBytes).removeAlpha().greyscale().raw().toBuffer({ resolveWithObject: true });
+        const tiles = planEditorTiles(rawMask.data, rawMask.info.width, rawMask.info.height, file.width!, file.height!, TILE_CORE, TILE_CONTEXT);
+        if (!tiles.length) throw new EditorError(400, 'INVALID_MASK', '请先涂抹需要修复的区域');
+        const patches: Array<{ input: string; left: number; top: number; blend: 'over' }> = [];
+        const profilePath = originalMeta.icc ? path.join(dir, 'source.icc') : null;
+        if (profilePath) await writeFile(profilePath, originalMeta.icc!);
+        for (let i = 0; i < tiles.length; i++) {
+          controller.signal.throwIfAborted();
+          const tile = tiles[i]!;
+          const [image, mask] = await Promise.all([
+            sharp(originalBytes).rotate().extract(tile.region).keepIccProfile().png().toBuffer(),
+            sharp(maskBytes).resize(file.width!, file.height!, { kernel: 'nearest' }).extract(tile.region).png().toBuffer(),
+          ]);
+          const result = await runInference(this.config, { jobId: job.id, model: job.model, image, mask, signal: controller.signal });
+          const meta = await sharp(result.data).metadata();
+          if (meta.width !== tile.region.width || meta.height !== tile.region.height) {
+            throw new EditorError(502, 'OPERATION_FAILED', '分块推理结果尺寸不一致');
+          }
+          const patch = path.join(dir, `tile-${i}.png`);
+          const coreMask = await sharp(maskBytes).resize(file.width!, file.height!, { kernel: 'nearest' })
+            .extract(tile.core).greyscale().png().toBuffer();
+          let core = sharp(result.data).extract({ left: tile.core.left - tile.region.left, top: tile.core.top - tile.region.top,
+            width: tile.core.width, height: tile.core.height }).removeAlpha();
+          if (profilePath && !originalMeta.icc!.equals(meta.icc ?? Buffer.alloc(0))) {
+            core = core.withIccProfile(profilePath);
+          } else if (!profilePath && meta.icc) {
+            core = core.withIccProfile('srgb');
+          } else {
+            core = core.keepIccProfile();
+          }
+          const coreImage = await core.png().toBuffer();
+          await sharp(coreImage).joinChannel(coreMask).keepIccProfile().png().toFile(patch);
+          patches.push({ input: patch, left: tile.core.left, top: tile.core.top, blend: 'over' });
+          this.db.prepare("UPDATE editor_jobs SET progress=?,stage='正在推理' WHERE id=? AND status='running'")
+            .run(0.25 + 0.55 * ((i + 1) / tiles.length), job.id);
+        }
+        controller.signal.throwIfAborted();
+        resultPath = path.join(dir, 'result.png');
+        resultMime = 'image/png';
+        if (originalMeta.hasAlpha) {
+          // Sharp 的移除 alpha 阶段晚于 composite，必须先生成不透明底图，避免改变未选像素。
+          const basePath = path.join(dir, 'base-rgb.png');
+          const rgbPath = path.join(dir, 'composed-rgb.png');
+          const alphaPath = path.join(dir, 'original-alpha.png');
+          await Promise.all([
+            sharp(originalBytes).rotate().removeAlpha().keepIccProfile().png().toFile(basePath),
+            sharp(originalBytes).rotate().ensureAlpha().extractChannel('alpha').png().toFile(alphaPath),
+          ]);
+          await sharp(basePath).composite(patches).removeAlpha().keepIccProfile().png().toFile(rgbPath);
+          await sharp(rgbPath).joinChannel(alphaPath).keepIccProfile().png().toFile(resultPath);
+          await Promise.all([rm(basePath, { force: true }), rm(rgbPath, { force: true }), rm(alphaPath, { force: true })]);
+        } else {
+          await sharp(originalBytes).rotate().composite(patches).removeAlpha().keepIccProfile().png().toFile(resultPath);
+        }
+        await Promise.all([...patches.map((patch) => rm(patch.input, { force: true })),
+          ...(profilePath ? [rm(profilePath, { force: true })] : [])]);
+      } else {
+        const image = originalMeta.orientation && originalMeta.orientation !== 1
+          ? await sharp(originalBytes).rotate().keepIccProfile().toBuffer() : originalBytes;
+        const maskMeta = await sharp(maskBytes).metadata();
+        const mask = maskMeta.width !== file.width || maskMeta.height !== file.height
+          ? await sharp(maskBytes).resize(file.width!, file.height!, { kernel: 'nearest' }).png().toBuffer() : maskBytes;
+        const result = await runInference(this.config, { jobId: job.id, model: job.model, image, mask, signal: controller.signal });
+        const resultMeta = await sharp(result.data).metadata().catch(() => null);
+        if (!resultMeta?.width || !resultMeta?.height) throw new EditorError(502, 'OPERATION_FAILED', '推理结果无法读取');
+        if (resultMeta.width !== file.width || resultMeta.height !== file.height) {
+          throw new EditorError(502, 'OPERATION_FAILED', '推理结果尺寸与原图不一致');
+        }
+        const ext = result.mime === 'image/jpeg' ? 'jpg' : result.mime === 'image/webp' ? 'webp' : 'png';
+        resultPath = path.join(dir, `result.${ext}`);
+        resultMime = result.mime;
+        await writeFile(resultPath, result.data);
       }
       this.db.prepare("UPDATE editor_jobs SET progress=0.9,stage='正在保存结果' WHERE id=? AND status='running'").run(job.id);
-      const ext = result.mime === 'image/jpeg' ? 'jpg' : result.mime === 'image/webp' ? 'webp' : 'png';
-      const resultPath = path.join(dir, `result.${ext}`);
-      await writeFile(resultPath, result.data);
+      const resultSize = (await stat(resultPath)).size;
+      if (resultSize > this.config.maxResultBytes) throw new EditorError(502, 'OPERATION_FAILED', '修复结果超过大小限制');
       const changed = this.db.prepare(`UPDATE editor_jobs SET status='succeeded',progress=1,stage=NULL,result_path=?,result_mime=?,result_bytes=?,
         finished_at=?,expires_at=? WHERE id=? AND status='running'`)
-        .run(resultPath, result.mime, result.data.length, now(), now() + this.config.jobTtlSeconds, job.id);
+        .run(resultPath, resultMime, resultSize, now(), now() + this.config.jobTtlSeconds, job.id);
       if (!changed.changes) await rm(resultPath, { force: true });
       await rm(job.mask_path, { force: true });
     } catch (error) {

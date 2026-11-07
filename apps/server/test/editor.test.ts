@@ -16,13 +16,18 @@ type FileRow = { id: string; size: number; modified_at: number; cache_generation
 
 async function startStub() {
   let delayInpaint = false;
+  let echoSource = false;
+  let lossyEcho = false;
+  let nativeMaxPixels = 40_000_000;
+  const inputSizes: Array<{ width: number; height: number }> = [];
   let requestBody = Buffer.alloc(0);
+  let lastResponse = Buffer.alloc(0);
   let result: Buffer = await sharp({ create: { width: 10, height: 8, channels: 3, background: '#dddddd' } }).png().toBuffer();
   const server = createServer((req, res) => {
     if (req.url === '/v1/models') {
       res.setHeader('content-type', 'application/json');
       res.end(JSON.stringify({ models: [
-        { id: 'migan', available: true, device: 'cpu', maxPixels: 40_000_000, features: ['mask'] },
+        { id: 'migan', available: true, device: 'cpu', maxPixels: nativeMaxPixels, features: ['mask'] },
         { id: 'lama', available: false, reason: '未安装权重', device: null, maxPixels: null, features: ['mask'] },
         { id: 'slbr', available: true, device: 'cpu', maxPixels: 40_000_000, features: ['mask', 'detect'] },
       ] }));
@@ -31,9 +36,30 @@ async function startStub() {
     if (req.url?.startsWith('/v1/inpaint')) {
       const chunks: Buffer[] = [];
       req.on('data', (chunk: Buffer) => chunks.push(chunk));
-      req.on('end', () => {
+      req.on('end', async () => {
         requestBody = Buffer.concat(chunks);
-        const finish = () => { res.setHeader('content-type', 'image/png'); res.end(result); };
+        let response = result;
+        if (echoSource) {
+          const marker = Buffer.from('Content-Disposition: form-data; name="image"; filename="source"\r\nContent-Type: application/octet-stream\r\n\r\n');
+          const start = requestBody.indexOf(marker) + marker.length;
+          const boundary = req.headers['content-type']!.split('boundary=')[1]!;
+          const end = requestBody.indexOf(Buffer.from(`\r\n--${boundary}`), start);
+          const bytes = requestBody.subarray(start, end);
+          const meta = await sharp(bytes).metadata();
+          inputSizes.push({ width: meta.width!, height: meta.height! });
+          const maskMarker = Buffer.from('Content-Disposition: form-data; name="mask"; filename="mask.png"\r\nContent-Type: image/png\r\n\r\n');
+          const maskStart = requestBody.indexOf(maskMarker) + maskMarker.length;
+          const maskEnd = requestBody.indexOf(Buffer.from(`\r\n--${boundary}`), maskStart);
+          const selected = await sharp(requestBody.subarray(maskStart, maskEnd)).removeAlpha().greyscale().raw().toBuffer();
+          const pixels = await sharp(bytes).ensureAlpha().raw().toBuffer();
+          for (let i = 0; i < selected.length; i++) if (selected[i]! > 127) {
+            pixels[i * 4] = 200; pixels[i * 4 + 1] = 100; pixels[i * 4 + 2] = 50;
+          }
+          response = lossyEcho ? await sharp(bytes).jpeg({ quality: 40 }).toBuffer()
+            : await sharp(pixels, { raw: { width: meta.width!, height: meta.height!, channels: 4 } }).png().toBuffer();
+        }
+        lastResponse = Buffer.from(response);
+        const finish = () => { res.setHeader('content-type', 'image/png'); res.end(response); };
         if (delayInpaint) setTimeout(finish, 500); else finish();
       });
       return;
@@ -45,8 +71,13 @@ async function startStub() {
   return {
     url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
     getRequest: () => requestBody,
+    getResponse: () => lastResponse,
     setDelay: (value: boolean) => { delayInpaint = value; },
     setResult: (value: Buffer) => { result = value; },
+    setEchoSource: () => { echoSource = true; },
+    setLossyEcho: () => { echoSource = true; lossyEcho = true; },
+    setMaxPixels: (value: number) => { nativeMaxPixels = value; },
+    inputSizes,
     close: () => new Promise<void>((resolve) => server.close(() => resolve())),
   };
 }
@@ -97,6 +128,164 @@ test('能力探测只暴露真实可用的模型', async () => {
     assert.equal(caps.models.find((m: { id: string }) => m.id === 'lama').reason, '未安装权重');
     assert.equal(caps.models.find((m: { id: string }) => m.id === 'slbr').features.includes('detect'), true);
     assert.equal(caps.mask.maxEdge > 0, true);
+  } finally { await app.close(); db.close(); await stub.close(); await rm(root, { recursive: true, force: true }); await rm(cache, { recursive: true, force: true }); }
+});
+
+test('超过四千万像素的图片按蒙版分块推理并生成原尺寸预览', async () => {
+  const stub = await startStub();
+  stub.setEchoSource();
+  const { root, cache, db, app, headers } = await setup(stub.url);
+  try {
+    const original = await sharp({ create: { width: 8000, height: 5100, channels: 3, background: '#768696' } }).jpeg().toBuffer();
+    await writeFile(path.join(root, 'photo.jpg'), original);
+    await scanLibrary(db, { id: 'lib', root }, { allowedRoots: [root] });
+    db.prepare('UPDATE files SET width=8000,height=5100').run();
+    const row = db.prepare('SELECT id,size,modified_at,cache_generation FROM files').get() as FileRow;
+    const white = await sharp({ create: { width: 3, height: 3, channels: 3, background: '#fff' } }).png().toBuffer();
+    const mask = await sharp({ create: { width: 800, height: 510, channels: 3, background: '#000' } })
+      .composite([{ input: white, left: 5, top: 5 }, { input: white, left: 780, top: 490 }]).png().toBuffer();
+    const created = await app.inject({ method: 'POST', url: '/api/v2/editor/jobs', headers,
+      payload: { mediaId: row.id, source: sourceOf(row), model: 'migan', mask: { data: mask.toString('base64'), width: 800, height: 510 } } });
+    assert.equal(created.statusCode, 200, created.body);
+    let job;
+    for (let i = 0; i < 600; i++) {
+      job = (await app.inject({ method: 'GET', url: `/api/v2/editor/jobs/${created.json().id}`, headers })).json();
+      if (['succeeded', 'failed', 'cancelled'].includes(job.status)) break;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    assert.equal(job.status, 'succeeded', JSON.stringify(job));
+    assert.equal(stub.inputSizes.length, 2);
+    assert.ok(stub.inputSizes.every((size) => size.width <= 1280 && size.height <= 1280));
+    const result = await app.inject({ method: 'GET', url: job.resultUrl, headers });
+    const meta = await sharp(result.rawPayload).metadata();
+    assert.deepEqual([meta.width, meta.height], [8000, 5100]);
+    const fixedPixel = await sharp(result.rawPayload).extract({ left: 60, top: 60, width: 1, height: 1 }).removeAlpha().raw().toBuffer();
+    const untouchedPixel = await sharp(result.rawPayload).extract({ left: 4000, top: 2500, width: 1, height: 1 }).removeAlpha().raw().toBuffer();
+    const originalPixel = await sharp(original).extract({ left: 4000, top: 2500, width: 1, height: 1 }).removeAlpha().raw().toBuffer();
+    assert.deepEqual([...fixedPixel], [200, 100, 50]);
+    assert.deepEqual(untouchedPixel, originalPixel);
+    assert.deepEqual(await readFile(path.join(root, 'photo.jpg')), original);
+  } finally { await app.close(); db.close(); await stub.close(); await rm(root, { recursive: true, force: true }); await rm(cache, { recursive: true, force: true }); }
+});
+
+test('分块修复按 EXIF 方向映射蒙版并保留透明通道', async () => {
+  const stub = await startStub();
+  stub.setEchoSource();
+  stub.setMaxPixels(1_638_400);
+  const { root, cache, db, app, headers } = await setup(stub.url);
+  try {
+    const original = await sharp({ create: { width: 2000, height: 1000, channels: 4, background: { r: 60, g: 90, b: 120, alpha: 0.25 } } })
+      .png().withMetadata({ orientation: 6 }).toBuffer();
+    await writeFile(path.join(root, 'photo.jpg'), original);
+    await scanLibrary(db, { id: 'lib', root }, { allowedRoots: [root] });
+    db.prepare('UPDATE files SET width=1000,height=2000').run();
+    const row = db.prepare('SELECT id,size,modified_at,cache_generation FROM files').get() as FileRow;
+    const white = await sharp({ create: { width: 3, height: 3, channels: 3, background: '#fff' } }).png().toBuffer();
+    const mask = await sharp({ create: { width: 100, height: 200, channels: 3, background: '#000' } })
+      .composite([{ input: white, left: 10, top: 20 }]).png().toBuffer();
+    const created = await app.inject({ method: 'POST', url: '/api/v2/editor/jobs', headers,
+      payload: { mediaId: row.id, source: sourceOf(row), model: 'migan', mask: { data: mask.toString('base64'), width: 100, height: 200 } } });
+    assert.equal(created.statusCode, 200, created.body);
+    const job = await waitForJob(app, headers, created.json().id);
+    assert.equal(job.status, 'succeeded', JSON.stringify(job));
+    const result = await app.inject({ method: 'GET', url: job.resultUrl!, headers });
+    const meta = await sharp(result.rawPayload).metadata();
+    assert.deepEqual([meta.width, meta.height, meta.hasAlpha], [1000, 2000, true]);
+    const fixedPixel = await sharp(result.rawPayload).extract({ left: 110, top: 210, width: 1, height: 1 }).raw().toBuffer();
+    assert.deepEqual([...fixedPixel], [200, 100, 50, 64]);
+    const untouched = await sharp(result.rawPayload).extract({ left: 500, top: 1500, width: 1, height: 1 }).raw().toBuffer();
+    const expected = await sharp(original).rotate().extract({ left: 500, top: 1500, width: 1, height: 1 }).raw().toBuffer();
+    assert.deepEqual(untouched, expected);
+  } finally { await app.close(); db.close(); await stub.close(); await rm(root, { recursive: true, force: true }); await rm(cache, { recursive: true, force: true }); }
+});
+
+test('透明广色域图片的未选区域保持原像素', async () => {
+  const stub = await startStub();
+  stub.setEchoSource();
+  stub.setMaxPixels(1_638_400);
+  const { root, cache, db, app, headers } = await setup(stub.url);
+  try {
+    const width = 2000, height = 1000;
+    const pixels = Buffer.alloc(width * height * 4);
+    for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+      const i = (y * width + x) * 4;
+      pixels[i] = x % 256; pixels[i + 1] = y % 256; pixels[i + 2] = (x + y) % 256; pixels[i + 3] = 16 + (x * 7 + y) % 240;
+    }
+    const original = await sharp(pixels, { raw: { width, height, channels: 4 } }).withIccProfile('p3').png().toBuffer();
+    await writeFile(path.join(root, 'photo.jpg'), original);
+    await scanLibrary(db, { id: 'lib', root }, { allowedRoots: [root] });
+    db.prepare('UPDATE files SET width=2000,height=1000').run();
+    const row = db.prepare('SELECT id,size,modified_at,cache_generation FROM files').get() as FileRow;
+    const white = await sharp({ create: { width: 3, height: 3, channels: 3, background: '#fff' } }).png().toBuffer();
+    const mask = await sharp({ create: { width: 200, height: 100, channels: 3, background: '#000' } })
+      .composite([{ input: white, left: 10, top: 10 }]).png().toBuffer();
+    const created = await app.inject({ method: 'POST', url: '/api/v2/editor/jobs', headers,
+      payload: { mediaId: row.id, source: sourceOf(row), model: 'migan', mask: { data: mask.toString('base64'), width: 200, height: 100 } } });
+    assert.equal(created.statusCode, 200, created.body);
+    const job = await waitForJob(app, headers, created.json().id);
+    assert.equal(job.status, 'succeeded', JSON.stringify(job));
+    const result = await app.inject({ method: 'GET', url: job.resultUrl!, headers });
+    for (const left of [600, 1500]) {
+      const rect = { left, top: 500, width: 50, height: 50 };
+      assert.deepEqual(await sharp(result.rawPayload).extract(rect).raw().toBuffer(), await sharp(original).extract(rect).raw().toBuffer());
+    }
+  } finally { await app.close(); db.close(); await stub.close(); await rm(root, { recursive: true, force: true }); await rm(cache, { recursive: true, force: true }); }
+});
+
+test('透明白色蒙版背景不会触发额外分块', async () => {
+  const stub = await startStub();
+  stub.setEchoSource();
+  stub.setMaxPixels(1_638_400);
+  const { root, cache, db, app, headers } = await setup(stub.url);
+  try {
+    const original = await sharp({ create: { width: 3000, height: 1000, channels: 3, background: '#789' } }).png().toBuffer();
+    await writeFile(path.join(root, 'photo.jpg'), original);
+    await scanLibrary(db, { id: 'lib', root }, { allowedRoots: [root] });
+    db.prepare('UPDATE files SET width=3000,height=1000').run();
+    const row = db.prepare('SELECT id,size,modified_at,cache_generation FROM files').get() as FileRow;
+    const white = await sharp({ create: { width: 3, height: 3, channels: 4, background: '#fff' } }).png().toBuffer();
+    const mask = await sharp({ create: { width: 300, height: 100, channels: 4, background: { r: 255, g: 255, b: 255, alpha: 0 } } })
+      .composite([{ input: white, left: 250, top: 50 }]).png().toBuffer();
+    const created = await app.inject({ method: 'POST', url: '/api/v2/editor/jobs', headers,
+      payload: { mediaId: row.id, source: sourceOf(row), model: 'migan', mask: { data: mask.toString('base64'), width: 300, height: 100 } } });
+    assert.equal(created.statusCode, 200, created.body);
+    const job = await waitForJob(app, headers, created.json().id);
+    assert.equal(job.status, 'succeeded', JSON.stringify(job));
+    assert.equal(stub.inputSizes.length, 1);
+    const result = await app.inject({ method: 'GET', url: job.resultUrl!, headers });
+    assert.deepEqual([...await sharp(result.rawPayload).extract({ left: 2510, top: 510, width: 1, height: 1 }).raw().toBuffer()], [200, 100, 50]);
+  } finally { await app.close(); db.close(); await stub.close(); await rm(root, { recursive: true, force: true }); await rm(cache, { recursive: true, force: true }); }
+});
+
+test('广色域图片分块只修改蒙版区域，未选区域保持原有色彩', async () => {
+  const stub = await startStub();
+  stub.setLossyEcho();
+  stub.setMaxPixels(1_638_400);
+  const { root, cache, db, app, headers } = await setup(stub.url);
+  try {
+    const original = await sharp({ create: { width: 2000, height: 1000, channels: 3, background: { r: 240, g: 25, b: 11 } } })
+      .withIccProfile('p3').png().toBuffer();
+    await writeFile(path.join(root, 'photo.jpg'), original);
+    await scanLibrary(db, { id: 'lib', root }, { allowedRoots: [root] });
+    db.prepare('UPDATE files SET width=2000,height=1000').run();
+    const row = db.prepare('SELECT id,size,modified_at,cache_generation FROM files').get() as FileRow;
+    const white = await sharp({ create: { width: 4, height: 4, channels: 3, background: '#fff' } }).png().toBuffer();
+    const mask = await sharp({ create: { width: 200, height: 100, channels: 3, background: '#000' } })
+      .composite([{ input: white, left: 10, top: 10 }]).png().toBuffer();
+    const created = await app.inject({ method: 'POST', url: '/api/v2/editor/jobs', headers,
+      payload: { mediaId: row.id, source: sourceOf(row), model: 'migan', mask: { data: mask.toString('base64'), width: 200, height: 100 } } });
+    assert.equal(created.statusCode, 200, created.body);
+    const job = await waitForJob(app, headers, created.json().id);
+    assert.equal(job.status, 'succeeded', JSON.stringify(job));
+    const result = await app.inject({ method: 'GET', url: job.resultUrl!, headers });
+    assert.deepEqual((await sharp(result.rawPayload).metadata()).icc, (await sharp(original).metadata()).icc);
+    for (const left of [600, 1500]) {
+      const rect = { left, top: 500, width: 1, height: 1 };
+      assert.deepEqual(await sharp(result.rawPayload).extract(rect).raw().toBuffer(), await sharp(original).extract(rect).raw().toBuffer());
+    }
+    const resultPixel = await sharp(result.rawPayload).extract({ left: 110, top: 110, width: 1, height: 1 }).raw().toBuffer();
+    const inferencePixel = await sharp(stub.getResponse()).extract({ left: 110, top: 110, width: 1, height: 1 }).raw().toBuffer();
+    assert.ok(resultPixel.every((value, i) => Math.abs(value - inferencePixel[i]!) <= 3), `结果色彩 ${resultPixel} 与推理结果 ${inferencePixel} 不一致`);
   } finally { await app.close(); db.close(); await stub.close(); await rm(root, { recursive: true, force: true }); await rm(cache, { recursive: true, force: true }); }
 });
 
