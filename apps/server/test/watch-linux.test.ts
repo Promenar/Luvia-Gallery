@@ -25,6 +25,7 @@ class Clock {
 class Index implements LibraryIndexPort {
   rows = new Map<string, IndexedRecord>(); changes: WatchLibraryChange[] = []; next = 0;
   async readDirectory(dir: string) { return [...this.rows.values()].filter((v) => (path.posix.dirname(v.path) === '.' ? '' : path.posix.dirname(v.path)) === dir); }
+  async writeDirectoryMtime(entry: MoveCandidate) { const old = this.rows.get(entry.path); if (!old?.isDir || old.dev !== entry.dev || old.ino !== entry.ino || old.mtimeMs === entry.mtimeMs) return false; old.mtimeMs = entry.mtimeMs; return true; }
   async findMissingCandidates(_entry: MoveCandidate) { return [...this.rows.values()].filter((v) => v.missingAt !== null); }
   async writeAdded(entry: MoveCandidate) { const id = entry.isDir ? null : `id-${++this.next}`; this.rows.set(entry.path, { ...entry, mediaId: id, missingAt: null }); return id; }
   async writeUpdated(old: IndexedRecord, entry: MoveCandidate) { this.rows.set(entry.path, { ...entry, mediaId: old.mediaId, missingAt: null }); }

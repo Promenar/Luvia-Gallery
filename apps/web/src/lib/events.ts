@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import type { Job, LibraryChangedEvent } from '@luvia/contracts';
-import { invalidate, queryClient, scheduleRefresh } from './query';
+import { queryClient, scheduleRefresh } from './query';
 import { thumbMemory } from '@/components/media/thumb-memory';
 import { reloadForAccessChange } from './access-reset';
 import { authStateQuery } from '@/stores/session';
@@ -34,8 +34,7 @@ function connect() {
   });
   source.addEventListener('library', (m) => {
     const ev = JSON.parse((m as MessageEvent<string>).data) as LibraryChangedEvent;
-    void invalidate(...LIBRARY_QUERIES);
-    scheduleRefresh('adminOverview', 'listLibraries');
+    scheduleRefresh(...LIBRARY_QUERIES, 'adminOverview', 'listLibraries');
     listeners.forEach((l) => l.library?.(ev));
   });
   source.addEventListener('session', () => {

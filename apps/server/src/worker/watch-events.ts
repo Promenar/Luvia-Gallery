@@ -27,13 +27,14 @@ function flushOne(db: Database.Database, libraryId: string, at: number): boolean
   db.prepare('DELETE FROM library_event_pending WHERE library_id=? AND source=?').run(libraryId, pending.source);
   return true;
 }
-export function publishLibraryEvent(db: Database.Database, event: LibraryChangedEvent, at = Date.now()): void {
+export function publishLibraryEvent(db: Database.Database, event: LibraryChangedEvent, at = Date.now(), channel?: 'folder-time'): void {
   if (!event.libraryId) throw new Error('媒体库事件缺少媒体库 ID');
   const id = event.libraryId;
+  const pendingSource = channel === 'folder-time' ? `${event.source}:folder-time` : event.source;
   db.transaction(() => {
-    const current = db.prepare('SELECT payload FROM library_event_pending WHERE library_id=? AND source=?').get(id, event.source) as { payload: string } | undefined;
+    const current = db.prepare('SELECT payload FROM library_event_pending WHERE library_id=? AND source=?').get(id, pendingSource) as { payload: string } | undefined;
     const value = current ? merge(JSON.parse(current.payload) as LibraryChangedEvent, event) : event;
-    db.prepare('INSERT INTO library_event_pending(library_id,source,payload,queued_at_ms) VALUES (?,?,?,?) ON CONFLICT(library_id,source) DO UPDATE SET payload=excluded.payload').run(id, event.source, JSON.stringify(value), at);
+    db.prepare('INSERT INTO library_event_pending(library_id,source,payload,queued_at_ms) VALUES (?,?,?,?) ON CONFLICT(library_id,source) DO UPDATE SET payload=excluded.payload').run(id, pendingSource, JSON.stringify(value), at);
     flushOne(db, id, at);
   }).immediate();
 }

@@ -1,7 +1,7 @@
 import { test as nodeTest } from 'node:test';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, rename, rm, stat, writeFile, link } from 'node:fs/promises';
+import { mkdtemp, mkdir, rename, rm, stat, utimes, writeFile, link } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { LibraryChangedEvent } from '@luvia/contracts';
@@ -34,6 +34,7 @@ class MemoryIndex implements LibraryIndexPort {
   records = new Map<string, IndexedRecord>(); events: LibraryChangedEvent[] = []; changes: WatchLibraryChange[] = []; requests: string[] = []; nextId = 0;
   async readDirectory(dir: string) { return [...this.records.values()].filter((v) => { const parent = path.posix.dirname(v.path); return (parent === '.' ? '' : parent) === dir; }).map((v) => ({ ...v })); }
   async readSubdirectories(dir: string) { return [...this.records.values()].filter((v) => v.isDir && v.path.startsWith(`${dir}/`)).map((v) => v.path); }
+  async writeDirectoryMtime(entry: MoveCandidate) { const old = this.records.get(entry.path); if (!old?.isDir || old.dev !== entry.dev || old.ino !== entry.ino || old.mtimeMs === entry.mtimeMs) return false; old.mtimeMs = entry.mtimeMs; return true; }
   async findMissingCandidates(_candidate: MoveCandidate) { return [...this.records.values()].filter((v) => v.missingAt !== null).map((v) => ({ ...v })); }
   async writeAdded(entry: MoveCandidate) { const id = entry.isDir ? null : `media-${++this.nextId}`; this.records.set(entry.path, { ...entry, mediaId: id, missingAt: null }); return id; }
   async writeUpdated(old: IndexedRecord, entry: MoveCandidate) { this.records.set(entry.path, { ...entry, mediaId: old.mediaId, missingAt: null }); }
@@ -62,6 +63,33 @@ async function setup() {
   await coordinator.start(); const advance = (ms: number) => clock.advance(ms, () => coordinator.idle());
   return { root, clock, watcher, port, coordinator, advance };
 }
+
+test('目录自身修改时间在对账后更新到索引', async () => {
+  const s = await setup();
+  try {
+    const folder = path.join(s.root, 'album'); await mkdir(folder);
+    await s.coordinator.reconcileDirectory(''); await s.advance(10_000);
+    assert.ok(s.port.records.get('album')?.isDir);
+    const time = new Date('2025-03-01T12:00:00.000Z');
+    await utimes(folder, time, time); const before = s.port.events.length;
+    await s.coordinator.reconcileDirectory('album');
+    assert.equal(Math.floor(s.port.records.get('album')!.mtimeMs), Math.floor((await stat(folder)).mtimeMs));
+    await s.advance(2000);
+    assert.ok(s.port.events.slice(before).some((event) => event.folders.includes('lib/album')));
+  } finally { await s.coordinator.stop(); s.port.close(); await rm(s.root, { recursive: true, force: true }); }
+});
+
+test('新目录等待匹配期间的修改时间使用入库前的最新值', async () => {
+  const s = await setup();
+  try {
+    const folder = path.join(s.root, 'album'); await mkdir(folder);
+    await s.coordinator.reconcileDirectory('');
+    await writeFile(path.join(folder, 'note.txt'), 'note');
+    const time = new Date('2025-03-01T12:00:00.000Z'); await utimes(folder, time, time);
+    await s.coordinator.reconcileDirectory('album'); await s.advance(10_000);
+    assert.equal(Math.floor(s.port.records.get('album')!.mtimeMs), Math.floor((await stat(folder)).mtimeMs));
+  } finally { await s.coordinator.stop(); s.port.close(); await rm(s.root, { recursive: true, force: true }); }
+});
 
 test('协调器新增文件稳定后写入和推送，移动保留 ID，删除转为 missing', async () => {
   const s = await setup();
@@ -358,7 +386,7 @@ test('新增文件七秒内通知，随后出现的消失项合并为移动并�
   try {
     await writeFile(path.join(s.root, 'old.jpg'), 'photo');
     s.watcher.emit({ eventType: 'rename', path: 'old.jpg' }); await s.coordinator.idle();
-    await s.advance(4999); assert.equal(s.port.events.length, 0);
+    await s.advance(4999); assert.equal(s.port.events.reduce((sum, event) => sum + event.added, 0), 0);
     await s.advance(1);
     const original = s.port.records.get('old.jpg')?.mediaId; assert.ok(original);
     assert.equal(s.port.events.at(-1)?.added, 1);

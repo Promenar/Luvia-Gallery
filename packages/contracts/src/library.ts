@@ -15,6 +15,8 @@ export const Folder = z.object({
   favorite: z.boolean(),
   /** 目录内最新媒体的 takenAt，空目录为 null。 */
   latestAt: IsoDateTime.nullable(),
+  /** 文件夹自身的文件系统修改时间；未知或不完整授权时为 null。 */
+  modifiedAt: IsoDateTime.nullable().optional(),
   /** 宿主机上的真实路径（媒体库 hostRoot + 相对目录）；未识别宿主机路径或管理员关闭显示时为 null。 */
   hostPath: z.string().nullable(),
 });

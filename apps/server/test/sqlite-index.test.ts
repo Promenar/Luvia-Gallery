@@ -6,6 +6,21 @@ import path from 'node:path';
 import { openDatabase } from '../src/core/database.ts';
 import { existsSync } from 'node:fs';
 
+test('实时目录时间更新只作用于身份匹配的目录', async () => {
+  const db = openDatabase(':memory:');
+  try {
+    db.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib','照片','/fixture')").run();
+    db.prepare("INSERT INTO folders(path,library_id,parent,name,dev,ino,mtime_ms) VALUES ('lib/a','lib','lib','a','1','2',1000)").run();
+    const { SqliteLibraryIndex } = await import('../src/watch/sqlite-index.ts');
+    const port = new SqliteLibraryIndex(db, { libraryId: 'lib', requestFullReconcile: async () => {}, publishEvent: async () => {} });
+    const entry = { path: 'a', isDir: true, mediaId: null, size: 0, mtimeMs: 2000, dev: '1', ino: '2', headHash: null };
+    await port.writeDirectoryMtime(entry);
+    assert.equal((db.prepare("SELECT mtime_ms FROM folders WHERE path='lib/a'").get() as { mtime_ms: number }).mtime_ms, 2000);
+    await port.writeDirectoryMtime({ ...entry, ino: 'other', mtimeMs: 3000 });
+    assert.equal((db.prepare("SELECT mtime_ms FROM folders WHERE path='lib/a'").get() as { mtime_ms: number }).mtime_ms, 2000);
+  } finally { db.close(); }
+});
+
 test('SQLite 目录移动原子改写子孙和路径引用，保留媒体 ID 及缺失状态', async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'luvia-sqlite-index-')); const filename = path.join(dir, 'db.sqlite');
   let db = openDatabase(filename); let reader = openDatabase(filename, { readonly: true });

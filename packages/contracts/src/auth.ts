@@ -69,6 +69,8 @@ export const Preferences = z.object({
   timelineBasis: z.enum(['modified', 'taken']).default('modified'),
   /** 文件夹、相册、收藏中媒体网格的排序，默认按修改时间从新到旧。 */
   mediaSort: MediaSort.default('modified_desc'),
+  /** 文件夹卡片独立排序，按文件夹自身修改时间或名称。 */
+  folderSort: z.enum(['modified_desc', 'name_asc']).default('modified_desc'),
   /** 视频悬停预览。 */
   hoverPreview: z.boolean().default(true),
   reduceMotion: z.enum(['system', 'on', 'off']).default('system'),
@@ -136,6 +138,7 @@ export const PreferencesPatch = z
     gridStyle: Preferences.shape.gridStyle.unwrap(),
     timelineBasis: Preferences.shape.timelineBasis.unwrap(),
     mediaSort: MediaSort,
+    folderSort: Preferences.shape.folderSort.unwrap(),
     hoverPreview: z.boolean(),
     reduceMotion: Preferences.shape.reduceMotion.unwrap(),
     startPage: Preferences.shape.startPage.unwrap(),

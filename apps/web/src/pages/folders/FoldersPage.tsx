@@ -16,7 +16,8 @@ import { FolderTree } from './FolderTree';
 import { useMediaPages } from './media';
 import { containerPathOf, hostCrumbs, libraryIdOf, parentPath } from './paths';
 import { EmptyNote, FolderCard, FolderGrid, FolderStack, PageHead, PageTitle, chip, countText, metaText, subhClass } from './ui';
-import { SortMenu, useMediaSort } from '@/components/media/SortMenu';
+import { FolderSortMenu, SortMenu, useMediaSort } from '@/components/media/SortMenu';
+import { sortFolders } from './sortFolders';
 
 /** 管理员可见的媒体库容器内根目录；普通用户或接口不可用时为空表。 */
 function useLibraryRoots() {
@@ -38,12 +39,14 @@ async function copyText(text: string, done: string) {
 function LibraryRoots() {
   const isAdmin = useIsAdmin();
   const roots = useLibraryRoots();
+  const folderSort = usePreferences().folderSort;
   const { data, isPending, isError, error } = useQuery(foldersQuery());
-  const libs = data?.folders ?? [];
+  const libs = sortFolders(data?.folders ?? [], folderSort);
   return (
     <>
       <PageHead>
         <PageTitle>文件夹</PageTitle>
+        {libs.length > 0 && <FolderSortMenu />}
         <div className={cn(metaText, 'w-full')}>
           {isPending ? '正在读取媒体库…' : libs.length
             ? `按宿主机上的真实目录浏览。下面是容器挂载进来、已启用的 ${libs.length} 个目录。`
@@ -178,7 +181,8 @@ function FolderView({ path, scroller }: { path: string; scroller: HTMLElement | 
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2 md:ml-auto">
-          <SortMenu small={false} />
+          {d.folders.length > 0 && <FolderSortMenu />}
+          <SortMenu small={false} scopeLabel="媒体" />
           <button
             type="button"
             aria-pressed={rec}
@@ -211,7 +215,7 @@ function FolderView({ path, scroller }: { path: string; scroller: HTMLElement | 
         <>
           <h2 className={subhClass}>子文件夹<span className="text-[13px] font-normal text-muted">{d.folders.length} 个</span></h2>
           <FolderGrid>
-            {d.folders.map((f) => <FolderCard key={f.path} folder={f} />)}
+            {sortFolders(d.folders, prefs.folderSort).map((f) => <FolderCard key={f.path} folder={f} />)}
           </FolderGrid>
         </>
       )}
