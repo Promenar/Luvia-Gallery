@@ -1,5 +1,5 @@
 import type Database from 'better-sqlite3';
-import { closeSync, constants, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, renameSync, rmdirSync, statSync, unlinkSync } from 'node:fs';
+import { closeSync, constants, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, realpathSync, renameSync, rmdirSync, statSync, unlinkSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { access, lstat, open, realpath } from 'node:fs/promises';
 import path from 'node:path';
@@ -157,6 +157,16 @@ async function finishIndexCleanup(db: Database.Database, op: OperationRow): Prom
       if ((row.dev !== null && row.dev !== identity.dev) || (row.ino !== null && row.ino !== identity.ino) ||
           (row.mtime_ms !== null && row.mtime_ms !== identity.mtimeMs)) {
         throw new MediaDeleteError(409, 'MEDIA_CHANGED', '媒体索引已发生变化，无法自动完成删除');
+      }
+    }
+    if (row) {
+      const library = db.prepare('SELECT root FROM libraries WHERE id=?').get(op.library_id) as { root: string } | undefined;
+      try {
+        if (!library) throw new Error('媒体库不存在');
+        const parent = realpathSync(path.dirname(path.join(library.root, op.relative_path)));
+        verifyOperationParent(op, parent);
+      } catch {
+        throw new MediaDeleteError(500, 'OPERATION_PARTIAL', '媒体目录已变化，保留索引等待对账');
       }
     }
     if (row) removeMediaRow(db, op.media_id);
