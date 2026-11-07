@@ -43,6 +43,9 @@ export class JobQueue {
         ORDER BY created_at,id LIMIT 1`).get() as (Omit<JobRow, 'leaseToken'> & { created_at: number }) | undefined : undefined;
       const interactive = waiting && hls ? (preferHls ? hls : waiting) : waiting ?? hls;
       const job = interactive ?? this.db.prepare(`SELECT id,type,checkpoint,payload FROM jobs WHERE status='queued'
+        AND (type<>'metadata' OR NOT EXISTS (SELECT 1 FROM jobs active WHERE active.type='metadata' AND active.status='running'
+          AND (json_extract(active.payload,'$.libraryId') IS NULL OR json_extract(jobs.payload,'$.libraryId') IS NULL
+            OR json_extract(active.payload,'$.libraryId')=json_extract(jobs.payload,'$.libraryId'))))
         AND (?=1 OR type<>'previews' OR (COALESCE(dedupe_key,'') NOT LIKE 'media:%' AND COALESCE(dedupe_key,'') NOT LIKE 'hls:%'))
         AND (?=1 OR type<>'previews' OR COALESCE(dedupe_key,'') LIKE 'media:%' OR COALESCE(dedupe_key,'') LIKE 'hls:%')
         ORDER BY CASE

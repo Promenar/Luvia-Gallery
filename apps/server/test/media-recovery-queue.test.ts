@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import sharp from 'sharp';
 import { openDatabase } from '../src/core/database.ts';
+import { JobQueue } from '../src/core/jobs.ts';
 import { cachePath } from '../src/core/media-cache.ts';
 import { enqueueMetadata, runNextJob } from '../src/worker/runner.ts';
 import { recoverMissingMedia } from '../src/worker/media-recovery.ts';
@@ -79,17 +80,20 @@ test('定向元数据作业只读取指定文件', async () => {
   } finally { db.close(); await rm(root, { recursive: true, force: true }); }
 });
 
-test('扫描在恢复期间完成时保留后续普通元数据作业', async () => {
+test('扫描在恢复期间完成时普通元数据作业保留且等待当前作业', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'luvia-recovery-deferred-'));
   const db = openDatabase(':memory:');
   try {
     db.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib','测试',?)").run(root);
-    db.prepare("INSERT INTO jobs(id,type,label,status,trigger,payload,created_at,dedupe_key) VALUES ('repair','metadata','重试','queued','manual',?,1,'metadata:lib')")
+    db.prepare("INSERT INTO jobs(id,type,label,status,trigger,payload,created_at,dedupe_key) VALUES ('repair','metadata','重试','queued','manual',?,1,'metadata-recovery:lib')")
       .run(JSON.stringify({ libraryId: 'lib', recovery: true, recoveryIds: [] }));
+    const first = new JobQueue(db, 'first'); const second = new JobQueue(db, 'second');
+    assert.equal(first.claim()?.id, 'repair');
     enqueueMetadata(db, 'lib');
-    assert.equal((db.prepare("SELECT json_extract(payload,'$.deferredScan') AS deferred FROM jobs WHERE id='repair'").get() as { deferred: number }).deferred, 1);
-    await runNextJob(db, { owner: 'test', allowedRoots: [root], legacyDir: root, systemRoots: [], cacheDir: root });
     assert.equal((db.prepare("SELECT count(*) AS n FROM jobs WHERE type='metadata' AND status='queued' AND dedupe_key='metadata:lib'").get() as { n: number }).n, 1);
+    assert.equal(second.claim(), null);
+    assert.equal(first.fail('repair', '模拟失败'), true); first.settle('repair');
+    assert.equal(second.claim()?.type, 'metadata'); second.settle((db.prepare("SELECT id FROM jobs WHERE status='running'").get() as { id: string }).id);
   } finally { db.close(); await rm(root, { recursive: true, force: true }); }
 });
 

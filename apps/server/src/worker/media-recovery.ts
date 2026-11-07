@@ -44,7 +44,7 @@ export async function recoverMissingMedia(db: Database.Database, cacheDir: strin
     for (const [libraryId, recoveryIds] of libraries) {
       const id = randomUUID();
       db.prepare("INSERT INTO jobs(id,type,label,status,trigger,payload,created_at,dedupe_key) VALUES (?,'metadata','重试失败的拍摄信息','queued','manual',?,unixepoch(),?)")
-        .run(id, JSON.stringify({ libraryId, recovery: true, recoveryIds }), `metadata:${libraryId}`);
+        .run(id, JSON.stringify({ libraryId, recovery: true, recoveryIds }), `metadata-recovery:${libraryId}`);
       publishJob(db, id);
     }
   }).immediate();
