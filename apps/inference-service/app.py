@@ -10,6 +10,7 @@ import os
 import sys
 import threading
 import types
+from collections import OrderedDict
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -26,6 +27,7 @@ DEVICE = os.environ.get('EDITOR_DEVICE', 'auto')
 MAX_PIXELS = int(os.environ.get('EDITOR_MAX_PIXELS', '40000000'))
 MAX_BYTES = int(os.environ.get('EDITOR_MAX_INPUT_BYTES', str(128 * 1024 * 1024)))
 UPLOAD_TIMEOUT_SECONDS = float(os.environ.get('EDITOR_UPLOAD_TIMEOUT_SECONDS', '120'))
+MODEL_CACHE_SIZE = max(1, min(3, int(os.environ.get('EDITOR_MODEL_CACHE_SIZE', '1'))))
 MODEL_FILES = {'lama': 'big-lama.pt', 'migan': 'migan_pipeline_v2.onnx', 'slbr': 'slbr.pth'}
 Image.MAX_IMAGE_PIXELS = MAX_PIXELS
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
@@ -37,6 +39,7 @@ cancel_lock = threading.Lock()
 model_status = {}
 background_tasks = set()
 cleanup_tasks = set()
+model_cache = OrderedDict()
 
 
 async def run_blocking(function, *args):
@@ -179,6 +182,53 @@ def resize_mask(mask, width, height):
     return result
 
 
+def load_model_uncached(model_id, target):
+    if model_id == 'migan':
+        import onnxruntime as ort
+        providers = ['CUDAExecutionProvider', 'CPUExecutionProvider'] if target == 'cuda' else ['CPUExecutionProvider']
+        model = ort.InferenceSession(str(MODEL_DIR / MODEL_FILES[model_id]), providers=providers)
+        if target == 'cuda' and 'CUDAExecutionProvider' not in model.get_providers():
+            raise RuntimeError('ONNX CUDA 不可用')
+        return model
+    if model_id == 'lama':
+        return torch.jit.load(str(MODEL_DIR / MODEL_FILES[model_id]), map_location=target).eval()
+    from importlib import import_module
+    src = types.ModuleType('src'); src.__path__ = [str(SLBR_SOURCE / 'src')]; sys.modules['src'] = src
+    utils = types.ModuleType('src.utils'); utils.__path__ = [str(SLBR_SOURCE / 'src/utils')]; sys.modules['src.utils'] = utils
+    slbr = import_module('src.networks').slbr
+    args = SimpleNamespace(mask_mode='res', sim_metric='cos', k_center=2, project_mode='simple', bg_mode='res_mask', use_refine=True, k_refine=3, k_skip_stage=3)
+    model = slbr(args=args)
+    checkpoint = torch.load(MODEL_DIR / MODEL_FILES[model_id], map_location='cpu', weights_only=True)
+    model.load_state_dict(checkpoint['state_dict'], strict=True)
+    return model.eval().to(target)
+
+
+def clear_model_cache():
+    model_cache.clear()
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+
+def get_cached_model(model_id, target):
+    # 推理在 gpu_lock 内串行；先释放旧模型再加载新模型，避免切换瞬间超出显存。
+    key = (model_id, target)
+    if key in model_cache:
+        model_cache.move_to_end(key)
+        return model_cache[key]
+    if len(model_cache) >= MODEL_CACHE_SIZE:
+        model_cache.popitem(last=False)
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    model = load_model_uncached(model_id, target)
+    model_cache[key] = model
+    return model
+
+
+get_cached_model.cache_clear = clear_model_cache
+
+
 def run_model(model_id, image, mask):
     """只在用户蒙版内合成结果，输入输出保持相同尺寸。"""
     height, width = mask.shape
@@ -187,18 +237,14 @@ def run_model(model_id, image, mask):
         raise ValueError('蒙版为空')
     target = device()
     if model_id == 'migan':
-        import onnxruntime as ort
-        providers = ['CUDAExecutionProvider', 'CPUExecutionProvider'] if target == 'cuda' else ['CPUExecutionProvider']
-        session = ort.InferenceSession(str(MODEL_DIR / MODEL_FILES[model_id]), providers=providers)
-        if target == 'cuda' and 'CUDAExecutionProvider' not in session.get_providers():
-            raise RuntimeError('ONNX CUDA 不可用')
+        session = get_cached_model(model_id, target)
         known = np.full(mask.shape, 255, dtype=np.uint8); known[selected] = 0
         inputs = {'image': image.transpose(2, 0, 1)[None], 'mask': known[None, None]}
         out = session.run(None, inputs)[0][0].transpose(1, 2, 0)
         del session
     elif model_id == 'lama':
         import torch.nn.functional as functional
-        model = torch.jit.load(str(MODEL_DIR / MODEL_FILES[model_id]), map_location=target).eval()
+        model = get_cached_model(model_id, target)
         # 局部裁剪并限制模型输入，降低显存消耗；最终画布仍保留原始尺寸。
         ys, xs = np.flatnonzero(selected.any(axis=1)), np.flatnonzero(selected.any(axis=0))
         margin = max(64, int(max(xs.max() - xs.min(), ys.max() - ys.min()) * 0.25))
@@ -219,14 +265,7 @@ def run_model(model_id, image, mask):
         out = image.copy(); out[y0:y1, x0:x1] = result
         del model, x, m
     else:
-        from importlib import import_module
-        src = types.ModuleType('src'); src.__path__ = [str(SLBR_SOURCE / 'src')]; sys.modules['src'] = src
-        utils = types.ModuleType('src.utils'); utils.__path__ = [str(SLBR_SOURCE / 'src/utils')]; sys.modules['src.utils'] = utils
-        slbr = import_module('src.networks').slbr
-        args = SimpleNamespace(mask_mode='res', sim_metric='cos', k_center=2, project_mode='simple', bg_mode='res_mask', use_refine=True, k_refine=3, k_skip_stage=3)
-        model = slbr(args=args)
-        checkpoint = torch.load(MODEL_DIR / MODEL_FILES[model_id], map_location='cpu', weights_only=True)
-        model.load_state_dict(checkpoint['state_dict'], strict=True); model = model.eval().to(target)
+        model = get_cached_model(model_id, target)
         # 官方权重按 256×256 训练；输出映射到原图，最后只合成用户选择的区域。
         resized = np.asarray(Image.fromarray(image).resize((256, 256), Image.Resampling.LANCZOS)).copy()
         x = torch.from_numpy(resized.transpose(2, 0, 1)).unsqueeze(0).float().to(target) / 255
@@ -238,8 +277,6 @@ def run_model(model_id, image, mask):
         del model, x
     output = image.copy(); output[selected] = out[selected]
     gc.collect()
-    if target == 'cuda':
-        torch.cuda.empty_cache()
     return output
 
 
