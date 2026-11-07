@@ -6,6 +6,7 @@ import { toast } from 'sonner';
 import type { EditorJob, EditorModelId, FolderListing } from '@luvia/contracts';
 import { ApiError } from '@/lib/api';
 import { cn } from '@/lib/cn';
+import { createOperationId } from '@/lib/operation-id';
 import { q, queryClient } from '@/lib/query';
 import { useIsAdmin } from '@/stores/session';
 import { EditorDock } from '@/viewer/editor/EditorDock';
@@ -289,7 +290,7 @@ export default function ExternalEditorPage() {
     if (!job || !importReady) return;
     const revision = pictureRevision.current;
     const key = JSON.stringify([job.id, libraryId, normalizedFolder, trimmedName]);
-    const operationId = importOpRef.current?.key === key ? importOpRef.current.id : crypto.randomUUID();
+    const operationId = importOpRef.current?.key === key ? importOpRef.current.id : createOperationId();
     importOpRef.current = { key, id: operationId };
     setImportPending(true);
     setImportError(null);

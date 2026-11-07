@@ -5,7 +5,9 @@
   width: min(760px, calc(100% - 24px)); padding: 8px; border-radius: calc(var(--r3) + 2px);
   background: rgb(20 20 22 / .68); backdrop-filter: blur(24px) saturate(1.4); -webkit-backdrop-filter: blur(24px) saturate(1.4);
   border: 1px solid rgb(255 255 255 / .12); box-shadow: 0 24px 60px -24px rgb(0 0 0 / .75); color: #fff; overflow: hidden;
+  animation: lv-editor-enter .22s cubic-bezier(.2, .8, .2, 1);
 }
+@keyframes lv-editor-enter { from { opacity: 0; translate: 0 8px; } }
 .lv-ed-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 0 2px; }
 .lv-ed-progress { position: absolute; left: 0; right: 0; top: 0; height: 2px; background: rgb(255 255 255 / .12); overflow: hidden; }
 .lv-ed-progress i { display: block; height: 100%; background: var(--accent); transition: width .3s ease; }
@@ -13,7 +15,7 @@
 @keyframes lv-ed-indet { 0% { transform: translateX(-100%); } 100% { transform: translateX(300%); } }
 
 .lv-ed-models { display: flex; gap: 2px; padding: 2px; border-radius: 999px; background: rgb(255 255 255 / .08); }
-.lv-ed-models button { height: 30px; padding: 0 11px; border-radius: 999px; font-size: 12px; color: rgb(255 255 255 / .72); background: transparent; border: 0; }
+.lv-ed-models button { height: 30px; padding: 0 11px; border-radius: 999px; font-size: 12px; color: rgb(255 255 255 / .72); background: transparent; border: 0; transition: background .18s ease, color .18s ease, opacity .18s ease; }
 .lv-ed-models button:hover:not(:disabled) { color: #fff; }
 .lv-ed-models button.on { background: #fff; color: #111; font-weight: 600; }
 .lv-ed-models button:disabled { opacity: .38; cursor: not-allowed; }
@@ -23,13 +25,13 @@
 .lv-ed-brush input { width: 110px; accent-color: var(--accent); }
 .lv-ed-brush output { min-width: 20px; text-align: right; font-variant-numeric: tabular-nums; color: #fff; }
 
-.lv-ed-tool { display: inline-flex; align-items: center; gap: 5px; height: 30px; padding: 0 9px; border-radius: 8px; border: 0; background: transparent; color: rgb(255 255 255 / .75); font-size: 12px; }
+.lv-ed-tool { display: inline-flex; align-items: center; gap: 5px; height: 30px; padding: 0 9px; border-radius: 8px; border: 0; background: transparent; color: rgb(255 255 255 / .75); font-size: 12px; transition: background .18s ease, color .18s ease, opacity .18s ease; }
 .lv-ed-tool svg { width: 14px; height: 14px; }
 .lv-ed-tool:hover:not(:disabled) { background: rgb(255 255 255 / .12); color: #fff; }
 .lv-ed-tool.on { background: rgb(255 255 255 / .16); color: #fff; }
 .lv-ed-tool:disabled { opacity: .35; cursor: default; }
 
-.lv-ed-primary { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 14px; margin-left: auto; border-radius: 999px; border: 0; background: var(--accent); color: var(--accent-fg); font-size: 12.5px; font-weight: 600; }
+.lv-ed-primary { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 14px; margin-left: auto; border-radius: 999px; border: 0; background: var(--accent); color: var(--accent-fg); font-size: 12.5px; font-weight: 600; transition: filter .18s ease, opacity .18s ease; }
 .lv-ed-primary:hover:not(:disabled) { filter: brightness(1.06); }
 .lv-ed-primary:disabled { opacity: .4; cursor: default; }
 .lv-ed-primary svg { width: 14px; height: 14px; }

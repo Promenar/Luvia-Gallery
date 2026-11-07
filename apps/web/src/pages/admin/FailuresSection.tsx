@@ -9,6 +9,7 @@ import { Clock, Eye, FileWarning, Grid2x2, Image as ImageIcon, RefreshCw, Rotate
 import type { MediaFailure } from '@luvia/contracts';
 import { ApiError, call } from '@/lib/api';
 import { cn } from '@/lib/cn';
+import { createOperationId } from '@/lib/operation-id';
 import { queryClient } from '@/lib/query';
 import { openViewer } from '@/stores/viewer';
 import { errMsg, formatWhen } from './format';
@@ -263,7 +264,7 @@ export default function FailuresSection() {
                 onOpen={(origin) => void openOriginal(f, origin)}
                 onRetry={() => retry.mutate(f)}
                 onUnignore={() => unignore.mutate(f)}
-                onDelete={() => { setDeleteError(null); setDeleteTarget({ failure: f, operationId: crypto.randomUUID() }); }}
+                onDelete={() => { setDeleteError(null); setDeleteTarget({ failure: f, operationId: createOperationId() }); }}
               />
             ))}
           </ul>

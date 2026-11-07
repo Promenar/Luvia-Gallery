@@ -227,7 +227,7 @@ export function Modal({ open, onOpenChange, title, desc, children, footer, wide 
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         showCloseButton={false}
-        className={cn('flex max-h-[86dvh] flex-col gap-0 overflow-hidden rounded-[calc(var(--r3)+2px)] border border-line-2 bg-raised p-0 shadow-[0_40px_80px_-24px_rgba(0,0,0,.6)] ring-0', wide ? 'sm:max-w-[640px]' : 'sm:max-w-[520px]')}
+        className={cn('flex max-h-[86dvh] flex-col gap-0 overflow-hidden rounded-[calc(var(--r3)+2px)] border border-line-2 p-0 shadow-[0_40px_80px_-24px_rgba(0,0,0,.6)] ring-0', wide ? 'sm:max-w-[640px]' : 'sm:max-w-[520px]')}
       >
         <div className="flex items-start gap-3 px-[22px] pt-[22px]">
           <div className="min-w-0 flex-1">
@@ -260,7 +260,7 @@ export function Confirm({ open, onOpenChange, title, desc, action, onConfirm, pe
 }) {
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
-      <AlertDialogContent className="rounded-[calc(var(--r3)+2px)] border border-line-2 bg-raised p-[22px] ring-0 data-[size=default]:max-w-[calc(100%-2rem)] data-[size=default]:sm:max-w-[440px]">
+      <AlertDialogContent className="rounded-[calc(var(--r3)+2px)] border border-line-2 p-[22px] ring-0 data-[size=default]:max-w-[calc(100%-2rem)] data-[size=default]:sm:max-w-[440px]">
         <AlertDialogHeader className="place-items-start text-left">
           <AlertDialogTitle className="text-[17px] font-semibold">{title}</AlertDialogTitle>
           <AlertDialogDescription className="text-left text-[13px] text-muted">{desc}</AlertDialogDescription>

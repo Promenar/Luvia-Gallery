@@ -70,7 +70,7 @@ export function AppShell() {
         <div aria-label={user?.username} title={user?.username} className="mt-2 size-[30px] rounded-full bg-[linear-gradient(140deg,#8b7660,#3d4c5c)]" />
       </nav>
 
-      <main className="relative min-h-0 min-w-0 overflow-hidden pb-[calc(56px+env(safe-area-inset-bottom))] md:pb-0">
+      <main className="luvia-page relative min-h-0 min-w-0 overflow-hidden pb-[calc(56px+env(safe-area-inset-bottom))] md:pb-0">
         <Suspense fallback={<div className="p-8 text-muted">正在加载…</div>}>
           <Outlet />
         </Suspense>
