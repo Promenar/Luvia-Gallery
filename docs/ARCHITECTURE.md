@@ -43,6 +43,7 @@
   - `src/worker/main.ts`：持久化作业队列（扫描、元数据、缩略图、视频预览、HLS 转码、缓存淘汰、旧库导入、索引回填）、定时调度与实时监控运行时。
 - `apps/web`：React 19 + Vite + Tailwind CSS v4 + Base UI，TanStack Router/Query/Virtual；`src/mocks` 为基于 msw 的离线开发数据。
 - `apps/inference-service`：独立图像修复服务，加载本地 LaMa、MI-GAN 和 SLBR 权重，按可用设备使用 CUDA 或 CPU；接口、资源限制及部署方式见该目录的 README。
+- SLBR 自动检测和修复共用推理服务的串行准入；批次状态、源版本及副本发布操作存入 SQLite。批次调度器运行于单个 API 实例，重启后恢复待处理项目；多 API 实例部署需先增加调度归属与互斥。
 
 ### 进程协作
 api 与 worker 共享同一个 SQLite 数据库，不直接通信。作业、租约、调度状态和变化事件都持久化在数据库中：worker 写入 `jobs`、`job_events`，api 轮询 `job_events` 推送 SSE，并按用户的目录权限过滤媒体库事件。可以运行多个 worker 实例，作业与监控均通过带过期时间的租约互斥。
