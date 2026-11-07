@@ -15,6 +15,8 @@ export interface ViewerScope {
   random?: Record<string, unknown>;
   /** 精确总数，未知为 null。 */
   total?: number | null;
+  /** 打开时已知的失败原因（例如从控制台“处理失败”进入），原图不可读时显示在错误卡片里。 */
+  errorHint?: string;
 }
 
 export interface OpenViewerOptions {
@@ -34,6 +36,7 @@ interface ViewerState {
   setIndex: (i: number) => void;
   appendItems: (items: MediaItem[], nextCursor: string | null) => void;
   updateItem: (id: string, patch: Partial<MediaItem>) => void;
+  removeItem: (id: string) => void;
   close: () => void;
 }
 
@@ -48,6 +51,15 @@ export const useViewer = create<ViewerState>((set) => ({
     set((s) => (s.scope ? { scope: { ...s.scope, items: [...s.scope.items, ...items], nextCursor } } : s)),
   updateItem: (id, patch) =>
     set((s) => (s.scope ? { scope: { ...s.scope, items: s.scope.items.map((m) => (m.id === id ? { ...m, ...patch } : m)) } } : s)),
+  removeItem: (id) =>
+    set((s) => {
+      if (!s.scope) return s;
+      const items = s.scope.items.filter((m) => m.id !== id);
+      return {
+        scope: { ...s.scope, items, total: s.scope.total == null ? null : Math.max(0, s.scope.total - 1) },
+        index: Math.min(s.index, Math.max(0, items.length - 1)),
+      };
+    }),
   close: () => set({ open: false, options: {} }),
 }));
 

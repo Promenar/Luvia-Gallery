@@ -10,6 +10,9 @@ import { withMediaGenerationLock } from './media-lock.ts';
 import { extractMetadataNow } from './metadata.ts';
 import { waitForWalCapacity } from './wal-checkpoint.ts';
 import { runLanes } from './lanes.ts';
+import { classifyMediaFailure, clearMediaFailure, mediaIgnored, recordMediaFailure } from '../core/media-failures.ts';
+import { isImageDecodeError } from './image-decoding.ts';
+import { isTransientSqliteError } from '../core/sqlite-errors.ts';
 
 /** 网格使用的两个尺寸；查看器大图（l）仍在打开时按需生成，避免全库生成占用过多缓存。 */
 export const BACKFILL_VARIANTS: Variant[] = [{ kind: 'thumb', size: 's' }, { kind: 'thumb', size: 'm' }];
@@ -61,6 +64,7 @@ export async function processThumbnailBackfill(db: Database.Database, job: JobRo
   for (const row of rows) {
     const before = tasks.length;
     for (const variant of BACKFILL_VARIANTS) {
+      if (mediaIgnored(db, row, variant)) continue;
       const key = cacheKey(row, variant);
       if (entry.get(key)) {
         const info = await lstat(cachePath(options.cacheDir, row, variant)).catch(() => null);
@@ -103,6 +107,7 @@ export async function processThumbnailBackfill(db: Database.Database, job: JobRo
       await waitForWalCapacity(signal);
       signal.throwIfAborted(); options.assertLease();
       const source = { mediaId: task.row.id, sourceSize: task.row.size, sourceModified: task.row.modified_at, sourceGeneration: task.row.cache_generation };
+      let thumbnailReady = false;
       try {
         if (task.kind === 'dimensions') { await readDimensions(task.row); continue; }
         const legacyInput = task.variant.kind === 'thumb' ? await legacyOf(task.row) : undefined;
@@ -116,12 +121,18 @@ export async function processThumbnailBackfill(db: Database.Database, job: JobRo
           state.generated++;
           if (fromLegacy) { state.legacy++; usedLegacy = true; }
         }, { signal, assertLease: options.assertLease });
+        thumbnailReady = true;
+        db.transaction(() => { options.assertLease(); clearMediaFailure(db, task.row, task.variant); }).immediate();
         // 从 1.x 缩略图缩放时不知道原始宽高，单独读取（图片只读文件头）
         if (usedLegacy && (!task.row.width || !task.row.height)) await readDimensions(task.row);
       } catch (error) {
         // 取消、租约失效向上抛出；单个文件损坏或变化只计入失败
-        if (signal.aborted) throw error;
+        if (signal.aborted || isTransientSqliteError(error)) throw error;
         options.assertLease();
+        if (task.kind === 'thumb' && !thumbnailReady) db.transaction(() => {
+          options.assertLease();
+          recordMediaFailure(db, task.row, task.variant, '媒体处理失败，请检查文件、编码器及存储', classifyMediaFailure(error, isImageDecodeError(error)));
+        }).immediate();
         state.failed++;
       }
     }

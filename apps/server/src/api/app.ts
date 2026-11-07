@@ -5,7 +5,7 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import type Database from 'better-sqlite3';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import path from 'node:path';
-import { constants } from 'node:fs';
+import { constants, createReadStream } from 'node:fs';
 import { access, realpath, stat, lstat, readdir, open as openFile } from 'node:fs/promises';
 import { once } from 'node:events';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -35,6 +35,10 @@ import { detectMounts } from '../core/mounts.ts';
 import type { Mount } from '../core/mounts.ts';
 import { readSettings, writeSettings } from '../core/settings.ts';
 import { cacheKey, cachePath, enqueueMediaTask, releaseMediaWaiter } from '../core/media-cache.ts';
+import { MediaIgnoredError, mediaIgnored } from '../core/media-failures.ts';
+import { deleteMediaFile, MediaDeleteError } from '../core/media-delete.ts';
+import { createEditorQueue, EditorError, type EditorQueue } from '../editor/queue.ts';
+import { editorConfig } from '../editor/service.ts';
 import { extractMetadataNow } from '../worker/metadata.ts';
 import { listLibraryChanges } from '../core/library-changes.ts';
 import { readInotifyQuota } from '../watch/mode.ts';
@@ -235,6 +239,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     db.prepare('DELETE FROM legacy_jwt_sessions WHERE user_id=?').run(id);
   }
   app.setErrorHandler((err, _req, reply) => {
+    if (err instanceof MediaIgnoredError) return reply.code(409).send({ error: { code: err.code, message: err.message } });
     if (err instanceof ZodError) return reply.code(400).send({ error: { code: 'VALIDATION', message: '请求参数无效' } });
     if (err instanceof HttpError) return reply.code(err.statusCode).send({ error: { code: err.code, message: err.message } });
     const status = (err as { statusCode?: unknown } | null)?.statusCode;
@@ -258,7 +263,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
   });
   function register<K extends keyof typeof endpoints>(name: K, handler: (req: FastifyRequest, reply: FastifyReply, body: any) => unknown | Promise<unknown>): void {
     const def = endpoints[name];
-    app.route({ method: def.method, url: def.path, handler: async (req, reply) => {
+    app.route({ method: def.method, url: def.path, ...(name === 'createEditorJob' ? { bodyLimit: Math.ceil(editorConfig().maskMaxBytes / 3) * 4 + 16384 } : {}), handler: async (req, reply) => {
       const identity = identities.get(req);
       if (def.auth !== 'public' && !identity) fail(401, 'UNAUTHORIZED', '请先登录');
       if (def.auth === 'admin' && (identity?.kind !== 'session' || identity.user.role !== 'admin')) fail(403, 'FORBIDDEN', '需要管理员会话');
@@ -645,6 +650,11 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     return result;
   }
   const cacheDir = options.cacheDir ?? path.resolve(process.env.CACHE_DIR ?? 'cache');
+  // 编辑器不可用不应阻断浏览；缓存目录不可写或初始化失败时，能力接口会返回明确原因。
+  let editorQueue: EditorQueue | null = null;
+  try { editorQueue = await createEditorQueue(db, cacheDir, editorConfig()); } catch { editorQueue = null; }
+  app.addHook('onClose', async () => { await editorQueue?.close(); });
+  const requireEditor = (): EditorQueue => editorQueue ?? fail(503, 'MODEL_UNAVAILABLE', '图像修复服务暂不可用');
   const exists = async (filename: string) => { try { await access(filename); return true; } catch { return false; } };
   async function cachedMedia(req: FastifyRequest, reply: FastifyReply, row: BinaryRow, variant: Variant, wait: boolean, authorize?: () => unknown) {
     const filename = cachePath(cacheDir, row, variant);
@@ -653,7 +663,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
         const previous = await findLegacyThumbnail(cacheDir, row);
         if (previous) {
           authorize?.();
-          enqueueMediaTask(db, row, variant, { interactive: true });
+          if (!mediaIgnored(db, row, variant)) enqueueMediaTask(db, row, variant, { interactive: true });
           return sendFile(req, reply, previous, { mime: 'image/webp', name: row.name, etagKey: `legacy:${cacheKey(row, variant)}`, authorize });
         }
       }
@@ -1341,6 +1351,132 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
       ORDER BY CASE WHEN status IN ('running','queued') THEN 0 ELSE 1 END, created_at DESC, id DESC LIMIT ?`)
       .all(query.status ?? null, query.status ?? null, query.limit) as JobRecord[];
     return { jobs: rows.map(jobView) };
+  });
+  register('listMediaFailures', async (req) => {
+    const query = endpoints.listMediaFailures.query.parse(req.query);
+    const rows = db.prepare(`SELECT mf.rowid AS id,mf.media_id,mf.operation,mf.source_size,mf.source_modified,mf.source_generation,
+      mf.failures,mf.ignored,mf.reason,mf.category,mf.error_code,mf.last_failed_at,f.library_id,f.name,f.folder
+      FROM media_failures mf JOIN files f ON f.id=mf.media_id
+      WHERE (? IS NULL OR mf.rowid<?) AND (? IS NULL OR mf.ignored=?)
+        AND f.size=mf.source_size AND f.modified_at=mf.source_modified AND f.cache_generation=mf.source_generation
+      ORDER BY mf.rowid DESC LIMIT ?`).all(query.cursor ?? null, query.cursor ?? null, query.ignored ?? null,
+        query.ignored === undefined ? null : query.ignored === 'true' ? 1 : 0, query.limit + 1) as {
+          id: number; media_id: string; library_id: string; name: string; folder: string; operation: string;
+          source_size: number; source_modified: number; source_generation: number; failures: number; ignored: number; reason: string; category: 'missing' | 'permission' | 'decode' | 'storage' | 'unknown'; error_code: string | null; last_failed_at: number;
+        }[];
+    const summary = db.prepare(`SELECT count(*) FILTER (WHERE mf.ignored=1) AS ignored,count(*) FILTER (WHERE mf.ignored=0) AS unignored
+      FROM media_failures mf JOIN files f ON f.id=mf.media_id
+      WHERE f.size=mf.source_size AND f.modified_at=mf.source_modified AND f.cache_generation=mf.source_generation`).get() as { ignored: number; unignored: number };
+    const items = rows.slice(0, query.limit).map((row) => ({ id: String(row.id), mediaId: row.media_id, libraryId: row.library_id,
+      name: row.name, folder: row.folder, operation: row.operation, source: { size: row.source_size, modifiedAt: row.source_modified, generation: row.source_generation },
+      failures: row.failures, ignored: !!row.ignored, reason: row.reason, category: row.category, ...(row.error_code ? { errorCode: row.error_code } : {}), lastFailedAt: iso(row.last_failed_at)! }));
+    const total = query.ignored === undefined ? summary.ignored + summary.unignored : query.ignored === 'true' ? summary.ignored : summary.unignored;
+    return { items, nextCursor: rows.length > query.limit ? items.at(-1)!.id : null, total, counts: summary };
+  });
+  register('unignoreMediaFailure', async (req, _reply, body) => {
+    const { id } = req.params as { id: string };
+    if (!/^[1-9]\d*$/.test(id)) return fail(404, 'NOT_FOUND', '失败记录不存在');
+    return db.transaction(() => {
+      const row = db.prepare(`SELECT mf.source_size,mf.source_modified,mf.source_generation,f.size,f.modified_at,f.cache_generation
+        FROM media_failures mf JOIN files f ON f.id=mf.media_id WHERE mf.rowid=?`).get(id) as {
+          source_size: number; source_modified: number; source_generation: number; size: number; modified_at: number; cache_generation: number;
+        } | undefined;
+      if (!row) return fail(404, 'NOT_FOUND', '失败记录不存在');
+      if (body.size !== row.source_size || body.modifiedAt !== row.source_modified || body.generation !== row.source_generation ||
+          row.size !== row.source_size || row.modified_at !== row.source_modified || row.cache_generation !== row.source_generation) {
+        return fail(409, 'MEDIA_CHANGED', '媒体已发生变化，请刷新后重试');
+      }
+      db.prepare('DELETE FROM media_failures WHERE rowid=?').run(id);
+      return { success: true as const };
+    }).immediate();
+  });
+  register('retryMediaFailure', async (req, _reply, body) => {
+    const { id } = req.params as { id: string };
+    if (!/^[1-9]\d*$/.test(id)) return fail(404, 'NOT_FOUND', '失败记录不存在');    return db.transaction(() => {
+      const row = db.prepare(`SELECT mf.media_id,mf.operation,mf.source_size,mf.source_modified,mf.source_generation,
+        f.size,f.modified_at,f.cache_generation,f.library_id,f.metadata_status FROM media_failures mf JOIN files f ON f.id=mf.media_id
+        JOIN libraries l ON l.id=f.library_id AND l.enabled=1 WHERE mf.rowid=? AND f.missing_at_ms IS NULL`).get(id) as {
+          media_id: string; operation: string; source_size: number; source_modified: number; source_generation: number;
+          size: number; modified_at: number; cache_generation: number; library_id: string; metadata_status: string;
+        } | undefined;
+      if (!row) return fail(404, 'NOT_FOUND', '失败记录不存在');
+      if (body.size !== row.source_size || body.modifiedAt !== row.source_modified || body.generation !== row.source_generation ||
+          row.size !== row.source_size || row.modified_at !== row.source_modified || row.cache_generation !== row.source_generation) {
+        return fail(409, 'MEDIA_CHANGED', '媒体已发生变化，请刷新后重试');
+      }
+      if (row.operation === 'metadata') {
+        const busy = db.prepare("SELECT 1 FROM jobs WHERE type='metadata' AND status IN ('queued','running','paused') AND (json_extract(payload,'$.libraryId')=? OR json_extract(payload,'$.libraryId') IS NULL) LIMIT 1").get(row.library_id);
+        if (busy) return fail(409, 'CONFLICT', '该媒体库已有拍摄信息任务，请稍后重试');
+        if (row.metadata_status !== 'failed') return fail(409, 'CONFLICT', '拍摄信息状态已经变化');
+        const jobId = randomUUID();
+        db.prepare("UPDATE files SET metadata_status='pending' WHERE id=?").run(row.media_id);
+        db.prepare('DELETE FROM media_failures WHERE rowid=?').run(id);
+        db.prepare("INSERT INTO jobs(id,type,label,status,trigger,payload,created_at,dedupe_key) VALUES (?,'metadata','重试失败的拍摄信息','queued','manual',?,unixepoch(),?)")
+          .run(jobId, JSON.stringify({ libraryId: row.library_id, recovery: true, recoveryIds: [row.media_id] }), `metadata-recovery:${row.library_id}`);
+        publishJob(db, jobId);
+        return { jobId };
+      }
+      let variant: Variant;
+      if (row.operation === 'thumb:s' || row.operation === 'thumb:m' || row.operation === 'thumb:l') variant = { kind: 'thumb', size: row.operation.slice(-1) as 's' | 'm' | 'l' };
+      else if (row.operation === 'preview' || row.operation === 'display' || row.operation === 'dimensions') variant = { kind: row.operation };
+      else {
+        const tile = /^tile:(\d+):(\d+):(\d+)$/.exec(row.operation);
+        if (!tile) return fail(409, 'CONFLICT', '此处理类型暂不支持重试');
+        variant = { kind: 'tile', level: Number(tile[1]), col: Number(tile[2]), row: Number(tile[3]) };
+      }
+      db.prepare('DELETE FROM media_failures WHERE rowid=?').run(id);
+      const jobId = enqueueMediaTask(db, { id: row.media_id, size: row.size, modified_at: row.modified_at, cache_generation: row.cache_generation }, variant);
+      return { jobId };
+    }).immediate();
+  });
+  register('deleteMedia', async (req, _reply, body) => {
+    const { id } = req.params as { id: string };
+    try {
+      return await deleteMediaFile(db, { mediaId: id, source: body.source, operationId: body.operationId });
+    } catch (error) {
+      if (error instanceof MediaDeleteError) return fail(error.statusCode, error.code, error.message);
+      throw error;
+    }
+  });
+  register('editorCapabilities', async () => requireEditor().capabilities());
+  register('createEditorJob', async (req, _reply, body) => {
+    const user = requireUser(req).user;
+    try {
+      return await requireEditor().create({ userId: user.id, mediaId: body.mediaId, source: body.source, model: body.model, mask: body.mask });
+    } catch (error) {
+      if (error instanceof EditorError) return fail(error.statusCode, error.code, error.message);
+      throw error;
+    }
+  });
+  register('getEditorJob', async (req) => {
+    const user = requireUser(req).user;
+    const { id } = req.params as { id: string };
+    try { return requireEditor().job(id, user.id); }
+    catch (error) { if (error instanceof EditorError) return fail(error.statusCode, error.code, error.message); throw error; }
+  });
+  register('cancelEditorJob', async (req) => {
+    const user = requireUser(req).user;
+    const { id } = req.params as { id: string };
+    try { return await requireEditor().cancel(id, user.id); }
+    catch (error) { if (error instanceof EditorError) return fail(error.statusCode, error.code, error.message); throw error; }
+  });
+  register('saveEditorCopy', async (req, _reply, body) => {
+    const user = requireUser(req).user;
+    const { id } = req.params as { id: string };
+    try { return await requireEditor().saveCopy(id, user.id, { name: body.name, source: body.source }); }
+    catch (error) { if (error instanceof EditorError) return fail(error.statusCode, error.code, error.message); throw error; }
+  });
+  app.get('/api/v2/editor/jobs/:id/result', async (req, reply) => {
+    const user = requireUser(req).user;
+    if (user.role !== 'admin') return fail(403, 'FORBIDDEN', '需要管理员会话');
+    const { id } = req.params as { id: string };
+    try {
+      const result = await requireEditor().result(id, user.id);
+      return reply.header('Cache-Control', 'private, no-store').header('Content-Length', String(result.bytes)).type(result.mime).send(createReadStream(result.path));
+    } catch (error) {
+      if (error instanceof EditorError) return fail(error.statusCode, error.code, error.message);
+      throw error;
+    }
   });
   register('createJob', async (_req, _reply, body) => {
     if (body.libraryId && !db.prepare('SELECT 1 FROM libraries WHERE id=?').get(body.libraryId)) fail(404, 'NOT_FOUND', '媒体库不存在');

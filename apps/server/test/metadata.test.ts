@@ -69,7 +69,9 @@ test('元数据作业分批保存断点，不抢占有效文件租约并接管�
     await runNextJob(db, options);
     const protectedFile = db.prepare('SELECT id FROM files ORDER BY id LIMIT 1').get() as { id: string };
     const expiry = Math.floor(Date.now() / 1000) + 30;
-    db.prepare("INSERT INTO jobs(id,type,label,status,trigger,created_at,owner,lease_expires_at) VALUES ('other','metadata','其他','running','manual',1,'worker-b',?)").run(expiry);
+    // 真实元数据作业总带库标识；空 payload 表示“全部媒体库”，会按并发边界挡住本库任务，无法覆盖租约接管的场景。
+    db.prepare("INSERT INTO jobs(id,type,label,status,trigger,payload,created_at,owner,lease_expires_at) VALUES ('other','metadata','其他','running','manual',?,1,'worker-b',?)")
+      .run(JSON.stringify({ libraryId: 'other-library' }), expiry);
     db.prepare("INSERT INTO metadata_claims(file_id,job_id,owner,lease_expires_at) VALUES (?,'other','worker-b',?)").run(protectedFile.id, expiry);
     await runNextJob(db, options);
     const pending = db.prepare("SELECT status,checkpoint FROM jobs WHERE type='metadata' AND id<>'other'").get() as { status: string; checkpoint: string };

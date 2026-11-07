@@ -3,6 +3,7 @@ import { lstat } from 'node:fs/promises';
 import type Database from 'better-sqlite3';
 import { cacheKey, cachePath, enqueueMediaTask } from '../core/media-cache.ts';
 import { publishJob } from '../core/job-view.ts';
+import { mediaIgnored } from '../core/media-failures.ts';
 
 export type RecoveryResult = { metadataCandidates: number; thumbnailCandidates: number; skippedExisting: number; skippedEmpty: number; skippedUnavailable: number; metadataSkippedBusy: number; metadataReset: number; thumbnailQueued: number; nextCursor: string | null };
 type Row = { id: string; library_id: string; size: number; modified_at: number; cache_generation: number; thumb_ready: number; metadata_status: string };
@@ -20,8 +21,8 @@ export async function recoverMissingMedia(db: Database.Database, cacheDir: strin
   const variant = { kind: 'thumb', size: 's' } as const;
   for (const row of rows) {
     if (!row.size) { result.skippedEmpty++; continue; }
-    if (row.metadata_status === 'failed') { result.metadataCandidates++; metadata.push(row); }
-    if (row.thumb_ready !== 0) continue;
+    if (row.metadata_status === 'failed' && !mediaIgnored(db, row, { kind: 'metadata' })) { result.metadataCandidates++; metadata.push(row); }
+    if (row.thumb_ready !== 0 || mediaIgnored(db, row, variant)) continue;
     const filename = cachePath(cacheDir, row, variant);
     try {
       await lstat(filename);
@@ -38,6 +39,7 @@ export async function recoverMissingMedia(db: Database.Database, cacheDir: strin
     const reset = db.prepare("UPDATE files SET metadata_status='pending' WHERE id=? AND size=? AND modified_at=? AND cache_generation=? AND metadata_status='failed' AND missing_at_ms IS NULL");
     const busy = db.prepare("SELECT 1 FROM jobs WHERE type='metadata' AND status IN ('queued','running','paused') AND (json_extract(payload,'$.libraryId')=? OR json_extract(payload,'$.libraryId') IS NULL) LIMIT 1");
     for (const row of metadata) {
+      if (mediaIgnored(db, row, { kind: 'metadata' })) continue;
       if (!libraries.has(row.library_id) && busy.get(row.library_id)) { result.metadataSkippedBusy++; continue; }
       if (reset.run(row.id, row.size, row.modified_at, row.cache_generation).changes) { result.metadataReset++; const ids = libraries.get(row.library_id) ?? []; ids.push(row.id); libraries.set(row.library_id, ids); }
     }
@@ -50,6 +52,7 @@ export async function recoverMissingMedia(db: Database.Database, cacheDir: strin
   }).immediate();
   for (const row of thumbs) {
     const added = db.transaction(() => {
+      if (mediaIgnored(db, row, variant)) return false;
       const current = db.prepare("SELECT 1 FROM files WHERE id=? AND size=? AND modified_at=? AND cache_generation=? AND thumb_ready=0 AND missing_at_ms IS NULL").get(row.id, row.size, row.modified_at, row.cache_generation);
       if (!current) return false;
       const key = `media:${cacheKey(row, variant)}`;

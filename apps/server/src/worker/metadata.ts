@@ -13,8 +13,9 @@ import { secureMediaPath } from '../core/paths.ts';
 import { readSettings } from '../core/settings.ts';
 import { isImageDecodeError } from './image-decoding.ts';
 import type { JobRow } from '../core/jobs.ts';
+import { clearMediaFailure, mediaIgnored, recordMediaFailure } from '../core/media-failures.ts';
 
-type Source = { id: string; relative_path: string; folder: string; name: string; media_type: string; size: number; modified_at: number; root: string };
+type Source = { id: string; relative_path: string; folder: string; name: string; media_type: string; size: number; modified_at: number; cache_generation: number; root: string };
 type Counts = { indexed: number; failed: number };
 type Metadata = {
   takenAt: number; takenAtSource: 'metadata' | 'filename' | 'mtime'; width: number | null; height: number | null;
@@ -84,7 +85,13 @@ async function readImage(filename: string, source: Source, signal: AbortSignal |
     result.orientation = image.orientation ?? null;
   }
   if (!image) return result;
-  const tags = await exifr.parse(filename, { gps: true, exif: true, reviveValues: false, translateValues: false }).catch(() => undefined) as Record<string, unknown> | undefined;
+  const parseOptions = { gps: true, exif: true, reviveValues: false, translateValues: false };
+  let tags = await exifr.parse(filename, parseOptions).catch(() => undefined) as Record<string, unknown> | undefined;
+  // exifr 不能直接解析部分 WebP 容器，但 sharp 已提取出其中的 TIFF 格式 EXIF。
+  if (!tags && image.exif) {
+    const exif = image.exif.subarray(0, 6).equals(Buffer.from('Exif\0\0')) ? image.exif.subarray(6) : image.exif;
+    tags = await exifr.parse(exif, parseOptions).catch(() => undefined) as Record<string, unknown> | undefined;
+  }
   if (!tags) return result;
   const taken = exifDate(tags.DateTimeOriginal, tags.OffsetTimeOriginal);
   if (taken !== null) { result.takenAt = taken; result.takenAtSource = 'metadata'; }
@@ -192,14 +199,14 @@ export const PRIORITY_TTL_SECONDS = 600;
 
 /** 下一个待读文件：沿索引按修改时间倒序，最近的文件先读，与默认时间线顺序一致。 */
 export function metadataClaimSql(byLibrary: boolean): string {
-  return `SELECT f.id,f.relative_path,f.folder,f.name,f.media_type,f.size,f.modified_at,l.root FROM files f INDEXED BY ${byLibrary ? 'files_library_metadata_recent' : 'files_metadata_recent'}
+  return `SELECT f.id,f.relative_path,f.folder,f.name,f.media_type,f.size,f.modified_at,f.cache_generation,l.root FROM files f INDEXED BY ${byLibrary ? 'files_library_metadata_recent' : 'files_metadata_recent'}
     CROSS JOIN libraries l ON l.id=f.library_id AND l.enabled=1 LEFT JOIN metadata_claims c ON c.file_id=f.id
     WHERE f.metadata_status='pending' AND f.missing_at_ms IS NULL AND c.file_id IS NULL${byLibrary ? ' AND f.library_id=?' : ''} ORDER BY f.modified_at DESC LIMIT 1`;
 }
 
 /** 界面正在显示且缺少宽高的文件（metadata_priority），最近请求的先读。 */
 export function metadataPriorityClaimSql(byLibrary: boolean): string {
-  return `SELECT f.id,f.relative_path,f.folder,f.name,f.media_type,f.size,f.modified_at,l.root FROM metadata_priority p INDEXED BY metadata_priority_recent
+  return `SELECT f.id,f.relative_path,f.folder,f.name,f.media_type,f.size,f.modified_at,f.cache_generation,l.root FROM metadata_priority p INDEXED BY metadata_priority_recent
     CROSS JOIN files f ON f.id=p.file_id CROSS JOIN libraries l ON l.id=f.library_id AND l.enabled=1 LEFT JOIN metadata_claims c ON c.file_id=f.id
     WHERE f.metadata_status='pending' AND f.missing_at_ms IS NULL AND c.file_id IS NULL${byLibrary ? ' AND f.library_id=?' : ''} ORDER BY p.requested_at DESC LIMIT 1`;
 }
@@ -225,12 +232,14 @@ async function extractSource(source: Source, allowed: string[], signal: AbortSig
 
 /** 在调用方的事务内保存读取结果；文件已不是待处理状态（已被其它途径读取、内容变化或缺失）时不写入。 */
 function saveMetadata(db: Database.Database, source: Source, metadata: Metadata | null): 'indexed' | 'failed' | null {
-  const current = db.prepare("SELECT 1 FROM files WHERE id=? AND size=? AND modified_at=? AND metadata_status='pending' AND missing_at_ms IS NULL").get(source.id, source.size, source.modified_at);
+  const current = db.prepare("SELECT 1 FROM files WHERE id=? AND size=? AND modified_at=? AND cache_generation=? AND metadata_status='pending' AND missing_at_ms IS NULL").get(source.id, source.size, source.modified_at, source.cache_generation);
   if (!current) return null;
   if (!metadata) {
     db.prepare("UPDATE files SET metadata_status='failed',playability=CASE WHEN media_type='video' THEN 'unsupported' ELSE NULL END WHERE id=?").run(source.id);
+    recordMediaFailure(db, source, { kind: 'metadata' }, '拍摄信息读取失败，请检查文件和格式');
     return 'failed';
   }
+  clearMediaFailure(db, source, { kind: 'metadata' });
   db.prepare(`UPDATE files SET taken_at=?,taken_at_source=?,width=?,height=?,orientation=?,duration_sec=?,codec=?,audio_codec=?,container=?,fps=?,bitrate=?,
     make=?,model=?,lens=?,f_number=?,exposure_time=?,iso=?,focal_length=?,focal_length35=?,software=?,latitude=?,longitude=?,altitude=?,playability=?,metadata_status='done' WHERE id=?`)
     .run(metadata.takenAt, metadata.takenAtSource, metadata.width, metadata.height, metadata.orientation, metadata.duration, metadata.codec, metadata.audioCodec,
@@ -245,9 +254,10 @@ function saveMetadata(db: Database.Database, source: Source, metadata: Metadata 
  * 已读取、文件缺失或媒体库停用时不做任何事，返回 false。
  */
 export async function extractMetadataNow(db: Database.Database, fileId: string, signal?: AbortSignal): Promise<boolean> {
-  const source = db.prepare(`SELECT f.id,f.relative_path,f.folder,f.name,f.media_type,f.size,f.modified_at,l.root FROM files f
+  const source = db.prepare(`SELECT f.id,f.relative_path,f.folder,f.name,f.media_type,f.size,f.modified_at,f.cache_generation,l.root FROM files f
     JOIN libraries l ON l.id=f.library_id AND l.enabled=1 WHERE f.id=? AND f.metadata_status='pending' AND f.missing_at_ms IS NULL`).get(fileId) as Source | undefined;
   if (!source) return false;
+  if (mediaIgnored(db, source, { kind: 'metadata' })) return false;
   const root = await realpath(source.root).catch(() => '');
   const metadata = await extractSource(source, [root], signal, readSettings(db).transcode.enabled);
   signal?.throwIfAborted();
@@ -274,7 +284,7 @@ export async function processMetadataBatch(db: Database.Database, job: JobRow, o
     db.prepare('DELETE FROM metadata_priority WHERE requested_at<=?').run(now() - PRIORITY_TTL_SECONDS);
     const priority = options.recoveryIds ? undefined : db.prepare(metadataPriorityClaimSql(!!options.libraryId)).get(...libraryArgs) as Source | undefined;
     if (priority) db.prepare('DELETE FROM metadata_priority WHERE file_id=?').run(priority.id);
-    const row = priority ?? (options.recoveryIds ? db.prepare(`SELECT f.id,f.relative_path,f.folder,f.name,f.media_type,f.size,f.modified_at,l.root
+    const row = priority ?? (options.recoveryIds ? db.prepare(`SELECT f.id,f.relative_path,f.folder,f.name,f.media_type,f.size,f.modified_at,f.cache_generation,l.root
       FROM files f JOIN libraries l ON l.id=f.library_id AND l.enabled=1 LEFT JOIN metadata_claims c ON c.file_id=f.id
       WHERE f.id IN (SELECT value FROM json_each(?)) AND f.library_id=? AND f.metadata_status='pending' AND f.missing_at_ms IS NULL AND c.file_id IS NULL LIMIT 1`)
       .get(JSON.stringify(options.recoveryIds), options.libraryId) : db.prepare(metadataClaimSql(!!options.libraryId)).get(...libraryArgs)) as Source | undefined;

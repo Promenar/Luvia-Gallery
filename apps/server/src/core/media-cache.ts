@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import type Database from 'better-sqlite3';
 import { publishJob } from './job-view.ts';
+import { MediaIgnoredError, mediaIgnored } from './media-failures.ts';
 
 export type MediaSource = { id: string; size: number; modified_at: number; cache_generation?: number };
 export type Variant = { kind: 'thumb'; size: 's' | 'm' | 'l' } | { kind: 'display' } | { kind: 'dimensions' } | { kind: 'preview' } | { kind: 'tile'; level: number; col: number; row: number };
@@ -17,6 +18,7 @@ export function cachePath(cacheDir: string, source: MediaSource, variant: Varian
 export function enqueueMediaTask(db: Database.Database, source: MediaSource, variant: Variant, options: { waiter?: string; interactive?: boolean; preserveUnindexed?: boolean } = {}): string {
   const key = `media:${cacheKey(source, variant)}`;
   return db.transaction(() => {
+    if (mediaIgnored(db, source, variant)) throw new MediaIgnoredError();
     const id = randomUUID();
     const payload: MediaTask & { preserveUnindexed?: boolean } = { mediaId: source.id, sourceSize: source.size, sourceModified: source.modified_at, sourceGeneration: source.cache_generation ?? 0, variant,
       ...(options.preserveUnindexed ? { preserveUnindexed: true } : {}) };

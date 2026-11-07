@@ -174,5 +174,6 @@ export function childrenOf(path: string): string[] {
 /** 去掉模拟专用字段，得到契约 MediaItem。 */
 export function pub(m: MockMedia): MediaItem {
   const { libraryId: _l, rel: _r, palette: _p, seed: _s, ...rest } = m;
-  return rest;
+  // 与真实后端一致：写操作需要源版本；mock 的源代次固定为 0。
+  return { ...rest, source: { size: m.size, modifiedAt: m.modifiedAt, generation: 0 } };
 }

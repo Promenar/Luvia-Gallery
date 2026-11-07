@@ -8,6 +8,7 @@ import { cn } from '@/lib/cn';
 import { q } from '@/lib/query';
 import { Switch } from '@/components/kit/switch';
 import { formatBytes, formatClock, formatJobResult, formatWhen, isActiveJob, jobView, num } from './format';
+import FailuresSection from './FailuresSection';
 import { overviewQuery, settingsQuery, useDeferredCommit, useJobs, useUpdateSettings, type SettingsPatch } from './hooks';
 import { JobRow } from './OverviewTab';
 import { Chip, Empty, Pill, QueryState, Section, Seg, SettingRow, inputClass, useFieldId, useSave } from './ui';
@@ -257,6 +258,7 @@ export default function ProcessingTab() {
       {s.data && (
         <>
           <ScanSection s={s.data} save={save} />
+          <FailuresSection />
           <WorkersSection s={s.data} save={save} />
           <LegacySection />
           <SystemSection />

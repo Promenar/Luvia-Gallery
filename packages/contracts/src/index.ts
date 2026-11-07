@@ -4,6 +4,7 @@ export * from './library.ts';
 export * from './auth.ts';
 export * from './shares.ts';
 export * from './admin.ts';
+export * from './editor.ts';
 export * from './events.ts';
 export * from './endpoints.ts';
 export * from './legacy.ts';

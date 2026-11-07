@@ -5,6 +5,7 @@ import * as L from './library.ts';
 import * as A from './auth.ts';
 import * as S from './shares.ts';
 import * as Ad from './admin.ts';
+import * as E from './editor.ts';
 
 /**
  * v2 JSON 接口路由表（唯一事实源）。服务端按此注册校验，前端按此生成类型化调用。
@@ -81,6 +82,17 @@ export const endpoints = {
   getSettings: d({ method: 'GET', path: '/api/v2/admin/settings', auth: 'admin', response: Ad.AdminSettings }),
   updateSettings: d({ method: 'PATCH', path: '/api/v2/admin/settings', auth: 'admin', body: Ad.AdminSettingsPatch, response: Ad.AdminSettings }),
   listJobs: d({ method: 'GET', path: '/api/v2/admin/jobs', auth: 'admin', query: z.object({ status: Ad.JobStatus.optional(), limit: z.coerce.number().int().min(1).max(200).default(50) }), response: Ad.JobList }),
+  listMediaFailures: d({ method: 'GET', path: '/api/v2/admin/media-failures', auth: 'admin', query: z.object({ cursor: z.coerce.number().int().positive().optional(), limit: z.coerce.number().int().min(1).max(200).default(50), ignored: z.enum(['true','false']).optional() }), response: Ad.MediaFailureList }),
+  unignoreMediaFailure: d({ method: 'POST', path: '/api/v2/admin/media-failures/:id/unignore', auth: 'admin', body: Ad.MediaFailureSource, response: z.object({ success: z.literal(true) }) }),
+  retryMediaFailure: d({ method: 'POST', path: '/api/v2/admin/media-failures/:id/retry', auth: 'admin', body: Ad.MediaFailureSource, response: z.object({ jobId: z.string() }) }),
+  deleteMedia: d({ method: 'DELETE', path: '/api/v2/admin/media/:id', auth: 'admin', body: Ad.DeleteMediaBody, response: Ad.DeleteMediaResult }),
+
+  // 图像修复编辑器（写操作仅管理员会话）
+  editorCapabilities: d({ method: 'GET', path: '/api/v2/editor/capabilities', auth: 'admin', response: E.EditorCapabilities }),
+  createEditorJob: d({ method: 'POST', path: '/api/v2/editor/jobs', auth: 'admin', body: E.CreateEditorJobBody, response: E.EditorJob }),
+  getEditorJob: d({ method: 'GET', path: '/api/v2/editor/jobs/:id', auth: 'admin', response: E.EditorJob }),
+  cancelEditorJob: d({ method: 'POST', path: '/api/v2/editor/jobs/:id/cancel', auth: 'admin', response: E.EditorJob }),
+  saveEditorCopy: d({ method: 'POST', path: '/api/v2/editor/jobs/:id/save-copy', auth: 'admin', body: E.SaveEditorCopyBody, response: E.SaveEditorCopyResult }),
   createJob: d({ method: 'POST', path: '/api/v2/admin/jobs', auth: 'admin', body: Ad.CreateJobBody, response: Ad.Job }),
   jobAction: d({ method: 'POST', path: '/api/v2/admin/jobs/:id/:action', auth: 'admin', response: Ad.Job }),
   listUsers: d({ method: 'GET', path: '/api/v2/admin/users', auth: 'admin', response: Ad.UserList }),

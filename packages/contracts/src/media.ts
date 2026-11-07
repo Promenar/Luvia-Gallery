@@ -16,6 +16,9 @@ export type Playability = z.infer<typeof Playability>;
 
 /** 拍摄时间来源：exif/quicktime 元数据、文件名中的日期、文件修改时间回退。 */
 export const TakenAtSource = z.enum(['metadata', 'filename', 'mtime']);
+/** 媒体源版本；modifiedAt 为 Unix 秒。 */
+export const MediaSourceVersion = z.object({ size: z.number().int().nonnegative(), modifiedAt: z.number().int(), generation: z.number().int().nonnegative() });
+export type MediaSourceVersion = z.infer<typeof MediaSourceVersion>;
 
 /**
  * 列表中的媒体项。
@@ -41,6 +44,8 @@ export const MediaItem = z.object({
   takenAtSource: TakenAtSource,
   /** 文件修改时间，Unix 秒。 */
   modifiedAt: z.number().int(),
+  /** 旧服务可能尚未提供；写操作必须使用实际返回的版本。 */
+  source: MediaSourceVersion.optional(),
   favorite: z.boolean(),
   /** ThumbHash（base64），用于加载前占位；尚未生成时为 null。 */
   thumbhash: z.string().nullable(),

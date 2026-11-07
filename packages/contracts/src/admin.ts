@@ -207,6 +207,33 @@ export const Job = z.object({
 export type Job = z.infer<typeof Job>;
 /** GET /api/v2/admin/jobs?status=&limit=（最近优先；运行中与排队的总在前） */
 export const JobList = z.object({ jobs: z.array(Job) });
+export const MediaFailureSource = z.object({ size: z.number().int().nonnegative(), modifiedAt: z.number().int(), generation: z.number().int().nonnegative() });
+export const MediaFailure = z.object({
+  id: z.string(), mediaId: z.string(), libraryId: z.string(), name: z.string(), folder: z.string(),
+  operation: z.string(), source: MediaFailureSource, failures: z.number().int(), ignored: z.boolean(),
+  category: z.enum(['missing', 'permission', 'decode', 'storage', 'unknown']), errorCode: z.string().optional(),
+  reason: z.string(), lastFailedAt: z.string(),
+});
+export type MediaFailure = z.infer<typeof MediaFailure>;
+export const MediaFailureList = z.object({ items: z.array(MediaFailure), nextCursor: z.string().nullable(), total: z.number().int().nonnegative(), counts: z.object({ ignored: z.number().int().nonnegative(), unignored: z.number().int().nonnegative() }) });
+export type MediaFailureList = z.infer<typeof MediaFailureList>;
+
+/**
+ * 删除原文件。confirm 必须显式为 true；operationId 由客户端生成，重试必须复用同一个值。
+ * source 是管理员在界面上看到的乐观并发令牌，服务器仍会重新校验路径、文件身份与写权限。
+ */
+export const DeleteMediaBody = z.object({
+  confirm: z.literal(true),
+  source: MediaFailureSource,
+  operationId: z.string().min(8).max(128).regex(/^[A-Za-z0-9._:-]+$/),
+}).strict();
+export type DeleteMediaBody = z.infer<typeof DeleteMediaBody>;
+export const DeleteMediaResult = z.object({
+  operationId: z.string(),
+  /** deleted：文件与索引都已处理；pending：文件已删除但索引清理待重试。 */
+  status: z.enum(['deleted', 'pending']),
+});
+export type DeleteMediaResult = z.infer<typeof DeleteMediaResult>;
 /** POST /api/v2/admin/jobs */
 export const CreateJobBody = z.object({ type: JobType, libraryId: z.string().optional() }).strict();
 /** POST /api/v2/admin/jobs/:id/:action，action ∈ pause|resume|cancel|retry → Job */
