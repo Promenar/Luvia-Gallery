@@ -1,5 +1,5 @@
 import type Database from 'better-sqlite3';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
 import { access, mkdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -15,6 +15,7 @@ import { planEditorTiles, type EditorTile } from './tiles.ts';
 import { detectWatermark } from './detection.ts';
 import { EditorUploads } from './uploads.ts';
 import { cleanupRetiredImport, cleanupSavedImport, importExternalResult } from './external-import.ts';
+import { recoverOriginalReplacements, replaceOriginal, savedReplacement } from './replace-original.ts';
 import {
   cancelInference, probeModels, probeWrite, runInference, type EditorServiceConfig,
 } from './service.ts';
@@ -23,6 +24,7 @@ type JobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
 type JobRow = {
   id: string; user_id: string; media_id: string; library_id: string;
   source_size: number; source_modified: number; source_generation: number; model: string;
+  source_sha256: string | null;
   status: JobStatus; progress: number; stage: string | null; error: string | null;
   mask_path: string; result_path: string | null; result_mime: string | null; result_bytes: number | null; result_state: string;
   mask_mode: 'manual' | 'auto' | 'adjust'; mask_threshold: number | null; outcome: 'detected' | 'no_detection' | null;
@@ -159,7 +161,8 @@ export class EditorQueue {
     const advertised = models.map((model) => ({ ...model,
       maxPixels: model.maxPixels && model.maxPixels >= TILE_MAX_PIXELS ? this.config.maxImagePixels
         : model.maxPixels === null ? Math.min(40_000_000, this.config.maxImagePixels) : Math.min(model.maxPixels, this.config.maxImagePixels) }));
-    return { models: advertised, write, mask: { maxBytes: this.config.maskMaxBytes, maxEdge: this.config.maskMaxEdge } };
+    const replace = process.platform === 'linux' ? write : { available: false, reason: '当前服务平台不支持安全覆盖原图，请保存副本' };
+    return { models: advertised, write, replace, mask: { maxBytes: this.config.maskMaxBytes, maxEdge: this.config.maskMaxEdge } };
   }
 
   async create(input: {
@@ -295,6 +298,8 @@ export class EditorQueue {
         throw new EditorError(409, 'MEDIA_CHANGED', '原图已发生变化，请重新生成');
       }
       const originalBytes = await readFile(original);
+      this.db.prepare('UPDATE editor_jobs SET source_sha256=? WHERE id=? AND status=\'running\'')
+        .run(createHash('sha256').update(originalBytes).digest('hex'), job.id);
       const originalMeta = await sharp(originalBytes).metadata();
       if (originalMeta.depth !== 'uchar' || (originalMeta.bitsPerSample ?? 8) > 8) {
         throw new EditorError(409, 'OPERATION_FAILED', '暂不支持高位深图片修复');
@@ -609,9 +614,18 @@ export class EditorQueue {
     return { status: 'saved', mediaId: newId, name, folder };
   }
 
+  async replaceOriginal(id: string, userId: string, body: { source: { size: number; modifiedAt: number; generation: number }; operationId: string }, assertAuthorized: () => void) {
+    const saved = savedReplacement(this.db, id, userId, body);
+    if (saved) return saved;
+    const job = this.owned(id, userId);
+    if (!job.result_path || !safeUnder(this.editorDir, job.result_path)) throw new EditorError(404, 'NOT_FOUND', '修复结果不可访问');
+    return replaceOriginal(this.db, job, userId, body, assertAuthorized);
+  }
+
   private async removeExpiredResult(id: string): Promise<boolean> {
     const claimed = this.db.prepare(`UPDATE editor_jobs SET result_state='deleting' WHERE id=? AND result_state IN ('ready','deleting') AND NOT EXISTS
       (SELECT 1 FROM editor_imports i WHERE i.job_id=editor_jobs.id AND i.status IN ('pending','attention')) AND NOT EXISTS
+      (SELECT 1 FROM editor_overwrites o WHERE o.job_id=editor_jobs.id AND o.status IN ('pending','attention')) AND NOT EXISTS
       (SELECT 1 FROM editor_batch_items b WHERE b.job_id=editor_jobs.id AND b.status IN ('generating','review','saving'))`).run(id);
     if (!claimed.changes) return false;
     try { await rm(this.jobDir(id), { recursive: true, force: true }); } catch { return false; }
@@ -620,6 +634,7 @@ export class EditorQueue {
   }
 
   async sweep(): Promise<void> {
+    recoverOriginalReplacements(this.db);
     await this.uploads.sweep();
     const recover = this.db.prepare(`SELECT operation_id,user_id,job_id,library_id,folder,requested_name FROM editor_imports i
       WHERE status='pending' AND operation_id>? AND NOT EXISTS (SELECT 1 FROM editor_batch_items b WHERE b.operation_id=i.operation_id)

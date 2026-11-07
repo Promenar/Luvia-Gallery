@@ -81,7 +81,7 @@ dialog.lv-viewer.is-thm { color: var(--fg); --vb-hover: color-mix(in oklab, var(
 .lv-viewer.is-idle :is(.lv-vt, .lv-vn, .lv-sspill, .lv-zhud, .lv-vidbar, .lv-mini, .lv-play) { opacity: 0; pointer-events: none; }
 
 /* 信息侧栏 */
-.lv-sheet { position: absolute; z-index: 3; top: 66px; right: 14px; bottom: 96px; width: 348px; border-radius: var(--r3); padding: 20px; background: rgb(22 22 24 / .62); backdrop-filter: blur(24px) saturate(1.4); -webkit-backdrop-filter: blur(24px) saturate(1.4); border: 1px solid rgb(255 255 255 / .1); transform: translateX(calc(100% + 20px)); transition: transform .35s cubic-bezier(.2, .8, .2, 1), visibility 0s .35s; visibility: hidden; overflow: auto; overscroll-behavior: contain; color: #fff; user-select: text; -webkit-user-select: text; }
+.lv-sheet { --scrollbar-thumb: rgb(255 255 255 / .3); --scrollbar-thumb-hover: rgb(255 255 255 / .48); position: absolute; z-index: 3; top: 66px; right: 14px; bottom: 96px; width: 348px; border-radius: var(--r3); padding: 20px; background: rgb(22 22 24 / .62); backdrop-filter: blur(24px) saturate(1.4); -webkit-backdrop-filter: blur(24px) saturate(1.4); border: 1px solid rgb(255 255 255 / .1); transform: translateX(calc(100% + 20px)); transition: transform .35s cubic-bezier(.2, .8, .2, 1), visibility 0s .35s; visibility: hidden; overflow: auto; overscroll-behavior: contain; color: #fff; user-select: text; -webkit-user-select: text; }
 .lv-viewer.is-info .lv-sheet { transform: none; visibility: visible; transition: transform .35s cubic-bezier(.2, .8, .2, 1); }
 .lv-sheet h4 { margin: 0 0 2px; font-size: 16px; font-weight: 600; word-break: break-all; }
 .lv-sheet .when { font-size: 12.5px; color: rgb(255 255 255 / .7); }

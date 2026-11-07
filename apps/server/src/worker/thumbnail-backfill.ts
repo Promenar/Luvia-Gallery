@@ -78,9 +78,10 @@ export async function processThumbnailBackfill(db: Database.Database, job: JobRo
   }
   // 同一文件的两个尺寸共用一次查找
   const legacyLookups = new Map<string, Promise<string | undefined>>();
+  const replaced = db.prepare("SELECT 1 FROM editor_overwrites WHERE media_id=? AND status='saved' LIMIT 1");
   const legacyOf = (row: Row) => {
     let lookup = legacyLookups.get(row.id);
-    if (!lookup) { lookup = findLegacyThumbnail(options.cacheDir, row); legacyLookups.set(row.id, lookup); }
+    if (!lookup) { lookup = replaced.get(row.id) ? Promise.resolve(undefined) : findLegacyThumbnail(options.cacheDir, row); legacyLookups.set(row.id, lookup); }
     return lookup;
   };
   const stop = new AbortController();

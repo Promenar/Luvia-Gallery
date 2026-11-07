@@ -16,7 +16,7 @@ export function excluded(value: string, rules: string[], isDir = false): boolean
   const count = isDir ? parts.length : Math.max(0, parts.length - 1);
   for (let i = 0; i < count; i++) {
     const name = parts[i]!; const relative = parts.slice(0, i + 1).join('/');
-    if (rules.some((rule) => path.matchesGlob(name, rule) || path.matchesGlob(relative, rule))) return true;
+    if (name.startsWith('.luvia-replace-') || rules.some((rule) => path.matchesGlob(name, rule) || path.matchesGlob(relative, rule))) return true;
   }
   return false;
 }

@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { mediaUrls, type EditorJob, type EditorModelId, type MediaItem } from '@luvia/contracts';
 import { call, ApiError, type CallOptions } from '@/lib/api';
 import { invalidate, q, queryClient } from '@/lib/query';
+import { useServerEvents } from '@/lib/events';
 import { useIsAdmin, usePreferences, useUpdatePreferences } from '@/stores/session';
 import { useViewer, type ViewerScope } from '@/stores/viewer';
 import { setDynamicFrom } from '@/theme/ThemeProvider';
@@ -45,6 +46,15 @@ function useViewportSize() {
 
 const toRect = (r: DOMRect): Rect => ({ x: r.left, y: r.top, w: r.width, h: r.height });
 const onScreen = (r: DOMRect) => r.width > 0 && r.bottom > 0 && r.right > 0 && r.top < innerHeight && r.left < innerWidth;
+function updateViewerMedia(updated: MediaItem) {
+  const viewer = useViewer.getState();
+  const current = viewer.scope?.items.find((item) => item.id === updated.id);
+  if (!current) return;
+  const previousGeneration = current.source?.generation ?? 0;
+  const nextGeneration = updated.source?.generation ?? 0;
+  if (nextGeneration < previousGeneration || (nextGeneration === previousGeneration && updated.thumbVersion < current.thumbVersion)) return;
+  viewer.updateItem(updated.id, updated);
+}
 
 /** 全屏查看器。由 AppShell 在 useViewer().open 时渲染；播放范围来自 stores/viewer.ts。 */
 export function Viewer() {
@@ -104,13 +114,25 @@ function ViewerDialog({ scope }: { scope: ViewerScope }) {
 
   const items = scope.items;
   const item: MediaItem = items[index] ?? items[0]!;
+  const viewerEvents = useMemo(() => ({ library: (event: { folders: string[] }) => {
+    const current = useViewer.getState();
+    const active = current.scope?.items[current.index];
+    if (!active || !event.folders.some((folder) => active.folder === folder || active.folder.startsWith(`${folder}/`))) return;
+    void call('mediaDetail', { params: { id: active.id } }).then((updated) => {
+      updateViewerMedia(updated);
+    }).catch(() => {});
+  } }), []);
+  useServerEvents(viewerEvents);
+  useEffect(() => {
+    void call('mediaDetail', { params: { id: item.id } }).then(updateViewerMedia).catch(() => {});
+  }, [item.id]);
   const isVideo = item.mediaType === 'video';
   const imgFailed = failedId === item.id;
   const canDelete = isAdmin && !!item.source;
   const canEdit = !isVideo || canDelete;
   const {
     job: editorJob, create: createEditorJob, cancel: cancelEditorJob, reset: resetEditorJob,
-    saveCopy: saveEditorCopy, createPending: editorPending, createError: editorCreateError, queryError: editorQueryError,
+    saveCopy: saveEditorCopy, replaceOriginal: replaceEditorOriginal, createPending: editorPending, createError: editorCreateError, queryError: editorQueryError,
     busy: editorBusy,
   } = editor;
   const canRepair = isAdmin && !isVideo && availableModels.length > 0;
@@ -140,6 +162,7 @@ function ViewerDialog({ scope }: { scope: ViewerScope }) {
     setDeleteOpen(false);
     setDeleteError(null);
     deleteOpRef.current = null;
+    replaceOpRef.current = null;
     setEditorOpen(false);
     setHasMask(false);
     setAdjustBase(null);
@@ -178,6 +201,8 @@ function ViewerDialog({ scope }: { scope: ViewerScope }) {
   const firstIdRef = useRef<string | null>(null);
   const openIndexRef = useRef(index);
   const deleteOpRef = useRef<string | null>(null);
+  const replaceOpRef = useRef<string | null>(null);
+  useEffect(() => { replaceOpRef.current = null; }, [editor.jobId]);
   const maskRef = useRef<MaskCanvasHandle>(null);
 
   const say = useViewerUi.getState().say;
@@ -701,6 +726,25 @@ function ViewerDialog({ scope }: { scope: ViewerScope }) {
     }
   }, [saveEditorCopy, say]);
 
+  const replaceEditorResult = useCallback(async () => {
+    const it = itemRef.current;
+    if (!it.source) return;
+    const operationId = replaceOpRef.current ?? crypto.randomUUID();
+    replaceOpRef.current = operationId;
+    setSavePending(true); setSaveError(null);
+    try {
+      const saved = await replaceEditorOriginal(it.source, operationId);
+      useViewer.getState().updateItem(it.id, { source: saved.source, size: saved.source.size, modifiedAt: saved.source.modifiedAt, thumbVersion: saved.thumbVersion, thumbhash: null });
+      replaceOpRef.current = null;
+      setSaveOpen(false); setSavedCopy(it.name); setEditorOpen(false);
+      resetEditorJob();
+      say('已覆盖原图，缩略图正在更新');
+      void invalidate('listMedia', 'mediaDetail', 'adminOverview');
+    } catch (error) {
+      setSaveError(error instanceof ApiError ? error.message : '覆盖原图失败，请稍后重试');
+    } finally { setSavePending(false); }
+  }, [replaceEditorOriginal, resetEditorJob, say]);
+
   // ---------- 键盘 ----------
   const onKeyDown = (e: React.KeyboardEvent<HTMLDialogElement>) => {
     const t = e.target as HTMLElement;
@@ -998,6 +1042,7 @@ function ViewerDialog({ scope }: { scope: ViewerScope }) {
             onCancel={() => void cancelEditorJob()}
             onReset={resetEditorResult}
             onSave={() => { setSaveError(null); setSaveOpen(true); }}
+            resultActionLabel="保存"
             onCompare={setComparing}
             comparing={comparing}
             savedName={savedCopy}
@@ -1069,10 +1114,14 @@ function ViewerDialog({ scope }: { scope: ViewerScope }) {
       <SaveCopyDialog
         open={saveOpen}
         defaultName={saveDefaultName}
+        originalName={item.name}
+        canReplace={!!item.source && !!capsQuery.data?.replace?.available && ['.jpg', '.jpeg', '.png', '.webp'].includes(originalExt)}
+        replaceReason={capsQuery.data?.replace?.reason}
         pending={savePending}
         error={saveError}
         onCancel={() => { if (!savePending) { setSaveOpen(false); setSaveError(null); } }}
         onSave={(name) => void saveEditorResult(name)}
+        onReplace={() => void replaceEditorResult()}
       />
 
       {menu && (

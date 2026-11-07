@@ -94,6 +94,7 @@ export const endpoints = {
   getEditorJob: d({ method: 'GET', path: '/api/v2/editor/jobs/:id', auth: 'admin', response: E.EditorJob }),
   cancelEditorJob: d({ method: 'POST', path: '/api/v2/editor/jobs/:id/cancel', auth: 'admin', response: E.EditorJob }),
   saveEditorCopy: d({ method: 'POST', path: '/api/v2/editor/jobs/:id/save-copy', auth: 'admin', body: E.SaveEditorCopyBody, response: E.SaveEditorCopyResult }),
+  replaceEditorOriginal: d({ method: 'POST', path: '/api/v2/editor/jobs/:id/replace-original', auth: 'admin', body: E.ReplaceEditorOriginalBody, response: E.ReplaceEditorOriginalResult }),
   createEditorBatch: d({ method: 'POST', path: '/api/v2/editor/batches', auth: 'admin', body: E.CreateEditorBatchBody, response: E.EditorBatch }),
   listEditorBatches: d({ method: 'GET', path: '/api/v2/editor/batches', auth: 'admin',
     query: z.object({ cursor: z.coerce.number().int().positive().optional(), limit: z.coerce.number().int().min(1).max(50).default(20) }), response: E.EditorBatchList }),

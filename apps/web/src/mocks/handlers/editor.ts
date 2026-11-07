@@ -76,6 +76,7 @@ export const editorHandlers = [
         { id: 'slbr', available: true, reason: null, device: 'cpu', maxPixels: 40_000_000, features: ['mask', 'detect'] },
       ],
       write: { available: true, reason: null },
+      replace: { available: true, reason: null },
       mask: { maxBytes: 8 * 1024 * 1024, maxEdge: 2048 },
     });
   }),
@@ -223,6 +224,19 @@ export const editorHandlers = [
     db.media.push(copy);
     await delay(240);
     return HttpResponse.json({ status: 'saved', mediaId: copy.id, name, folder: copy.folder });
+  }),
+  http.post('/api/v2/editor/jobs/:id/replace-original', async ({ params, request }) => {
+    const job = jobs.get(String(params.id ?? ''));
+    const media = job?.mediaId ? db.media.find((item) => item.id === job.mediaId) : undefined;
+    if (!job || !media) return err(404, 'NOT_FOUND', '原图已不存在');
+    const body = await request.json() as { confirm?: boolean; source?: typeof media.source };
+    const source = media.source ?? { size: media.size, modifiedAt: media.modifiedAt, generation: 0 };
+    if (!body.confirm || !body.source || JSON.stringify(body.source) !== JSON.stringify(source)) return err(409, 'MEDIA_CHANGED', '原图已变化');
+    media.source = { ...source, generation: source.generation + 1 };
+    media.thumbVersion += 1;
+    media.thumbhash = null;
+    await delay(240);
+    return HttpResponse.json({ status: 'saved', mediaId: media.id, source: media.source, thumbVersion: media.thumbVersion });
   }),
   http.post('/api/v2/editor/jobs/:id/import', async ({ params, request }) => {
     const job = jobs.get(String(params.id ?? ''));

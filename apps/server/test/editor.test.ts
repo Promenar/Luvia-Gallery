@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { chmod, link, mkdir, mkdtemp, readFile, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
+import { chmod, link, mkdir, mkdtemp, readFile, realpath, rename, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -12,6 +12,7 @@ import { extractMetadataNow } from '../src/worker/metadata.ts';
 import { createHash, randomBytes } from 'node:crypto';
 import { editorConfig, runInference } from '../src/editor/service.ts';
 import { EditorQueue } from '../src/editor/queue.ts';
+import { recoverOriginalReplacements } from '../src/editor/replace-original.ts';
 
 type FileRow = { id: string; size: number; modified_at: number; cache_generation: number };
 
@@ -157,6 +158,10 @@ test('能力探测只暴露真实可用的模型', async () => {
     assert.equal(caps.models.find((m: { id: string }) => m.id === 'lama').reason, '未安装权重');
     assert.equal(caps.models.find((m: { id: string }) => m.id === 'slbr').features.includes('detect'), true);
     assert.equal(caps.mask.maxEdge > 0, true);
+    if (process.platform !== 'linux') {
+      assert.equal(caps.replace.available, false);
+      assert.match(caps.replace.reason, /不支持安全覆盖/);
+    }
   } finally { await app.close(); db.close(); await stub.close(); await rm(root, { recursive: true, force: true }); await rm(cache, { recursive: true, force: true }); }
 });
 
@@ -555,6 +560,304 @@ test('广色域图片分块只修改蒙版区域，未选区域保持原有色�
     const inferencePixel = await sharp(stub.getResponse()).extract({ left: 110, top: 110, width: 1, height: 1 }).raw().toBuffer();
     assert.ok(resultPixel.every((value, i) => Math.abs(value - inferencePixel[i]!) <= 3), `结果色彩 ${resultPixel} 与推理结果 ${inferencePixel} 不一致`);
   } finally { await app.close(); db.close(); await stub.close(); await rm(root, { recursive: true, force: true }); await rm(cache, { recursive: true, force: true }); }
+});
+
+test('非 Linux 服务端不执行覆盖并向界面说明原因', { skip: process.platform === 'linux' }, async () => {
+  const stub = await startStub();
+  const { root, cache, db, app, headers, row } = await setup(stub.url);
+  try {
+    const original = await readFile(path.join(root, 'photo.jpg'));
+    const created = await app.inject({ method: 'POST', url: '/api/v2/editor/jobs', headers,
+      payload: { mediaId: row.id, source: sourceOf(row), model: 'migan', mask: await maskOf() } });
+    assert.equal(created.statusCode, 200, created.body);
+    const job = await waitForJob(app, headers, created.json().id);
+    const result = await app.inject({ method: 'POST', url: `/api/v2/editor/jobs/${job.id}/replace-original`, headers,
+      payload: { confirm: true, operationId: 'replace-unsupported-0001', source: sourceOf(row) } });
+    assert.equal(result.statusCode, 409, result.body);
+    assert.equal(result.json().error.code, 'OPERATION_UNAVAILABLE');
+    assert.deepEqual(await readFile(path.join(root, 'photo.jpg')), original);
+  } finally { await app.close(); db.close(); await stub.close(); await rm(root, { recursive: true, force: true }); await rm(cache, { recursive: true, force: true }); }
+});
+
+test('确认覆盖后保留媒体身份，更新源版本并使旧缩略图失效，重复请求保持幂等', { skip: process.platform !== 'linux' }, async () => {
+  const stub = await startStub();
+  const { root, cache, db, app, headers, row } = await setup(stub.url);
+  try {
+    const original = await readFile(path.join(root, 'photo.jpg'));
+    db.prepare("UPDATE files SET thumb_ready=1,thumb_version=7,thumbhash='old' WHERE id=?").run(row.id);
+    db.prepare("INSERT INTO favorites(user_id,item_type,item_id) SELECT id,'file',? FROM users LIMIT 1").run(row.id);
+    const created = await app.inject({ method: 'POST', url: '/api/v2/editor/jobs', headers,
+      payload: { mediaId: row.id, source: sourceOf(row), model: 'migan', mask: await maskOf() } });
+    assert.equal(created.statusCode, 200, created.body);
+    const job = await waitForJob(app, headers, created.json().id);
+    assert.equal(job.status, 'succeeded', JSON.stringify(job));
+    const request = { method: 'POST' as const, url: `/api/v2/editor/jobs/${job.id}/replace-original`, headers,
+      payload: { confirm: true, operationId: 'replace-test-0001', source: sourceOf(row) } };
+    const saved = await app.inject(request);
+    assert.equal(saved.statusCode, 200, saved.body);
+    assert.equal(saved.json().mediaId, row.id);
+    const current = db.prepare('SELECT id,size,modified_at,cache_generation,thumb_ready,thumb_version,thumbhash FROM files WHERE id=?').get(row.id) as
+      FileRow & { thumb_ready: number; thumb_version: number; thumbhash: string | null };
+    assert.equal(current.cache_generation, row.cache_generation + 1);
+    assert.equal(current.thumb_ready, 0);
+    assert.equal(current.thumbhash, null);
+    assert.ok(current.thumb_version > 7);
+    assert.equal(current.size, (await stat(path.join(root, 'photo.jpg'))).size);
+    assert.notDeepEqual(await readFile(path.join(root, 'photo.jpg')), original);
+    assert.equal((db.prepare("SELECT count(*) AS n FROM favorites WHERE item_type='file' AND item_id=?").get(row.id) as { n: number }).n, 1);
+    assert.equal((db.prepare("SELECT count(*) AS n FROM library_changes WHERE media_id=? AND kind='updated'").get(row.id) as { n: number }).n, 1);
+    const again = await app.inject(request);
+    assert.equal(again.statusCode, 200, again.body);
+    assert.equal((db.prepare('SELECT cache_generation FROM files WHERE id=?').get(row.id) as FileRow).cache_generation, current.cache_generation);
+    db.prepare('DELETE FROM editor_jobs WHERE id=?').run(job.id);
+    const afterExpiry = await app.inject(request);
+    assert.equal(afterExpiry.statusCode, 200, afterExpiry.body);
+    assert.deepEqual(afterExpiry.json(), saved.json());
+  } finally { await app.close(); db.close(); await stub.close(); await rm(root, { recursive: true, force: true }); await rm(cache, { recursive: true, force: true }); }
+});
+
+for (const phase of ['准备完成', '原图已暂存', '结果已发布', '原路径被占用', '暂存原图内容变化', '原图需人工找回', '暂存目录权限受限'] as const) {
+  test(`覆盖操作在${phase}中断后安全恢复`, { skip: process.platform !== 'linux' || (phase === '暂存目录权限受限' && process.getuid?.() === 0) }, async () => {
+    const stub = await startStub();
+    const { root, cache, db, app, row } = await setup(stub.url);
+    try {
+      const operationId = `recover-${phase}`;
+      const stage = path.join(root, `.luvia-replace-${createHash('sha256').update(operationId).digest('hex')}`);
+      const original = path.join(root, 'photo.jpg');
+      const oldBytes = await readFile(original);
+      const sourceInfo = await stat(original, { bigint: true }); const parentInfo = await stat(root, { bigint: true });
+      await mkdir(stage, { mode: 0o700 });
+      const stageInfo = await stat(stage, { bigint: true });
+      const replacement = await sharp({ create: { width: 10, height: 8, channels: 3, background: '#00aa44' } }).jpeg().toBuffer();
+      await writeFile(path.join(stage, 'result'), replacement);
+      const resultInfo = await stat(path.join(stage, 'result'), { bigint: true });
+      db.prepare(`INSERT INTO media_operations(operation_id,media_id,library_id,relative_path,source_size,source_modified,source_generation,state,created_at,updated_at,kind)
+        VALUES (?,?, 'lib','photo.jpg',?,?,?,'pending',unixepoch(),unixepoch(),'overwrite')`).run(`replace:${operationId}`, row.id, row.size, row.modified_at, row.cache_generation);
+      db.prepare(`INSERT INTO editor_overwrites(operation_id,user_id,job_id,media_id,library_id,relative_path,source_size,source_modified,source_generation,
+        source_dev,source_ino,source_mtime_ns,parent_dev,parent_ino,stage_dev,stage_ino,result_dev,result_ino,status,created_at)
+        VALUES (?,'test-user','test-job',?,'lib','photo.jpg',?,?,?,?,?,?,?,?,?,?,?,?,'pending',unixepoch())`)
+        .run(operationId, row.id, row.size, row.modified_at, row.cache_generation, String(sourceInfo.dev), String(sourceInfo.ino), String(sourceInfo.mtimeNs),
+          String(parentInfo.dev), String(parentInfo.ino), String(stageInfo.dev), String(stageInfo.ino), String(resultInfo.dev), String(resultInfo.ino));
+      db.prepare('UPDATE editor_overwrites SET source_sha256=? WHERE operation_id=?').run(createHash('sha256').update(oldBytes).digest('hex'), operationId);
+      db.prepare('UPDATE editor_overwrites SET root_real=?,root_dev=?,root_ino=? WHERE operation_id=?').run(await realpath(root), String(parentInfo.dev), String(parentInfo.ino), operationId);
+      if (phase !== '准备完成') await rename(original, path.join(stage, 'original'));
+      if (phase === '结果已发布') await link(path.join(stage, 'result'), original);
+      if (phase === '原路径被占用') await writeFile(original, '其他程序写入');
+      let changedBytes: Buffer | null = null;
+      if (phase === '暂存原图内容变化') {
+        const stagedOriginal = path.join(stage, 'original');
+        changedBytes = Buffer.from(oldBytes); changedBytes[changedBytes.length - 4] = changedBytes[changedBytes.length - 4]! ^ 1;
+        await writeFile(stagedOriginal, changedBytes);
+        await utimes(stagedOriginal, Number(sourceInfo.atimeNs) / 1e9, Number(sourceInfo.mtimeNs) / 1e9);
+        const altered = await stat(stagedOriginal, { bigint: true });
+        db.prepare('UPDATE editor_overwrites SET source_mtime_ns=? WHERE operation_id=?').run(String(altered.mtimeNs), operationId);
+      }
+      await assert.rejects(scanLibrary(db, { id: 'lib', root }, { allowedRoots: [root] }), /等待恢复/);
+      if (phase === '原图需人工找回') db.prepare("UPDATE editor_overwrites SET status='attention',root_real=? WHERE operation_id=?").run(path.join(root, 'unavailable'), operationId);
+      if (phase === '暂存目录权限受限') await chmod(stage, 0);
+      recoverOriginalReplacements(db);
+      if (phase !== '暂存目录权限受限') recoverOriginalReplacements(db);
+      const state = db.prepare('SELECT status FROM editor_overwrites WHERE operation_id=?').get(operationId) as { status: string };
+      if (phase === '暂存目录权限受限') {
+        assert.equal(state.status, 'attention');
+        await writeFile(path.join(root, 'other.png'), await sharp({ create: { width: 2, height: 2, channels: 3, background: '#444' } }).png().toBuffer());
+        await scanLibrary(db, { id: 'lib', root }, { allowedRoots: [root] });
+        assert.equal((db.prepare("SELECT count(*) AS n FROM files WHERE name='other.png'").get() as { n: number }).n, 1);
+        assert.equal((db.prepare('SELECT missing_at_ms FROM files WHERE id=?').get(row.id) as { missing_at_ms: number | null }).missing_at_ms, null);
+        await chmod(stage, 0o700);
+        recoverOriginalReplacements(db);
+        assert.equal((db.prepare('SELECT status FROM editor_overwrites WHERE operation_id=?').get(operationId) as { status: string }).status, 'saved');
+        assert.deepEqual(await readFile(original), replacement);
+      } else if (phase === '原图需人工找回') {
+        assert.equal(state.status, 'attention');
+        await writeFile(path.join(root, 'other.png'), await sharp({ create: { width: 2, height: 2, channels: 3, background: '#444' } }).png().toBuffer());
+        await scanLibrary(db, { id: 'lib', root }, { allowedRoots: [root] });
+        assert.equal((db.prepare('SELECT missing_at_ms FROM files WHERE id=?').get(row.id) as { missing_at_ms: number | null }).missing_at_ms, null);
+        assert.equal((db.prepare("SELECT count(*) AS n FROM files WHERE name='other.png'").get() as { n: number }).n, 1);
+        assert.deepEqual(await readFile(path.join(stage, 'original')), oldBytes);
+      } else if (phase === '暂存原图内容变化') {
+        assert.equal(state.status, 'attention');
+        assert.deepEqual(await readFile(original), changedBytes);
+        assert.deepEqual(await readFile(path.join(stage, 'original')), changedBytes);
+        assert.deepEqual(await readFile(path.join(stage, 'result')), replacement);
+      } else if (phase === '原路径被占用') {
+        assert.equal(state.status, 'attention');
+        assert.equal((await readFile(original)).toString(), '其他程序写入');
+        assert.deepEqual(await readFile(path.join(stage, 'original')), oldBytes);
+        assert.deepEqual(await readFile(path.join(stage, 'result')), replacement);
+        await writeFile(path.join(root, 'other.png'), await sharp({ create: { width: 2, height: 2, channels: 3, background: '#444' } }).png().toBuffer());
+        await scanLibrary(db, { id: 'lib', root }, { allowedRoots: [root] });
+        assert.equal((db.prepare('SELECT missing_at_ms FROM files WHERE id=?').get(row.id) as { missing_at_ms: number | null }).missing_at_ms, null);
+        assert.equal((db.prepare("SELECT count(*) AS n FROM files WHERE name='other.png'").get() as { n: number }).n, 1);
+      } else {
+        assert.equal(state.status, 'saved');
+        assert.deepEqual(await readFile(original), replacement);
+        assert.equal((db.prepare('SELECT cache_generation FROM files WHERE id=?').get(row.id) as FileRow).cache_generation, row.cache_generation + 1);
+        await assert.rejects(stat(stage), { code: 'ENOENT' });
+      }
+    } finally {
+      if (phase === '暂存目录权限受限') await chmod(path.join(root, `.luvia-replace-${createHash('sha256').update(`recover-${phase}`).digest('hex')}`), 0o700).catch(() => {});
+      await app.close(); db.close(); await stub.close(); await rm(root, { recursive: true, force: true }); await rm(cache, { recursive: true, force: true });
+    }
+  });
+}
+
+test('同一版本号但磁盘内容已变化时拒绝覆盖', { skip: process.platform !== 'linux' }, async () => {
+  const stub = await startStub();
+  const { root, cache, db, app, headers, row } = await setup(stub.url);
+  try {
+    const created = await app.inject({ method: 'POST', url: '/api/v2/editor/jobs', headers,
+      payload: { mediaId: row.id, source: sourceOf(row), model: 'migan', mask: await maskOf() } });
+    const job = await waitForJob(app, headers, created.json().id);
+    assert.equal(job.status, 'succeeded');
+    const filename = path.join(root, 'photo.jpg');
+    const info = await stat(filename);
+    const changed = await readFile(filename);
+    changed[changed.length - 4] = changed[changed.length - 4]! ^ 1;
+    await writeFile(filename, changed);
+    await utimes(filename, info.atime, info.mtime);
+    const disk = await stat(filename);
+    db.prepare('UPDATE files SET mtime_ms=? WHERE id=?').run(disk.mtimeMs, row.id);
+    const saved = await app.inject({ method: 'POST', url: `/api/v2/editor/jobs/${job.id}/replace-original`, headers,
+      payload: { confirm: true, operationId: 'replace-changed-0001', source: sourceOf(row) } });
+    assert.equal(saved.statusCode, 409, saved.body);
+    assert.equal(saved.json().error.code, 'MEDIA_CHANGED');
+    assert.deepEqual(await readFile(filename), changed);
+  } finally { await app.close(); db.close(); await stub.close(); await rm(root, { recursive: true, force: true }); await rm(cache, { recursive: true, force: true }); }
+});
+
+test('覆盖 CMYK 原图后成品颜色与确认预览一致', { skip: process.platform !== 'linux' }, async () => {
+  const stub = await startStub();
+  const { root, cache, db, app, headers } = await setup(stub.url);
+  try {
+    const filename = path.join(root, 'photo.jpg');
+    const original = await sharp({ create: { width: 10, height: 8, channels: 3, background: '#00ff00' } }).withIccProfile('cmyk').jpeg().toBuffer();
+    assert.equal((await sharp(original).metadata()).space, 'cmyk');
+    await writeFile(filename, original);
+    await scanLibrary(db, { id: 'lib', root }, { allowedRoots: [root] });
+    db.prepare("UPDATE files SET width=10,height=8 WHERE name='photo.jpg'").run();
+    const row = db.prepare('SELECT id,size,modified_at,cache_generation FROM files WHERE name=?').get('photo.jpg') as FileRow;
+    stub.setResult(await sharp({ create: { width: 10, height: 8, channels: 3, background: '#00ff00' } }).withIccProfile('srgb').png().toBuffer());
+    const created = await app.inject({ method: 'POST', url: '/api/v2/editor/jobs', headers,
+      payload: { mediaId: row.id, source: sourceOf(row), model: 'migan', mask: await maskOf() } });
+    assert.equal(created.statusCode, 200, created.body);
+    const job = await waitForJob(app, headers, created.json().id);
+    const preview = await app.inject({ method: 'GET', url: job.resultUrl, headers });
+    const expected = await sharp(preview.rawPayload).withIccProfile('srgb').removeAlpha().raw().toBuffer();
+    const saved = await app.inject({ method: 'POST', url: `/api/v2/editor/jobs/${job.id}/replace-original`, headers,
+      payload: { confirm: true, operationId: 'replace-cmyk-0001', source: sourceOf(row) } });
+    assert.equal(saved.statusCode, 200, saved.body);
+    const actual = await sharp(filename).withIccProfile('srgb').removeAlpha().raw().toBuffer();
+    assert.ok(actual.every((value, index) => Math.abs(value - expected[index]!) <= 5), `成品色彩与预览不一致：${[...actual.subarray(0, 3)]} / ${[...expected.subarray(0, 3)]}`);
+    assert.equal((await sharp(filename).metadata()).space, 'srgb');
+  } finally { await app.close(); db.close(); await stub.close(); await rm(root, { recursive: true, force: true }); await rm(cache, { recursive: true, force: true }); }
+});
+
+test('覆盖时保留色彩配置并将 EXIF 方向归一化', { skip: process.platform !== 'linux' }, async () => {
+  const stub = await startStub();
+  const { root, cache, db, app, headers } = await setup(stub.url);
+  try {
+    const filename = path.join(root, 'photo.jpg');
+    const original = await sharp({ create: { width: 10, height: 8, channels: 3, background: '#5c7799' } })
+      .jpeg({ quality: 95 }).withMetadata({ orientation: 6 }).withIccProfile('p3').toBuffer();
+    await writeFile(filename, original);
+    await scanLibrary(db, { id: 'lib', root }, { allowedRoots: [root] });
+    db.prepare('UPDATE files SET width=8,height=10 WHERE name=?').run('photo.jpg');
+    const row = db.prepare('SELECT id,size,modified_at,cache_generation FROM files WHERE name=?').get('photo.jpg') as FileRow;
+    const originalMeta = await sharp(original).metadata();
+    assert.equal(originalMeta.orientation, 6);
+    assert.ok(originalMeta.icc);
+    stub.setResult(await sharp({ create: { width: 8, height: 10, channels: 3, background: '#dc3c28' } }).withIccProfile('srgb').png().toBuffer());
+    const mask = await sharp({ create: { width: 8, height: 10, channels: 3, background: '#fff' } }).png().toBuffer();
+    const created = await app.inject({ method: 'POST', url: '/api/v2/editor/jobs', headers,
+      payload: { mediaId: row.id, source: sourceOf(row), model: 'migan', mask: { data: mask.toString('base64'), width: 8, height: 10 } } });
+    assert.equal(created.statusCode, 200, created.body);
+    const job = await waitForJob(app, headers, created.json().id);
+    assert.equal(job.status, 'succeeded', JSON.stringify(job));
+    const preview = await app.inject({ method: 'GET', url: job.resultUrl, headers });
+    const expected = await sharp(preview.rawPayload).withIccProfile('srgb').removeAlpha().raw().toBuffer();
+    const saved = await app.inject({ method: 'POST', url: `/api/v2/editor/jobs/${job.id}/replace-original`, headers,
+      payload: { confirm: true, operationId: 'replace-color-0001', source: sourceOf(row) } });
+    assert.equal(saved.statusCode, 200, saved.body);
+    const outputMeta = await sharp(filename).metadata();
+    assert.deepEqual(outputMeta.icc, originalMeta.icc);
+    assert.equal(outputMeta.orientation, 1);
+    assert.deepEqual([outputMeta.width, outputMeta.height], [8, 10]);
+    const actual = await sharp(filename).withIccProfile('srgb').removeAlpha().raw().toBuffer();
+    assert.ok(actual.every((value, index) => Math.abs(value - expected[index]!) <= 5), '成品颜色应接近用户确认的预览');
+  } finally { await app.close(); db.close(); await stub.close(); await rm(root, { recursive: true, force: true }); await rm(cache, { recursive: true, force: true }); }
+});
+
+test('登记后尚未发布的旧暂存目录会安全清理', { skip: process.platform !== 'linux' }, async () => {
+  const stub = await startStub();
+  const { root, cache, db, app } = await setup(stub.url);
+  try {
+    const name = `.luvia-replace-${'a'.repeat(64)}-01234567-89ab-4cde-8abc-0123456789ab`;
+    const stage = path.join(root, name);
+    await mkdir(stage, { mode: 0o700 });
+    await writeFile(path.join(stage, 'result'), '临时结果');
+    const parent = await stat(root, { bigint: true });
+    const stageInfo = await stat(stage, { bigint: true }); const resultInfo = await stat(path.join(stage, 'result'), { bigint: true });
+    db.prepare(`INSERT INTO editor_overwrite_preparations(stage_name,library_id,relative_path,parent_dev,parent_ino,root_real,root_dev,root_ino,stage_dev,stage_ino,result_dev,result_ino,created_at)
+      VALUES (?,'lib','photo.jpg',?,?,?,?,?,?,?,?,?,unixepoch()-3601)`).run(name, String(parent.dev), String(parent.ino), await realpath(root), String(parent.dev), String(parent.ino),
+        String(stageInfo.dev), String(stageInfo.ino), String(resultInfo.dev), String(resultInfo.ino));
+    const unverified = `.luvia-replace-${'b'.repeat(64)}-01234567-89ab-4cde-8abc-0123456789ab`;
+    await mkdir(path.join(root, unverified), { mode: 0o700 });
+    await writeFile(path.join(root, unverified, 'result'), '身份未登记');
+    db.prepare(`INSERT INTO editor_overwrite_preparations(stage_name,library_id,relative_path,parent_dev,parent_ino,root_real,root_dev,root_ino,created_at)
+      VALUES (?,'lib','photo.jpg',?,?,?,?,?,unixepoch()-3601)`).run(unverified, String(parent.dev), String(parent.ino), await realpath(root), String(parent.dev), String(parent.ino));
+    recoverOriginalReplacements(db);
+    await assert.rejects(stat(stage), { code: 'ENOENT' });
+    assert.equal(db.prepare('SELECT 1 FROM editor_overwrite_preparations WHERE stage_name=?').get(name), undefined);
+    assert.equal((await readFile(path.join(root, unverified, 'result'))).toString(), '身份未登记');
+    assert.ok((await stat(path.join(root, 'photo.jpg'))).isFile());
+  } finally { await app.close(); db.close(); await stub.close(); await rm(root, { recursive: true, force: true }); await rm(cache, { recursive: true, force: true }); }
+});
+
+for (const changed of ['父目录', '媒体库根目录', '暂存目录'] as const) test(`恢复时拒绝被替换为库外链接的${changed}`, { skip: process.platform !== 'linux' }, async () => {
+  const stub = await startStub();
+  const { root, cache, db, app, row } = await setup(stub.url);
+  const outside = await mkdtemp(path.join(tmpdir(), 'luvia-replace-outside-'));
+  try {
+    const sub = path.join(root, 'sub'); await mkdir(sub);
+    await rename(path.join(root, 'photo.jpg'), path.join(sub, 'photo.jpg'));
+    db.prepare("UPDATE files SET relative_path='sub/photo.jpg',folder='lib/sub' WHERE id=?").run(row.id);
+    const operationId = 'parent-link-test';
+    const stage = path.join(sub, `.luvia-replace-${createHash('sha256').update(operationId).digest('hex')}`);
+    const original = path.join(sub, 'photo.jpg');
+    const oldBytes = await readFile(original);
+    const source = await stat(original, { bigint: true }); const parent = await stat(sub, { bigint: true });
+    await mkdir(stage, { mode: 0o700 });
+    const stageInfo = await stat(stage, { bigint: true });
+    await writeFile(path.join(stage, 'result'), '修复结果');
+    const result = await stat(path.join(stage, 'result'), { bigint: true });
+    db.prepare(`INSERT INTO media_operations(operation_id,media_id,library_id,relative_path,source_size,source_modified,source_generation,state,created_at,updated_at,kind)
+      VALUES (?,?,'lib','sub/photo.jpg',?,?,?,'pending',unixepoch(),unixepoch(),'overwrite')`).run(`replace:${operationId}`, row.id, row.size, row.modified_at, row.cache_generation);
+    db.prepare(`INSERT INTO editor_overwrites(operation_id,user_id,job_id,media_id,library_id,relative_path,source_size,source_modified,source_generation,
+      source_dev,source_ino,source_mtime_ns,parent_dev,parent_ino,stage_dev,stage_ino,result_dev,result_ino,source_sha256,status,created_at)
+      VALUES (?,'user','job',?,'lib','sub/photo.jpg',?,?,?,?,?,?,?,?,?,?,?,?,?,'pending',unixepoch())`)
+      .run(operationId, row.id, row.size, row.modified_at, row.cache_generation, String(source.dev), String(source.ino), String(source.mtimeNs),
+        String(parent.dev), String(parent.ino), String(stageInfo.dev), String(stageInfo.ino), String(result.dev), String(result.ino), createHash('sha256').update(oldBytes).digest('hex'));
+    const rootInfo = await stat(root, { bigint: true });
+    db.prepare('UPDATE editor_overwrites SET root_real=?,root_dev=?,root_ino=? WHERE operation_id=?').run(await realpath(root), String(rootInfo.dev), String(rootInfo.ino), operationId);
+    let physical = original;
+    if (changed === '父目录') {
+      await rename(sub, path.join(outside, 'sub'));
+      await symlink(path.join(outside, 'sub'), sub);
+      physical = path.join(outside, 'sub', 'photo.jpg');
+    } else if (changed === '媒体库根目录') {
+      await rename(root, path.join(outside, 'library'));
+      await symlink(path.join(outside, 'library'), root);
+      physical = path.join(outside, 'library', 'sub', 'photo.jpg');
+    } else {
+      await rename(stage, path.join(outside, 'stage'));
+      await symlink(path.join(outside, 'stage'), stage);
+    }
+    recoverOriginalReplacements(db);
+    assert.equal((db.prepare('SELECT status FROM editor_overwrites WHERE operation_id=?').get(operationId) as { status: string }).status, 'attention');
+    assert.equal((db.prepare('SELECT cache_generation FROM files WHERE id=?').get(row.id) as FileRow).cache_generation, row.cache_generation);
+    assert.deepEqual(await readFile(physical), oldBytes);
+  } finally { await app.close(); db.close(); await stub.close(); await rm(root, { recursive: true, force: true }); await rm(cache, { recursive: true, force: true }); await rm(outside, { recursive: true, force: true }); }
 });
 
 test('创建修复作业、读取结果并保存副本', async () => {

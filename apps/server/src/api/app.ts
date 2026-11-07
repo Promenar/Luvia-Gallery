@@ -38,6 +38,7 @@ import { cacheKey, cachePath, enqueueMediaTask, releaseMediaWaiter } from '../co
 import { MediaIgnoredError, mediaIgnored } from '../core/media-failures.ts';
 import { deleteMediaFile, MediaDeleteError } from '../core/media-delete.ts';
 import { createEditorQueue, EditorError, type EditorQueue } from '../editor/queue.ts';
+import { ReplaceOriginalError } from '../editor/replace-original.ts';
 import { EditorBatches } from '../editor/batches.ts';
 import { editorConfig } from '../editor/service.ts';
 import { extractMetadataNow } from '../worker/metadata.ts';
@@ -667,7 +668,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
   async function cachedMedia(req: FastifyRequest, reply: FastifyReply, row: BinaryRow, variant: Variant, wait: boolean, authorize?: () => unknown) {
     const filename = cachePath(cacheDir, row, variant);
     if (!await exists(filename)) {
-      if (variant.kind === 'thumb' && variant.size === 'm') {
+      if (variant.kind === 'thumb' && variant.size === 'm' && !db.prepare("SELECT 1 FROM editor_overwrites WHERE media_id=? AND status='saved' LIMIT 1").get(row.id)) {
         const previous = await findLegacyThumbnail(cacheDir, row);
         if (previous) {
           authorize?.();
@@ -842,7 +843,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
         return cachedMedia(req, reply, row, { kind: 'display' }, false, mediaAuthorization(req, row));
     }
     const download = resource === 'original' && (req.query as { download?: string }).download === '1';
-    return sendFile(req, reply, filename, { mime: row.mime, name: row.name, download, etagKey: row.id, authorize: mediaAuthorization(req, row) });
+    return sendFile(req, reply, filename, { mime: row.mime, name: row.name, download, etagKey: `${row.id}:${row.cache_generation}`, authorize: mediaAuthorization(req, row) });
   });
   app.get('/api/v2/media/:id/tiles/:level/:tile', async (req, reply) => {
     const { id, level: rawLevel, tile } = req.params as { id: string; level: string; tile: string };
@@ -994,7 +995,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
       db.prepare('UPDATE cache_entries SET last_access_at=? WHERE cache_key=? AND last_access_at<?').run(touched, cacheKey(row, variant), touched - 60_000);
       return sendFile(req, reply, filename, { mime: 'video/mp4', name: row.name, etagKey: cacheKey(row, variant), authorize });
     }
-    return sendFile(req, reply, filename, { mime: row.mime, name: row.name, download: (req.query as { download?: string }).download === '1', etagKey: row.id, authorize });
+    return sendFile(req, reply, filename, { mime: row.mime, name: row.name, download: (req.query as { download?: string }).download === '1', etagKey: `${row.id}:${row.cache_generation}`, authorize });
   });
   app.get('/api/v2/public/shares/:token/media/:id/hls/:resource', async (req, reply) => {
     const { token, id, resource } = req.params as { token: string; id: string; resource: string };
@@ -1272,7 +1273,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     const legacyId = (req.params as { '*': string })['*'];
     const id = legacyMediaId(legacyId) ?? fail(404, 'NOT_FOUND', '媒体不存在');
     const { row, filename } = await binaryMedia(req, id);
-    return sendFile(req, reply, filename, { mime: row.mime, name: row.name, etagKey: row.id, authorize: mediaAuthorization(req, row) });
+    return sendFile(req, reply, filename, { mime: row.mime, name: row.name, etagKey: `${row.id}:${row.cache_generation}`, authorize: mediaAuthorization(req, row) });
   });
   app.get('/api/thumb/:id', async (req, reply) => {
     const legacyId = (req.params as { id: string }).id;
@@ -1520,6 +1521,15 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     const { id } = req.params as { id: string };
     try { return await requireEditor().saveCopy(id, user.id, { name: body.name, source: body.source }); }
     catch (error) { if (error instanceof EditorError) return fail(error.statusCode, error.code, error.message); throw error; }
+  });
+  register('replaceEditorOriginal', async (req, _reply, body) => {
+    const identity = requireUser(req);
+    const { id } = req.params as { id: string };
+    try { return await requireEditor().replaceOriginal(id, identity.user.id, body, () => requireCurrentAdmin(identity)); }
+    catch (error) {
+      if (error instanceof EditorError || error instanceof ReplaceOriginalError) return fail(error.statusCode, error.code, error.message);
+      throw error;
+    }
   });
   app.get('/api/v2/editor/jobs/:id/result', async (req, reply) => {
     const identity = identities.get(req);
