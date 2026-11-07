@@ -1,0 +1,27 @@
+services:
+  editor:
+    image: ${LUVIA_EDITOR_IMAGE:?请设置推理服务镜像}
+    container_name: ${LUVIA_EDITOR_CONTAINER_NAME:-luvia-editor}
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=512m
+    mem_limit: ${LUVIA_EDITOR_MEMORY_LIMIT:-12g}
+    memswap_limit: ${LUVIA_EDITOR_MEMORY_LIMIT:-12g}
+    stop_grace_period: 30s
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    env_file:
+      - ${LUVIA_EDITOR_ENV_FILE:?请设置服务环境文件}
+    volumes:
+      - ${LUVIA_EDITOR_MODELS_DIR:?请设置模型目录}:/models:ro
+      - ${LUVIA_EDITOR_SLBR_SOURCE_DIR:?请设置 SLBR 源码目录}:/slbr:ro
+    networks:
+      - luvia
+
+networks:
+  luvia:
+    external: true
+    name: ${LUVIA_EDITOR_NETWORK:?请设置图库容器网络}
