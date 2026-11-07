@@ -70,7 +70,7 @@ export const Thumb = memo(function Thumb({ item, width, height, className, badge
       aria-label={item.name}
       aria-pressed={selected === undefined ? undefined : selected}
       className={cn(
-        'group/thumb relative block cursor-zoom-in overflow-hidden rounded-[var(--r1)] bg-sunken',
+        'group/thumb relative block overflow-hidden rounded-[var(--r1)] bg-sunken',
         // 选中态：强调色描边 + 浅色罩层，密集网格里也醒目
         selected && "outline-2 -outline-offset-2 outline-accent after:pointer-events-none after:absolute after:inset-0 after:bg-accent/25 after:content-['']",
         className,

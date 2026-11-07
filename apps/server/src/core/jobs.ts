@@ -107,6 +107,15 @@ export class JobQueue {
     }).immediate();
   }
 
+  cancel(id: string, at = seconds()): boolean {
+    return this.db.transaction(() => {
+      const changed = this.db.prepare(`UPDATE jobs SET status='cancelled',finished_at=?,owner=NULL,heartbeat_at=NULL,lease_expires_at=NULL,lease_token=NULL
+        WHERE id=? AND status='running' AND owner=? AND lease_token=?`).run(at, id, this.owner, this.leases.get(id) ?? '').changes === 1;
+      if (changed) publishJob(this.db, id);
+      return changed;
+    }).immediate();
+  }
+
   release(id: string, _at?: number): boolean {
     return this.db.transaction(() => {
       const changed = this.db.prepare(`UPDATE jobs SET status='queued', owner=NULL, heartbeat_at=NULL, lease_expires_at=NULL,lease_token=NULL

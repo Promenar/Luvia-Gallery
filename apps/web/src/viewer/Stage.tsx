@@ -6,6 +6,8 @@ import { activeMedia, isReduceMotion, useViewerUi } from './state';
 import { VideoMedia } from './VideoMedia';
 import { detailQuery } from './InfoSheet';
 import { Icon } from './icons';
+import { MediaError } from './MediaError';
+import { isQuarterTurn, type Rotation } from './rotation';
 import {
   centerOn, clampPan, formatPercent, isZoomed, minimapBox, needsHigherRes, oneToOneZoom, pixelPercent, shouldPixelate,
   wheelFactor, zoomAt, zoomCentered, type Rect, type Size, type View,
@@ -44,17 +46,27 @@ export function zoomToLevel(ctx: ZoomCtx, z: number) {
   ui.setView(zoomCentered(ui.view, ctx.rect, ctx.viewport, z, ctx.max), true);
 }
 
-interface Shown { item: MediaItem; rect: Rect; src: string | undefined }
+interface Shown { item: MediaItem; rect: Rect; src: string | undefined; rotation: Rotation }
 
 /**
  * 舞台：当前媒体（图片或视频）与缩放层、换图交叉淡化、指针手势（拖动、双指捏合、滑动翻页、双击/双击触摸切换缩放）、滚轮缩放与右键菜单入口。
  */
-export function Stage({ item, ctx, frameRef, first, kenBurns, onStep, onMenu, onVideoEnded }: {
+export function Stage({ item, ctx, frameRef, first, rotation, errorHint, resultUrl, showOriginal, overlay, kenBurns, onStep, onMenu, onVideoEnded }: {
   item: MediaItem;
   ctx: ZoomCtx;
   frameRef: React.RefObject<HTMLDivElement | null>;
   /** 首次显示（由打开过渡负责入场，不做淡入）。 */
   first: boolean;
+  /** 顺时针旋转角度；只影响预览，不改变原文件。 */
+  rotation: Rotation;
+  /** 打开时已知的失败原因，原图不可读时显示。 */
+  errorHint?: string;
+  /** 修复结果地址；存在时替代原图显示。 */
+  resultUrl?: string | null;
+  /** 按住对比时显示原图。 */
+  showOriginal?: boolean;
+  /** 蒙版画布等编辑层，渲染在旋转容器内部。 */
+  overlay?: React.ReactNode;
   kenBurns: { on: boolean; sec: number };
   onStep: (dir: 1 | -1) => void;
   onMenu: (x: number, y: number) => void;
@@ -77,7 +89,10 @@ export function Stage({ item, ctx, frameRef, first, kenBurns, onStep, onMenu, on
   const displayUrl = mediaUrls.display(item.id, item.thumbVersion);
   const directHi = !lUrl || item.mime === 'image/gif';
   const [hi, setHi] = useState<{ id: string; ready: boolean } | null>(null);
-  const useHi = directHi || (hi?.id === item.id && hi.ready);
+  // l 缩略图读不出来时先退到 display，再失败才显示错误卡片；避免一次坏缓存直接判死刑。
+  const [lFailed, setLFailed] = useState<{ id: string } | null>(null);
+  const lFailedNow = lFailed?.id === item.id;
+  const useHi = directHi || lFailedNow || (hi?.id === item.id && hi.ready);
   const src = isVideo ? lUrl ?? undefined : useHi ? displayUrl : lUrl!;
   const [nat, setNat] = useState<{ src: string; w: number } | null>(null);
   const sourceW = nat && nat.src === src ? nat.w : useHi ? ctx.mediaW : Math.min(ctx.mediaW, L_EDGE);
@@ -85,8 +100,18 @@ export function Stage({ item, ctx, frameRef, first, kenBurns, onStep, onMenu, on
   const loadingHi = !isVideo && hi?.id === item.id && !hi.ready;
   const [loaded, setLoaded] = useState<string | null>(null);
 
+  // 原图不可读：记录失败的是哪一版地址；重试换 key 让 img 重新发起请求。
+  const [failed, setFailed] = useState<{ key: string } | null>(null);
+  const [retryKey, setRetryKey] = useState(0);
+  const srcKey = `${item.id}:${src ?? ''}:${retryKey}`;
+  const showError = !isVideo && failed?.key === srcKey;
+  const retry = () => { setFailed(null); setLFailed(null); setRetryKey((n) => n + 1); };
   useEffect(() => {
-    if (isVideo || directHi || hi?.id === item.id) return;
+    useViewerUi.getState().set({ failed: showError ? item.id : null });
+  }, [showError, item.id]);
+
+  useEffect(() => {
+    if (isVideo || directHi || lFailedNow || hi?.id === item.id) return;
     if (!needsHigherRes(ctx.rect, view.z, dpr(), Math.min(ctx.mediaW, nat?.src === lUrl ? nat.w : L_EDGE))) return;
     if (ctx.mediaW <= (nat?.src === lUrl ? nat.w : L_EDGE)) return; // 原图本身不比缩略图大
     const id = item.id;
@@ -101,7 +126,7 @@ export function Stage({ item, ctx, frameRef, first, kenBurns, onStep, onMenu, on
         useViewerUi.getState().say('原图载入失败，暂时显示缩略图。可以稍后再放大试试');
       },
     );
-  }, [isVideo, directHi, hi?.id, item.id, ctx.rect, ctx.mediaW, view.z, nat, lUrl, displayUrl]);
+  }, [isVideo, directHi, lFailedNow, hi?.id, item.id, ctx.rect, ctx.mediaW, view.z, nat, lUrl, displayUrl]);
 
   // 换图时把上一张留作淡出的“残影”。
   const lastRef = useRef<Shown | null>(null);
@@ -114,7 +139,25 @@ export function Stage({ item, ctx, frameRef, first, kenBurns, onStep, onMenu, on
       return () => clearTimeout(t);
     }
   }, [item.id]);
-  useEffect(() => { lastRef.current = { item, rect: ctx.rect, src }; });
+  useEffect(() => { lastRef.current = { item, rect: ctx.rect, src, rotation }; });
+
+  // 旋转时让外框几何与内层角度一起过渡；换图复位不做这段动画，避免与交叉淡化打架。
+  const prevRot = useRef({ id: item.id, rot: rotation });
+  const [rotAnim, setRotAnim] = useState(false);
+  useLayoutEffect(() => {
+    const p = prevRot.current;
+    if (p.id !== item.id) {
+      prevRot.current = { id: item.id, rot: rotation };
+      setRotAnim(false);
+      return;
+    }
+    if (p.rot === rotation) return;
+    prevRot.current = { id: item.id, rot: rotation };
+    if (isReduceMotion()) { setRotAnim(false); return; }
+    setRotAnim(true);
+    const t = window.setTimeout(() => setRotAnim(false), 280);
+    return () => window.clearTimeout(t);
+  }, [item.id, rotation]);
 
   // 滚轮缩放（以光标为中心）。React 的 onWheel 是被动监听，无法阻止默认滚动，因此手动绑定。
   useEffect(() => {
@@ -213,6 +256,10 @@ export function Stage({ item, ctx, frameRef, first, kenBurns, onStep, onMenu, on
   const kbOn = kenBurns.on && !zoomed && slideshow !== 'off' && !isVideo && !isReduceMotion();
   const placeholder = thumbhashUrl(item);
   const r = ctx.rect;
+  const quarter = isQuarterTurn(rotation);
+  const innerW = quarter ? r.h : r.w;
+  const innerH = quarter ? r.w : r.h;
+  const ghostQuarter = ghost ? isQuarterTurn(ghost.rotation) : false;
 
   return (
     <div
@@ -231,67 +278,103 @@ export function Stage({ item, ctx, frameRef, first, kenBurns, onStep, onMenu, on
     >
       {ghost && (
         <div key={ghost.key} className="lv-frame lv-ghost" aria-hidden style={{ left: ghost.rect.x, top: ghost.rect.y, width: ghost.rect.w, height: ghost.rect.h }}>
-          <div className="lv-zoom">{ghost.src && <img src={ghost.src} alt="" draggable={false} />}</div>
+          <div className="lv-zoom">
+            <div
+              className="lv-rot"
+              style={{
+                width: ghostQuarter ? ghost.rect.h : ghost.rect.w,
+                height: ghostQuarter ? ghost.rect.w : ghost.rect.h,
+                transform: `rotate(${ghost.rotation}deg)`,
+              }}
+            >
+              {ghost.src && <img src={ghost.src} alt="" draggable={false} />}
+            </div>
+          </div>
         </div>
       )}
       <div
         key={item.id}
         ref={frameRef}
-        className={first ? 'lv-frame' : 'lv-frame lv-fin'}
+        className={`lv-frame${first ? '' : ' lv-fin'}${rotAnim ? ' lv-rot-anim' : ''}`}
         style={{ left: r.x, top: r.y, width: r.w, height: r.h }}
       >
         <div className={kbOn ? 'lv-kb on' : 'lv-kb'} style={{ '--kbd': `${kenBurns.sec}s` } as React.CSSProperties}>
           <div
             className={animate ? 'lv-zoom anim' : 'lv-zoom'}
-            style={{
-              transform: `translate(${view.x}px, ${view.y}px) scale(${view.z})`,
-              backgroundImage: placeholder && loaded !== item.id ? `url(${placeholder})` : undefined,
-            }}
+            style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.z})` }}
           >
-            {isVideo ? (
-              !video || video.playability === 'unsupported' ? (
-                src && <img src={src} alt={item.name} draggable={false} />
-              ) : (
-                <VideoMedia
-                  item={video}
-                  poster={src}
-                  autoPlay={slideshow === 'playing'}
-                  pixelated={pixelated}
-                  onEnded={onVideoEnded}
-                  onMeasured={(w, h) => {
-                    setLoaded(item.id);
-                    if (!item.width || !item.height) useViewerUi.getState().set({ measured: { id: item.id, w, h } });
-                  }}
-                />
-              )
-            ) : (
-              <img
-                ref={(el) => { activeMedia.image = el; }}
-                src={src}
-                alt={item.name}
-                draggable={false}
-                decoding="async"
-                className={pixelated ? 'px' : undefined}
-                onLoad={(e) => {
-                  const im = e.currentTarget;
-                  setNat({ src: im.currentSrc || im.src, w: im.naturalWidth });
-                  setLoaded(item.id);
-                  if ((!item.width || !item.height) && useHi) useViewerUi.getState().set({ measured: { id: item.id, w: im.naturalWidth, h: im.naturalHeight } });
+            {(!showError || !!resultUrl) && (
+              <div
+                className="lv-rot"
+                style={{
+                  width: innerW,
+                  height: innerH,
+                  transform: `rotate(${rotation}deg)`,
+                  backgroundImage: !resultUrl && placeholder && loaded !== item.id ? `url(${placeholder})` : undefined,
                 }}
-              />
+              >
+                {resultUrl && !showOriginal ? (
+                  <img
+                    src={resultUrl}
+                    alt={item.name}
+                    draggable={false}
+                    className={pixelated ? 'px' : undefined}
+                    onError={() => useViewerUi.getState().say('修复结果加载失败，请重新生成')}
+                  />
+                ) : isVideo ? (
+                  !video || video.playability === 'unsupported' ? (
+                    src && <img src={src} alt={item.name} draggable={false} />
+                  ) : (
+                    <VideoMedia
+                      item={video}
+                      poster={src}
+                      autoPlay={slideshow === 'playing'}
+                      pixelated={pixelated}
+                      onEnded={onVideoEnded}
+                      onMeasured={(w, h) => {
+                        setLoaded(item.id);
+                        if (!item.width || !item.height) useViewerUi.getState().set({ measured: { id: item.id, w, h } });
+                      }}
+                    />
+                  )
+                ) : (
+                  <img
+                    ref={(el) => { activeMedia.image = el; }}
+                    src={src}
+                    alt={item.name}
+                    draggable={false}
+                    decoding="async"
+                    className={pixelated ? 'px' : undefined}
+                    onLoad={(e) => {
+                      const im = e.currentTarget;
+                      setNat({ src: im.currentSrc || im.src, w: im.naturalWidth });
+                      setLoaded(item.id);
+                      if ((!item.width || !item.height) && useHi) useViewerUi.getState().set({ measured: { id: item.id, w: im.naturalWidth, h: im.naturalHeight } });
+                    }}
+                    onError={() => {
+                      // 缩略图失败先换 display 全分辨率；两者都失败才展示错误卡片。
+                      if (!useHi && lUrl) { setLFailed({ id: item.id }); return; }
+                      setFailed({ key: srcKey });
+                    }}
+                  />
+                )}
+                {overlay}
+              </div>
             )}
           </div>
         </div>
       </div>
+      {showError && !resultUrl && <MediaError item={item} hint={errorHint} onRetry={retry} />}
       <div className={loadingHi ? 'lv-chip show' : 'lv-chip'} aria-hidden={!loadingHi}>正在载入原图</div>
     </div>
   );
 }
 
 /** 小地图：缩放后显示整图与当前视口，点击或拖动可跳转。 */
-export function Minimap({ item, ctx }: { item: MediaItem; ctx: ZoomCtx }) {
+export function Minimap({ item, ctx, rotation }: { item: MediaItem; ctx: ZoomCtx; rotation: Rotation }) {
   const view = useViewerUi((s) => s.view);
   const box = minimapBox(view, ctx.rect, ctx.viewport);
+  const quarter = isQuarterTurn(rotation);
   const jump = (e: React.PointerEvent<HTMLDivElement>) => {
     const r = e.currentTarget.getBoundingClientRect();
     const fx = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
@@ -307,7 +390,16 @@ export function Minimap({ item, ctx }: { item: MediaItem; ctx: ZoomCtx }) {
       onPointerDown={(e) => { e.currentTarget.setPointerCapture(e.pointerId); jump(e); }}
       onPointerMove={(e) => { if (e.currentTarget.hasPointerCapture(e.pointerId)) jump(e); }}
     >
-      {thumbS(item) && <img src={thumbS(item)} alt="" draggable={false} />}
+      <div
+        className="lv-mini-rot"
+        style={{
+          width: quarter ? `${(ctx.rect.h / ctx.rect.w) * 100}%` : '100%',
+          height: quarter ? `${(ctx.rect.w / ctx.rect.h) * 100}%` : '100%',
+          transform: `rotate(${rotation}deg)`,
+        }}
+      >
+        {thumbS(item) && <img src={thumbS(item)} alt="" draggable={false} />}
+      </div>
       <i style={{ left: `${box.left * 100}%`, top: `${box.top * 100}%`, width: `${box.width * 100}%`, height: `${box.height * 100}%` }} />
     </div>
   );

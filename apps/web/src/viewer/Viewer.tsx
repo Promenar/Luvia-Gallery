@@ -1,19 +1,26 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from '@tanstack/react-router';
-import { mediaUrls, type MediaItem } from '@luvia/contracts';
-import { call, type CallOptions } from '@/lib/api';
-import { invalidate, queryClient } from '@/lib/query';
-import { usePreferences, useUpdatePreferences } from '@/stores/session';
+import { useQuery } from '@tanstack/react-query';
+import { mediaUrls, type EditorModelId, type MediaItem } from '@luvia/contracts';
+import { call, ApiError, type CallOptions } from '@/lib/api';
+import { invalidate, q, queryClient } from '@/lib/query';
+import { useIsAdmin, usePreferences, useUpdatePreferences } from '@/stores/session';
 import { useViewer, type ViewerScope } from '@/stores/viewer';
 import { setDynamicFrom } from '@/theme/ThemeProvider';
 import { thumbhashUrl } from '@/components/media/Thumb';
 import { canWriteImage, clipboardFailMessage, copyImageToClipboard, copyTextToClipboard, triggerDownload } from './clipboard';
 import { ContextMenu, type MenuAction } from './ContextMenu';
+import { DeleteConfirm } from './DeleteConfirm';
 import { Filmstrip } from './Filmstrip';
 import { Icon } from './icons';
 import { detailQuery, InfoSheet } from './InfoSheet';
+import { EditorDock } from './editor/EditorDock';
+import { MaskCanvas, type MaskCanvasHandle } from './editor/MaskCanvas';
+import { SaveCopyDialog } from './editor/SaveCopyDialog';
+import { useEditorJob } from './editor/useEditorJob';
+import { nextRotation, rotatedSize, rotationLabel, type Rotation } from './rotation';
 import {
-  buildOrder, counterText, dedupe, excludeIds, extendOrder, filePath, formatTakenAt, reorder, shouldLoadMore, step,
+  buildOrder, counterText, dedupe, excludeIds, extendOrder, filePath, formatTakenAt, removeFromOrder, reorder, shouldLoadMore, step,
 } from './sequence';
 import { Minimap, Stage, thumbL, thumbS, ZoomHud, zoomStep, zoomToLevel, type ZoomCtx } from './Stage';
 import { activeMedia, isReduceMotion, useViewerUi } from './state';
@@ -54,8 +61,14 @@ function ViewerDialog({ scope }: { scope: ViewerScope }) {
   const options = useViewer((s) => s.options);
   const prefs = usePreferences();
   const updatePrefs = useUpdatePreferences();
+  const isAdmin = useIsAdmin();
+  const editor = useEditorJob();
+  const capsQuery = useQuery({ ...q('editorCapabilities'), enabled: isAdmin, staleTime: 30_000 });
+  const models = capsQuery.data?.models ?? [];
+  const availableModels = models.filter((model) => model.available);
   const navigate = useNavigate();
   const vp = useViewportSize();
+  const mobile = vp.w < MOBILE_BREAKPOINT;
 
   const pos = useViewerUi((s) => s.pos);
   const order = useViewerUi((s) => s.order);
@@ -66,6 +79,21 @@ function ViewerDialog({ scope }: { scope: ViewerScope }) {
   const dragging = useViewerUi((s) => s.dragging);
   const measured = useViewerUi((s) => s.measured);
   const zoomed = useViewerUi((s) => isZoomed(s.view));
+  const failedId = useViewerUi((s) => s.failed);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deletePending, setDeletePending] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [editorModel, setEditorModel] = useState<EditorModelId>('migan');
+  const [brush, setBrush] = useState(18);
+  const [erase, setErase] = useState(false);
+  const [hasMask, setHasMask] = useState(false);
+  const [comparing, setComparing] = useState(false);
+  const [saveOpen, setSaveOpen] = useState(false);
+  const [savePending, setSavePending] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [savedCopy, setSavedCopy] = useState<string | null>(null);
+  const [mobileEditOpen, setMobileEditOpen] = useState(false);
 
   const dialogRef = useRef<HTMLDialogElement>(null);
   const frameRef = useRef<HTMLDivElement>(null);
@@ -76,11 +104,62 @@ function ViewerDialog({ scope }: { scope: ViewerScope }) {
   const items = scope.items;
   const item: MediaItem = items[index] ?? items[0]!;
   const isVideo = item.mediaType === 'video';
+  const imgFailed = failedId === item.id;
+  const canDelete = isAdmin && !!item.source;
+  const canEdit = !isVideo || canDelete;
+  const {
+    job: editorJob, create: createEditorJob, cancel: cancelEditorJob, reset: resetEditorJob,
+    saveCopy: saveEditorCopy, createPending: editorPending, createError: editorCreateError, queryError: editorQueryError,
+    busy: editorBusy,
+  } = editor;
+  const canRepair = isAdmin && !isVideo && availableModels.length > 0;
+  const activeModel = models.find((model) => model.id === editorModel) ?? null;
+  const maskLimit = capsQuery.data?.mask ?? null;
+  const modelTooLarge = !!(activeModel?.maxPixels && item.width && item.height && item.width * item.height > activeModel.maxPixels);
+  const resultUrl = editorJob?.status === 'succeeded' ? editorJob.resultUrl : null;
+  const editorError = editorCreateError ?? editorQueryError ?? editorJob?.error ?? null;
+  const canGenerate = !!item.width && !!item.height && !!maskLimit && hasMask && !modelTooLarge;
+  const generateHint = !item.width || !item.height ? '原图尺寸未知，暂时无法修复'
+    : !maskLimit ? '正在读取编辑器能力…'
+      : modelTooLarge ? '图片超过该模型的输入上限'
+        : !hasMask ? '先涂抹要修复的区域'
+          : null;
+  const extMatch = /\.[^.]+$/.exec(item.name);
+  const originalExt = (extMatch?.[0] ?? '').toLowerCase();
+  const saveExt = ['.jpg', '.jpeg', '.png', '.webp'].includes(originalExt) ? originalExt : '.png';
+  const saveDefaultName = `${item.name.slice(0, item.name.length - (extMatch?.[0]?.length ?? 0)) || '修复副本'}-修复${saveExt}`;
+  useEffect(() => {
+    if (!availableModels.length) return;
+    if (!availableModels.some((model) => model.id === editorModel)) setEditorModel(availableModels[0]!.id);
+  }, [availableModels, editorModel]);
+  useEffect(() => {
+    setDeleteOpen(false);
+    setDeleteError(null);
+    deleteOpRef.current = null;
+    setEditorOpen(false);
+    setHasMask(false);
+    setComparing(false);
+    setSaveOpen(false);
+    setSaveError(null);
+    setSavedCopy(null);
+    setMobileEditOpen(false);
+    resetEditorJob();
+  }, [item.id, resetEditorJob]);
 
   // 几何
-  const dims = item.width && item.height
+  const [rotationState, setRotationState] = useState<{ id: string; deg: Rotation } | null>(null);
+  const rotation: Rotation = rotationState?.id === item.id ? rotationState.deg : 0;
+  const [rotHint, setRotHint] = useState<string | null>(null);
+  useEffect(() => {
+    if (!rotHint) return;
+    const t = window.setTimeout(() => setRotHint(null), 1200);
+    return () => window.clearTimeout(t);
+  }, [rotHint]);
+
+  const base = item.width && item.height
     ? { w: item.width, h: item.height }
     : measured?.id === item.id ? { w: measured.w, h: measured.h } : { w: 1600, h: 1200 };
+  const dims = rotatedSize(base.w, base.h, rotation);
   const rect = useMemo(() => fitRect(dims, vp, { info }), [dims.w, dims.h, vp, info]);
   const ctx: ZoomCtx = useMemo(() => ({ rect, viewport: vp, mediaW: dims.w, max: maxZoom(rect, dims.w) }), [rect, vp, dims.w]);
   const ctxRef = useRef(ctx);
@@ -93,6 +172,8 @@ function ViewerDialog({ scope }: { scope: ViewerScope }) {
   itemRef.current = item;
   const firstIdRef = useRef<string | null>(null);
   const openIndexRef = useRef(index);
+  const deleteOpRef = useRef<string | null>(null);
+  const maskRef = useRef<MaskCanvasHandle>(null);
 
   const say = useViewerUi.getState().say;
 
@@ -477,10 +558,147 @@ function ViewerDialog({ scope }: { scope: ViewerScope }) {
     ui.set({ info: !ui.info });
   }, []);
 
+  /** 顺时针旋转 90°：只影响预览，不写原文件；换图后自动回到 0°。 */
+  const rotate = useCallback(() => {
+    const ui = useViewerUi.getState();
+    const deg = nextRotation(rotation);
+    setRotationState({ id: itemRef.current.id, deg });
+    if (isZoomed(ui.view)) ui.setView(FIT_VIEW, true);
+    setRotHint(rotationLabel(deg));
+  }, [rotation]);
+
+  /** 管理员确认后的磁盘删除；成功后把当前顺序重映射到删除后的索引。 */
+  const confirmDelete = useCallback(async () => {
+    const it = itemRef.current;
+    if (!it.source) return;
+    const operationId = deleteOpRef.current ?? crypto.randomUUID();
+    deleteOpRef.current = operationId;
+    setDeletePending(true);
+    setDeleteError(null);
+    try {
+      await call('deleteMedia', { params: { id: it.id }, body: { confirm: true, source: it.source, operationId } });
+      setDeletePending(false);
+      setDeleteOpen(false);
+      deleteOpRef.current = null;
+      const viewer = useViewer.getState();
+      if (!viewer.scope || viewer.scope.items.length <= 1) {
+        say(`已删除 ${it.name}`);
+        void invalidate('listMedia', 'mediaDetail', 'adminOverview');
+        void queryClient.invalidateQueries({ queryKey: ['listMediaFailures'] });
+        requestClose();
+        return;
+      }
+      const ui = useViewerUi.getState();
+      const { order: nextOrder, removedPos } = removeFromOrder(ui.order, viewer.index);
+      viewer.removeItem(it.id);
+      const nextPos = Math.max(0, Math.min(removedPos < 0 ? ui.pos : removedPos, nextOrder.length - 1));
+      ui.set({ order: nextOrder, pos: nextPos, view: FIT_VIEW, animate: false, menu: null });
+      if (nextOrder[nextPos] != null) viewer.setIndex(nextOrder[nextPos]!);
+      say(`已删除 ${it.name}`);
+      void invalidate('listMedia', 'mediaDetail', 'adminOverview');
+      void queryClient.invalidateQueries({ queryKey: ['listMediaFailures'] });
+    } catch (e) {
+      setDeletePending(false);
+      const message = e instanceof ApiError ? e.message : '删除失败，请稍后重试';
+      if (e instanceof ApiError && (e.code === 'MEDIA_CHANGED' || e.code === 'NOT_FOUND')) {
+        setDeleteOpen(false);
+        setDeleteError(null);
+        say(`${message}，列表已刷新`);
+        void invalidate('listMedia', 'mediaDetail');
+        void queryClient.invalidateQueries({ queryKey: ['listMediaFailures'] });
+      } else {
+        setDeleteError(message);
+      }
+    }
+  }, [requestClose, say]);
+
+  const openEditor = useCallback(() => {
+    if (!canRepair) return;
+    const ui = useViewerUi.getState();
+    ui.set({ info: false, menu: null, slideshow: 'off', idle: false });
+    ui.setView(FIT_VIEW, true);
+    setEditorOpen(true);
+    setHasMask(false);
+    setComparing(false);
+    setErase(false);
+    setSavedCopy(null);
+    setSaveOpen(false);
+    setSaveError(null);
+    resetEditorJob();
+  }, [canRepair, resetEditorJob]);
+
+  const closeEditor = useCallback(() => {
+    if (editorPending) { say('正在提交修复作业，请稍候'); return; }
+    if (editorJob?.status === 'queued' || editorJob?.status === 'running') void cancelEditorJob();
+    else if (editorJob?.status === 'succeeded' && !savedCopy) say('已放弃修复预览，原图未修改');
+    setEditorOpen(false);
+    setComparing(false);
+    setHasMask(false);
+    setSaveOpen(false);
+    setSaveError(null);
+    resetEditorJob();
+    useViewerUi.getState().setView(FIT_VIEW, true);
+  }, [editorPending, editorJob?.status, savedCopy, cancelEditorJob, resetEditorJob, say]);
+
+  const generate = useCallback(async () => {
+    const it = itemRef.current;
+    const mask = maskRef.current;
+    if (!it.source || !mask || !maskLimit) return;
+    const data = mask.exportPng();
+    if (!data) { say('先涂抹要修复的区域'); return; }
+    if (Math.floor((data.length * 3) / 4) > maskLimit.maxBytes) {
+      say('蒙版文件过大，请减少涂抹范围或换更小的笔刷');
+      return;
+    }
+    setComparing(false);
+    setSavedCopy(null);
+    await createEditorJob({
+      mediaId: it.id,
+      source: it.source,
+      model: editorModel,
+      mask: { data, width: mask.width, height: mask.height },
+    });
+  }, [createEditorJob, editorModel, maskLimit, say]);
+
+  const resetEditorResult = useCallback(() => {
+    resetEditorJob();
+    setComparing(false);
+    setSavedCopy(null);
+  }, [resetEditorJob]);
+
+  const saveEditorResult = useCallback(async (name: string) => {
+    const it = itemRef.current;
+    if (!it.source) return;
+    setSavePending(true);
+    setSaveError(null);
+    try {
+      const saved = await saveEditorCopy(name, it.source);
+      setSavePending(false);
+      setSaveOpen(false);
+      setSavedCopy(saved.name);
+      say(saved.status === 'saved' ? `已保存副本 ${saved.name}` : `已保存 ${saved.name}，正在入库`);
+      void invalidate('listMedia', 'adminOverview');
+    } catch (error) {
+      setSavePending(false);
+      setSaveError(error instanceof ApiError ? error.message : '保存副本失败，请稍后重试');
+    }
+  }, [saveEditorCopy, say]);
+
   // ---------- 键盘 ----------
   const onKeyDown = (e: React.KeyboardEvent<HTMLDialogElement>) => {
     const t = e.target as HTMLElement;
     const k = e.key;
+    if (deleteOpen) return;
+    if (editorOpen) {
+      if (saveOpen) return;
+      if (k === 'Escape') { e.preventDefault(); closeEditor(); return; }
+      if (k === ' ') { e.preventDefault(); setComparing(true); return; }
+      return;
+    }
+    if (mobileEditOpen) {
+      if (k === 'Escape') { e.preventDefault(); setMobileEditOpen(false); }
+      return;
+    }
     const ui = useViewerUi.getState();
     const c = ctxRef.current;
     if (k === 'Escape') {
@@ -524,6 +742,7 @@ function ViewerDialog({ scope }: { scope: ViewerScope }) {
       case '1': zoomToLevel(c, oneToOneZoom(c.rect, c.mediaW)); return;
       case 'i': case 'I': toggleInfo(); return;
       case 'f': case 'F': void toggleFavorite(); return;
+      case 'r': case 'R': if (!isVideo) rotate(); return;
     }
   };
 
@@ -544,6 +763,7 @@ function ViewerDialog({ scope }: { scope: ViewerScope }) {
     slideshow === 'paused' && 'is-paused',
     idle && 'is-idle',
     info && 'is-info',
+    editorOpen && 'is-edit',
     isVideo && 'is-vid',
   ].filter(Boolean).join(' ');
 
@@ -554,9 +774,11 @@ function ViewerDialog({ scope }: { scope: ViewerScope }) {
       aria-label={`查看${isVideo ? '视频' : '照片'}：${item.name}`}
       tabIndex={-1}
       onKeyDown={onKeyDown}
+      onKeyUp={(event) => { if (editorOpen && !saveOpen && event.key === ' ') setComparing(false); }}
       onCancel={(e) => { e.preventDefault(); requestClose(); }}
       onPointerDownCapture={(e) => {
         if (useViewerUi.getState().menu && !(e.target as HTMLElement).closest('.lv-menu')) closeMenu(false);
+        if (mobileEditOpen && !(e.target as HTMLElement).closest('.lv-edit-sheet, .lv-edit-trigger')) setMobileEditOpen(false);
       }}
     >
       <div ref={baseRef} className="lv-base" aria-hidden>
@@ -568,6 +790,23 @@ function ViewerDialog({ scope }: { scope: ViewerScope }) {
         ctx={ctx}
         frameRef={frameRef}
         first={item.id === firstIdRef.current}
+        rotation={rotation}
+        errorHint={scope.errorHint}
+        resultUrl={resultUrl}
+        showOriginal={comparing}
+        overlay={editorOpen ? (
+          <MaskCanvas
+            key={item.id}
+            ref={maskRef}
+            item={item}
+            rotation={rotation}
+            brush={brush}
+            erase={erase}
+            active={!resultUrl && !editorBusy}
+            maxEdge={maskLimit?.maxEdge ?? 2048}
+            onChange={setHasMask}
+          />
+        ) : undefined}
         kenBurns={{ on: prefs.slideshow.kenBurns, sec: intervalSec }}
         onStep={(d) => advance(d)}
         onMenu={openMenu}
@@ -577,45 +816,137 @@ function ViewerDialog({ scope }: { scope: ViewerScope }) {
       <div ref={chromeRef} className="lv-chrome">
         <div className="lv-prog" aria-hidden><i ref={barRef} /></div>
 
-        <div className="lv-vt">
-          <button type="button" className="lv-vb" aria-label="关闭" onClick={() => requestClose()}><Icon name="close" /></button>
-          <div className="lv-nm">
-            <b>{item.name}</b>
-            <small>{formatTakenAt(item.takenAt)}</small>
+        {editorOpen ? (
+          <div className="lv-vt">
+            <button type="button" className="lv-vb" aria-label="退出修复编辑" onClick={closeEditor}><Icon name="close" /></button>
+            <div className="lv-nm">
+              <b>{item.name}</b>
+              <small>修复编辑</small>
+            </div>
+            <button type="button" className="lv-vb lv-ed-done" onClick={closeEditor}>完成</button>
           </div>
-          <button
-            type="button"
-            className={slideshow !== 'off' ? 'lv-vb on' : 'lv-vb'}
-            aria-label={playLabel}
-            title={slideshow === 'off' ? `幻灯片播放（空格），范围：${scope.label}` : '空格暂停或继续'}
-            onClick={toggleSlideshow}
-          >
-            <Icon name={slideshow === 'playing' ? 'pause' : 'play'} />
-          </button>
-          <button
-            type="button"
-            className={item.favorite ? 'lv-vb on' : 'lv-vb'}
-            aria-label="收藏"
-            aria-pressed={item.favorite}
-            title={item.favorite ? '取消收藏（F）' : '收藏（F）'}
-            onClick={() => void toggleFavorite()}
-          >
-            <Icon name="heart" filled={item.favorite} />
-          </button>
-          <a className="lv-vb" href={mediaUrls.download(item.id)} download aria-label="下载原图" title="下载原图">
-            <Icon name="download" />
-          </a>
-          <button
-            type="button"
-            className={info ? 'lv-vb on' : 'lv-vb'}
-            aria-label="信息"
-            aria-pressed={info}
-            title="信息（I）"
-            onClick={toggleInfo}
-          >
-            <Icon name="info" />
-          </button>
-        </div>
+        ) : (
+          <div className="lv-vt">
+            <button type="button" className="lv-vb" aria-label="关闭" onClick={() => requestClose()}><Icon name="close" /></button>
+            <div className="lv-nm">
+              <b>{item.name}</b>
+              <small>{formatTakenAt(item.takenAt)}</small>
+            </div>
+            <button
+              type="button"
+              className={slideshow !== 'off' ? 'lv-vb on' : 'lv-vb'}
+              aria-label={playLabel}
+              title={slideshow === 'off' ? `幻灯片播放（空格），范围：${scope.label}` : '空格暂停或继续'}
+              onClick={toggleSlideshow}
+            >
+              <Icon name={slideshow === 'playing' ? 'pause' : 'play'} />
+            </button>
+            <button
+              type="button"
+              className={item.favorite ? 'lv-vb on' : 'lv-vb'}
+              aria-label="收藏"
+              aria-pressed={item.favorite}
+              title={item.favorite ? '取消收藏（F）' : '收藏（F）'}
+              onClick={() => void toggleFavorite()}
+            >
+              <Icon name="heart" filled={item.favorite} />
+            </button>
+            {!mobile && !isVideo && (
+              <>
+                <span className="lv-vsep" aria-hidden />
+                <button
+                  type="button"
+                  className="lv-vb"
+                  aria-label="顺时针旋转 90 度"
+                  title="顺时针旋转 90 度（R）"
+                  onClick={rotate}
+                >
+                  <Icon name="rotate" />
+                </button>
+              </>
+            )}
+            {!mobile && canDelete && (
+              <>
+                {isVideo && <span className="lv-vsep" aria-hidden />}
+                <button
+                  type="button"
+                  className="lv-vb lv-danger"
+                  aria-label="删除原文件"
+                  title="删除原文件（不可撤销）"
+                  onClick={() => { setDeleteError(null); setDeleteOpen(true); }}
+                >
+                  <Icon name="trash" />
+                </button>
+              </>
+            )}
+            {!mobile && canRepair && (
+              <button
+                type="button"
+                className="lv-vb"
+                aria-label="修复"
+                title="图像修复"
+                onClick={openEditor}
+              >
+                <Icon name="brush" />
+              </button>
+            )}
+            {mobile && canEdit && (
+              <>
+                <span className="lv-vsep" aria-hidden />
+                <button
+                  type="button"
+                  className="lv-vb lv-edit-trigger"
+                  aria-label="编辑"
+                  title="编辑"
+                  aria-expanded={mobileEditOpen}
+                  onClick={() => setMobileEditOpen((value) => !value)}
+                >
+                  <Icon name="edit" />
+                </button>
+              </>
+            )}
+            <a className="lv-vb" href={mediaUrls.download(item.id)} download aria-label="下载原图" title="下载原图">
+              <Icon name="download" />
+            </a>
+            <button
+              type="button"
+              className={info ? 'lv-vb on' : 'lv-vb'}
+              aria-label="信息"
+              aria-pressed={info}
+              title="信息（I）"
+              onClick={toggleInfo}
+            >
+              <Icon name="info" />
+            </button>
+          </div>
+        )}
+
+        {mobile && mobileEditOpen && (
+          <div className="lv-edit-sheet" role="menu" aria-label="编辑">
+            {!isVideo && (
+              <button type="button" role="menuitem" onClick={() => { setMobileEditOpen(false); rotate(); }}>
+                <Icon name="rotate" />旋转 90°
+              </button>
+            )}
+            {canRepair && (
+              <button type="button" role="menuitem" onClick={() => { setMobileEditOpen(false); openEditor(); }}>
+                <Icon name="brush" />修复
+              </button>
+            )}
+            {canDelete && (
+              <button
+                type="button"
+                role="menuitem"
+                className="danger"
+                onClick={() => { setMobileEditOpen(false); setDeleteError(null); setDeleteOpen(true); }}
+              >
+                <Icon name="trash" />删除原文件
+              </button>
+            )}
+          </div>
+        )}
+
+        <div className={rotHint ? 'lv-rot-hint show' : 'lv-rot-hint'} role="status" aria-live="polite">{rotHint}</div>
 
         {isVideo && <VideoControls item={item} />}
 
@@ -623,6 +954,36 @@ function ViewerDialog({ scope }: { scope: ViewerScope }) {
         <button type="button" className="lv-vn r" aria-label="下一项" onClick={() => advance(1)}><Icon name="next" /></button>
 
         <InfoSheet item={item} open={info} onOpenFolder={openFolder} />
+
+        {editorOpen && (
+          <EditorDock
+            models={models}
+            model={editorModel}
+            onModel={setEditorModel}
+            brush={brush}
+            onBrush={setBrush}
+            erase={erase}
+            onErase={setErase}
+            hasMask={hasMask}
+            onUndo={() => maskRef.current?.undo()}
+            onClear={() => maskRef.current?.clear()}
+            job={editorJob}
+            createPending={editorPending}
+            error={editorError}
+            canGenerate={canGenerate}
+            generateHint={generateHint}
+            onGenerate={() => void generate()}
+            onCancel={() => void cancelEditorJob()}
+            onReset={resetEditorResult}
+            onSave={() => { setSaveError(null); setSaveOpen(true); }}
+            onCompare={setComparing}
+            comparing={comparing}
+            savedName={savedCopy}
+            writeAvailable={capsQuery.data?.write.available ?? false}
+            writeReason={capsQuery.data?.write.reason ?? '正在读取编辑器能力…'}
+            onDone={closeEditor}
+          />
+        )}
 
         <Filmstrip
           items={items}
@@ -633,8 +994,8 @@ function ViewerDialog({ scope }: { scope: ViewerScope }) {
           onPick={goPos}
         />
 
-        {!isVideo && <Minimap item={item} ctx={ctx} />}
-        <ZoomHud ctx={ctx} />
+        {!isVideo && !imgFailed && <Minimap item={item} ctx={ctx} rotation={rotation} />}
+        {!imgFailed && <ZoomHud ctx={ctx} />}
 
         <div className="lv-sspill" role="group" aria-label="幻灯片控制">
           <div className="ssl"><b title={scope.label}>{scope.label}</b><small>{counter}</small></div>
@@ -673,6 +1034,24 @@ function ViewerDialog({ scope }: { scope: ViewerScope }) {
 
         <ViewerToast />
       </div>
+
+      <DeleteConfirm
+        open={deleteOpen}
+        name={item.name}
+        pending={deletePending}
+        error={deleteError}
+        onCancel={() => { if (!deletePending) { setDeleteOpen(false); setDeleteError(null); } }}
+        onConfirm={() => void confirmDelete()}
+      />
+
+      <SaveCopyDialog
+        open={saveOpen}
+        defaultName={saveDefaultName}
+        pending={savePending}
+        error={saveError}
+        onCancel={() => { if (!savePending) { setSaveOpen(false); setSaveError(null); } }}
+        onSave={(name) => void saveEditorResult(name)}
+      />
 
       {menu && (
         <ContextMenu x={menu.x} y={menu.y} video={isVideo} onAction={(a) => void onMenuAction(a)} onClose={closeMenu} />

@@ -1,12 +1,12 @@
 import {
-  ChevronLeft, ChevronRight, Copy, Download, ExternalLink, FileText, FolderOpen, Heart, Info, Link, Minus, Pause, Play,
-  Plus, Presentation, ScanSearch, Shuffle, X,
+  Brush, ChevronLeft, ChevronRight, Copy, Download, ExternalLink, FileText, FolderOpen, Heart, Info, Link, Minus, Pause, Play,
+  Plus, Presentation, RotateCw, ScanSearch, Shuffle, SlidersHorizontal, Trash2, X,
 } from 'lucide-react';
 
 const ICONS = {
   close: X, play: Play, pause: Pause, heart: Heart, download: Download, info: Info, prev: ChevronLeft, next: ChevronRight,
   shuffle: Shuffle, copy: Copy, link: Link, path: FileText, folder: FolderOpen, open: ExternalLink, hero: Presentation,
-  pixels: ScanSearch, minus: Minus, plus: Plus,
+  pixels: ScanSearch, minus: Minus, plus: Plus, rotate: RotateCw, trash: Trash2, brush: Brush, edit: SlidersHorizontal,
 } as const;
 
 export type IconName = keyof typeof ICONS;

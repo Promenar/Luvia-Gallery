@@ -98,6 +98,16 @@ export function filmCount(viewportW: number): number {
   return n % 2 ? n : n - 1;
 }
 
+/**
+ * 删除当前媒体后重映射浏览顺序。order 存的是原数组索引；删除 removedArray 后，
+ * 大于它的索引整体减一。removedPos 为删除项在原顺序中的位置，找不到时为 -1。
+ */
+export function removeFromOrder(order: readonly number[], removedArray: number): { order: number[]; removedPos: number } {
+  const removedPos = order.indexOf(removedArray);
+  const remaining = removedPos < 0 ? order.filter((i) => i !== removedArray) : order.filter((_, position) => position !== removedPos);
+  return { order: remaining.map((i) => (i > removedArray ? i - 1 : i)), removedPos };
+}
+
 const WEEK = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
 
 /** 拍摄时间按拍摄地的墙上时间显示（保留 ISO 字符串自带的偏移，不换算到浏览器时区）。 */

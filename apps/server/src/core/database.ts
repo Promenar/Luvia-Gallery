@@ -631,6 +631,64 @@ export function openDatabase(filename: string, options: { readonly?: boolean; bo
           db.exec('CREATE TABLE IF NOT EXISTS scan_pending_media_moves (file_id TEXT PRIMARY KEY REFERENCES files(id) ON DELETE CASCADE)');
           db.pragma('user_version = 39');
         }
+        // 增量表不改变数据库版本，旧版仍可读取并保留该表。
+        db.exec(`CREATE TABLE IF NOT EXISTS media_failures (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          media_id TEXT NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+          operation TEXT NOT NULL, source_size INTEGER NOT NULL, source_modified INTEGER NOT NULL,
+          source_generation INTEGER NOT NULL, failures INTEGER NOT NULL DEFAULT 0,
+          ignored INTEGER NOT NULL DEFAULT 0, reason TEXT NOT NULL, last_failed_at INTEGER NOT NULL,
+          UNIQUE(media_id,operation,source_size,source_modified,source_generation)
+        )`);
+        const failureColumns = new Set((db.pragma('table_info(media_failures)') as { name: string }[]).map((column) => column.name));
+        if (!failureColumns.has('category')) db.exec("ALTER TABLE media_failures ADD COLUMN category TEXT NOT NULL DEFAULT 'unknown'");
+        if (!failureColumns.has('error_code')) db.exec('ALTER TABLE media_failures ADD COLUMN error_code TEXT');
+
+        // 删除操作保留幂等键与可恢复阶段；不引用 files，文件行删除后仍能识别同一 operationId。
+        db.exec(`CREATE TABLE IF NOT EXISTS media_operations (
+          operation_id TEXT PRIMARY KEY,
+          media_id TEXT NOT NULL,
+          library_id TEXT NOT NULL,
+          relative_path TEXT NOT NULL,
+          source_size INTEGER NOT NULL,
+          source_modified INTEGER NOT NULL,
+          source_generation INTEGER NOT NULL,
+          state TEXT NOT NULL CHECK (state IN ('pending','file_deleted','deleted','failed')),
+          error_code TEXT,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS media_operations_media ON media_operations(media_id, created_at DESC);
+        CREATE UNIQUE INDEX IF NOT EXISTS media_operations_active ON media_operations(media_id) WHERE state IN ('pending','file_deleted')`);
+        const operationColumns = new Set((db.pragma('table_info(media_operations)') as { name: string }[]).map((column) => column.name));
+        for (const name of ['stage_state', 'stage_dev', 'stage_ino', 'stage_mtime_ns']) {
+          if (!operationColumns.has(name)) db.exec(`ALTER TABLE media_operations ADD COLUMN ${name} TEXT`);
+        }
+        // 编辑器作业保存在缓存目录；结果过期后由清理任务回收，不引用 files，媒体删除后仍可追踪。
+        db.exec(`CREATE TABLE IF NOT EXISTS editor_jobs (
+          id TEXT PRIMARY KEY,
+          user_id TEXT NOT NULL,
+          media_id TEXT NOT NULL,
+          library_id TEXT NOT NULL,
+          source_size INTEGER NOT NULL,
+          source_modified INTEGER NOT NULL,
+          source_generation INTEGER NOT NULL,
+          model TEXT NOT NULL,
+          status TEXT NOT NULL CHECK (status IN ('queued','running','succeeded','failed','cancelled')),
+          progress REAL NOT NULL DEFAULT 0,
+          stage TEXT,
+          error TEXT,
+          mask_path TEXT NOT NULL,
+          result_path TEXT,
+          result_mime TEXT,
+          result_bytes INTEGER,
+          created_at INTEGER NOT NULL,
+          started_at INTEGER,
+          finished_at INTEGER,
+          expires_at INTEGER
+        );
+        CREATE INDEX IF NOT EXISTS editor_jobs_user ON editor_jobs(user_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS editor_jobs_expiry ON editor_jobs(expires_at)`);
         // 元数据作业按媒体库认领：待处理文件在 id 上跨库交错，只靠 files_metadata 需要逐条跳过其它库的记录。
         // 纯增量索引不提升版本号，回滚到旧镜像时旧代码仍能打开数据库。
         db.exec('CREATE INDEX IF NOT EXISTS media_waiters_expiry ON media_waiters(lease_expires_at,job_id)');

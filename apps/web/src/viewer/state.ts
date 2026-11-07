@@ -29,6 +29,8 @@ interface ViewerUi {
   menu: { x: number; y: number } | null;
   /** 未在列表中给出宽高时，加载后测得的尺寸。 */
   measured: { id: string; w: number; h: number } | null;
+  /** 原图不可读的媒体 ID；用于收起对该图无意义的缩放控件。 */
+  failed: string | null;
   video: VideoState;
   toast: { id: number; text: string } | null;
   closing: boolean;
@@ -51,6 +53,7 @@ const initial = {
   idle: false,
   menu: null,
   measured: null,
+  failed: null,
   video: { playing: false, time: 0, duration: 0, error: null } as VideoState,
   toast: null,
   closing: false,

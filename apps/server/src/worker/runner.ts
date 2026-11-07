@@ -15,6 +15,7 @@ import { processMetadataBatch } from './metadata.ts';
 import { processThumbnailBackfill } from './thumbnail-backfill.ts';
 import { cacheKey, cachePath, cancelUnobservedMediaTask, enqueueMediaTask } from '../core/media-cache.ts';
 import type { Variant } from '../core/media-cache.ts';
+import { classifyMediaFailure, clearMediaFailure, mediaIgnored, recordMediaFailure } from '../core/media-failures.ts';
 import { generateHls } from './hls.ts';
 import { FfmpegExitError, withThumbnailSlot } from './ffmpeg-slots.ts';
 import { isImageDecodeError } from './image-decoding.ts';
@@ -71,6 +72,11 @@ export async function runNextJob(db: Database.Database, options: WorkerOptions):
   let waiterTimer: NodeJS.Timeout | undefined;
   try {
     const payload = job.payload ? JSON.parse(job.payload) as Payload : {};
+    if (payload.mediaId && payload.sourceSize !== undefined && payload.sourceModified !== undefined && payload.variant &&
+        mediaIgnored(db, { id: payload.mediaId, size: payload.sourceSize, modified_at: payload.sourceModified, cache_generation: payload.sourceGeneration ?? 0 }, payload.variant)) {
+      if (!queue.cancel(job.id)) throw new Error('作业租约已失效');
+      return true;
+    }
     if (job.type === 'thumbnails' && payload.mediaId) {
       const checkWaiters = () => {
         try { if (cancelUnobservedMediaTask(db, job.id) || !queue.active(job.id)) controller.abort(); }
@@ -191,6 +197,7 @@ export async function runNextJob(db: Database.Database, options: WorkerOptions):
               assertLease();
               const variants: Variant[] = [{ kind: 'preview' }];
               for (const variant of variants) {
+                if (mediaIgnored(db, row, variant)) continue;
                 const key = cacheKey(row, variant);
                 if (db.prepare('SELECT 1 FROM cache_entries WHERE cache_key=?').get(key)) continue;
                 const existing = db.prepare("SELECT 1 FROM jobs WHERE dedupe_key=? AND status IN ('queued','running','paused')").get(`media:${key}`);
@@ -239,7 +246,12 @@ export async function runNextJob(db: Database.Database, options: WorkerOptions):
         else await generate(signal);
         return true;
       }, { signal: controller.signal, assertLease });
-      if (!queue.finish(job.id, { generated: generated ? 1 : 0 })) throw new Error('作业租约已失效');
+      db.transaction(() => {
+        if (!queue.finish(job.id, { generated: generated ? 1 : 0 })) throw new Error('作业租约已失效');
+        if (payload.mediaId && payload.sourceSize !== undefined && payload.sourceModified !== undefined && payload.variant) {
+          clearMediaFailure(db, { id: payload.mediaId, size: payload.sourceSize, modified_at: payload.sourceModified, cache_generation: payload.sourceGeneration ?? 0 }, payload.variant);
+        }
+      }).immediate();
     } else if (job.type === 'cache_prune') {
       const result = await pruneCache(db, options.cacheDir ?? path.resolve(process.env.CACHE_DIR ?? 'cache'), readSettings(db).cache.limitGB * 1024 ** 3, assertLease, controller.signal);
       controller.signal.throwIfAborted();
@@ -282,6 +294,13 @@ export async function runNextJob(db: Database.Database, options: WorkerOptions):
       const code = `${typeof sqliteCode === 'string' ? sqliteCode : error instanceof Error ? error.name : 'unknown'}${detail}`.slice(0, 200);
       const failed = db.transaction(() => {
         if (!queue.fail(job.id, message)) return false;
+        if ((job.type === 'thumbnails' || job.type === 'previews') && job.payload) {
+          let payload: Payload = {};
+          try { payload = JSON.parse(job.payload) as Payload; } catch { /* 无效作业负载仍应保留失败状态。 */ }
+          if (payload.mediaId && payload.sourceSize !== undefined && payload.sourceModified !== undefined && payload.variant) {
+            recordMediaFailure(db, { id: payload.mediaId, size: payload.sourceSize, modified_at: payload.sourceModified, cache_generation: payload.sourceGeneration ?? 0 }, payload.variant, message, classifyMediaFailure(error, isImageDecodeError(error)));
+          }
+        }
         if (watchScan) finishWatchReconcile(db, job.id, false);
         if (job.type === 'scan') {
           const run = db.prepare('SELECT library_id FROM scan_runs WHERE job_id=?').get(job.id) as { library_id: string } | undefined;

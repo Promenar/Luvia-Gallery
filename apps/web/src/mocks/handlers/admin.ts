@@ -282,6 +282,53 @@ const merge = <T extends object>(a: T, b: Partial<T>): T => {
   return o as T;
 };
 
+/* ---------- 处理失败 ---------- */
+
+interface MockFailure {
+  id: string;
+  mediaId: string;
+  operation: string;
+  failures: number;
+  ignored: boolean;
+  category: 'missing' | 'permission' | 'decode' | 'storage' | 'unknown';
+  reason: string;
+  lastFailedAt: string;
+}
+
+const imageIds = db.media.filter((m) => m.mediaType === 'image').slice(0, 4).map((m) => m.id);
+const videoId = db.media.find((m) => m.mediaType === 'video')?.id ?? imageIds[0]!;
+
+/** 按插入顺序递增 id；列表按 id 倒序，最后一项最新。 */
+const mediaFailures: MockFailure[] = [
+  { id: '1', mediaId: imageIds[3]!, operation: 'dimensions', failures: 1, ignored: false, category: 'decode', reason: '读取图片尺寸失败', lastFailedAt: iso(3 * DAY) },
+  { id: '2', mediaId: imageIds[2]!, operation: 'tile:2:1:0', failures: 2, ignored: false, category: 'storage', reason: '时间线图块生成失败，请检查存储', lastFailedAt: iso(26 * HOUR) },
+  { id: '3', mediaId: imageIds[1]!, operation: 'thumb:m', failures: 3, ignored: true, category: 'storage', reason: '媒体处理失败，请检查文件、编码器及存储', lastFailedAt: iso(5 * HOUR) },
+  { id: '4', mediaId: videoId, operation: 'preview', failures: 1, ignored: false, category: 'storage', reason: '视频预览生成失败，请检查编码器和存储', lastFailedAt: iso(2 * HOUR) },
+  { id: '5', mediaId: imageIds[0]!, operation: 'metadata', failures: 2, ignored: false, category: 'permission', reason: '拍摄信息读取失败，请检查文件和格式', lastFailedAt: iso(26 * MIN) },
+  { id: '6', mediaId: imageIds[0]!, operation: 'thumb:s', failures: 3, ignored: true, category: 'decode', reason: '图片无法解码，请检查文件完整性及格式支持', lastFailedAt: iso(8 * MIN) },
+];
+
+function failureView(f: MockFailure) {
+  const m = db.media.find((x) => x.id === f.mediaId);
+  if (!m) return null;
+  return {
+    id: f.id, mediaId: f.mediaId, libraryId: m.libraryId, name: m.name, folder: m.folder,
+    operation: f.operation,
+    source: { size: m.size, modifiedAt: m.modifiedAt, generation: 0 },
+    failures: f.failures, ignored: f.ignored, category: f.category, reason: f.reason, lastFailedAt: f.lastFailedAt,
+  };
+}
+
+async function failureSource(request: Request) {
+  try {
+    const body = (await request.json()) as Partial<{ size: number; modifiedAt: number; generation: number }>;
+    if (typeof body.size !== 'number' || typeof body.modifiedAt !== 'number' || typeof body.generation !== 'number') return null;
+    return { size: body.size, modifiedAt: body.modifiedAt, generation: body.generation };
+  } catch {
+    return null;
+  }
+}
+
 export const adminHandlers = [
   http.get('/api/v2/admin/overview', async () => { await delay(150); return HttpResponse.json(overview()); }),
 
@@ -396,6 +443,77 @@ export const adminHandlers = [
     } else return err(400, 'VALIDATION', '不支持的操作');
     await delay(150);
     return HttpResponse.json(pubJob(j));
+  }),
+
+  // 处理失败：与真实接口同形，供前端在未部署后端时联调
+  http.get('/api/v2/admin/media-failures', async ({ request }) => {
+    const sp = new URL(request.url).searchParams;
+    const ignored = sp.get('ignored');
+    const limit = Math.min(200, Math.max(1, Number(sp.get('limit') ?? 50)));
+    const cursor = Number(sp.get('cursor') ?? 0);
+    let rows = mediaFailures.filter((f) => (ignored == null ? true : f.ignored === (ignored === 'true')));
+    rows.sort((a, b) => Number(b.id) - Number(a.id));
+    if (cursor > 0) rows = rows.filter((f) => Number(f.id) < cursor);
+    const page = rows.slice(0, limit);
+    const counts = {
+      ignored: mediaFailures.filter((f) => f.ignored).length,
+      unignored: mediaFailures.filter((f) => !f.ignored).length,
+    };
+    const total = ignored == null ? counts.ignored + counts.unignored : ignored === 'true' ? counts.ignored : counts.unignored;
+    await delay(180);
+    return HttpResponse.json({
+      items: page.map(failureView).filter((x): x is NonNullable<typeof x> => x != null),
+      nextCursor: rows.length > limit ? page.at(-1)!.id : null,
+      total,
+      counts,
+    });
+  }),
+  http.post('/api/v2/admin/media-failures/:id/retry', async ({ params, request }) => {
+    const f = mediaFailures.find((x) => x.id === params.id);
+    if (!f) return err(404, 'NOT_FOUND', '失败记录不存在');
+    const m = db.media.find((x) => x.id === f.mediaId);
+    if (!m) return err(404, 'NOT_FOUND', '媒体记录不存在');
+    const body = await failureSource(request);
+    if (!body) return err(400, 'VALIDATION', '提交的内容不符合要求');
+    if (body.size !== m.size || body.modifiedAt !== m.modifiedAt || body.generation !== 0) {
+      return err(409, 'CONFLICT', '媒体已发生变化，请刷新后重试');
+    }
+    mediaFailures.splice(mediaFailures.indexOf(f), 1);
+    await delay(220);
+    return HttpResponse.json({ jobId: `job-${Date.now()}` });
+  }),
+  http.post('/api/v2/admin/media-failures/:id/unignore', async ({ params, request }) => {
+    const f = mediaFailures.find((x) => x.id === params.id);
+    if (!f) return err(404, 'NOT_FOUND', '失败记录不存在');
+    const m = db.media.find((x) => x.id === f.mediaId);
+    if (!m) return err(404, 'NOT_FOUND', '媒体记录不存在');
+    const body = await failureSource(request);
+    if (!body) return err(400, 'VALIDATION', '提交的内容不符合要求');
+    if (body.size !== m.size || body.modifiedAt !== m.modifiedAt || body.generation !== 0) {
+      return err(409, 'CONFLICT', '媒体已发生变化，请刷新后重试');
+    }
+    mediaFailures.splice(mediaFailures.indexOf(f), 1);
+    await delay(180);
+    return HttpResponse.json({ success: true });
+  }),
+  http.delete('/api/v2/admin/media/:id', async ({ params, request }) => {
+    const index = db.media.findIndex((item) => item.id === params.id);
+    if (index < 0) return err(404, 'NOT_FOUND', '媒体不存在或已被删除');
+    const media = db.media[index]!;
+    const body = await request.json().catch(() => null) as {
+      confirm?: boolean; source?: { size?: number; modifiedAt?: number; generation?: number }; operationId?: string;
+    } | null;
+    if (!body?.confirm || !body.source || !body.operationId) return err(400, 'VALIDATION', '提交的内容不符合要求');
+    if (body.source.size !== media.size || body.source.modifiedAt !== media.modifiedAt || body.source.generation !== 0) {
+      return err(409, 'MEDIA_CHANGED', '媒体已发生变化，请刷新后重试');
+    }
+    db.media.splice(index, 1);
+    // 真实后端由 files 外键级联删除失败记录；mock 需要同步，避免计数残留。
+    for (let i = mediaFailures.length - 1; i >= 0; i--) {
+      if (mediaFailures[i]!.mediaId === media.id) mediaFailures.splice(i, 1);
+    }
+    await delay(220);
+    return HttpResponse.json({ operationId: body.operationId, status: 'deleted' });
   }),
 
   // 用户

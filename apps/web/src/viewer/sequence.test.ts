@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildOrder, counterText, dedupe, excludeIds, extendOrder, filePath, filmCount, filmWindow, formatBytes, formatExposure,
-  formatTakenAt, reorder, shouldLoadMore, shuffled, step,
+  formatTakenAt, removeFromOrder, reorder, shouldLoadMore, shuffled, step,
 } from './sequence';
 
 /** 可复现的伪随机数。 */
@@ -136,5 +136,23 @@ describe('文案与格式', () => {
     expect(formatExposure(1 / 250)).toBe('1/250');
     expect(formatExposure(2)).toBe('2″');
     expect(filePath([{ name: '家庭照片' }, { name: '2025' }, { name: '09 上海' }], 'IMG_1.jpg')).toBe('家庭照片/2025/09 上海/IMG_1.jpg');
+  });
+});
+
+describe('删除后的顺序重映射', () => {
+  it('顺序播放删除中间项后后面的索引整体前移', () => {
+    expect(removeFromOrder([0, 1, 2, 3], 1)).toEqual({ order: [0, 1, 2], removedPos: 1 });
+  });
+
+  it('随机顺序保留相对排列，并把大于删除项的索引减一', () => {
+    expect(removeFromOrder([2, 0, 3, 1], 0)).toEqual({ order: [1, 2, 0], removedPos: 1 });
+  });
+
+  it('删除末尾项时保留前面的顺序', () => {
+    expect(removeFromOrder([0, 1, 2], 2)).toEqual({ order: [0, 1], removedPos: 2 });
+  });
+
+  it('当前项不在顺序中时按值剔除并重映射', () => {
+    expect(removeFromOrder([1, 2, 3], 0)).toEqual({ order: [0, 1, 2], removedPos: -1 });
   });
 });
