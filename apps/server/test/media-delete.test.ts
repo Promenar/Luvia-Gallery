@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { chmod, mkdir, mkdtemp, readFile, rename, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
+import { chmod, link, mkdir, mkdtemp, readFile, rename, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
-import { renameSync, writeFileSync } from 'node:fs';
+import { readdirSync, readlinkSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { openDatabase } from '../src/core/database.ts';
 import { scanLibrary } from '../src/worker/scan.ts';
@@ -233,8 +233,13 @@ test('移动待删文件后中断，同一操作可恢复并完成删除', async
     await setOperationParent(db, root, operationId);
     await mkdir(stage, { mode: 0o700 });
     await rename(path.join(root, 'photo.jpg'), path.join(stage, 'source'));
+    const rootDescriptors = () => readdirSync('/proc/self/fd').filter((fd) => {
+      try { return readlinkSync(`/proc/self/fd/${fd}`) === root; } catch { return false; }
+    }).length;
+    const beforeFds = process.platform === 'linux' ? rootDescriptors() : 0;
     const res = await app.inject({ method: 'DELETE', url: `/api/v2/admin/media/${row.id}`, headers, payload: body(row, operationId) });
     assert.equal(res.statusCode, 200, res.body);
+    if (process.platform === 'linux') assert.equal(rootDescriptors(), beforeFds);
     await assert.rejects(stat(path.join(root, 'photo.jpg')));
     await assert.rejects(stat(stage));
     assert.equal(db.prepare('SELECT 1 FROM files WHERE id=?').get(row.id), undefined);
@@ -330,5 +335,28 @@ test('恢复删除时父目录身份变化则保留暂存文件与索引', async
     assert.equal(res.json().error.code, 'OPERATION_PARTIAL', res.body);
     assert.equal(await readFile(path.join(stage, 'source'), 'utf8'), 'a small file');
     assert.ok(db.prepare('SELECT 1 FROM files WHERE id=?').get(row.id));
+  } finally { await app.close(); db.close(); await rm(root, { recursive: true, force: true }); }
+});
+
+test('Linux 删除时目录被切换仍定位用户选中的目录', { skip: process.platform !== 'linux' }, async () => {
+  const { root, db, app, headers, row } = await setup();
+  try {
+    const selectedDir = path.join(root, 'selected');
+    const replacementDir = path.join(root, 'replacement');
+    await mkdir(selectedDir);
+    await mkdir(replacementDir);
+    await rename(path.join(root, 'photo.jpg'), path.join(selectedDir, 'photo.jpg'));
+    await link(path.join(selectedDir, 'photo.jpg'), path.join(replacementDir, 'photo.jpg'));
+    db.prepare("UPDATE files SET relative_path='selected/photo.jpg',folder='lib/selected' WHERE id=?").run(row.id);
+    db.function('switch_parent', () => {
+      renameSync(selectedDir, path.join(root, 'selected-moved'));
+      renameSync(replacementDir, selectedDir);
+      return 1;
+    });
+    db.exec('CREATE TRIGGER switch_parent AFTER INSERT ON media_operations BEGIN SELECT switch_parent(); END');
+    const res = await app.inject({ method: 'DELETE', url: `/api/v2/admin/media/${row.id}`, headers, payload: body(row, 'delete-parent-switch') });
+    assert.equal(res.statusCode, 200, res.body);
+    await assert.rejects(stat(path.join(root, 'selected-moved', 'photo.jpg')));
+    assert.equal(await readFile(path.join(selectedDir, 'photo.jpg'), 'utf8'), 'a small file');
   } finally { await app.close(); db.close(); await rm(root, { recursive: true, force: true }); }
 });
