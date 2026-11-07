@@ -1,5 +1,5 @@
 import type Database from 'better-sqlite3';
-import { closeSync, constants, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, renameSync, rmdirSync, unlinkSync } from 'node:fs';
+import { closeSync, constants, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, renameSync, rmdirSync, statSync, unlinkSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { access, lstat, open, realpath } from 'node:fs/promises';
 import path from 'node:path';
@@ -66,7 +66,7 @@ function syncDirectory(directory: string): void {
 }
 
 function verifyOperationParent(op: { parent_dev: string | null; parent_ino: string | null }, parent: string): void {
-  const current = lstatIfPresent(parent);
+  const current = process.platform === 'linux' ? statSync(parent, { bigint: true }) : lstatIfPresent(parent);
   if (!current?.isDirectory() || !op.parent_dev || !op.parent_ino || current.dev.toString() !== op.parent_dev || current.ino.toString() !== op.parent_ino) {
     throw new MediaDeleteError(500, 'OPERATION_PARTIAL', '媒体目录身份已变化，请检查挂载与暂存文件');
   }
@@ -187,6 +187,13 @@ export async function deleteMediaFile(
 ): Promise<DeleteMediaResult> {
   if (activeOperations.has(input.operationId)) throw new MediaDeleteError(409, 'OPERATION_CONFLICT', '删除操作正在处理，请稍后刷新重试');
   activeOperations.add(input.operationId);
+  let parentFd: number | null = null;
+  const pinParent = (parent: string): string => {
+    if (process.platform !== 'linux') return parent;
+    if (parentFd !== null) { closeSync(parentFd); parentFd = null; }
+    parentFd = openSync(parent, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+    return `/proc/self/fd/${parentFd}`;
+  };
   try {
     // 已结束的操作只保留 30 天用于追溯；活动状态（pending/file_deleted）不清理。
     db.prepare("DELETE FROM media_operations WHERE state IN ('deleted','failed') AND updated_at<?").run(now() - 30 * 86_400);
@@ -203,10 +210,11 @@ export async function deleteMediaFile(
         if (!library?.enabled) throw new MediaDeleteError(500, 'OPERATION_PARTIAL', '删除状态待恢复，媒体库暂不可访问');
         const root = await realpath(library.root).catch(() => null);
         if (!root) throw new MediaDeleteError(500, 'OPERATION_PARTIAL', '删除状态待恢复，媒体库暂不可访问');
-        const parent = await realpath(path.dirname(path.join(root, existing.relative_path))).catch(() => null);
+        let parent = await realpath(path.dirname(path.join(root, existing.relative_path))).catch(() => null);
         if (!parent || path.relative(root, parent).startsWith('..') || path.isAbsolute(path.relative(root, parent))) {
           throw new MediaDeleteError(500, 'OPERATION_PARTIAL', '删除状态待恢复，文件所在目录不可访问');
         }
+        parent = pinParent(parent);
         const action = existing.state === 'pending' ? recoverPendingStage(db, existing, parent) : 'finish';
         if (action === 'finish') {
           try { finishStagedDelete(db, existing, parent); await finishIndexCleanup(db, existing); }
@@ -226,11 +234,12 @@ export async function deleteMediaFile(
     if (!sourceMatches(row, input.source)) throw new MediaDeleteError(409, 'MEDIA_CHANGED', '媒体已发生变化，请刷新后重试');
 
     const root = await realpath(row.root).catch(() => { throw new MediaDeleteError(404, 'NOT_FOUND', '媒体库目录不可用'); });
-    const parent = await realpath(path.dirname(path.join(root, row.relative_path))).catch(() => { throw new MediaDeleteError(404, 'NOT_FOUND', '文件所在目录不可用'); });
+    let parent = await realpath(path.dirname(path.join(root, row.relative_path))).catch(() => { throw new MediaDeleteError(404, 'NOT_FOUND', '文件所在目录不可用'); });
     const fromRoot = path.relative(root, parent);
     if (fromRoot === '..' || fromRoot.startsWith(`..${path.sep}`) || path.isAbsolute(fromRoot)) {
       throw new MediaDeleteError(403, 'FORBIDDEN', '媒体路径不在允许的目录中');
     }
+    parent = pinParent(parent);
     const target = path.join(parent, path.basename(row.relative_path));
     const rawInfo = await lstat(target, { bigint: true }).catch((error: NodeJS.ErrnoException) => {
       if (error.code === 'ENOENT' || error.code === 'ENOTDIR') throw new MediaDeleteError(404, 'NOT_FOUND', '文件已不在磁盘上');
@@ -263,7 +272,7 @@ export async function deleteMediaFile(
     }
     try { await access(parent, constants.W_OK); }
     catch { throw new MediaDeleteError(409, 'MEDIA_READ_ONLY', '媒体库目录当前为只读挂载，无法删除原文件'); }
-    const parentInfo = await lstat(parent, { bigint: true });
+    const parentInfo = parentFd === null ? await lstat(parent, { bigint: true }) : fstatSync(parentFd, { bigint: true });
     if (!parentInfo.isDirectory()) throw new MediaDeleteError(409, 'MEDIA_CHANGED', '媒体目录已发生变化');
 
     try {
@@ -329,5 +338,8 @@ export async function deleteMediaFile(
       throw new MediaDeleteError(500, 'OPERATION_PARTIAL', '删除状态无法确认，请核验媒体库和暂存状态');
     }
     return { operationId: input.operationId, status: 'deleted' };
-  } finally { activeOperations.delete(input.operationId); }
+  } finally {
+    if (parentFd !== null) closeSync(parentFd);
+    activeOperations.delete(input.operationId);
+  }
 }
