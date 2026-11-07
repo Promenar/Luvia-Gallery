@@ -1,5 +1,7 @@
 import io
+import threading
 import time
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -124,6 +126,29 @@ class Tests(unittest.TestCase):
                 files = {'image': ('image.png', png(image), 'image/png'), 'mask': ('mask.png', png(mask), 'image/png')}
                 response = client.post('/v1/inpaint', data={'model': 'migan', 'jobId': 'slow-model'}, files=files)
                 self.assertEqual(response.status_code, 200, response.text)
+
+    def test_cancelled_request_keeps_lane_until_worker_exits(self):
+        async def check():
+            started, finish = threading.Event(), threading.Event()
+            def work():
+                started.set()
+                finish.wait(3)
+            async def receive():
+                return {'type': 'http.request', 'body': b'', 'more_body': False}
+            request = SimpleNamespace(method='POST', url=SimpleNamespace(path='/v1/inpaint'),
+                                      headers={'content-length': '1'}, receive=receive)
+            task = service.asyncio.create_task(service.limit_requests(request, lambda _request: service.run_blocking(work)))
+            await service.asyncio.to_thread(started.wait, 1)
+            self.assertTrue(started.is_set())
+            task.cancel()
+            await service.asyncio.sleep(0.05)
+            self.assertTrue(service.lane.locked())
+            finish.set()
+            with self.assertRaises(service.asyncio.CancelledError):
+                await task
+            self.assertFalse(service.lane.locked())
+        with patch.object(service, 'TOKEN', ''):
+            service.asyncio.run(check())
 
 
 if __name__ == '__main__':
