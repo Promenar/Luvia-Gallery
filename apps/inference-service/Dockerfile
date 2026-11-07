@@ -6,7 +6,7 @@ RUN pip install --no-cache-dir \
     opencv-python-headless==4.11.0.86
 
 WORKDIR /app
-COPY app.py /app/app.py
+COPY --chmod=0644 app.py /app/app.py
 USER 65534:65534
 EXPOSE 8090
 CMD ["python", "-m", "uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8090"]
