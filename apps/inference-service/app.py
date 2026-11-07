@@ -17,7 +17,7 @@ import numpy as np
 import torch
 from fastapi import FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
-from PIL import Image, ImageOps
+from PIL import Image, ImageCms, ImageOps
 
 MODEL_DIR = Path(os.environ.get('MODEL_DIR', '/models'))
 SLBR_SOURCE = Path(os.environ.get('SLBR_SOURCE_DIR', '/slbr'))
@@ -25,6 +25,7 @@ TOKEN = os.environ.get('EDITOR_SERVICE_TOKEN', '')
 DEVICE = os.environ.get('EDITOR_DEVICE', 'auto')
 MAX_PIXELS = int(os.environ.get('EDITOR_MAX_PIXELS', '40000000'))
 MAX_BYTES = int(os.environ.get('EDITOR_MAX_INPUT_BYTES', str(128 * 1024 * 1024)))
+UPLOAD_TIMEOUT_SECONDS = float(os.environ.get('EDITOR_UPLOAD_TIMEOUT_SECONDS', '120'))
 MODEL_FILES = {'lama': 'big-lama.pt', 'migan': 'migan_pipeline_v2.onnx', 'slbr': 'slbr.pth'}
 Image.MAX_IMAGE_PIXELS = MAX_PIXELS
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
@@ -56,6 +57,24 @@ async def limit_requests(request: Request, call_next):
     if lane.locked():
         return JSONResponse({'detail': '推理服务正忙'}, status_code=429)
     await lane.acquire()
+    receive = request.receive
+    deadline = asyncio.get_running_loop().time() + UPLOAD_TIMEOUT_SECONDS
+    body_complete = False
+    async def receive_with_deadline():
+        nonlocal body_complete
+        if body_complete:
+            return await receive()
+        remaining = deadline - asyncio.get_running_loop().time()
+        if remaining <= 0:
+            raise HTTPException(408, '上传超时')
+        try:
+            message = await asyncio.wait_for(receive(), timeout=remaining)
+            if message['type'] == 'http.disconnect' or (message['type'] == 'http.request' and not message.get('more_body', False)):
+                body_complete = True
+            return message
+        except TimeoutError as error:
+            raise HTTPException(408, '上传超时') from error
+    request._receive = receive_with_deadline
     try:
         return await call_next(request)
     finally:
@@ -93,6 +112,33 @@ def read_image(data, mode):
         return np.asarray(ImageOps.exif_transpose(image).convert(mode)).copy()
 
 
+def read_source(data):
+    if len(data) > MAX_BYTES:
+        raise ValueError('图片超过大小限制')
+    with Image.open(io.BytesIO(data)) as image:
+        if image.width * image.height > MAX_PIXELS:
+            raise ValueError('图片超过像素限制')
+        png_16bit = image.format == 'PNG' and len(data) > 24 and data[24] > 8
+        tiff_bits = getattr(image, 'tag_v2', {}).get(258, (8,))
+        if isinstance(tiff_bits, int):
+            tiff_bits = (tiff_bits,)
+        if image.mode in ('I', 'F', 'I;16', 'I;16B', 'I;16L') or png_16bit or any(value > 8 for value in tiff_bits):
+            raise ValueError('暂不支持高位深图片修复')
+        profile = image.info.get('icc_profile')
+        image = ImageOps.exif_transpose(image)
+        if profile and image.mode not in ('RGB', 'RGBA', 'P'):
+            try:
+                alpha = image.convert('RGBA').getchannel('A')
+                source_profile = ImageCms.ImageCmsProfile(io.BytesIO(profile))
+                target_profile = ImageCms.ImageCmsProfile(ImageCms.createProfile('sRGB'))
+                image = ImageCms.profileToProfile(image, source_profile, target_profile, outputMode='RGB').convert('RGBA')
+                image.putalpha(alpha)
+                profile = target_profile.tobytes()
+            except Exception as error:
+                raise ValueError('无法转换图片色彩配置') from error
+        return np.asarray(image.convert('RGBA')).copy(), profile
+
+
 def resize_mask(mask, width, height):
     """缩小蒙版时扩展覆盖范围，防止细线在采样时消失。"""
     import cv2
@@ -119,7 +165,8 @@ def run_model(model_id, image, mask):
         session = ort.InferenceSession(str(MODEL_DIR / MODEL_FILES[model_id]), providers=providers)
         if target == 'cuda' and 'CUDAExecutionProvider' not in session.get_providers():
             raise RuntimeError('ONNX CUDA 不可用')
-        inputs = {'image': image.transpose(2, 0, 1)[None], 'mask': np.where(selected, 0, 255).astype(np.uint8)[None, None]}
+        known = np.full(mask.shape, 255, dtype=np.uint8); known[selected] = 0
+        inputs = {'image': image.transpose(2, 0, 1)[None], 'mask': known[None, None]}
         out = session.run(None, inputs)[0][0].transpose(1, 2, 0)
         del session
     elif model_id == 'lama':
@@ -216,7 +263,7 @@ async def inpaint(model: str = Form(...), jobId: str = Form(...), image: UploadF
         active_jobs.add(jobId)
     try:
         image_data = await image.read(MAX_BYTES + 1); mask_data = await mask.read(MAX_BYTES + 1)
-        original, selection = await asyncio.to_thread(lambda: (read_image(image_data, 'RGBA'), read_image(mask_data, 'L')))
+        (original, profile), selection = await asyncio.to_thread(lambda: (read_source(image_data), read_image(mask_data, 'L')))
         if original.shape[:2] != selection.shape:
             raise ValueError('图片和蒙版尺寸不一致')
         with cancel_lock:
@@ -225,7 +272,7 @@ async def inpaint(model: str = Form(...), jobId: str = Form(...), image: UploadF
         result = await asyncio.to_thread(run_serial, model, original[:, :, :3].copy(), selection)
         def encode():
             rgba = np.dstack((result, original[:, :, 3])); output = io.BytesIO()
-            Image.fromarray(rgba).save(output, format='PNG')
+            Image.fromarray(rgba).save(output, format='PNG', **({'icc_profile': profile} if profile else {}))
             return output.getvalue()
         data = await asyncio.to_thread(encode)
         with cancel_lock:

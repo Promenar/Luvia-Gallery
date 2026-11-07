@@ -1,4 +1,5 @@
 import io
+import time
 import unittest
 from unittest.mock import patch
 
@@ -85,6 +86,11 @@ class Tests(unittest.TestCase):
                 self.assertEqual(response.status_code, 200, response.text)
                 self.assertEqual(Image.open(io.BytesIO(response.content)).info.get('icc_profile'), profile)
 
+    def test_high_bit_depth_source_is_rejected(self):
+        image = np.full((16, 16), 1000, dtype=np.uint16)
+        with self.assertRaisesRegex(ValueError, '高位深'):
+            service.read_source(png(image))
+
     def test_thin_mask_survives_downsampling(self):
         mask = np.zeros((5000, 8000), dtype=np.uint8)
         mask[:, 7999] = 1
@@ -105,6 +111,19 @@ class Tests(unittest.TestCase):
                 self.assertFalse(service.lane.locked())
         with patch.object(service, 'TOKEN', ''), patch.object(service, 'UPLOAD_TIMEOUT_SECONDS', 0.05, create=True):
             service.asyncio.run(check())
+
+    def test_finished_upload_is_not_timed_out_during_inference(self):
+        image = np.full((16, 16, 3), 60, dtype=np.uint8)
+        mask = np.full((16, 16), 255, dtype=np.uint8)
+        def slow(_model, source, _mask):
+            time.sleep(0.15)
+            return source
+        with patch.object(service, 'TOKEN', ''), patch.object(service, 'UPLOAD_TIMEOUT_SECONDS', 0.05), \
+             patch.object(service, 'available', return_value=(True, None)), patch.object(service, 'run_serial', side_effect=slow):
+            with TestClient(service.app) as client:
+                files = {'image': ('image.png', png(image), 'image/png'), 'mask': ('mask.png', png(mask), 'image/png')}
+                response = client.post('/v1/inpaint', data={'model': 'migan', 'jobId': 'slow-model'}, files=files)
+                self.assertEqual(response.status_code, 200, response.text)
 
 
 if __name__ == '__main__':
