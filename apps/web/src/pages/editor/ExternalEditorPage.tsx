@@ -391,7 +391,7 @@ export default function ExternalEditorPage() {
           >
             <span aria-hidden className="ue-drop-icon"><ImagePlus className="size-7" /></span>
             <b>拖入图片、粘贴或选择文件</b>
-            <span className="ue-drop-desc">支持 JPG、PNG、WebP、HEIC 等；大图由后端分块处理。图片只暂存在服务端缓存，不会改动原文件。</span>
+            <span className="ue-drop-desc">支持 JPG、PNG、WebP、GIF；大图由后端分块处理。图片只暂存在服务端缓存，不会改动原文件。</span>
             <span className="ue-drop-action">选择图片</span>
             <small>也可以在任意位置按 ⌘V / Ctrl+V 粘贴截图</small>
           </button>
