@@ -1,25 +1,27 @@
 import { monitorEventLoopDelay } from 'node:perf_hooks';
 import { createApp } from './app.ts';
 import { installFatalHandlers, loadLegacyJwtSecret, openRuntime } from '../core/runtime.ts';
+import { HealthWindow, workerReady } from '../core/health-window.ts';
 
 installFatalHandlers('api');
 const runtime = await openRuntime();
 const loop = monitorEventLoopDelay({ resolution: 20 });
 loop.enable();
-let loopP99 = 0;
-const monitor = setInterval(() => { loopP99 = loop.percentile(99) / 1e6; loop.reset(); }, 5000);
+let loopHealthy = true;
+const healthWindow = new HealthWindow();
+const monitor = setInterval(() => { loopHealthy = healthWindow.observe(loop.percentile(99) / 1e6); loop.reset(); }, 5000);
 monitor.unref();
 const legacyJwtSecret = await loadLegacyJwtSecret(runtime.legacyDir, runtime.dataDir);
 const app = await createApp({ db: runtime.db, legacyJwtSecret, legacyPending: () => {
   const row = runtime.db.prepare("SELECT value FROM settings WHERE key='legacy.pending'").get() as { value: string } | undefined;
   return row?.value === 'true';
 } });
-app.get('/healthz', async (_req, reply) => reply.code(loopP99 <= 50 ? 200 : 503).send({ ok: loopP99 <= 50 }));
+app.get('/healthz', async (_req, reply) => reply.code(loopHealthy ? 200 : 503).send({ ok: loopHealthy }));
 app.get('/readyz', async (_req, reply) => {
   const row = runtime.db.prepare("SELECT value FROM settings WHERE key='worker.heartbeat'").get() as { value: string } | undefined;
   let heartbeat: { at?: number; healthy?: boolean } = {};
   try { if (row) heartbeat = JSON.parse(row.value); } catch { /* 无效心跳不能视为就绪。 */ }
-  const ready = loopP99 <= 50 && heartbeat.healthy === true && typeof heartbeat.at === 'number' && Date.now() / 1000 - heartbeat.at < 20;
+  const ready = loopHealthy && workerReady(heartbeat, Date.now() / 1000);
   return reply.code(ready ? 200 : 503).send({ ok: ready });
 });
 const port = Number(process.env.PORT ?? '3001');

@@ -107,6 +107,21 @@ test('取消 FFmpeg 执行会停止进程并释放共享槽位', async () => {
   } finally { db.close(); }
 });
 
+test('数据库写锁繁忙时槽位等待可及时取消且不阻塞事件循环', async () => {
+  const { withFfmpegSlot } = await import('../src/worker/ffmpeg-slots.ts');
+  const dir = await mkdtemp(path.join(tmpdir(), 'luvia-slot-busy-'));
+  const db = openDatabase(path.join(dir, 'db.sqlite')); const peer = new Database(path.join(dir, 'db.sqlite'));
+  const abort = new AbortController();
+  try {
+    peer.exec('BEGIN IMMEDIATE');
+    setTimeout(() => abort.abort(), 100);
+    const start = Date.now();
+    await assert.rejects(withFfmpegSlot(db, 'busy', async () => {}, { signal: abort.signal }), { name: 'AbortError' });
+    assert.ok(Date.now() - start < 1000);
+    assert.equal(db.pragma('busy_timeout', { simple: true }), 5000);
+  } finally { if (peer.inTransaction) peer.exec('ROLLBACK'); peer.close(); db.close(); await rm(dir, { recursive: true, force: true }); }
+});
+
 test('缩略图槽位按设置限制多个 worker 的并发', async () => {
   const { withThumbnailSlot } = await import('../src/worker/ffmpeg-slots.ts');
   const db = openDatabase(':memory:');

@@ -2,9 +2,10 @@ import { realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { runProcess } from './process-runner.ts';
+import { withFfmpegSlot } from './ffmpeg-slots.ts';
 import { waitForWalCapacity } from './wal-checkpoint.ts';
 import { runLanes } from './lanes.ts';
-import { renewLease } from '../core/sqlite-errors.ts';
+import { isTransientSqliteError, renewLease } from '../core/sqlite-errors.ts';
 import type Database from 'better-sqlite3';
 import { publishLibraryEvent } from './watch-events.ts';
 import exifr from 'exifr';
@@ -63,7 +64,7 @@ function base(source: Source): Metadata {
     make: null, model: null, lens: null, fNumber: null, exposure: null, iso: null, focalLength: null, focalLength35: null,
     software: null, latitude: null, longitude: null, altitude: null, playability: null };
 }
-async function readImage(filename: string, source: Source, signal: AbortSignal | undefined, transcode: boolean): Promise<Metadata> {
+async function readImage(db: Database.Database, filename: string, source: Source, signal: AbortSignal | undefined, transcode: boolean): Promise<Metadata> {
   const result = base(source);
   let image: SharpMetadata | undefined;
   try { image = await sharp(filename).metadata(); }
@@ -72,7 +73,7 @@ async function readImage(filename: string, source: Source, signal: AbortSignal |
     try { image = await sharp(filename, { failOn: 'none' }).metadata(); }
     catch (fallbackError) {
       if (!isImageDecodeError(fallbackError)) throw fallbackError;
-      const probed = await readAv(filename, source, signal, transcode);
+      const probed = await readAv(db, filename, source, signal, transcode);
       if (!probed.width || !probed.height) throw new Error('图片尺寸不可用');
       result.width = probed.width; result.height = probed.height;
       if (probed.takenAtSource === 'metadata') { result.takenAt = probed.takenAt; result.takenAtSource = 'metadata'; }
@@ -104,9 +105,24 @@ async function readImage(filename: string, source: Source, signal: AbortSignal |
   result.altitude = altitude === null ? null : tags.GPSAltitudeRef === 1 ? -altitude : altitude;
   return result;
 }
-async function readAv(filename: string, source: Source, signal: AbortSignal | undefined, transcode: boolean): Promise<Metadata> {
-  const probed = await runProcess('ffprobe', ['-v', 'error', '-protocol_whitelist', 'file,pipe', '-show_streams', '-show_format', '-of', 'json', filename], { timeoutMs: 15000, maxBuffer: 2 * 1024 * 1024, capture: true, signal });
+async function readAv(db: Database.Database, filename: string, source: Source, signal: AbortSignal | undefined, transcode: boolean, allowVideoFallback = false): Promise<Metadata> {
+  let probed = await runProcess('ffprobe', ['-v', 'error', '-protocol_whitelist', 'file,pipe', '-show_streams', '-show_format', '-of', 'json', filename], { timeoutMs: 15000, maxBuffer: 2 * 1024 * 1024, capture: true, signal });
   signal?.throwIfAborted();
+  let videoOnly = false;
+  if ((probed.code !== 0 || probed.error) && allowVideoFallback && source.media_type === 'video' && probed.code !== null && !probed.error) {
+    // 音轨损坏可能使 ffprobe 无法输出任何信息。只复制一帧视频及容器标签，保留原文件。
+    const partial = await withFfmpegSlot(db, `metadata:${process.pid}`, async (slotSignal) => {
+      const copied = await runProcess('ffmpeg', ['-hide_banner', '-nostdin', '-loglevel', 'error', '-protocol_whitelist', 'file,pipe', '-an', '-i', filename,
+        '-map', '0:v:0', '-frames:v', '1', '-c:v', 'copy', '-map_metadata', '0', '-f', 'nut', 'pipe:1'],
+        { timeoutMs: 15000, maxBuffer: 2 * 1024 * 1024, capture: true, binary: true, signal: slotSignal });
+      slotSignal.throwIfAborted();
+      if (copied.code !== 0 || copied.error) return null;
+      return runProcess('ffprobe', ['-v', 'error', '-protocol_whitelist', 'file,pipe', '-show_streams', '-show_format', '-of', 'json', 'pipe:0'],
+        { timeoutMs: 15000, maxBuffer: 2 * 1024 * 1024, capture: true, inputBase64: copied.stdout, signal: slotSignal });
+    }, { signal });
+    signal?.throwIfAborted();
+    if (partial) { probed = partial; videoOnly = true; }
+  }
   if (probed.code !== 0 || probed.error) throw new Error('媒体信息读取失败');
   const { stdout } = probed;
   const probe = JSON.parse(stdout) as { streams?: Record<string, any>[]; format?: Record<string, any> };
@@ -115,22 +131,25 @@ async function readAv(filename: string, source: Source, signal: AbortSignal | un
   const audio = streams.find((stream) => stream.codec_type === 'audio');
   if (source.media_type === 'video' && !video || source.media_type === 'audio' && !audio) throw new Error('媒体流不可用');
   const result = base(source);
-  result.codec = string(video?.codec_name); result.audioCodec = string(audio?.codec_name); result.container = string(probe.format?.format_name);
-  result.duration = positive(probe.format?.duration) ?? positive(video?.duration) ?? positive(audio?.duration);
-  result.bitrate = positive(probe.format?.bit_rate);
+  result.codec = string(video?.codec_name); result.audioCodec = string(audio?.codec_name); result.container = videoOnly ? null : string(probe.format?.format_name);
+  result.duration = videoOnly ? null : positive(probe.format?.duration) ?? positive(video?.duration) ?? positive(audio?.duration);
+  result.bitrate = videoOnly ? null : positive(probe.format?.bit_rate);
   const frame = typeof video?.avg_frame_rate === 'string' ? /^(\d+)\/(\d+)$/.exec(video.avg_frame_rate) : null;
-  if (frame && Number(frame[2]) > 0) result.fps = Number(frame[1]) / Number(frame[2]);
+  if (!videoOnly && frame && Number(frame[2]) > 0) result.fps = Number(frame[1]) / Number(frame[2]);
   const rotation = Number(video?.tags?.rotate ?? video?.side_data_list?.find((entry: Record<string, unknown>) => entry.rotation !== undefined)?.rotation ?? 0);
   const swapped = Math.abs(rotation) % 180 === 90;
-  result.width = positive(swapped ? video?.height : video?.width); result.height = positive(swapped ? video?.width : video?.height);
+  // 单帧复制容器可能丢失原始显示旋转信息，不能把编码尺寸误当成显示尺寸。
+  result.width = videoOnly ? null : positive(swapped ? video?.height : video?.width);
+  result.height = videoOnly ? null : positive(swapped ? video?.width : video?.height);
   const date = probe.format?.tags?.creation_time ?? video?.tags?.creation_time ?? audio?.tags?.creation_time;
   const timestamp = typeof date === 'string' ? Date.parse(date) : NaN;
+  if (videoOnly && !Number.isFinite(timestamp)) throw new Error('媒体信息读取失败');
   if (Number.isFinite(timestamp)) { result.takenAt = Math.floor(timestamp / 1000); result.takenAtSource = 'metadata'; }
   if (source.media_type === 'video') {
     const containers = result.container?.split(',') ?? [];
     const direct = (containers.some((name) => name === 'mp4' || name === 'mov') && result.codec === 'h264' && (!result.audioCodec || result.audioCodec === 'aac')) ||
       (containers.includes('webm') && ['vp8', 'vp9', 'av1'].includes(result.codec ?? '') && (!result.audioCodec || ['opus', 'vorbis'].includes(result.audioCodec)));
-    result.playability = direct ? 'direct' : transcode ? 'transcode' : 'unsupported';
+    result.playability = videoOnly ? 'unsupported' : direct ? 'direct' : transcode ? 'transcode' : 'unsupported';
   }
   return result;
 }
@@ -216,18 +235,21 @@ export function flushMetadataFolders(db: Database.Database, assertLease: () => v
 }
 
 /** 读取单个文件的元数据；文件在读取前后发生变化、损坏或不在允许的挂载内时返回 null。 */
-async function extractSource(source: Source, allowed: string[], signal: AbortSignal | undefined, transcode: boolean): Promise<Metadata | null> {
+async function extractSource(db: Database.Database, source: Source, allowed: string[], signal: AbortSignal | undefined, transcode: boolean, allowVideoFallback = false): Promise<Metadata | null> {
   try {
     const root = await realpath(source.root);
     if (!allowed.some((candidate) => candidate && within(candidate, root))) throw new Error('媒体库不在挂载内');
     const filename = await secureMediaPath(root, source.relative_path);
     const before = await stat(filename);
     if (before.size !== source.size || Math.floor(before.mtimeMs / 1000) !== source.modified_at) throw new Error('媒体已变化');
-    const metadata = source.media_type === 'image' ? await readImage(filename, source, signal, transcode) : await readAv(filename, source, signal, transcode);
+    const metadata = source.media_type === 'image' ? await readImage(db, filename, source, signal, transcode) : await readAv(db, filename, source, signal, transcode, allowVideoFallback);
     const after = await stat(filename);
     if (after.size !== source.size || Math.floor(after.mtimeMs / 1000) !== source.modified_at) throw new Error('媒体已变化');
     return metadata;
-  } catch { return null; }
+  } catch (error) {
+    if (isTransientSqliteError(error)) throw error;
+    return null;
+  }
 }
 
 /** 在调用方的事务内保存读取结果；文件已不是待处理状态（已被其它途径读取、内容变化或缺失）时不写入。 */
@@ -240,7 +262,7 @@ function saveMetadata(db: Database.Database, source: Source, metadata: Metadata 
     return 'failed';
   }
   clearMediaFailure(db, source, { kind: 'metadata' });
-  db.prepare(`UPDATE files SET taken_at=?,taken_at_source=?,width=?,height=?,orientation=?,duration_sec=?,codec=?,audio_codec=?,container=?,fps=?,bitrate=?,
+  db.prepare(`UPDATE files SET taken_at=?,taken_at_source=?,width=COALESCE(?,width),height=COALESCE(?,height),orientation=?,duration_sec=?,codec=?,audio_codec=?,container=?,fps=?,bitrate=?,
     make=?,model=?,lens=?,f_number=?,exposure_time=?,iso=?,focal_length=?,focal_length35=?,software=?,latitude=?,longitude=?,altitude=?,playability=?,metadata_status='done' WHERE id=?`)
     .run(metadata.takenAt, metadata.takenAtSource, metadata.width, metadata.height, metadata.orientation, metadata.duration, metadata.codec, metadata.audioCodec,
       metadata.container, metadata.fps, metadata.bitrate, metadata.make, metadata.model, metadata.lens, metadata.fNumber, metadata.exposure, metadata.iso,
@@ -259,8 +281,10 @@ export async function extractMetadataNow(db: Database.Database, fileId: string, 
   if (!source) return false;
   if (mediaIgnored(db, source, { kind: 'metadata' })) return false;
   const root = await realpath(source.root).catch(() => '');
-  const metadata = await extractSource(source, [root], signal, readSettings(db).transcode.enabled);
+  const metadata = await extractSource(db, source, [root], signal, readSettings(db).transcode.enabled);
   signal?.throwIfAborted();
+  // 即时视频探测失败交由后台完整回退，不能抢先把后台已认领的文件标为失败。
+  if (!metadata && source.media_type === 'video') return false;
   return db.transaction(() => saveMetadata(db, source, metadata) !== null).immediate();
 }
 
@@ -306,7 +330,7 @@ export async function processMetadataBatch(db: Database.Database, job: JobRow, o
       }, () => local.abort()), 5000);
       timer.unref();
       let metadata: Metadata | null = null;
-      try { metadata = await extractSource(source, allowed, fileSignal, settings.transcode.enabled); }
+      try { metadata = await extractSource(db, source, allowed, fileSignal, settings.transcode.enabled, true); }
       catch (error) { if (!local.signal.aborted || signal.aborted) throw error; }
       finally { clearInterval(timer); }
       signal.throwIfAborted();

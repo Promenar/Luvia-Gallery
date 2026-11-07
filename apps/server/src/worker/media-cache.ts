@@ -8,11 +8,11 @@ import { rgbaToThumbHash } from 'thumbhash';
 import { z } from 'zod';
 import { cacheKey, cachePath } from '../core/media-cache.ts';
 import { secureMediaPath } from '../core/paths.ts';
-import { FfmpegExitError, runFfmpeg, withFfmpegSlot } from './ffmpeg-slots.ts';
+import { FfmpegExitError, NoVideoPacketsError, runFfmpeg, withFfmpegSlot } from './ffmpeg-slots.ts';
 import { runProcess } from './process-runner.ts';
 import { readSettings } from '../core/settings.ts';
 import { noteThumbnail } from '../core/folder-covers.ts';
-import { isImageDecodeError, isJpegFile } from './image-decoding.ts';
+import { isImageDecodeError, isIsoBmffFile, isJpegFile } from './image-decoding.ts';
 
 const Variant = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('thumb'), size: z.enum(['s', 'm', 'l']) }),
@@ -128,16 +128,19 @@ export async function generateMediaCache(db: Database.Database, payload: unknown
       try { thumbnail = await render(); }
       catch (error) {
         if (row.media_type !== 'image' || fromLegacy) throw error;
+        const code = (error as NodeJS.ErrnoException | null)?.code;
+        if (code && /^E[A-Z0-9]+$/.test(code)) throw error;
         const jpeg = await isJpegFile(filename);
+        const isoBmff = !jpeg && await isIsoBmffFile(filename);
         const warning = error instanceof Error && /^(Warning treated as error due to failOn setting|Unknown error)/.test(error.message);
-        if (!isImageDecodeError(error) && !(jpeg && warning)) throw error;
+        const badSeek = error instanceof Error && /bad seek/i.test(error.message);
+        if (!isImageDecodeError(error) && !(jpeg && warning) && !(isoBmff && badSeek)) throw error;
         options.signal?.throwIfAborted(); options.assertLease(); await unlink(temp).catch(() => {});
-        if (jpeg) { lenient = true; thumbnail = await render(); }
-        else {
-          if (!/unsupported image format/i.test(error instanceof Error ? error.message : '')) throw error;
+        if (isoBmff || /unsupported image format/i.test(error instanceof Error ? error.message : '')) {
           await runFfmpeg(db, options.owner, ['-n', '-max_pixels', '100000000', '-i', filename, '-map', '0:v:0', '-frames:v', '1', '-threads', '1', '-f', 'image2', '-vcodec', 'png', decoded], options);
           input = decoded; thumbnail = await render();
-        }
+        } else if (jpeg) { lenient = true; thumbnail = await render(); }
+        else throw error;
       }
       // 不透明缩略图复用生成结果；透明图从原图计算，保留透明度和颜色。
       const placeholder = await sharp(thumbnail.hasAlpha ? input : temp, thumbnail.hasAlpha && lenient ? { failOn: 'none' } : {}).rotate().resize({ width: 100, height: 100, fit: 'inside', withoutEnlargement: true }).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
@@ -166,7 +169,20 @@ export async function generateMediaCache(db: Database.Database, payload: unknown
         // 部分视频的帧时间戳无法直接封装 MP4；常规路径失败后才做帧率规范化。
         if (!(error instanceof FfmpegExitError)) throw error;
         options.signal?.throwIfAborted(); options.assertLease(); await unlink(temp).catch(() => {});
-        await attempt(true);
+        try { await attempt(true); }
+        catch (finalError) {
+          if (!(finalError instanceof FfmpegExitError)) throw finalError;
+          const result = await withFfmpegSlot(db, options.owner, (signal) => runProcess('ffprobe',
+            ['-v', 'error', '-protocol_whitelist', 'file,pipe', '-select_streams', 'v:0', '-read_intervals', '%+#1', '-show_entries', 'packet=stream_index', '-of', 'json', filename],
+            { timeoutMs: 15000, maxBuffer: 65536, capture: true, signal }), options);
+          options.signal?.throwIfAborted(); options.assertLease();
+          if (result.code === 0 && !result.error) {
+            let packets: unknown;
+            try { packets = (JSON.parse(result.stdout) as { packets?: unknown }).packets; } catch { /* 探测输出无效时保留原转码错误。 */ }
+            if (Array.isArray(packets) && packets.length === 0) throw new NoVideoPacketsError();
+          }
+          throw finalError;
+        }
       }
     } else if (task.variant.kind === 'display') {
       try { await sharp(input).rotate().webp({ quality: 90 }).toFile(temp); }

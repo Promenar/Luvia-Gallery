@@ -17,7 +17,7 @@ import { cacheKey, cachePath, cancelUnobservedMediaTask, enqueueMediaTask } from
 import type { Variant } from '../core/media-cache.ts';
 import { classifyMediaFailure, clearMediaFailure, mediaIgnored, recordMediaFailure } from '../core/media-failures.ts';
 import { generateHls } from './hls.ts';
-import { FfmpegExitError, withThumbnailSlot } from './ffmpeg-slots.ts';
+import { FfmpegExitError, NoVideoPacketsError, withThumbnailSlot } from './ffmpeg-slots.ts';
 import { isImageDecodeError } from './image-decoding.ts';
 import { withMediaGenerationLock } from './media-lock.ts';
 import { finishWatchReconcile } from './watch-reconcile-queue.ts';
@@ -264,6 +264,7 @@ export async function runNextJob(db: Database.Database, options: WorkerOptions):
   } catch (error) {
     const watchScan = job.type === 'scan' && !!db.prepare('SELECT 1 FROM watch_reconcile_requests WHERE job_id=?').get(job.id);
     const message = watchScan ? safeScanError(error) : error instanceof LegacyIdentityUncertainError ? error.message
+      : job.type === 'previews' && error instanceof NoVideoPacketsError ? error.message
       : (job.type === 'thumbnails' || job.type === 'previews') && error instanceof FfmpegExitError
         ? '媒体处理失败，请检查文件、编码器及存储'
       : (job.type === 'thumbnails' || job.type === 'previews') && isImageDecodeError(error)
@@ -298,7 +299,7 @@ export async function runNextJob(db: Database.Database, options: WorkerOptions):
           let payload: Payload = {};
           try { payload = JSON.parse(job.payload) as Payload; } catch { /* 无效作业负载仍应保留失败状态。 */ }
           if (payload.mediaId && payload.sourceSize !== undefined && payload.sourceModified !== undefined && payload.variant) {
-            recordMediaFailure(db, { id: payload.mediaId, size: payload.sourceSize, modified_at: payload.sourceModified, cache_generation: payload.sourceGeneration ?? 0 }, payload.variant, message, classifyMediaFailure(error, isImageDecodeError(error)));
+            recordMediaFailure(db, { id: payload.mediaId, size: payload.sourceSize, modified_at: payload.sourceModified, cache_generation: payload.sourceGeneration ?? 0 }, payload.variant, message, classifyMediaFailure(error, error instanceof NoVideoPacketsError || isImageDecodeError(error)));
           }
         }
         if (watchScan) finishWatchReconcile(db, job.id, false);

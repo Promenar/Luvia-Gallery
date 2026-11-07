@@ -37,3 +37,12 @@ test('代理意外退出时未完成的调用返回失败，下一次调用重�
   const next = await runProcess('sh', ['-c', 'echo ok'], { timeoutMs: 5000, capture: true });
   assert.equal(next.stdout.trim(), 'ok');
 });
+
+test('代理能有界传递二进制数据，输出超限会中止', async () => {
+  const input = Buffer.from([0, 255, 128, 42, 13, 10]).toString('base64');
+  const result = await runProcess('cat', [], { timeoutMs: 5000, capture: true, binary: true, inputBase64: input });
+  assert.equal(result.code, 0);
+  assert.deepEqual(Buffer.from(result.stdout, 'base64'), Buffer.from(input, 'base64'));
+  const large = await runProcess('sh', ['-c', 'head -c 4096 /dev/zero'], { timeoutMs: 5000, capture: true, binary: true, maxBuffer: 1024 });
+  assert.equal(large.error, 'maxBuffer');
+});
