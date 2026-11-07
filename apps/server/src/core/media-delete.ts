@@ -20,7 +20,7 @@ type FileRow = {
 type OperationRow = {
   operation_id: string; media_id: string; library_id: string; relative_path: string;
   source_size: number; source_modified: number; source_generation: number; state: 'pending' | 'file_deleted' | 'deleted' | 'failed';
-  parent_dev: string | null; parent_ino: string | null;
+  parent_dev: string | null; parent_ino: string | null; kind: string;
 };
 
 export class MediaDeleteError extends Error {
@@ -210,6 +210,7 @@ export async function deleteMediaFile(
 
     const existing = db.prepare('SELECT * FROM media_operations WHERE operation_id=?').get(input.operationId) as OperationRow | undefined;
     if (existing) {
+      if (existing.kind !== 'delete') throw new MediaDeleteError(409, 'OPERATION_CONFLICT', '操作编号已用于其他操作');
       if (existing.media_id !== input.mediaId || existing.source_size !== input.source.size ||
           existing.source_modified !== input.source.modifiedAt || existing.source_generation !== input.source.generation) {
         throw new MediaDeleteError(409, 'OPERATION_CONFLICT', '操作编号已用于其他删除请求');

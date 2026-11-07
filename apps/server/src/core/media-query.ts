@@ -99,7 +99,7 @@ function item(row: FileRow): z.output<typeof MediaItem> {
     id: row.id, name: row.name, folder: row.folder, mediaType: row.media_type, mime: row.mime, size: row.size,
     width: row.width, height: row.height, durationSec: row.duration_sec,
     takenAt: new Date(row.taken_at * 1000).toISOString(), takenAtSource: row.taken_at_source,
-    modifiedAt: row.modified_at, source: { size: row.size, modifiedAt: row.modified_at, generation: row.cache_generation }, favorite: !!row.favorite, thumbhash: row.thumbhash, thumbVersion: row.thumb_ready ? row.thumb_version : 0,
+    modifiedAt: row.modified_at, source: { size: row.size, modifiedAt: row.modified_at, generation: row.cache_generation }, favorite: !!row.favorite, thumbhash: row.thumbhash, thumbVersion: row.thumb_ready || row.cache_generation ? row.thumb_version : 0,
     hasLocation: row.latitude !== null && row.longitude !== null, playability: row.playability, hasPreview: !!row.has_preview,
   };
 }

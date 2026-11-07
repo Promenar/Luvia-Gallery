@@ -15,19 +15,20 @@ export function formatDuration(sec: number | null | undefined) {
 const hashCache = new Map<string, string>();
 export function thumbhashUrl(m: Pick<MediaItem, 'id' | 'thumbhash'>): string | undefined {
   if (!m.thumbhash) return undefined;
-  let u = hashCache.get(m.id);
+  const key = `${m.id}:${m.thumbhash}`;
+  let u = hashCache.get(key);
   if (!u) {
     try {
       u = thumbHashToDataURL(Uint8Array.from(atob(m.thumbhash), (c) => c.charCodeAt(0)));
-      hashCache.set(m.id, u);
+      hashCache.set(key, u);
     } catch { return undefined; }
   }
   return u;
 }
 
 /**
- * 是否请求缩略图。契约规定缩略图未生成时请求会同步生成（thumbVersion=0 只表示“尚未生成”），
- * 所以不能以 thumbVersion>0 作为条件，否则新入库的媒体永远停在占位图；音频没有画面，不请求。
+ * 是否请求缩略图。缩略图缺失时请求会触发生成；版本号用于缓存失效，不能代表是否已经生成。
+ * 音频没有画面，不请求。
  */
 export const canThumb = (m: Pick<MediaItem, 'mediaType'>) => m.mediaType !== 'audio';
 

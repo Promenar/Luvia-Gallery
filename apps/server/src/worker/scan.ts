@@ -50,10 +50,13 @@ export async function scanLibrary(db: Database.Database, library: { id: string; 
   const at = clock();
   const jobToken = options.jobId ? options.jobLeaseToken ?? (db.prepare('SELECT lease_token FROM jobs WHERE id=? AND owner=?').get(options.jobId, owner) as { lease_token: string | null } | undefined)?.lease_token : null;
   if (options.jobId && !jobToken) throw new LeaseLost();
-  const locked = db.prepare(`INSERT INTO scan_locks(library_id,owner,acquired_at,heartbeat_at,lease_expires_at,lease_token)
+  const locked = db.transaction(() => {
+    if (db.prepare("SELECT 1 FROM editor_overwrites WHERE library_id=? AND status='pending' LIMIT 1").get(library.id)) throw new Error('媒体替换正在处理或等待恢复');
+    return db.prepare(`INSERT INTO scan_locks(library_id,owner,acquired_at,heartbeat_at,lease_expires_at,lease_token)
     VALUES (?,?,?,?,?,?) ON CONFLICT(library_id) DO UPDATE SET owner=excluded.owner, acquired_at=excluded.acquired_at,
     heartbeat_at=excluded.heartbeat_at, lease_expires_at=excluded.lease_expires_at,lease_token=excluded.lease_token
     WHERE scan_locks.lease_expires_at<=?`).run(library.id, owner, at, at, at + 30, lockToken, at);
+  }).immediate();
   if (!locked.changes) throw new Error('媒体库正在扫描');
   let lost = false;
   const assertLease = () => {
@@ -224,6 +227,7 @@ async function scanWithLock(db: Database.Database, library: { id: string; root: 
     if (db.prepare('INSERT OR IGNORE INTO scan_expiry_logged(library_id,path) VALUES (?,?)').run(library.id, ancestor).changes) logChange('removed', ancestor, null, true, null);
   };
   const changedContent = '(files.size != excluded.size OR files.modified_at != excluded.modified_at OR (files.mtime_ms IS NOT NULL AND files.mtime_ms != excluded.mtime_ms))';
+  const attentionForMedia = db.prepare("SELECT 1 FROM editor_overwrites WHERE media_id=? AND status='attention' LIMIT 1");
   const resetMetadata = ['orientation','duration_sec','codec','audio_codec','container','fps','bitrate','make','model','lens','f_number','exposure_time','iso','focal_length','focal_length35','software','latitude','longitude','altitude','playability']
     .map((column) => `${column}=CASE WHEN ${changedContent} THEN NULL ELSE files.${column} END`).join(',');
   const upsert = db.prepare(`INSERT INTO files
@@ -251,6 +255,11 @@ async function scanWithLock(db: Database.Database, library: { id: string; root: 
       assertLease();
       for (const file of current) {
         let byPath = existingPath.get(library.id, file.relative) as Existing | undefined;
+        if (file.movedId && attentionForMedia.get(file.movedId)) { markSeen.run(marker, file.movedId); continue; }
+        if (byPath && attentionForMedia.get(byPath.id)) {
+          if (byPath.scan_marker !== marker) markSeen.run(marker, byPath.id);
+          continue;
+        }
         let moved = file.movedId ? db.prepare('SELECT id,missing_at_ms FROM files WHERE id=? AND library_id=? AND dev=? AND ino=? AND (scan_marker IS NULL OR scan_marker<>?)').get(file.movedId, library.id, file.dev, file.ino, marker) as { id: string; missing_at_ms: number | null } | undefined : undefined;
         if (allowDefer && ((byPath?.missing_at_ms ?? null) !== null || (moved?.missing_at_ms ?? null) !== null ||
           (byPath?.dev && byPath.ino && (byPath.dev !== file.dev || byPath.ino !== file.ino)))) {
@@ -340,6 +349,10 @@ async function scanWithLock(db: Database.Database, library: { id: string; root: 
           let oldStillPresent = false;
           try { const old = await lstat(path.join(root, oldRelative), { bigint: true }); oldStillPresent = old.dev.toString() === dirInfo.dev && old.ino.toString() === dirInfo.ino; }
           catch (error) { if (!['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error; }
+          if (!oldStillPresent && db.prepare(`SELECT 1 FROM editor_overwrites o JOIN files f ON f.id=o.media_id WHERE o.library_id=? AND o.status='attention'
+            AND (f.folder=? OR (f.folder>=? AND f.folder<?)) LIMIT 1`).get(library.id, previous.path, `${previous.path}/`, `${previous.path}0`)) {
+            throw new Error('移动的目录包含等待处理的媒体');
+          }
           if (!oldStillPresent) db.transaction(() => {
             assertLease();
             const current = db.prepare('SELECT dev,ino,missing_at_ms FROM folders WHERE path=? AND library_id=?').get(previous.path, library.id) as { dev: string | null; ino: string | null; missing_at_ms: number | null } | undefined;
@@ -378,7 +391,7 @@ async function scanWithLock(db: Database.Database, library: { id: string; root: 
       for await (const entry of opened) {
         signal?.throwIfAborted();
         const relative = relativeDir ? `${relativeDir}/${entry.name}` : entry.name;
-        if (entry.isDirectory() && exclude.some((rule: string) => path.matchesGlob(entry.name, rule) || path.matchesGlob(relative, rule))) continue;
+        if (entry.isDirectory() && (entry.name.startsWith('.luvia-replace-') || exclude.some((rule: string) => path.matchesGlob(entry.name, rule) || path.matchesGlob(relative, rule)))) continue;
         if (entry.isDirectory()) children.push(relative);
         else if (entry.isFile() && typeOf(relative)) {
           const full = path.join(root, relative);
@@ -487,7 +500,8 @@ async function scanWithLock(db: Database.Database, library: { id: string; root: 
   if (result.errors === 0) {
     const nowMs = scanNow();
     const expired = db.prepare(`SELECT id,relative_path,folder FROM files WHERE library_id=? AND (scan_marker IS NULL OR scan_marker<>?)
-      AND missing_at_ms IS NOT NULL AND ${grace === 0 ? 'missing_at_ms<=?' : 'missing_at_ms<?'} LIMIT 256`);
+      AND missing_at_ms IS NOT NULL AND ${grace === 0 ? 'missing_at_ms<=?' : 'missing_at_ms<?'}
+      AND NOT EXISTS (SELECT 1 FROM editor_overwrites o WHERE o.media_id=files.id AND o.status='attention') LIMIT 256`);
     let count: number;
     do {
       signal?.throwIfAborted();
@@ -521,7 +535,9 @@ async function scanWithLock(db: Database.Database, library: { id: string; root: 
       if (!count) break; await new Promise<void>((resolve) => setImmediate(resolve));
     }
     const markFolders = db.prepare(`SELECT path,parent FROM folders WHERE library_id=? AND (scan_marker IS NULL OR scan_marker<>?)
-      AND missing_at_ms IS NULL ORDER BY length(path),path LIMIT 256`);
+      AND missing_at_ms IS NULL AND NOT EXISTS (SELECT 1 FROM editor_overwrites o JOIN files f ON f.id=o.media_id
+        WHERE o.library_id=folders.library_id AND o.status='attention' AND (f.folder=folders.path OR (f.folder>=folders.path||'/' AND f.folder<folders.path||'0')))
+      ORDER BY length(path),path LIMIT 256`);
     while (result.errors === 0) {
       signal?.throwIfAborted(); if (!(await rootAvailable())) { result.errors++; break; }
       count = db.transaction(() => {
@@ -535,7 +551,8 @@ async function scanWithLock(db: Database.Database, library: { id: string; root: 
       if (!count) break; await new Promise<void>((resolve) => setImmediate(resolve));
     }
     const markFiles = db.prepare(`SELECT id,relative_path,folder FROM files WHERE library_id=?
-      AND (scan_marker IS NULL OR scan_marker<>?) AND missing_at_ms IS NULL LIMIT 256`);
+      AND (scan_marker IS NULL OR scan_marker<>?) AND missing_at_ms IS NULL
+      AND NOT EXISTS (SELECT 1 FROM editor_overwrites o WHERE o.media_id=files.id AND o.status='attention') LIMIT 256`);
     while (result.errors === 0) {
       signal?.throwIfAborted(); if (!(await rootAvailable())) { result.errors++; break; }
       count = db.transaction(() => {

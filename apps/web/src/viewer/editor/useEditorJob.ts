@@ -58,6 +58,11 @@ export function useEditorJob() {
     return call('saveEditorCopy', { params: { id: jobId }, body: { name, source } });
   }, [jobId]);
 
+  const replaceOriginal = useCallback(async (source: MediaSourceVersion, operationId: string) => {
+    if (!jobId) throw new Error('没有可保存的修复结果');
+    return call('replaceEditorOriginal', { params: { id: jobId }, body: { confirm: true, source, operationId } });
+  }, [jobId]);
+
   const job = jobId ? query.data ?? null : null;
   return {
     job,
@@ -66,6 +71,7 @@ export function useEditorJob() {
     cancel,
     reset,
     saveCopy,
+    replaceOriginal,
     createPending,
     createError,
     queryError: query.error ? message(query.error) : null,

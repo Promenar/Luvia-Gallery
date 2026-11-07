@@ -49,7 +49,7 @@ export const MediaItem = z.object({
   favorite: z.boolean(),
   /** ThumbHash（base64），用于加载前占位；尚未生成时为 null。 */
   thumbhash: z.string().nullable(),
-  /** 缩略图版本号，变化时客户端 URL 追加 ?v= 以绕过缓存；0 表示尚无缩略图。 */
+  /** 缩略图版本号，变化时客户端 URL 追加 ?v= 以绕过缓存；0 表示尚无版本。 */
   thumbVersion: z.number().int().nonnegative(),
   hasLocation: z.boolean(),
   playability: Playability.nullable(),

@@ -30,6 +30,8 @@ export const EditorCapabilities = z.object({
   models: z.array(EditorModel),
   /** 是否允许保存副本；只读挂载时为 false 并给出原因。 */
   write: z.object({ available: z.boolean(), reason: z.string().nullable() }),
+  /** 安全覆盖原图需要服务端支持目录句柄操作。旧服务端可不返回此字段。 */
+  replace: z.object({ available: z.boolean(), reason: z.string().nullable() }).optional(),
   /** 蒙版输入限制；maxBytes 指 base64 解码后的 PNG 字节数。 */
   mask: z.object({ maxBytes: z.number().int().positive(), maxEdge: z.number().int().positive() }),
 });
@@ -87,6 +89,15 @@ export const SaveEditorCopyBody = z.object({
   source: MediaSourceVersion,
 }).strict();
 export type SaveEditorCopyBody = z.infer<typeof SaveEditorCopyBody>;
+
+export const ReplaceEditorOriginalBody = z.object({
+  confirm: z.literal(true),
+  source: MediaSourceVersion,
+  operationId: z.string().min(8).max(128).regex(/^[A-Za-z0-9_-]+$/),
+}).strict();
+export type ReplaceEditorOriginalBody = z.infer<typeof ReplaceEditorOriginalBody>;
+export const ReplaceEditorOriginalResult = z.object({ status: z.literal('saved'), mediaId: z.string(), source: MediaSourceVersion, thumbVersion: z.number().int().nonnegative() });
+export type ReplaceEditorOriginalResult = z.infer<typeof ReplaceEditorOriginalResult>;
 
 export const SaveEditorCopyResult = z.object({
   status: z.enum(['saved', 'pending']),

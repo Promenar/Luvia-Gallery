@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
+import { lstatSync } from 'node:fs';
 import { lstat } from 'node:fs/promises';
 import { lookup } from 'mime-types';
 import type { LibraryChangedEvent } from '@luvia/contracts';
@@ -123,6 +124,15 @@ export class SqliteLibraryIndex implements LibraryIndexPort {
     try {
       this.options.assertLease?.();
       if (this.db.prepare('SELECT 1 FROM scan_locks WHERE library_id=? AND lease_expires_at>unixepoch()').get(this.libraryId)) throw new ScanLockedError();
+      if (this.db.prepare("SELECT 1 FROM editor_overwrites WHERE library_id=? AND status='pending' LIMIT 1").get(this.libraryId)) throw new ScanLockedError();
+      const protectedMedia = (pending.mediaId && this.db.prepare("SELECT 1 FROM editor_overwrites WHERE media_id=? AND status='attention' LIMIT 1").get(pending.mediaId)) ||
+        [pending.path, pending.oldPath].filter((value): value is string => value !== null).some((relative) => {
+          if (!pending.isDir) return !!this.db.prepare("SELECT 1 FROM editor_overwrites WHERE library_id=? AND relative_path=? AND status='attention' LIMIT 1").get(this.libraryId, relative);
+          const folder = virtualPath(this.libraryId, relative);
+          return !!this.db.prepare(`SELECT 1 FROM editor_overwrites o JOIN files f ON f.id=o.media_id WHERE o.library_id=? AND o.status='attention'
+            AND (f.folder=? OR (f.folder>=? AND f.folder<?)) LIMIT 1`).get(this.libraryId, folder, `${folder}/`, `${folder}0`);
+        });
+      if (protectedMedia) throw new Error('该媒体的覆盖操作等待处理');
       work(); this.pending = pending;
     }
     catch (error) { this.db.exec('ROLLBACK'); throw error; }
@@ -203,6 +213,11 @@ export class SqliteLibraryIndex implements LibraryIndexPort {
     const parent = virtualPath(this.libraryId, parentOf(entry.path));
     this.begin({ kinds: ['updated'], oldPath: null, path: entry.path, isDir: false, mediaId: old.mediaId }, () => {
       this.verify(old);
+      if (this.db.prepare("SELECT 1 FROM editor_overwrites WHERE media_id=? AND status='saved' LIMIT 1").get(old.mediaId)) {
+        const library = this.db.prepare('SELECT root FROM libraries WHERE id=?').get(this.libraryId) as { root: string } | undefined;
+        const actual = library ? statFields(lstatSync(path.join(library.root, entry.path), { bigint: true })) : null;
+        if (!actual || actual.size !== entry.size || actual.mtimeMs !== entry.mtimeMs || actual.dev !== identity(entry.dev) || actual.ino !== identity(entry.ino)) throw new Error('磁盘快照已变化');
+      }
       const seconds = Math.floor(entry.mtimeMs / 1000);
       if (!contentChanged(old, entry)) {
         this.db.prepare('UPDATE files SET dev=?,ino=?,mtime_ms=?,head_hash=? WHERE id=? AND library_id=?').run(identity(entry.dev), identity(entry.ino), entry.mtimeMs, entry.headHash, old.mediaId, this.libraryId);
@@ -303,6 +318,12 @@ export class SqliteLibraryIndex implements LibraryIndexPort {
     let missingMedia = 0;
     this.begin({ kinds: ['missing'], oldPath: null, path: old.path, isDir: old.isDir, mediaId: old.mediaId }, () => {
       this.verify(old);
+      if (!old.isDir && old.mediaId && this.db.prepare("SELECT 1 FROM editor_overwrites WHERE media_id=? AND status='saved' LIMIT 1").get(old.mediaId)) {
+        const library = this.db.prepare('SELECT root FROM libraries WHERE id=?').get(this.libraryId) as { root: string } | undefined;
+        try {
+          if (library) { lstatSync(path.join(library.root, old.path)); throw new Error('磁盘快照已变化'); }
+        } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+      }
       if (old.isDir) {
         missingMedia = this.db.prepare('UPDATE files SET missing_at_ms=? WHERE library_id=? AND missing_at_ms IS NULL AND (folder=? OR (folder>=? AND folder<?))')
           .run(at, this.libraryId, virtual, `${virtual}/`, `${virtual}0`).changes;

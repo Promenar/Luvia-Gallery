@@ -664,6 +664,37 @@ export function openDatabase(filename: string, options: { readonly?: boolean; bo
         for (const name of ['stage_state', 'stage_dev', 'stage_ino', 'stage_mtime_ns', 'parent_dev', 'parent_ino']) {
           if (!operationColumns.has(name)) db.exec(`ALTER TABLE media_operations ADD COLUMN ${name} TEXT`);
         }
+        if (!operationColumns.has('kind')) db.exec("ALTER TABLE media_operations ADD COLUMN kind TEXT NOT NULL DEFAULT 'delete'");
+        db.exec(`CREATE TABLE IF NOT EXISTS editor_overwrites (
+          operation_id TEXT PRIMARY KEY, user_id TEXT NOT NULL, job_id TEXT NOT NULL,
+          media_id TEXT NOT NULL, library_id TEXT NOT NULL, relative_path TEXT NOT NULL,
+          source_size INTEGER NOT NULL, source_modified INTEGER NOT NULL, source_generation INTEGER NOT NULL,
+          source_dev TEXT NOT NULL, source_ino TEXT NOT NULL, source_mtime_ns TEXT NOT NULL,
+          parent_dev TEXT NOT NULL, parent_ino TEXT NOT NULL, stage_dev TEXT NOT NULL, stage_ino TEXT NOT NULL,
+          result_dev TEXT NOT NULL, result_ino TEXT NOT NULL,
+          stage_name TEXT, source_sha256 TEXT, root_real TEXT, root_dev TEXT, root_ino TEXT,
+          result_size INTEGER, result_modified INTEGER, result_generation INTEGER, result_thumb_version INTEGER,
+          last_attempt_at INTEGER NOT NULL DEFAULT 0, cleanup_pending INTEGER NOT NULL DEFAULT 1,
+          status TEXT NOT NULL CHECK(status IN ('pending','saved','attention')), created_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS editor_overwrites_library ON editor_overwrites(library_id,status);
+        CREATE INDEX IF NOT EXISTS editor_overwrites_media ON editor_overwrites(media_id,status)`);
+        const overwriteColumns = new Set((db.pragma('table_info(editor_overwrites)') as { name: string }[]).map((column) => column.name));
+        for (const [name, definition] of [['stage_name','TEXT'],['source_sha256','TEXT'],['root_real','TEXT'],['root_dev','TEXT'],['root_ino','TEXT'],['result_size','INTEGER'],['result_modified','INTEGER'],
+          ['result_generation','INTEGER'],['result_thumb_version','INTEGER'],['last_attempt_at','INTEGER NOT NULL DEFAULT 0'],['cleanup_pending','INTEGER NOT NULL DEFAULT 1']] as const) {
+          if (!overwriteColumns.has(name)) db.exec(`ALTER TABLE editor_overwrites ADD COLUMN ${name} ${definition}`);
+        }
+        db.exec(`CREATE TABLE IF NOT EXISTS editor_overwrite_preparations (
+          stage_name TEXT PRIMARY KEY, library_id TEXT NOT NULL, relative_path TEXT NOT NULL,
+          parent_dev TEXT NOT NULL, parent_ino TEXT NOT NULL, root_real TEXT, root_dev TEXT, root_ino TEXT,
+          stage_dev TEXT, stage_ino TEXT, result_dev TEXT, result_ino TEXT, created_at INTEGER NOT NULL,
+          last_attempt_at INTEGER NOT NULL DEFAULT 0
+        )`);
+        const preparationColumns = new Set((db.pragma('table_info(editor_overwrite_preparations)') as { name: string }[]).map((column) => column.name));
+        for (const [name, definition] of [['last_attempt_at','INTEGER NOT NULL DEFAULT 0'],['root_real','TEXT'],['root_dev','TEXT'],['root_ino','TEXT'],
+          ['stage_dev','TEXT'],['stage_ino','TEXT'],['result_dev','TEXT'],['result_ino','TEXT']] as const) {
+          if (!preparationColumns.has(name)) db.exec(`ALTER TABLE editor_overwrite_preparations ADD COLUMN ${name} ${definition}`);
+        }
         // 编辑器作业保存在缓存目录；结果过期后由清理任务回收，不引用 files，媒体删除后仍可追踪。
         db.exec(`CREATE TABLE IF NOT EXISTS editor_jobs (
           id TEXT PRIMARY KEY,
@@ -690,6 +721,7 @@ export function openDatabase(filename: string, options: { readonly?: boolean; bo
         CREATE INDEX IF NOT EXISTS editor_jobs_user ON editor_jobs(user_id, created_at DESC);
         CREATE INDEX IF NOT EXISTS editor_jobs_expiry ON editor_jobs(expires_at)`);
         const editorJobColumns = new Set((db.pragma('table_info(editor_jobs)') as { name: string }[]).map((column) => column.name));
+        if (!editorJobColumns.has('source_sha256')) db.exec('ALTER TABLE editor_jobs ADD COLUMN source_sha256 TEXT');
         if (!editorJobColumns.has('result_state')) db.exec("ALTER TABLE editor_jobs ADD COLUMN result_state TEXT NOT NULL DEFAULT 'ready'");
         if (!editorJobColumns.has('mask_mode')) db.exec("ALTER TABLE editor_jobs ADD COLUMN mask_mode TEXT NOT NULL DEFAULT 'manual'");
         if (!editorJobColumns.has('mask_threshold')) db.exec('ALTER TABLE editor_jobs ADD COLUMN mask_threshold INTEGER');
