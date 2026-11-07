@@ -348,6 +348,8 @@ test('Linux 删除时目录被切换仍定位用户选中的目录', { skip: pro
     await rename(path.join(root, 'photo.jpg'), path.join(selectedDir, 'photo.jpg'));
     await link(path.join(selectedDir, 'photo.jpg'), path.join(replacementDir, 'photo.jpg'));
     db.prepare("UPDATE files SET relative_path='selected/photo.jpg',folder='lib/selected' WHERE id=?").run(row.id);
+    const user = db.prepare('SELECT id FROM users LIMIT 1').get() as { id: string };
+    db.prepare("INSERT INTO favorites(user_id,item_type,item_id,created_at) VALUES (?,'file',?,unixepoch())").run(user.id, row.id);
     db.function('switch_parent', () => {
       renameSync(selectedDir, path.join(root, 'selected-moved'));
       renameSync(replacementDir, selectedDir);
@@ -355,8 +357,10 @@ test('Linux 删除时目录被切换仍定位用户选中的目录', { skip: pro
     });
     db.exec('CREATE TRIGGER switch_parent AFTER INSERT ON media_operations BEGIN SELECT switch_parent(); END');
     const res = await app.inject({ method: 'DELETE', url: `/api/v2/admin/media/${row.id}`, headers, payload: body(row, 'delete-parent-switch') });
-    assert.equal(res.statusCode, 200, res.body);
+    assert.equal(res.json().error.code, 'OPERATION_PARTIAL', res.body);
     await assert.rejects(stat(path.join(root, 'selected-moved', 'photo.jpg')));
     assert.equal(await readFile(path.join(selectedDir, 'photo.jpg'), 'utf8'), 'a small file');
+    assert.ok(db.prepare('SELECT 1 FROM files WHERE id=?').get(row.id));
+    assert.ok(db.prepare("SELECT 1 FROM favorites WHERE item_type='file' AND item_id=?").get(row.id));
   } finally { await app.close(); db.close(); await rm(root, { recursive: true, force: true }); }
 });
