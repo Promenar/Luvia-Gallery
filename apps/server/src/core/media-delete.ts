@@ -20,6 +20,7 @@ type FileRow = {
 type OperationRow = {
   operation_id: string; media_id: string; library_id: string; relative_path: string;
   source_size: number; source_modified: number; source_generation: number; state: 'pending' | 'file_deleted' | 'deleted' | 'failed';
+  parent_dev: string | null; parent_ino: string | null;
 };
 
 export class MediaDeleteError extends Error {
@@ -64,12 +65,20 @@ function syncDirectory(directory: string): void {
   try { fsyncSync(fd); } finally { closeSync(fd); }
 }
 
+function verifyOperationParent(op: { parent_dev: string | null; parent_ino: string | null }, parent: string): void {
+  const current = lstatIfPresent(parent);
+  if (!current?.isDirectory() || !op.parent_dev || !op.parent_ino || current.dev.toString() !== op.parent_dev || current.ino.toString() !== op.parent_ino) {
+    throw new MediaDeleteError(500, 'OPERATION_PARTIAL', '媒体目录身份已变化，请检查挂载与暂存文件');
+  }
+}
+
 /** 文件系统操作在 SQLite 写事务内串行执行，避免其他 API 实例同时恢复同一删除。 */
 function recoverPendingStage(db: Database.Database, op: OperationRow, parent: string): 'restart' | 'finish' {
   return db.transaction(() => {
     const current = db.prepare('SELECT state FROM media_operations WHERE operation_id=?').get(op.operation_id) as { state: OperationRow['state'] } | undefined;
     if (!current || current.state === 'failed') return 'restart';
     if (current.state === 'deleted' || current.state === 'file_deleted') return 'finish';
+    verifyOperationParent(op, parent);
     const target = path.join(parent, path.basename(op.relative_path));
     const stageDir = stageDirectory(parent, op.operation_id);
     const stageInfo = lstatIfPresent(stageDir);
@@ -97,6 +106,7 @@ function finishStagedDelete(db: Database.Database, op: OperationRow, parent: str
     if (current.state !== 'file_deleted') throw new MediaDeleteError(500, 'OPERATION_PARTIAL', '删除状态待恢复');
     if (current.stage_state === 'unlinked') return;
     if (current.stage_state !== 'prepared') throw new MediaDeleteError(500, 'OPERATION_PARTIAL', '删除阶段无法确认，请检查媒体库');
+    verifyOperationParent(op, parent);
     const stageDir = stageDirectory(parent, op.operation_id);
     const stageInfo = lstatIfPresent(stageDir);
     if (!stageInfo) throw new MediaDeleteError(500, 'OPERATION_PARTIAL', '暂存目录不可见，无法确认删除状态');
@@ -253,11 +263,13 @@ export async function deleteMediaFile(
     }
     try { await access(parent, constants.W_OK); }
     catch { throw new MediaDeleteError(409, 'MEDIA_READ_ONLY', '媒体库目录当前为只读挂载，无法删除原文件'); }
+    const parentInfo = await lstat(parent, { bigint: true });
+    if (!parentInfo.isDirectory()) throw new MediaDeleteError(409, 'MEDIA_CHANGED', '媒体目录已发生变化');
 
     try {
-      db.prepare(`INSERT INTO media_operations(operation_id,media_id,library_id,relative_path,source_size,source_modified,source_generation,state,created_at,updated_at)
-        VALUES (?,?,?,?,?,?,?,'pending',?,?)`).run(input.operationId, row.id, row.library_id, row.relative_path,
-        input.source.size, input.source.modifiedAt, input.source.generation, now(), now());
+      db.prepare(`INSERT INTO media_operations(operation_id,media_id,library_id,relative_path,source_size,source_modified,source_generation,parent_dev,parent_ino,state,created_at,updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?,'pending',?,?)`).run(input.operationId, row.id, row.library_id, row.relative_path,
+        input.source.size, input.source.modifiedAt, input.source.generation, parentInfo.dev.toString(), parentInfo.ino.toString(), now(), now());
     } catch {
       const active = db.prepare("SELECT operation_id FROM media_operations WHERE media_id=? AND state IN ('pending','file_deleted')").get(row.id) as { operation_id: string } | undefined;
       if (active?.operation_id === input.operationId) {
@@ -272,11 +284,13 @@ export async function deleteMediaFile(
       const outcome = db.transaction(() => {
         const current = db.prepare('SELECT state FROM media_operations WHERE operation_id=?').get(input.operationId) as { state: OperationRow['state'] } | undefined;
         if (!current || current.state !== 'pending') throw new MediaDeleteError(409, 'OPERATION_CONFLICT', '删除操作状态已变化');
+        verifyOperationParent({ parent_dev: parentInfo.dev.toString(), parent_ino: parentInfo.ino.toString() }, parent);
         let stageCreated = false;
         try {
           mkdirSync(stageDir, { mode: 0o700 });
           stageCreated = true;
           renameSync(target, staged);
+          verifyOperationParent({ parent_dev: parentInfo.dev.toString(), parent_ino: parentInfo.ino.toString() }, parent);
         } catch (error) {
           if (stageCreated) { try { rmdirSync(stageDir); } catch { /* 保留待恢复的文件。 */ } }
           throw error;
