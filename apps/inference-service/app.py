@@ -36,6 +36,7 @@ active_jobs = set()
 cancel_lock = threading.Lock()
 model_status = {}
 background_tasks = set()
+cleanup_tasks = set()
 
 
 async def run_blocking(function, *args):
@@ -93,8 +94,18 @@ async def limit_requests(request: Request, call_next):
         return response
     finally:
         if background_tasks:
-            await asyncio.shield(asyncio.gather(*list(background_tasks), return_exceptions=True))
-        lane.release()
+            async def release_after_work():
+                try:
+                    await asyncio.gather(*list(background_tasks), return_exceptions=True)
+                finally:
+                    lane.release()
+            # 清理任务独立于请求；请求重复取消也不能提前释放或永久占住准入。
+            cleanup = asyncio.create_task(release_after_work())
+            cleanup_tasks.add(cleanup)
+            cleanup.add_done_callback(cleanup_tasks.discard)
+            await asyncio.shield(cleanup)
+        else:
+            lane.release()
 
 
 def device():

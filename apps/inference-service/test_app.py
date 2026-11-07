@@ -150,6 +150,29 @@ class Tests(unittest.TestCase):
         with patch.object(service, 'TOKEN', ''):
             service.asyncio.run(check())
 
+    def test_repeated_cancellation_does_not_lock_lane(self):
+        async def check():
+            started, finish = threading.Event(), threading.Event()
+            def work():
+                started.set()
+                finish.wait(3)
+            async def receive():
+                return {'type': 'http.request', 'body': b'', 'more_body': False}
+            request = SimpleNamespace(method='POST', url=SimpleNamespace(path='/v1/inpaint'),
+                                      headers={'content-length': '1'}, receive=receive)
+            task = service.asyncio.create_task(service.limit_requests(request, lambda _request: service.run_blocking(work)))
+            await service.asyncio.to_thread(started.wait, 1)
+            self.assertTrue(started.is_set())
+            task.cancel(); await service.asyncio.sleep(0.05)
+            task.cancel(); await service.asyncio.sleep(0.05)
+            finish.set()
+            with self.assertRaises(service.asyncio.CancelledError):
+                await task
+            await service.asyncio.sleep(0.1)
+            self.assertFalse(service.lane.locked())
+        with patch.object(service, 'TOKEN', ''):
+            service.asyncio.run(check())
+
 
 if __name__ == '__main__':
     unittest.main()
