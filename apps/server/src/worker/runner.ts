@@ -16,14 +16,15 @@ import { processThumbnailBackfill } from './thumbnail-backfill.ts';
 import { cacheKey, cachePath, cancelUnobservedMediaTask, enqueueMediaTask } from '../core/media-cache.ts';
 import type { Variant } from '../core/media-cache.ts';
 import { generateHls } from './hls.ts';
-import { withThumbnailSlot } from './ffmpeg-slots.ts';
+import { FfmpegExitError, withThumbnailSlot } from './ffmpeg-slots.ts';
+import { isImageDecodeError } from './image-decoding.ts';
 import { withMediaGenerationLock } from './media-lock.ts';
 import { finishWatchReconcile } from './watch-reconcile-queue.ts';
 import { isTransientSqliteError, renewLease } from '../core/sqlite-errors.ts';
 
 export type WorkerOptions = { owner: string; allowedRoots: string[]; legacyDir: string; systemRoots: string[]; configuredMediaRoots?: string[]; cacheDir?: string; signal?: AbortSignal; hlsIdleMs?: number; log?: (level: 'info' | 'warn', message: string, ctx: Record<string, string>) => void };
 /** dimensionsOnly 只出现在已下线的“补全照片宽高”作业的历史记录里。 */
-type Payload = { libraryId?: string | null; dimensionsOnly?: boolean; legacyImportId?: string; mediaId?: string; hlsSessionId?: string; sourceSize?: number; sourceModified?: number; sourceGeneration?: number; variant?: Variant };
+type Payload = { libraryId?: string | null; dimensionsOnly?: boolean; recovery?: boolean; recoveryIds?: string[]; preserveUnindexed?: boolean; legacyImportId?: string; mediaId?: string; hlsSessionId?: string; sourceSize?: number; sourceModified?: number; sourceGeneration?: number; variant?: Variant };
 /** SQLite 暂时繁忙（锁等待超时），稍后重试即可恢复。 */
 export { isTransientSqliteError };
 const now = () => Math.floor(Date.now() / 1000);
@@ -42,11 +43,12 @@ function enqueueScan(db: Database.Database, id: string, libraryId: string, legac
   db.prepare("INSERT OR IGNORE INTO jobs(id,type,label,status,trigger,payload,created_at) VALUES (?,'scan','扫描媒体库','queued','system',?,?)")
     .run(id, JSON.stringify({ libraryId, legacyImportId }), now());
 }
-function enqueueMetadata(db: Database.Database, libraryId: string) {
+export function enqueueMetadata(db: Database.Database, libraryId: string) {
   const id = randomUUID();
   const result = db.prepare("INSERT OR IGNORE INTO jobs(id,type,label,status,trigger,payload,created_at,dedupe_key) VALUES (?,'metadata','提取元数据','queued','system',?,?,?)")
     .run(id, JSON.stringify({ libraryId }), now(), `metadata:${libraryId}`);
   if (result.changes) publishJob(db, id);
+  else db.prepare("UPDATE jobs SET payload=json_set(payload,'$.deferredScan',json('true')) WHERE dedupe_key=? AND status IN ('queued','running','paused') AND json_extract(payload,'$.recovery')=1").run(`metadata:${libraryId}`);
 }
 function enqueuePreviews(db: Database.Database, libraryId?: string | null) {
   if (!readSettings(db).previews.enabled) return;
@@ -148,11 +150,13 @@ export async function runNextJob(db: Database.Database, options: WorkerOptions):
         if (!queue.finish(job.id, finalCounts)) throw new Error('作业租约已失效');
       }).immediate();
     } else if (job.type === 'metadata') {
-      const result = await processMetadataBatch(db, job, { owner: options.owner, allowedRoots: options.allowedRoots, libraryId: payload.libraryId, assertLease, signal: controller.signal });
+      const result = await processMetadataBatch(db, job, { owner: options.owner, allowedRoots: options.allowedRoots, libraryId: payload.libraryId, recoveryIds: payload.recoveryIds, assertLease, signal: controller.signal });
       if (result.complete) {
         db.transaction(() => {
+          const deferredScan = payload.recovery && !!db.prepare("SELECT 1 FROM jobs WHERE id=? AND json_extract(payload,'$.deferredScan')=1").get(job.id);
           if (!queue.finish(job.id, result.counts)) throw new Error('作业租约已失效');
-          enqueuePreviews(db, payload.libraryId);
+          if (!payload.recovery) enqueuePreviews(db, payload.libraryId);
+          else if (deferredScan && payload.libraryId) enqueueMetadata(db, payload.libraryId);
         }).immediate();
       } else if (!queue.release(job.id)) throw new Error('作业租约已失效');
     } else if (job.type === 'previews' && payload.hlsSessionId) {
@@ -228,8 +232,12 @@ export async function runNextJob(db: Database.Database, options: WorkerOptions):
             const info = await lstat(cachePath(cacheDir, source, payload.variant)).catch(() => null);
             if (info?.isFile() && !info.isSymbolicLink()) return false;
           }
+          if (payload.preserveUnindexed) {
+            try { await lstat(cachePath(cacheDir, source, payload.variant)); return false; }
+            catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+          }
         }
-        const generate = (inner: AbortSignal, guard = assertMediaLease) => generateMediaCache(db, payload, { owner: options.owner, cacheDir, allowedRoots: options.allowedRoots, assertLease: guard, signal: inner });
+        const generate = (inner: AbortSignal, guard = assertMediaLease) => generateMediaCache(db, payload, { owner: options.owner, cacheDir, allowedRoots: options.allowedRoots, assertLease: guard, signal: inner, preserveExisting: payload.preserveUnindexed });
         if (job.type === 'thumbnails') await withThumbnailSlot(db, options.owner, generate, { signal, assertLease: assertMediaLease });
         else await generate(signal);
         return true;
@@ -247,6 +255,10 @@ export async function runNextJob(db: Database.Database, options: WorkerOptions):
   } catch (error) {
     const watchScan = job.type === 'scan' && !!db.prepare('SELECT 1 FROM watch_reconcile_requests WHERE job_id=?').get(job.id);
     const message = watchScan ? safeScanError(error) : error instanceof LegacyIdentityUncertainError ? error.message
+      : (job.type === 'thumbnails' || job.type === 'previews') && error instanceof FfmpegExitError
+        ? '媒体处理失败，请检查文件、编码器及存储'
+      : (job.type === 'thumbnails' || job.type === 'previews') && isImageDecodeError(error)
+        ? '图片无法解码，请检查文件完整性及格式支持'
       : error instanceof Error && error.message === '作业类型尚未实现' ? error.message : '作业执行失败，请检查媒体库及工作进程';
     if (error instanceof LegacyIdentityUncertainError) options.log?.('warn', error.message, { type: job.type });
     // 停止进程或数据库暂时被锁（例如检查点）时把作业放回队列，稍后从检查点继续，而不是判为失败

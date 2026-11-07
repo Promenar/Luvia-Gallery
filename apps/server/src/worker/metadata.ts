@@ -8,9 +8,10 @@ import { renewLease } from '../core/sqlite-errors.ts';
 import type Database from 'better-sqlite3';
 import { publishLibraryEvent } from './watch-events.ts';
 import exifr from 'exifr';
-import sharp from 'sharp';
+import sharp, { type Metadata as SharpMetadata } from 'sharp';
 import { secureMediaPath } from '../core/paths.ts';
 import { readSettings } from '../core/settings.ts';
+import { isImageDecodeError } from './image-decoding.ts';
 import type { JobRow } from '../core/jobs.ts';
 
 type Source = { id: string; relative_path: string; folder: string; name: string; media_type: string; size: number; modified_at: number; root: string };
@@ -61,13 +62,28 @@ function base(source: Source): Metadata {
     make: null, model: null, lens: null, fNumber: null, exposure: null, iso: null, focalLength: null, focalLength35: null,
     software: null, latitude: null, longitude: null, altitude: null, playability: null };
 }
-async function readImage(filename: string, source: Source): Promise<Metadata> {
+async function readImage(filename: string, source: Source, signal: AbortSignal | undefined, transcode: boolean): Promise<Metadata> {
   const result = base(source);
-  const image = await sharp(filename).metadata();
-  if (!image.width || !image.height) throw new Error('图片尺寸不可用');
-  const flipped = image.orientation !== undefined && image.orientation >= 5 && image.orientation <= 8;
-  result.width = flipped ? image.height : image.width; result.height = flipped ? image.width : image.height;
-  result.orientation = image.orientation ?? null;
+  let image: SharpMetadata | undefined;
+  try { image = await sharp(filename).metadata(); }
+  catch (error) {
+    if (!isImageDecodeError(error)) throw error;
+    try { image = await sharp(filename, { failOn: 'none' }).metadata(); }
+    catch (fallbackError) {
+      if (!isImageDecodeError(fallbackError)) throw fallbackError;
+      const probed = await readAv(filename, source, signal, transcode);
+      if (!probed.width || !probed.height) throw new Error('图片尺寸不可用');
+      result.width = probed.width; result.height = probed.height;
+      if (probed.takenAtSource === 'metadata') { result.takenAt = probed.takenAt; result.takenAtSource = 'metadata'; }
+    }
+  }
+  if (image) {
+    if (!image.width || !image.height) throw new Error('图片尺寸不可用');
+    const flipped = image.orientation !== undefined && image.orientation >= 5 && image.orientation <= 8;
+    result.width = flipped ? image.height : image.width; result.height = flipped ? image.width : image.height;
+    result.orientation = image.orientation ?? null;
+  }
+  if (!image) return result;
   const tags = await exifr.parse(filename, { gps: true, exif: true, reviveValues: false, translateValues: false }).catch(() => undefined) as Record<string, unknown> | undefined;
   if (!tags) return result;
   const taken = exifDate(tags.DateTimeOriginal, tags.OffsetTimeOriginal);
@@ -200,7 +216,7 @@ async function extractSource(source: Source, allowed: string[], signal: AbortSig
     const filename = await secureMediaPath(root, source.relative_path);
     const before = await stat(filename);
     if (before.size !== source.size || Math.floor(before.mtimeMs / 1000) !== source.modified_at) throw new Error('媒体已变化');
-    const metadata = source.media_type === 'image' ? await readImage(filename, source) : await readAv(filename, source, signal, transcode);
+    const metadata = source.media_type === 'image' ? await readImage(filename, source, signal, transcode) : await readAv(filename, source, signal, transcode);
     const after = await stat(filename);
     if (after.size !== source.size || Math.floor(after.mtimeMs / 1000) !== source.modified_at) throw new Error('媒体已变化');
     return metadata;
@@ -238,7 +254,7 @@ export async function extractMetadataNow(db: Database.Database, fileId: string, 
   return db.transaction(() => saveMetadata(db, source, metadata) !== null).immediate();
 }
 
-export async function processMetadataBatch(db: Database.Database, job: JobRow, options: { owner: string; allowedRoots: string[]; libraryId?: string | null; assertLease: () => void; signal?: AbortSignal }): Promise<{ complete: boolean; counts: Counts }> {
+export async function processMetadataBatch(db: Database.Database, job: JobRow, options: { owner: string; allowedRoots: string[]; libraryId?: string | null; recoveryIds?: string[]; assertLease: () => void; signal?: AbortSignal }): Promise<{ complete: boolean; counts: Counts }> {
   const previous = job.checkpoint ? JSON.parse(job.checkpoint) as Partial<Counts> : {};
   const counts: Counts = { indexed: previous.indexed ?? 0, failed: previous.failed ?? 0 };
   const libraryClause = options.libraryId ? ' AND f.library_id=?' : '';
@@ -256,9 +272,12 @@ export async function processMetadataBatch(db: Database.Database, job: JobRow, o
     db.prepare('DELETE FROM metadata_claims WHERE lease_expires_at<=?').run(now());
     // 界面请求超过 10 分钟的优先项已滚走，不再插队
     db.prepare('DELETE FROM metadata_priority WHERE requested_at<=?').run(now() - PRIORITY_TTL_SECONDS);
-    const priority = db.prepare(metadataPriorityClaimSql(!!options.libraryId)).get(...libraryArgs) as Source | undefined;
+    const priority = options.recoveryIds ? undefined : db.prepare(metadataPriorityClaimSql(!!options.libraryId)).get(...libraryArgs) as Source | undefined;
     if (priority) db.prepare('DELETE FROM metadata_priority WHERE file_id=?').run(priority.id);
-    const row = priority ?? db.prepare(metadataClaimSql(!!options.libraryId)).get(...libraryArgs) as Source | undefined;
+    const row = priority ?? (options.recoveryIds ? db.prepare(`SELECT f.id,f.relative_path,f.folder,f.name,f.media_type,f.size,f.modified_at,l.root
+      FROM files f JOIN libraries l ON l.id=f.library_id AND l.enabled=1 LEFT JOIN metadata_claims c ON c.file_id=f.id
+      WHERE f.id IN (SELECT value FROM json_each(?)) AND f.library_id=? AND f.metadata_status='pending' AND f.missing_at_ms IS NULL AND c.file_id IS NULL LIMIT 1`)
+      .get(JSON.stringify(options.recoveryIds), options.libraryId) : db.prepare(metadataClaimSql(!!options.libraryId)).get(...libraryArgs)) as Source | undefined;
     if (row) db.prepare('INSERT INTO metadata_claims(file_id,job_id,owner,lease_expires_at) VALUES (?,?,?,?)').run(row.id, job.id, options.owner, now() + 30);
     return row;
   }).immediate();
@@ -299,7 +318,8 @@ export async function processMetadataBatch(db: Database.Database, job: JobRow, o
   };
   await runLanes(concurrency, stop, lane);
   const dirtyRemaining = flushMetadataFolders(db, options.assertLease);
-  const pending = db.prepare(`SELECT 1 FROM files f INDEXED BY ${options.libraryId ? 'files_library_metadata' : 'files_metadata'} CROSS JOIN libraries l ON l.id=f.library_id AND l.enabled=1 WHERE f.metadata_status='pending' AND f.missing_at_ms IS NULL${libraryClause} LIMIT 1`).get(...libraryArgs);
+  const pending = options.recoveryIds ? db.prepare("SELECT 1 FROM files f JOIN libraries l ON l.id=f.library_id AND l.enabled=1 WHERE f.id IN (SELECT value FROM json_each(?)) AND f.library_id=? AND f.metadata_status='pending' AND f.missing_at_ms IS NULL LIMIT 1").get(JSON.stringify(options.recoveryIds), options.libraryId)
+    : db.prepare(`SELECT 1 FROM files f INDEXED BY ${options.libraryId ? 'files_library_metadata' : 'files_metadata'} CROSS JOIN libraries l ON l.id=f.library_id AND l.enabled=1 WHERE f.metadata_status='pending' AND f.missing_at_ms IS NULL${libraryClause} LIMIT 1`).get(...libraryArgs);
   if (pending || dirtyRemaining) await delay(50, undefined, { signal: options.signal });
   return { complete: !pending && !dirtyRemaining, counts };
 }

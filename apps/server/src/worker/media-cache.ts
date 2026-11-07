@@ -1,9 +1,9 @@
 import { mkdir, realpath, stat, unlink } from 'node:fs/promises';
-import { renameSync } from 'node:fs';
+import { linkSync, renameSync } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
-import sharp, { type Metadata } from 'sharp';
+import sharp, { type Metadata, type OutputInfo } from 'sharp';
 import { rgbaToThumbHash } from 'thumbhash';
 import { z } from 'zod';
 import { cacheKey, cachePath } from '../core/media-cache.ts';
@@ -12,6 +12,7 @@ import { FfmpegExitError, runFfmpeg, withFfmpegSlot } from './ffmpeg-slots.ts';
 import { runProcess } from './process-runner.ts';
 import { readSettings } from '../core/settings.ts';
 import { noteThumbnail } from '../core/folder-covers.ts';
+import { isImageDecodeError } from './image-decoding.ts';
 
 const Variant = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('thumb'), size: z.enum(['s', 'm', 'l']) }),
@@ -32,7 +33,7 @@ export const LEGACY_MIN_SIDE = 192;
  * 生成缓存文件。legacyInput 为已校验的 1.x 缩略图时，小尺寸缩略图直接从它缩放，不读原文件（原文件只做变化校验）。
  * 返回是否使用了 1.x 缩略图。
  */
-export async function generateMediaCache(db: Database.Database, payload: unknown, options: { owner: string; cacheDir: string; allowedRoots: string[]; assertLease: () => void; signal?: AbortSignal; legacyInput?: string }): Promise<{ fromLegacy: boolean }> {
+export async function generateMediaCache(db: Database.Database, payload: unknown, options: { owner: string; cacheDir: string; allowedRoots: string[]; assertLease: () => void; signal?: AbortSignal; legacyInput?: string; preserveExisting?: boolean }): Promise<{ fromLegacy: boolean }> {
   const task = Task.parse(payload);
   const row = db.prepare(`SELECT f.id,f.size,f.modified_at,f.cache_generation,f.mtime_ms,f.relative_path,f.media_type,f.width,f.height,f.duration_sec,l.root FROM files f
     JOIN libraries l ON l.id=f.library_id WHERE f.id=? AND l.enabled=1 AND f.missing_at_ms IS NULL`).get(task.mediaId) as
@@ -121,12 +122,26 @@ export async function generateMediaCache(db: Database.Database, payload: unknown
         input = frame;
       }
       const dimension = { s: 256, m: 768, l: 1600 }[task.variant.size];
-      const thumbnail = await sharp(input).rotate().resize({ width: dimension, height: dimension, fit: 'outside', withoutEnlargement: true }).webp({ quality: 82 }).toFile(temp);
+      let lenient = false;
+      const render = () => sharp(input, lenient ? { failOn: 'none' } : {}).rotate().resize({ width: dimension, height: dimension, fit: 'outside', withoutEnlargement: true }).webp({ quality: 82 }).toFile(temp);
+      let thumbnail: OutputInfo;
+      try { thumbnail = await render(); }
+      catch (error) {
+        if (row.media_type !== 'image' || fromLegacy || !isImageDecodeError(error)) throw error;
+        options.signal?.throwIfAborted(); options.assertLease(); await unlink(temp).catch(() => {});
+        const format = await sharp(input).metadata().then((value) => value.format).catch(() => undefined);
+        if (format === 'jpeg') { lenient = true; thumbnail = await render(); }
+        else {
+          if (!/unsupported image format/i.test(error instanceof Error ? error.message : '')) throw error;
+          await runFfmpeg(db, options.owner, ['-n', '-max_pixels', '100000000', '-i', filename, '-map', '0:v:0', '-frames:v', '1', '-threads', '1', '-f', 'image2', '-vcodec', 'png', decoded], options);
+          input = decoded; thumbnail = await render();
+        }
+      }
       // 不透明缩略图复用生成结果；透明图从原图计算，保留透明度和颜色。
-      const placeholder = await sharp(thumbnail.hasAlpha ? input : temp).rotate().resize({ width: 100, height: 100, fit: 'inside', withoutEnlargement: true }).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+      const placeholder = await sharp(thumbnail.hasAlpha ? input : temp, thumbnail.hasAlpha && lenient ? { failOn: 'none' } : {}).rotate().resize({ width: 100, height: 100, fit: 'inside', withoutEnlargement: true }).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
       hash = Buffer.from(rgbaToThumbHash(placeholder.info.width, placeholder.info.height, placeholder.data)).toString('base64');
       // 生成缩略图时顺带记录原始宽高，供网格按原始比例排布；视频帧已由 FFmpeg 按显示方向旋转
-      if (!fromLegacy && (!row.width || !row.height)) recordDimensions(await sharp(input).metadata(), true);
+      if (!fromLegacy && (!row.width || !row.height)) recordDimensions(await sharp(input, lenient ? { failOn: 'none' } : {}).metadata(), true);
     } else if (task.variant.kind === 'preview') {
       if (!readSettings(db).previews.enabled) throw new Error('视频预览已关闭');
       const setting = readSettings(db).transcode.hwaccel;
@@ -152,7 +167,13 @@ export async function generateMediaCache(db: Database.Database, payload: unknown
         await attempt(true);
       }
     } else if (task.variant.kind === 'display') {
-      await sharp(input).rotate().webp({ quality: 90 }).toFile(temp);
+      try { await sharp(input).rotate().webp({ quality: 90 }).toFile(temp); }
+      catch (error) {
+        if (row.media_type !== 'image' || !/unsupported image format/i.test(error instanceof Error ? error.message : '')) throw error;
+        options.signal?.throwIfAborted(); options.assertLease(); await unlink(temp).catch(() => {});
+        await runFfmpeg(db, options.owner, ['-n', '-max_pixels', '100000000', '-i', filename, '-map', '0:v:0', '-frames:v', '1', '-threads', '1', '-f', 'image2', '-vcodec', 'png', decoded], options);
+        await sharp(decoded).rotate().webp({ quality: 90 }).toFile(temp);
+      }
     } else {
       if (!row.width || !row.height || Math.max(row.width, row.height) <= 8192) throw new Error('媒体不支持深度缩放');
       const maxLevel = Math.ceil(Math.log2(Math.max(row.width, row.height)));
@@ -174,7 +195,8 @@ export async function generateMediaCache(db: Database.Database, payload: unknown
       options.assertLease();
       if (!db.prepare('SELECT 1 FROM files WHERE id=? AND size=? AND modified_at=? AND cache_generation=? AND missing_at_ms IS NULL').get(row.id, row.size, row.modified_at, row.cache_generation)) throw new Error('媒体已变化');
       // 写事务阻止其它 worker 在校验租约与发布文件之间接管。
-      renameSync(temp, destination);
+      if (options.preserveExisting) linkSync(temp, destination);
+      else renameSync(temp, destination);
       db.prepare(`INSERT INTO cache_entries(cache_key,relative_path,bytes,last_access_at,media_id,variant,source_size,source_modified) VALUES (?,?,?,?,?,?,?,?)
         ON CONFLICT(cache_key) DO UPDATE SET bytes=excluded.bytes,last_access_at=excluded.last_access_at,media_id=excluded.media_id,variant=excluded.variant,source_size=excluded.source_size,source_modified=excluded.source_modified`)
         .run(cacheKey(row, task.variant), path.relative(cacheRoot, destination), output.size, Date.now(), row.id, task.variant.kind, row.size, row.modified_at);

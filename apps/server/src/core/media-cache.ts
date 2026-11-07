@@ -14,11 +14,12 @@ export function cachePath(cacheDir: string, source: MediaSource, variant: Varian
   const key = cacheKey(source, variant);
   return path.join(cacheDir, 'media', key.slice(0, 2), `${key}.${variant.kind === 'preview' ? 'mp4' : 'webp'}`);
 }
-export function enqueueMediaTask(db: Database.Database, source: MediaSource, variant: Variant, options: { waiter?: string; interactive?: boolean } = {}): string {
+export function enqueueMediaTask(db: Database.Database, source: MediaSource, variant: Variant, options: { waiter?: string; interactive?: boolean; preserveUnindexed?: boolean } = {}): string {
   const key = `media:${cacheKey(source, variant)}`;
   return db.transaction(() => {
     const id = randomUUID();
-    const payload: MediaTask = { mediaId: source.id, sourceSize: source.size, sourceModified: source.modified_at, sourceGeneration: source.cache_generation ?? 0, variant };
+    const payload: MediaTask & { preserveUnindexed?: boolean } = { mediaId: source.id, sourceSize: source.size, sourceModified: source.modified_at, sourceGeneration: source.cache_generation ?? 0, variant,
+      ...(options.preserveUnindexed ? { preserveUnindexed: true } : {}) };
     const result = db.prepare("INSERT OR IGNORE INTO jobs(id,type,label,status,trigger,payload,created_at,dedupe_key,media_background) VALUES (?,?,?,'queued','system',?,unixepoch(),?,?)")
       .run(id, variant.kind === 'preview' ? 'previews' : 'thumbnails', variant.kind === 'preview' ? '生成视频预览' : '生成媒体缓存', JSON.stringify(payload), key, options.waiter ? 0 : 1);
     const job = result.changes ? id : (db.prepare("SELECT id FROM jobs WHERE dedupe_key=? AND status IN ('queued','running','paused')").get(key) as { id: string }).id;
