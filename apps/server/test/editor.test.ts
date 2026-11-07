@@ -257,6 +257,36 @@ test('透明白色蒙版背景不会触发额外分块', async () => {
   } finally { await app.close(); db.close(); await stub.close(); await rm(root, { recursive: true, force: true }); await rm(cache, { recursive: true, force: true }); }
 });
 
+test('CMYK 图片分块修复时选区与原图区均使用正确的显示色彩', async () => {
+  const stub = await startStub();
+  stub.setLossyEcho();
+  stub.setMaxPixels(1_638_400);
+  const { root, cache, db, app, headers } = await setup(stub.url);
+  try {
+    const original = await sharp({ create: { width: 2000, height: 1000, channels: 3, background: { r: 36, g: 233, b: 39 } } })
+      .withIccProfile('cmyk').jpeg().toBuffer();
+    assert.equal((await sharp(original).metadata()).space, 'cmyk');
+    await writeFile(path.join(root, 'photo.jpg'), original);
+    await scanLibrary(db, { id: 'lib', root }, { allowedRoots: [root] });
+    db.prepare('UPDATE files SET width=2000,height=1000').run();
+    const row = db.prepare('SELECT id,size,modified_at,cache_generation FROM files').get() as FileRow;
+    const white = await sharp({ create: { width: 4, height: 4, channels: 3, background: '#fff' } }).png().toBuffer();
+    const mask = await sharp({ create: { width: 200, height: 100, channels: 3, background: '#000' } })
+      .composite([{ input: white, left: 10, top: 10 }]).png().toBuffer();
+    const created = await app.inject({ method: 'POST', url: '/api/v2/editor/jobs', headers,
+      payload: { mediaId: row.id, source: sourceOf(row), model: 'migan', mask: { data: mask.toString('base64'), width: 200, height: 100 } } });
+    assert.equal(created.statusCode, 200, created.body);
+    const job = await waitForJob(app, headers, created.json().id);
+    assert.equal(job.status, 'succeeded', JSON.stringify(job));
+    const result = await app.inject({ method: 'GET', url: job.resultUrl!, headers });
+    const at = (input: Buffer, left: number) => sharp(input).extract({ left, top: 110, width: 1, height: 1 }).raw().toBuffer();
+    const fixed = await at(result.rawPayload, 110), inferred = await at(stub.getResponse(), 110);
+    const untouched = await at(result.rawPayload, 600), expected = await at(original, 600);
+    assert.ok(fixed.every((v, i) => Math.abs(v - inferred[i]!) <= 3), `选区色彩不一致 ${[...fixed]} ${[...inferred]}`);
+    assert.ok(untouched.every((v, i) => Math.abs(v - expected[i]!) <= 3), `原图区色彩不一致 ${[...untouched]} ${[...expected]}`);
+  } finally { await app.close(); db.close(); await stub.close(); await rm(root, { recursive: true, force: true }); await rm(cache, { recursive: true, force: true }); }
+});
+
 test('广色域图片分块只修改蒙版区域，未选区域保持原有色彩', async () => {
   const stub = await startStub();
   stub.setLossyEcho();
