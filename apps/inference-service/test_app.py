@@ -1,0 +1,55 @@
+import io
+import unittest
+from unittest.mock import patch
+
+import numpy as np
+from fastapi.testclient import TestClient
+from PIL import Image
+
+import app as service
+
+
+def png(array):
+    buffer = io.BytesIO()
+    Image.fromarray(array).save(buffer, format='PNG')
+    return buffer.getvalue()
+
+
+class Tests(unittest.TestCase):
+    def test_migan_mask_polarity_and_pixels_outside_mask(self):
+        image = np.full((16, 16, 3), 60, dtype=np.uint8)
+        mask = np.zeros((16, 16), dtype=np.uint8)
+        mask[4:12, 4:12] = 255
+
+        class Session:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def run(self, _outputs, inputs):
+                np.testing.assert_array_equal(inputs['mask'][0, 0], 255 - mask)
+                return [np.full((1, 3, 16, 16), 200, dtype=np.uint8)]
+
+        with patch('onnxruntime.InferenceSession', Session), patch.object(service, 'device', return_value='cpu'):
+            result = service.run_model('migan', image, mask)
+        np.testing.assert_array_equal(result[mask == 0], image[mask == 0])
+        self.assertTrue(np.all(result[mask != 0] == 200))
+
+    def test_http_auth_and_source_dimensions(self):
+        image = np.full((16, 16, 3), 60, dtype=np.uint8)
+        mask = np.zeros((16, 16), dtype=np.uint8)
+        mask[4:12, 4:12] = 255
+        with patch.object(service, 'TOKEN', 'test-token'), patch.object(service, 'available', return_value=(True, None)), \
+             patch.object(service, 'run_serial', side_effect=lambda _model, source, _mask: source):
+            with TestClient(service.app) as client:
+                self.assertEqual(client.get('/v1/models').status_code, 401)
+                headers = {'Authorization': 'Bearer test-token'}
+                files = {'image': ('image.png', png(image), 'image/png'), 'mask': ('mask.png', png(mask), 'image/png')}
+                response = client.post('/v1/inpaint', data={'model': 'migan', 'jobId': 'job-1'}, files=files, headers=headers)
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertEqual(Image.open(io.BytesIO(response.content)).size, (16, 16))
+                wrong = {'image': files['image'], 'mask': ('mask.png', png(mask[:8]), 'image/png')}
+                self.assertEqual(client.post('/v1/inpaint', data={'model': 'migan', 'jobId': 'job-2'}, files=wrong, headers=headers).status_code, 400)
+
+
+if __name__ == '__main__':
+    unittest.main()
