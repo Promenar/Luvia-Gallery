@@ -256,13 +256,16 @@ export class EditorQueue {
         const tiles = planEditorTiles(rawMask.data, rawMask.info.width, rawMask.info.height, file.width!, file.height!, TILE_CORE, TILE_CONTEXT);
         if (!tiles.length) throw new EditorError(400, 'INVALID_MASK', '请先涂抹需要修复的区域');
         const patches: Array<{ input: string; left: number; top: number; blend: 'over' }> = [];
-        const profilePath = originalMeta.icc ? path.join(dir, 'source.icc') : null;
+        // 非 RGB 原图先转成 sRGB；CMYK 配置不能附着到 RGB PNG 上。
+        const rgbSource = originalMeta.space === 'srgb' || originalMeta.space === 'rgb';
+        const profilePath = rgbSource && originalMeta.icc ? path.join(dir, 'source.icc') : null;
         if (profilePath) await writeFile(profilePath, originalMeta.icc!);
         for (let i = 0; i < tiles.length; i++) {
           controller.signal.throwIfAborted();
           const tile = tiles[i]!;
           const [image, mask] = await Promise.all([
-            sharp(originalBytes).rotate().extract(tile.region).keepIccProfile().png().toBuffer(),
+            (rgbSource ? sharp(originalBytes).rotate().extract(tile.region).keepIccProfile()
+              : sharp(originalBytes).rotate().extract(tile.region).withIccProfile('srgb')).png().toBuffer(),
             sharp(maskBytes).resize(file.width!, file.height!, { kernel: 'nearest' }).extract(tile.region).png().toBuffer(),
           ]);
           const result = await runInference(this.config, { jobId: job.id, model: job.model, image, mask, signal: controller.signal });
@@ -275,7 +278,9 @@ export class EditorQueue {
             .extract(tile.core).greyscale().png().toBuffer();
           let core = sharp(result.data).extract({ left: tile.core.left - tile.region.left, top: tile.core.top - tile.region.top,
             width: tile.core.width, height: tile.core.height }).removeAlpha();
-          if (profilePath && !originalMeta.icc!.equals(meta.icc ?? Buffer.alloc(0))) {
+          if (!rgbSource) {
+            core = core.withIccProfile('srgb');
+          } else if (profilePath && !originalMeta.icc!.equals(meta.icc ?? Buffer.alloc(0))) {
             core = core.withIccProfile(profilePath);
           } else if (!profilePath && meta.icc) {
             core = core.withIccProfile('srgb');
@@ -291,17 +296,22 @@ export class EditorQueue {
         controller.signal.throwIfAborted();
         resultPath = path.join(dir, 'result.png');
         resultMime = 'image/png';
-        if (originalMeta.hasAlpha) {
-          // Sharp 的移除 alpha 阶段晚于 composite，必须先生成不透明底图，避免改变未选像素。
+        if (originalMeta.hasAlpha || !rgbSource) {
+          // Sharp 的移除 alpha 阶段晚于 composite，先生成不透明底图以保持未选像素。
           const basePath = path.join(dir, 'base-rgb.png');
           const rgbPath = path.join(dir, 'composed-rgb.png');
           const alphaPath = path.join(dir, 'original-alpha.png');
+          const base = sharp(originalBytes).rotate().removeAlpha();
           await Promise.all([
-            sharp(originalBytes).rotate().removeAlpha().keepIccProfile().png().toFile(basePath),
-            sharp(originalBytes).rotate().ensureAlpha().extractChannel('alpha').png().toFile(alphaPath),
+            (rgbSource ? base.keepIccProfile() : base.withIccProfile('srgb')).png().toFile(basePath),
+            ...(originalMeta.hasAlpha ? [sharp(originalBytes).rotate().ensureAlpha().extractChannel('alpha').png().toFile(alphaPath)] : []),
           ]);
-          await sharp(basePath).composite(patches).removeAlpha().keepIccProfile().png().toFile(rgbPath);
-          await sharp(rgbPath).joinChannel(alphaPath).keepIccProfile().png().toFile(resultPath);
+          if (originalMeta.hasAlpha) {
+            await sharp(basePath).composite(patches).removeAlpha().keepIccProfile().png().toFile(rgbPath);
+            await sharp(rgbPath).joinChannel(alphaPath).keepIccProfile().png().toFile(resultPath);
+          } else {
+            await sharp(basePath).composite(patches).removeAlpha().keepIccProfile().png().toFile(resultPath);
+          }
           await Promise.all([rm(basePath, { force: true }), rm(rgbPath, { force: true }), rm(alphaPath, { force: true })]);
         } else {
           await sharp(originalBytes).rotate().composite(patches).removeAlpha().keepIccProfile().png().toFile(resultPath);
