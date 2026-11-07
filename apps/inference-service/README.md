@@ -4,7 +4,7 @@
 
 服务从 `MODEL_DIR`（默认 `/models`）读取 `big-lama.pt`、`migan_pipeline_v2.onnx` 和 `slbr.pth`。SLBR 上游源码由 `SLBR_SOURCE_DIR`（默认 `/slbr`）提供；权重和源码不包含在镜像内。准备模型前应核对来源、版本、许可和哈希。修改权重后重启服务以重新检查能力。
 
-`EDITOR_DEVICE` 可设为 `auto`、`cuda` 或 `cpu`；`EDITOR_MAX_PIXELS` 默认为 4000 万；`EDITOR_MAX_INPUT_BYTES` 默认为 128 MiB；`EDITOR_UPLOAD_TIMEOUT_SECONDS` 默认为 120 秒。可配置 `EDITOR_SERVICE_TOKEN` 用于服务间认证。服务应仅连接受限容器网络，不直接暴露到公网。目前的作业准入和取消状态由单进程持有，必须以单实例、单 Uvicorn 进程运行。
+`EDITOR_DEVICE` 可设为 `auto`、`cuda` 或 `cpu`；`EDITOR_MAX_PIXELS` 默认为 4000 万；`EDITOR_MAX_INPUT_BYTES` 默认为 128 MiB；`EDITOR_UPLOAD_TIMEOUT_SECONDS` 默认为 120 秒。Compose 部署须设置 `EDITOR_SERVICE_TOKEN` 用于服务间认证与健康检查。服务应仅连接受限容器网络，不直接暴露到公网。目前的作业准入和取消状态由单进程持有，必须以单实例、单 Uvicorn 进程运行。
 
 部署时设置 `LUVIA_EDITOR_IMAGE`、`LUVIA_EDITOR_MODELS_DIR`、`LUVIA_EDITOR_SLBR_SOURCE_DIR`、`LUVIA_EDITOR_ENV_FILE` 和 `LUVIA_EDITOR_NETWORK`，使用 `compose.yml`；NVIDIA 环境同时加载 `compose.cuda.yml`。环境文件存放服务令牌，权限应限制为管理员可读。容器没有宿主机端口映射，图库通过内部网络访问。当前准入在返回响应对象时释放，部署应保持图库单 API 实例和唯一调用方，避免多个慢读客户端同时保留结果。
 
