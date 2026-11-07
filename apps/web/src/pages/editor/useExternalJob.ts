@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import type { EditorMask, EditorModelId } from '@luvia/contracts';
+import type { EditorMaskInput, EditorModelId } from '@luvia/contracts';
 import { ApiError, call } from '@/lib/api';
 import { createExternalEditorJob } from './external-api';
 
@@ -23,7 +23,7 @@ export function useExternalJob() {
     },
   });
 
-  const create = useCallback(async (uploadId: string, model: EditorModelId, mask: EditorMask) => {
+  const create = useCallback(async (uploadId: string, model: EditorModelId, mask: EditorMaskInput) => {
     const current = ++generation.current;
     setCreatePending(true);
     setCreateError(null);

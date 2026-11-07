@@ -20,6 +20,40 @@ def png(array):
 
 
 class Tests(unittest.TestCase):
+    def test_slbr_detector_uses_first_mask_from_official_model_output(self):
+        class FakeSLBR:
+            def __call__(self, image):
+                mask = service.torch.full((1, 1, 256, 256), 0.75, device=image.device)
+                return [image], [mask], None
+        image = np.full((10, 16, 3), 60, dtype=np.uint8)
+        with patch.object(service, 'device', return_value='cpu'), patch.object(service, 'get_cached_model', return_value=FakeSLBR()):
+            scores = service.detect_serial(image)
+        self.assertEqual(scores.shape, (10, 16))
+        self.assertTrue(np.all(scores == 191))
+
+    def test_slbr_detection_exposes_mask_and_shares_inference_lane(self):
+        image = np.full((12, 16, 3), 60, dtype=np.uint8)
+        expected = np.zeros((12, 16), dtype=np.uint8)
+        expected[2:6, 4:8] = 180
+        with patch.object(service, 'TOKEN', 'test-token'), patch.object(service, 'available', return_value=(True, None)), \
+             patch.object(service, 'run_serial', side_effect=lambda _model, source, _mask: source), \
+             patch.object(service, 'detect_serial', return_value=expected):
+            with TestClient(service.app) as client:
+                headers = {'Authorization': 'Bearer test-token'}
+                models = client.get('/v1/models', headers=headers).json()['models']
+                self.assertIn('detect', next(item for item in models if item['id'] == 'slbr')['features'])
+                self.assertNotIn('detect', next(item for item in models if item['id'] == 'lama')['features'])
+                files = {'image': ('image.png', png(image), 'image/png')}
+                self.assertEqual(client.post('/v1/detect', data={'jobId': 'd1'}, files=files).status_code, 401)
+                response = client.post('/v1/detect', data={'jobId': 'd1'}, files=files, headers=headers)
+                self.assertEqual(response.status_code, 200, response.text)
+                np.testing.assert_array_equal(np.asarray(Image.open(io.BytesIO(response.content))), expected)
+                service.lane = service.asyncio.Semaphore(0)
+                try:
+                    self.assertEqual(client.post('/v1/detect', data={'jobId': 'd2'}, files=files, headers=headers).status_code, 429)
+                finally:
+                    service.lane = service.asyncio.Semaphore(1)
+
     def test_migan_mask_polarity_and_pixels_outside_mask(self):
         image = np.full((16, 16, 3), 60, dtype=np.uint8)
         mask = np.zeros((16, 16), dtype=np.uint8)

@@ -53,9 +53,11 @@ const adminRoute = createRoute({
   },
 });
 /** 外部图片修复：未入库图片的上传、蒙版修复与导入；仅管理员。 */
+export const editorSearch = z.object({ tab: z.enum(['single', 'batches']).optional() });
 const editorRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/editor',
+  validateSearch: editorSearch,
   component: ExternalEditorPage,
   beforeLoad: async () => {
     const state = await queryClient.ensureQueryData(authStateQuery);

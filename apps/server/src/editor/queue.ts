@@ -4,14 +4,15 @@ import { constants } from 'node:fs';
 import { access, mkdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import sharp from 'sharp';
-import type { EditorCapabilities, EditorJob, EditorModel, SaveEditorCopyResult } from '@luvia/contracts';
-import { editorResultUrl } from '@luvia/contracts';
+import type { EditorCapabilities, EditorJob, EditorMaskInput, EditorModel, SaveEditorCopyResult } from '@luvia/contracts';
+import { editorMaskUrl, editorResultUrl } from '@luvia/contracts';
 import { mediaId, secureMediaPath, virtualPath } from '../core/paths.ts';
 import { appendLibraryChange } from '../core/library-changes.ts';
 import { materializeFolders } from '../worker/scan.ts';
 import { publishLibraryEvent } from '../worker/watch-events.ts';
 import { statFields } from '../watch/file-info.ts';
-import { planEditorTiles } from './tiles.ts';
+import { planEditorTiles, type EditorTile } from './tiles.ts';
+import { detectWatermark } from './detection.ts';
 import { EditorUploads } from './uploads.ts';
 import { cleanupRetiredImport, cleanupSavedImport, importExternalResult } from './external-import.ts';
 import {
@@ -24,6 +25,7 @@ type JobRow = {
   source_size: number; source_modified: number; source_generation: number; model: string;
   status: JobStatus; progress: number; stage: string | null; error: string | null;
   mask_path: string; result_path: string | null; result_mime: string | null; result_bytes: number | null; result_state: string;
+  mask_mode: 'manual' | 'auto' | 'adjust'; mask_threshold: number | null; outcome: 'detected' | 'no_detection' | null;
   created_at: number; started_at: number | null; finished_at: number | null; expires_at: number | null;
 };
 type FileRow = {
@@ -72,7 +74,8 @@ function jobView(row: JobRow): EditorJob {
     progress: expired ? 0 : row.progress,
     stage: expired ? null : row.stage,
     error: expired ? '预览已过期，请重新生成' : row.error,
-    resultUrl: status === 'succeeded' ? editorResultUrl(row.id) : null,
+    resultUrl: status === 'succeeded' && row.result_path ? editorResultUrl(row.id) : null,
+    ...(row.mask_mode !== 'manual' ? { maskUrl: status === 'succeeded' ? editorMaskUrl(row.id) : null, outcome: row.outcome } : {}),
     createdAt: iso(row.created_at)!,
     startedAt: iso(row.started_at),
     finishedAt: iso(row.finished_at),
@@ -161,11 +164,15 @@ export class EditorQueue {
 
   async create(input: {
     userId: string; mediaId?: string; source?: { size: number; modifiedAt: number; generation: number }; uploadId?: string;
-    model: EditorModel['id']; mask: { data: string; width: number; height: number };
+    model: EditorModel['id']; mask: EditorMaskInput;
   }): Promise<EditorJob> {
     const models = await probeModels(this.config);
     const model = models.find((item) => item.id === input.model);
     if (!model?.available) throw new EditorError(409, 'MODEL_UNAVAILABLE', model?.reason ?? '该修复模型不可用');
+    const automatic = 'mode' in input.mask && input.mask.mode === 'auto';
+    if (automatic && (input.model !== 'slbr' || !model.features.includes('detect'))) {
+      throw new EditorError(409, 'MODEL_UNAVAILABLE', 'SLBR 自动检测当前不可用');
+    }
     const upload = input.uploadId ? this.uploads.get(input.uploadId, input.userId) : null;
     const file = upload ? { id: `upload:${upload.id}`, library_id: '', media_type: 'image', width: upload.width, height: upload.height,
       size: upload.size, modified_at: 0, cache_generation: 0, enabled: 1, missing_at_ms: null } : this.fileRow(input.mediaId ?? '');
@@ -178,28 +185,49 @@ export class EditorQueue {
     if (file.width * file.height > maxPixels) {
       throw new EditorError(409, 'MODEL_UNAVAILABLE', '图片超过所选模型的输入上限');
     }
-    if (input.mask.width > this.config.maskMaxEdge || input.mask.height > this.config.maskMaxEdge) {
-      throw new EditorError(400, 'INVALID_MASK', `蒙版尺寸超过 ${this.config.maskMaxEdge} 像素上限`);
+    let maskPng: Buffer | null = null;
+    const changes = 'mode' in input.mask ? input.mask.mode === 'adjust' ? input.mask.changes : null : input.mask;
+    if (changes) {
+      if (changes.width > this.config.maskMaxEdge || changes.height > this.config.maskMaxEdge) {
+        throw new EditorError(400, 'INVALID_MASK', `蒙版尺寸超过 ${this.config.maskMaxEdge} 像素上限`);
+      }
+      const raw = Buffer.from(changes.data, 'base64');
+      if (!raw.length || raw.length > this.config.maskMaxBytes) throw new EditorError(400, 'INVALID_MASK', '蒙版超过大小限制');
+      if (!raw.subarray(0, 8).equals(PNG)) throw new EditorError(400, 'INVALID_MASK', '蒙版必须是 PNG');
+      const meta = await sharp(raw).metadata().catch(() => null);
+      if (!meta?.width || !meta?.height || meta.width !== changes.width || meta.height !== changes.height) {
+        throw new EditorError(400, 'INVALID_MASK', '蒙版尺寸与声明不一致');
+      }
+      const originalRatio = file.width / file.height;
+      if (Math.abs(changes.width / changes.height - originalRatio) / originalRatio > 0.015) {
+        throw new EditorError(400, 'INVALID_MASK', '蒙版宽高比必须与原图一致');
+      }
+      if ('mode' in input.mask && input.mask.mode === 'adjust') {
+        const base = this.owned(input.mask.baseJobId, input.userId);
+        if (base.media_id !== file.id || base.source_size !== file.size || base.source_modified !== file.modified_at ||
+            base.source_generation !== file.cache_generation || base.mask_mode === 'manual' || base.status !== 'succeeded' ||
+            base.expires_at === null || base.expires_at < now() || !safeUnder(this.editorDir, base.mask_path)) {
+          throw new EditorError(409, 'MEDIA_CHANGED', '原蒙版已过期或图片已发生变化');
+        }
+        const originalMask = await readFile(base.mask_path).catch(() => { throw new EditorError(404, 'NOT_FOUND', '原蒙版不存在'); });
+        const overlay = async (channel: 0 | 2, color: string) => {
+          const component = await sharp(raw).flatten({ background: '#000' }).extractChannel(channel).png().toBuffer();
+          const alpha = await sharp(component).resize(file.width!, file.height!, { kernel: 'nearest' }).threshold(128).png().toBuffer();
+          return sharp({ create: { width: file.width!, height: file.height!, channels: 3, background: color } })
+            .joinChannel(alpha).png().toBuffer();
+        };
+        const [add, remove] = await Promise.all([overlay(0, '#fff'), overlay(2, '#000')]);
+        maskPng = await sharp(originalMask).removeAlpha().composite([{ input: add }, { input: remove }]).greyscale().png().toBuffer();
+      } else {
+        // 手绘蒙版统一转为单通道二值 PNG。
+        maskPng = await sharp(raw).flatten({ background: '#000000' }).greyscale().threshold(128).png({ compressionLevel: 9 }).toBuffer();
+      }
     }
-    const raw = Buffer.from(input.mask.data, 'base64');
-    if (!raw.length || raw.length > this.config.maskMaxBytes) throw new EditorError(400, 'INVALID_MASK', '蒙版超过大小限制');
-    if (!raw.subarray(0, 8).equals(PNG)) throw new EditorError(400, 'INVALID_MASK', '蒙版必须是 PNG');
-    const meta = await sharp(raw).metadata().catch(() => null);
-    if (!meta?.width || !meta?.height || meta.width !== input.mask.width || meta.height !== input.mask.height) {
-      throw new EditorError(400, 'INVALID_MASK', '蒙版尺寸与声明不一致');
-    }
-    const originalRatio = file.width / file.height;
-    const maskRatio = input.mask.width / input.mask.height;
-    if (Math.abs(maskRatio - originalRatio) / originalRatio > 0.015) {
-      throw new EditorError(400, 'INVALID_MASK', '蒙版宽高比必须与原图一致');
-    }
-    // 统一转为单通道二值 PNG，避免前端导出的 RGBA/抗锯齿灰阶影响模型掩膜约定。
-    const maskPng = await sharp(raw).flatten({ background: '#000000' }).greyscale().threshold(128).png({ compressionLevel: 9 }).toBuffer();
     const id = randomUUID();
     const dir = this.jobDir(id);
     await mkdir(dir, { recursive: true });
     const maskPath = path.join(dir, 'mask.png');
-    await writeFile(maskPath, maskPng);
+    if (maskPng) await writeFile(maskPath, maskPng);
     try {
       this.db.transaction(() => {
         if (upload) {
@@ -207,9 +235,11 @@ export class EditorQueue {
             .run(now() + this.config.jobTtlSeconds, upload.id, input.userId, now());
           if (!changed.changes) throw new EditorError(404, 'NOT_FOUND', '上传图片不存在或已过期');
         }
-        this.db.prepare(`INSERT INTO editor_jobs(id,user_id,media_id,library_id,source_size,source_modified,source_generation,model,status,progress,mask_path,created_at)
-          VALUES (?,?,?,?,?,?,?,?,'queued',0,?,?)`).run(id, input.userId, file.id, file.library_id,
-          file.size, file.modified_at, file.cache_generation, input.model, maskPath, now());
+        this.db.prepare(`INSERT INTO editor_jobs(id,user_id,media_id,library_id,source_size,source_modified,source_generation,model,status,progress,mask_path,created_at,mask_mode,mask_threshold,mask_bytes,outcome)
+          VALUES (?,?,?,?,?,?,?,?,'queued',0,?,?,?,?,?,?)`).run(id, input.userId, file.id, file.library_id,
+          file.size, file.modified_at, file.cache_generation, input.model, maskPath, now(),
+          'mode' in input.mask ? input.mask.mode : 'manual', automatic && 'mode' in input.mask && input.mask.mode === 'auto' ? input.mask.threshold : null,
+          maskPng?.length ?? 0, 'mode' in input.mask && input.mask.mode === 'adjust' ? 'detected' : null);
       }).immediate();
     } catch (error) {
       await rm(dir, { recursive: true, force: true });
@@ -264,7 +294,7 @@ export class EditorQueue {
           (file.mtime_ms !== null && info.mtimeMs !== file.mtime_ms)))) {
         throw new EditorError(409, 'MEDIA_CHANGED', '原图已发生变化，请重新生成');
       }
-      const [originalBytes, maskBytes] = await Promise.all([readFile(original), readFile(job.mask_path)]);
+      const originalBytes = await readFile(original);
       const originalMeta = await sharp(originalBytes).metadata();
       if (originalMeta.depth !== 'uchar' || (originalMeta.bitsPerSample ?? 8) > 8) {
         throw new EditorError(409, 'OPERATION_FAILED', '暂不支持高位深图片修复');
@@ -272,12 +302,44 @@ export class EditorQueue {
       this.db.prepare("UPDATE editor_jobs SET progress=0.25,stage='正在推理' WHERE id=? AND status='running'").run(job.id);
       const model = (await probeModels(this.config)).find((item) => item.id === job.model);
       if (!model?.available) throw new EditorError(409, 'MODEL_UNAVAILABLE', '模型当前不可用');
+      let maskBytes: Buffer;
+      let selectedTiles: EditorTile[] | null = null;
+      if (job.mask_mode === 'auto') {
+        if (!model.features.includes('detect')) throw new EditorError(409, 'MODEL_UNAVAILABLE', 'SLBR 自动检测当前不可用');
+        this.db.prepare("UPDATE editor_jobs SET progress=0.1,stage='正在检测水印' WHERE id=? AND status='running'").run(job.id);
+        const detection = await detectWatermark(this.config, {
+          image: originalBytes, width: file.width!, height: file.height!, jobId: job.id,
+          threshold: job.mask_threshold ?? 128, signal: controller.signal,
+          progress: (value) => this.db.prepare("UPDATE editor_jobs SET progress=? WHERE id=? AND status='running'").run(0.1 + value * 0.15, job.id),
+        });
+        maskBytes = detection.mask;
+        selectedTiles = detection.selectedTiles;
+        if (maskBytes.length > this.config.maxResultBytes) throw new EditorError(502, 'OPERATION_FAILED', '检测蒙版超过大小限制');
+        await writeFile(job.mask_path, maskBytes);
+        this.db.prepare('UPDATE editor_jobs SET mask_bytes=? WHERE id=?').run(maskBytes.length, job.id);
+        if (!detection.detected) {
+          this.db.prepare(`UPDATE editor_jobs SET status='succeeded',outcome='no_detection',progress=1,stage=NULL,finished_at=?,
+            expires_at=CASE WHEN EXISTS (SELECT 1 FROM editor_batch_items b WHERE b.job_id=editor_jobs.id AND b.status='generating') THEN 2147483647 ELSE ? END
+            WHERE id=? AND status='running'`)
+            .run(now(), now() + this.config.jobTtlSeconds, job.id);
+          return;
+        }
+        this.db.prepare("UPDATE editor_jobs SET outcome='detected',stage='正在修复水印' WHERE id=? AND status='running'").run(job.id);
+      } else {
+        maskBytes = await readFile(job.mask_path);
+      }
       let resultPath: string;
       let resultMime: string;
-      if (model.maxPixels && file.width! * file.height! > model.maxPixels) {
-        if (model.maxPixels < TILE_MAX_PIXELS) throw new EditorError(409, 'MODEL_UNAVAILABLE', '模型输入上限不足以分块处理');
-        const rawMask = await sharp(maskBytes).removeAlpha().greyscale().raw().toBuffer({ resolveWithObject: true });
-        const tiles = planEditorTiles(rawMask.data, rawMask.info.width, rawMask.info.height, file.width!, file.height!, TILE_CORE, TILE_CONTEXT);
+      if (job.mask_mode !== 'manual' || (model.maxPixels && file.width! * file.height! > model.maxPixels)) {
+        if (model.maxPixels && model.maxPixels < Math.min(file.width!, TILE_CORE + TILE_CONTEXT * 2) * Math.min(file.height!, TILE_CORE + TILE_CONTEXT * 2)) {
+          throw new EditorError(409, 'MODEL_UNAVAILABLE', '模型输入上限不足以分块处理');
+        }
+        let tiles: EditorTile[];
+        if (selectedTiles !== null) tiles = selectedTiles;
+        else {
+          const rawMask = await sharp(maskBytes).removeAlpha().greyscale().raw().toBuffer({ resolveWithObject: true });
+          tiles = planEditorTiles(rawMask.data, rawMask.info.width, rawMask.info.height, file.width!, file.height!, TILE_CORE, TILE_CONTEXT);
+        }
         if (!tiles.length) throw new EditorError(400, 'INVALID_MASK', '请先涂抹需要修复的区域');
         const patches: Array<{ input: string; left: number; top: number; blend: 'over' }> = [];
         // 非 RGB 原图先转成 sRGB；CMYK 配置不能附着到 RGB PNG 上。
@@ -363,10 +425,14 @@ export class EditorQueue {
       const resultSize = (await stat(resultPath)).size;
       if (resultSize > this.config.maxResultBytes) throw new EditorError(502, 'OPERATION_FAILED', '修复结果超过大小限制');
       const changed = this.db.prepare(`UPDATE editor_jobs SET status='succeeded',progress=1,stage=NULL,result_path=?,result_mime=?,result_bytes=?,
-        finished_at=?,expires_at=? WHERE id=? AND status='running'`)
+        finished_at=?,expires_at=CASE WHEN EXISTS (SELECT 1 FROM editor_batch_items b WHERE b.job_id=editor_jobs.id AND b.status='generating')
+          THEN 2147483647 ELSE ? END WHERE id=? AND status='running'`)
         .run(resultPath, resultMime, resultSize, now(), now() + this.config.jobTtlSeconds, job.id);
       if (!changed.changes) await rm(resultPath, { force: true });
-      await rm(job.mask_path, { force: true });
+      if (job.mask_mode === 'manual') {
+        await rm(job.mask_path, { force: true });
+        this.db.prepare('UPDATE editor_jobs SET mask_bytes=0 WHERE id=?').run(job.id);
+      }
     } catch (error) {
       const current = this.load(job.id);
       if (current?.status === 'cancelled' || controller.signal.aborted) {
@@ -418,6 +484,15 @@ export class EditorQueue {
     return { path: row.result_path, mime: row.result_mime, bytes: info.size };
   }
 
+  async mask(id: string, userId: string): Promise<{ path: string; bytes: number }> {
+    const row = this.owned(id, userId);
+    if (row.mask_mode === 'manual' || row.status !== 'succeeded' || row.expires_at === null || row.expires_at < now() ||
+        !safeUnder(this.editorDir, row.mask_path)) throw new EditorError(404, 'NOT_FOUND', '检测蒙版不存在或已过期');
+    const info = await stat(row.mask_path).catch(() => { throw new EditorError(404, 'NOT_FOUND', '检测蒙版不存在或已过期'); });
+    if (!info.isFile()) throw new EditorError(404, 'NOT_FOUND', '检测蒙版不可访问');
+    return { path: row.mask_path, bytes: info.size };
+  }
+
   async importExternal(id: string, userId: string, body: { libraryId: string; folder: string; name: string; operationId: string }) {
     const saved = this.db.prepare("SELECT user_id,job_id,library_id,folder,requested_name,final_name,media_id FROM editor_imports WHERE operation_id=? AND status='saved'")
       .get(body.operationId) as { user_id: string; job_id: string; library_id: string; folder: string; requested_name: string; final_name: string; media_id: string } | undefined;
@@ -430,6 +505,19 @@ export class EditorQueue {
     const job = this.owned(id, userId);
     if (!job.result_path || !safeUnder(this.editorDir, job.result_path)) throw new EditorError(404, 'NOT_FOUND', '修复结果不存在');
     if (this.closed) throw new EditorError(503, 'MODEL_UNAVAILABLE', '图像修复服务正在关闭');
+    const recoverable = this.db.prepare("SELECT 1 FROM editor_imports WHERE operation_id=? AND user_id=? AND job_id=? AND status IN ('pending','attention')")
+      .get(body.operationId, userId, id);
+    if (!job.media_id.startsWith('upload:') && !recoverable) {
+      const file = this.fileRow(job.media_id);
+      if (!file || !file.enabled || file.missing_at_ms !== null ||
+          !sourceMatches(file, { size: job.source_size, modifiedAt: job.source_modified, generation: job.source_generation })) {
+        throw new EditorError(409, 'MEDIA_CHANGED', '原图已发生变化，请重新生成');
+      }
+      const original = await secureMediaPath(file.root, file.relative_path).catch(() => { throw new EditorError(404, 'NOT_FOUND', '原图不可访问'); });
+      const info = await stat(original).catch(() => { throw new EditorError(404, 'NOT_FOUND', '原图不可访问'); });
+      if (!info.isFile() || info.size !== job.source_size || Math.floor(info.mtimeMs / 1000) !== job.source_modified ||
+          (file.mtime_ms !== null && info.mtimeMs !== file.mtime_ms)) throw new EditorError(409, 'MEDIA_CHANGED', '原图已在磁盘上变化，请重新生成');
+    }
     const task = importExternalResult(this.db, userId, job, body).then(async (result) => {
       if (result.status === 'saved') await cleanupSavedImport(this.db, body.operationId).catch(() => {});
       return result;
@@ -523,7 +611,8 @@ export class EditorQueue {
 
   private async removeExpiredResult(id: string): Promise<boolean> {
     const claimed = this.db.prepare(`UPDATE editor_jobs SET result_state='deleting' WHERE id=? AND result_state IN ('ready','deleting') AND NOT EXISTS
-      (SELECT 1 FROM editor_imports i WHERE i.job_id=editor_jobs.id AND i.status IN ('pending','attention'))`).run(id);
+      (SELECT 1 FROM editor_imports i WHERE i.job_id=editor_jobs.id AND i.status IN ('pending','attention')) AND NOT EXISTS
+      (SELECT 1 FROM editor_batch_items b WHERE b.job_id=editor_jobs.id AND b.status IN ('generating','review','saving'))`).run(id);
     if (!claimed.changes) return false;
     try { await rm(this.jobDir(id), { recursive: true, force: true }); } catch { return false; }
     this.db.prepare("DELETE FROM editor_jobs WHERE id=? AND result_state='deleting'").run(id);
@@ -532,7 +621,9 @@ export class EditorQueue {
 
   async sweep(): Promise<void> {
     await this.uploads.sweep();
-    const recover = this.db.prepare("SELECT operation_id,user_id,job_id,library_id,folder,requested_name FROM editor_imports WHERE status='pending' AND operation_id>? ORDER BY operation_id LIMIT 20").all(this.recoverCursor) as
+    const recover = this.db.prepare(`SELECT operation_id,user_id,job_id,library_id,folder,requested_name FROM editor_imports i
+      WHERE status='pending' AND operation_id>? AND NOT EXISTS (SELECT 1 FROM editor_batch_items b WHERE b.operation_id=i.operation_id)
+      ORDER BY operation_id LIMIT 20`).all(this.recoverCursor) as
       { operation_id: string; user_id: string; job_id: string; library_id: string; folder: string; requested_name: string }[];
     this.recoverCursor = recover.at(-1)?.operation_id ?? '';
     for (const row of recover) await this.importExternal(row.job_id, row.user_id, { libraryId: row.library_id, folder: row.folder, name: row.requested_name, operationId: row.operation_id }).catch(() => {});
@@ -551,13 +642,16 @@ export class EditorQueue {
       this.db.prepare('DELETE FROM editor_jobs WHERE id=?').run(row.id);
     }
     // 结果缓存按总量回收，优先保留最近生成的。
-    const total = (this.db.prepare("SELECT COALESCE(sum(result_bytes),0) AS n FROM editor_jobs WHERE status='succeeded'").get() as { n: number }).n;
+    const total = (this.db.prepare("SELECT COALESCE(sum(COALESCE(result_bytes,0)+mask_bytes),0) AS n FROM editor_jobs WHERE status='succeeded'").get() as { n: number }).n;
     if (total <= RESULT_BUDGET_BYTES) return;
     let over = total - RESULT_BUDGET_BYTES;
-    const rows = this.db.prepare("SELECT id,result_bytes FROM editor_jobs j WHERE status='succeeded' AND NOT EXISTS (SELECT 1 FROM editor_imports i WHERE i.job_id=j.id AND i.status IN ('pending','attention')) ORDER BY created_at ASC LIMIT 200").all() as { id: string; result_bytes: number | null }[];
+    const rows = this.db.prepare(`SELECT id,result_bytes,mask_bytes FROM editor_jobs j WHERE status='succeeded'
+      AND NOT EXISTS (SELECT 1 FROM editor_imports i WHERE i.job_id=j.id AND i.status IN ('pending','attention'))
+      AND NOT EXISTS (SELECT 1 FROM editor_batch_items b WHERE b.job_id=j.id AND b.status IN ('generating','review','saving'))
+      ORDER BY created_at ASC LIMIT 200`).all() as { id: string; result_bytes: number | null; mask_bytes: number }[];
     for (const row of rows) {
       if (over <= 0) break;
-      if (await this.removeExpiredResult(row.id)) over -= row.result_bytes ?? 0;
+      if (await this.removeExpiredResult(row.id)) over -= (row.result_bytes ?? 0) + row.mask_bytes;
     }
   }
 }

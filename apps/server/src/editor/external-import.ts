@@ -1,6 +1,6 @@
 import type Database from 'better-sqlite3';
 import { createHash, randomUUID } from 'node:crypto';
-import { constants, createWriteStream, linkSync, lstatSync, realpathSync } from 'node:fs';
+import { constants, createWriteStream, linkSync, lstatSync, realpathSync, statSync } from 'node:fs';
 import { lstat, mkdir, open, realpath, rm, rmdir, stat } from 'node:fs/promises';
 import { pipeline } from 'node:stream/promises';
 import path from 'node:path';
@@ -49,10 +49,11 @@ async function openTarget(root: string, folder: string, create = true) {
 
 export async function importExternalResult(db: Database.Database, userId: string, job: {
   id: string; media_id: string; status: string; result_path: string | null; expires_at: number | null;
+  source_size: number; source_modified: number; source_generation: number;
 }, body: ImportBody) {
   const recoverable = db.prepare("SELECT 1 FROM editor_imports WHERE operation_id=? AND user_id=? AND job_id=? AND status IN ('pending','attention')")
     .get(body.operationId, userId, job.id);
-  if (!job.media_id.startsWith('upload:') || job.status !== 'succeeded' || !job.result_path || ((job.expires_at ?? 0) <= timestamp() && !recoverable)) {
+  if (job.status !== 'succeeded' || !job.result_path || ((job.expires_at ?? 0) <= timestamp() && !recoverable)) {
     throw new EditorError(409, 'OPERATION_FAILED', '修复结果不存在或已过期');
   }
   if (active.has(body.operationId)) throw new EditorError(409, 'OPERATION_CONFLICT', '导入正在进行，请稍后重试');
@@ -66,6 +67,8 @@ export async function importExternalResult(db: Database.Database, userId: string
   const stem = body.name.slice(0, body.name.length - path.extname(body.name).length).trim() || '修复图片';
   const library = db.prepare('SELECT root,enabled FROM libraries WHERE id=?').get(body.libraryId) as { root: string; enabled: number } | undefined;
   if (!library?.enabled) throw new EditorError(404, 'NOT_FOUND', '媒体库不存在或未启用');
+  const sourceTime = job.media_id.startsWith('upload:') ? null : db.prepare('SELECT taken_at,taken_at_source FROM files WHERE id=?')
+    .get(job.media_id) as { taken_at: number; taken_at_source: string } | undefined;
   active.add(body.operationId);
   const owner = randomUUID();
   let heartbeat: NodeJS.Timeout | undefined;
@@ -137,6 +140,10 @@ export async function importExternalResult(db: Database.Database, userId: string
         if (!changed.changes) throw new EditorError(409, 'OPERATION_CONFLICT', '导入认领已失效，请重试');
         op = { ...op, stage_dev: identity.dev.toString(), stage_ino: identity.ino.toString() };
         let image = sharp(job.result_path).keepIccProfile();
+        if (sourceTime?.taken_at) {
+          const date = new Date(sourceTime.taken_at * 1000).toISOString();
+          image = image.withExif({ IFD2: { DateTimeOriginal: `${date.slice(0, 10).replaceAll('-', ':')} ${date.slice(11, 19)}`, OffsetTimeOriginal: '+00:00' } });
+        }
         image = extension === '.jpg' || extension === '.jpeg' ? image.jpeg({ quality: 92 }) : extension === '.webp' ? image.webp({ quality: 92 }) : image.png();
         await pipeline(image, createWriteStream('', { fd: file.fd, autoClose: false }));
         await file.chmod(0o666 & ~process.umask());
@@ -191,7 +198,38 @@ export async function importExternalResult(db: Database.Database, userId: string
         { owner: string | null; lease_until: number | null; final_name: string | null };
       if (current.owner !== owner || (current.lease_until ?? 0) < timestamp() || current.final_name !== chosen)
         throw new EditorError(409, 'OPERATION_CONFLICT', '导入认领已失效，请重试');
+      // 批次状态与发布操作在同一事务中检查，暂停或取消后不能再发布新文件。
+      const batch = db.prepare(`SELECT b.status AS batch_status,i.status AS item_status FROM editor_batch_items i
+        JOIN editor_batches b ON b.id=i.batch_id WHERE i.operation_id=?`).get(body.operationId) as
+        { batch_status: string; item_status: string } | undefined;
       verifyParents();
+      let alreadyPublished = false;
+      try {
+        const visible = lstatSync(path.join(directory, chosen!), { bigint: true });
+        alreadyPublished = visible.dev === staged.dev && visible.ino === staged.ino;
+      } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+      if (batch && (batch.batch_status !== 'running' || batch.item_status !== 'saving') && !alreadyPublished) {
+        throw new EditorError(409, 'BATCH_STOPPED', '批量任务已暂停或取消，副本尚未发布');
+      }
+      if (!alreadyPublished && !job.media_id.startsWith('upload:')) {
+        const source = db.prepare(`SELECT f.size,f.modified_at,f.cache_generation,f.mtime_ms,f.relative_path,f.missing_at_ms,l.root,l.enabled
+          FROM files f JOIN libraries l ON l.id=f.library_id WHERE f.id=?`).get(job.media_id) as
+          { size: number; modified_at: number; cache_generation: number; mtime_ms: number | null; relative_path: string;
+            missing_at_ms: number | null; root: string; enabled: number } | undefined;
+        if (!source || !source.enabled || source.missing_at_ms !== null || source.size !== job.source_size ||
+            source.modified_at !== job.source_modified || source.cache_generation !== job.source_generation) {
+          throw new EditorError(409, 'MEDIA_CHANGED', '原图已发生变化，请重新生成');
+        }
+        try {
+          const root = realpathSync(source.root);
+          const resolved = realpathSync(path.join(root, source.relative_path));
+          const relative = path.relative(root, resolved);
+          const currentSource = statSync(resolved);
+          if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative) ||
+              !currentSource.isFile() || currentSource.size !== job.source_size || Math.floor(currentSource.mtimeMs / 1000) !== job.source_modified ||
+              (source.mtime_ms !== null && currentSource.mtimeMs !== source.mtime_ms)) throw new Error('原图已变化');
+        } catch { throw new EditorError(409, 'MEDIA_CHANGED', '原图已在磁盘上变化，请重新生成'); }
+      }
       try { linkSync(stage, path.join(directory, chosen!)); }
       catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
@@ -219,8 +257,9 @@ export async function importExternalResult(db: Database.Database, userId: string
         const prior = db.prepare('SELECT dev,ino FROM files WHERE id=?').get(id) as { dev: string | null; ino: string | null } | undefined;
         if (prior && (prior.dev !== identity.dev || prior.ino !== identity.ino)) throw new Error('索引文件身份冲突');
         if (!prior) db.prepare(`INSERT INTO files(id,library_id,relative_path,folder,name,mime,media_type,size,modified_at,taken_at,taken_at_source,width,height,mtime_ms,dev,ino)
-          VALUES (?,?,?,?,?,?,'image',?,?,?,'mtime',?,?,?,?,?)`).run(id, body.libraryId, relative, folder, chosen, mime, file.size,
-          Math.floor(file.mtimeMs / 1000), Math.floor(file.mtimeMs / 1000), meta.width, meta.height, identity.mtimeMs, identity.dev, identity.ino);
+          VALUES (?,?,?,?,?,?,'image',?,?,?,?,?,?,?,?,?)`).run(id, body.libraryId, relative, folder, chosen, mime, file.size,
+          Math.floor(file.mtimeMs / 1000), sourceTime?.taken_at ?? Math.floor(file.mtimeMs / 1000), sourceTime?.taken_at_source ?? 'mtime',
+          meta.width, meta.height, identity.mtimeMs, identity.dev, identity.ino);
         const changed = db.prepare("UPDATE editor_imports SET status='saved',media_id=? WHERE operation_id=? AND owner=? AND lease_until>=?")
           .run(id, body.operationId, owner, timestamp());
         if (!changed.changes) throw new Error('导入认领已失效');
@@ -237,6 +276,12 @@ export async function importExternalResult(db: Database.Database, userId: string
     return { status: 'saved' as const, mediaId: id, name: chosen, folder: body.folder };
   } catch (error) {
     try {
+      // 取消时发布围栏已经确认目标尚未链接；把私有暂存交给现有清理流程。
+      if (error instanceof EditorError && error.code === 'BATCH_STOPPED') {
+        db.prepare(`UPDATE editor_imports SET status='failed' WHERE operation_id=? AND owner=? AND EXISTS
+          (SELECT 1 FROM editor_batch_items i JOIN editor_batches b ON b.id=i.batch_id
+           WHERE i.operation_id=editor_imports.operation_id AND b.status='cancelled')`).run(body.operationId, owner);
+      }
       if (error instanceof EditorError && error.code === 'OPERATION_PARTIAL') {
         db.prepare("UPDATE editor_imports SET status='attention' WHERE operation_id=? AND owner=? AND stage_ready=1")
           .run(body.operationId, owner);

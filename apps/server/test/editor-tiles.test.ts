@@ -1,6 +1,18 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { planEditorTiles } from '../src/editor/tiles.ts';
+import * as tilePlanner from '../src/editor/tiles.ts';
+
+test('自动检测分块完整覆盖图片且边缘上下文受图片范围约束', () => {
+  assert.equal(typeof (tilePlanner as Record<string, unknown>).planDetectionTiles, 'function');
+  const plan = (tilePlanner as unknown as { planDetectionTiles: typeof planEditorTiles }).planDetectionTiles;
+  const tiles = (plan as unknown as (w: number, h: number, core: number, context: number) => ReturnType<typeof planEditorTiles>)(2300, 1300, 1024, 128);
+  assert.equal(tiles.length, 6);
+  assert.deepEqual(tiles.map((tile) => [tile.core.left, tile.core.top]), [[0, 0], [1024, 0], [2048, 0], [0, 1024], [1024, 1024], [2048, 1024]]);
+  assert.deepEqual(tiles[5]?.core, { left: 2048, top: 1024, width: 252, height: 276 });
+  assert.deepEqual(tiles[5]?.region, { left: 1920, top: 896, width: 380, height: 404 });
+  assert.equal(tiles.reduce((sum, tile) => sum + tile.core.width * tile.core.height, 0), 2300 * 1300);
+});
 
 test('只为蒙版覆盖的核心块规划带上下文的原图区域', () => {
   const mask = new Uint8Array(16 * 16);

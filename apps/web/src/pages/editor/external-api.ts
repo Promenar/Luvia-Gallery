@@ -1,5 +1,5 @@
 import { CSRF_HEADER, EditorUpload as EditorUploadSchema, editorUploadUrl } from '@luvia/contracts';
-import type { EditorJob, EditorMask, EditorModelId, EditorUpload, SaveEditorCopyResult } from '@luvia/contracts';
+import type { EditorJob, EditorMaskInput, EditorModelId, EditorUpload, SaveEditorCopyResult } from '@luvia/contracts';
 import { ApiError, call } from '@/lib/api';
 
 export type ExternalUpload = EditorUpload;
@@ -48,7 +48,7 @@ export function uploadExternalImage(file: File, options: { signal?: AbortSignal;
 export function createExternalEditorJob(body: {
   uploadId: string;
   model: EditorModelId;
-  mask: EditorMask;
+  mask: EditorMaskInput;
 }): Promise<EditorJob> {
   return call('createEditorJob', { body });
 }

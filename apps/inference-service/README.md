@@ -12,4 +12,4 @@
 
 LaMa 对蒙版周边裁剪，最长边缩放至 1024 后推理并合回原尺寸；MI-GAN 使用官方 ONNX 完整管线，并转换其已知区域为白色的蒙版约定；SLBR 使用官方 256 像素模型输出与其检测蒙版。输出保留透明通道及 RGB 图像的色彩配置；其他带色彩配置的模式转换到 sRGB。高位深原图暂不支持修复；大范围修复可能出现局部细节变软，最终效果需要使用实际图片验证。服务不会修改输入文件。
 
-接口为 `GET /v1/models`、`POST /v1/inpaint` 和 `POST /v1/cancel/:jobId`，其参数与图库编辑器的[推理服务契约](../../docs/MEDIA_FAILURE_AND_EDITOR_DESIGN.md)一致。推理和编码阶段取消后会丢弃结果，不能强制中断已启动的 GPU 运算；上传阶段和响应发送阶段由客户端中止传输。
+接口为 `GET /v1/models`、`POST /v1/detect`、`POST /v1/inpaint` 和 `POST /v1/cancel/:jobId`。`/v1/detect` 使用 SLBR 输出灰度检测蒙版，检测和修复共享串行准入、认证及模型缓存；仅在 SLBR 可用时报告 `detect` 能力。推理和编码阶段取消后会丢弃结果，不能强制中断已启动的 GPU 运算；上传阶段和响应发送阶段由客户端中止传输。图库侧分块和批量任务见 [SLBR 自动修复](../../docs/SLBR_AUTOMATION.md)。

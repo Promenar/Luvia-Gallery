@@ -23,6 +23,11 @@ export type EditorDockProps = {
   canGenerate: boolean;
   generateHint: string | null;
   onGenerate: () => void;
+  onAuto?: () => void;
+  canAuto?: boolean;
+  onAdjust?: () => void;
+  adjusting?: boolean;
+  onCancelAdjust?: () => void;
   onCancel: () => void;
   onReset: () => void;
   onSave: () => void;
@@ -68,6 +73,11 @@ export function EditorDock(props: EditorDockProps) {
           <span className="lv-ed-pct" aria-hidden>{Math.round(progress * 100)}%</span>
           <button type="button" className="lv-ed-tool" onClick={props.onCancel}><X />取消</button>
         </div>
+      ) : done && job?.outcome === 'no_detection' ? (
+        <div className="lv-ed-row">
+          <span className="lv-ed-result">未检测到水印</span>
+          <button type="button" className="lv-ed-tool" onClick={props.onReset}>手动涂抹</button>
+        </div>
       ) : done ? (
         <div className="lv-ed-row">
           <span className="lv-ed-result"><i aria-hidden />{resultText}</span>
@@ -75,6 +85,7 @@ export function EditorDock(props: EditorDockProps) {
             {props.resultActionIcon ?? <Save />}{props.resultActionLabel ?? '保存副本'}
           </button>
           <button type="button" className="lv-ed-tool" onClick={props.onReset}><RotateCcw />重新生成</button>
+          {job?.maskUrl && props.onAdjust && <button type="button" className="lv-ed-tool" onClick={props.onAdjust}>调整蒙版</button>}
           <button
             type="button"
             className={cn('lv-ed-tool', props.comparing && 'on')}
@@ -136,6 +147,10 @@ export function EditorDock(props: EditorDockProps) {
           </button>
           <button type="button" className="lv-ed-tool" disabled={!props.hasMask} onClick={props.onUndo}><Undo2 />撤销</button>
           <button type="button" className="lv-ed-tool" disabled={!props.hasMask} onClick={props.onClear}><Trash2 />清除</button>
+          {props.adjusting && props.onCancelAdjust && <button type="button" className="lv-ed-tool" onClick={props.onCancelAdjust}>返回预览</button>}
+          {props.onAuto && !props.adjusting && (
+            <button type="button" className="lv-ed-tool" disabled={!props.canAuto} onClick={props.onAuto}>SLBR 自动修复</button>
+          )}
           <button
             type="button"
             className="lv-ed-primary"
@@ -143,7 +158,7 @@ export function EditorDock(props: EditorDockProps) {
             title={props.generateHint ?? undefined}
             onClick={props.onGenerate}
           >
-            {props.createPending ? '正在提交…' : '生成预览'}
+            {props.createPending ? '正在提交…' : props.adjusting ? '应用蒙版' : '生成预览'}
           </button>
         </div>
       )}
