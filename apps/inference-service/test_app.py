@@ -2,6 +2,7 @@ import io
 import unittest
 from unittest.mock import patch
 
+import httpx
 import numpy as np
 from fastapi.testclient import TestClient
 from PIL import Image
@@ -77,6 +78,20 @@ class Tests(unittest.TestCase):
         resized = service.resize_mask(mask, 1024, 640)
         self.assertTrue(resized.any())
         self.assertTrue(resized[:, -1].all())
+
+    def test_stalled_upload_releases_lane(self):
+        async def check():
+            async def slow_body():
+                await service.asyncio.sleep(0.3)
+                yield b'--x--\r\n'
+            transport = httpx.ASGITransport(app=service.app)
+            async with httpx.AsyncClient(transport=transport, base_url='http://test') as client:
+                headers = {'content-type': 'multipart/form-data; boundary=x', 'content-length': '7'}
+                response = await client.post('/v1/inpaint', content=slow_body(), headers=headers)
+                self.assertEqual(response.status_code, 408, response.text)
+                self.assertFalse(service.lane.locked())
+        with patch.object(service, 'TOKEN', ''), patch.object(service, 'UPLOAD_TIMEOUT_SECONDS', 0.05, create=True):
+            service.asyncio.run(check())
 
 
 if __name__ == '__main__':
