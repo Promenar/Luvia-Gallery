@@ -12,7 +12,7 @@ import { FfmpegExitError, runFfmpeg, withFfmpegSlot } from './ffmpeg-slots.ts';
 import { runProcess } from './process-runner.ts';
 import { readSettings } from '../core/settings.ts';
 import { noteThumbnail } from '../core/folder-covers.ts';
-import { isImageDecodeError } from './image-decoding.ts';
+import { isImageDecodeError, isJpegFile } from './image-decoding.ts';
 
 const Variant = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('thumb'), size: z.enum(['s', 'm', 'l']) }),
@@ -127,10 +127,12 @@ export async function generateMediaCache(db: Database.Database, payload: unknown
       let thumbnail: OutputInfo;
       try { thumbnail = await render(); }
       catch (error) {
-        if (row.media_type !== 'image' || fromLegacy || !isImageDecodeError(error)) throw error;
+        if (row.media_type !== 'image' || fromLegacy) throw error;
+        const jpeg = await isJpegFile(filename);
+        const warning = error instanceof Error && /^(Warning treated as error due to failOn setting|Unknown error)/.test(error.message);
+        if (!isImageDecodeError(error) && !(jpeg && warning)) throw error;
         options.signal?.throwIfAborted(); options.assertLease(); await unlink(temp).catch(() => {});
-        const format = await sharp(input).metadata().then((value) => value.format).catch(() => undefined);
-        if (format === 'jpeg') { lenient = true; thumbnail = await render(); }
+        if (jpeg) { lenient = true; thumbnail = await render(); }
         else {
           if (!/unsupported image format/i.test(error instanceof Error ? error.message : '')) throw error;
           await runFfmpeg(db, options.owner, ['-n', '-max_pixels', '100000000', '-i', filename, '-map', '0:v:0', '-frames:v', '1', '-threads', '1', '-f', 'image2', '-vcodec', 'png', decoded], options);
