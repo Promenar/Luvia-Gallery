@@ -92,7 +92,7 @@ export const Thumb = memo(function Thumb({ item, width, height, className, badge
         />
       )}
       {badges && item.mediaType === 'video' && (
-        <span className="absolute top-1.5 right-1.5 flex items-center gap-1 rounded-[5px] bg-black/50 px-1.5 py-px text-[11px] font-semibold text-white">
+        <span className="absolute top-1.5 right-1.5 flex items-center gap-1 rounded-[5px] bg-black/50 px-1.5 py-px text-[11px] font-semibold text-white backdrop-blur-sm">
           <Play className="size-2.5 fill-current" strokeWidth={0} />{formatDuration(item.durationSec)}
         </span>
       )}

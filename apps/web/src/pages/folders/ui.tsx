@@ -118,7 +118,7 @@ export function FolderCard({ folder, showHostPath, onPlay }: { folder: Folder; s
             'top-2 right-2 z-[3]',
             on
               ? 'bg-accent text-accent-fg opacity-100'
-              : 'bg-black/45 text-white opacity-0 group-focus-within/fc:opacity-100 group-hover/fc:opacity-100 [@media(hover:none)]:opacity-100',
+              : 'bg-black/45 text-white opacity-0 backdrop-blur-sm group-focus-within/fc:opacity-100 group-hover/fc:opacity-100 [@media(hover:none)]:opacity-100',
           )}
         >
           <Heart className={cn(on && 'fill-current')} strokeWidth={1.8} />
@@ -128,7 +128,7 @@ export function FolderCard({ folder, showHostPath, onPlay }: { folder: Folder; s
             type="button"
             aria-label={`播放文件夹 ${folder.name}`}
             onClick={onPlay}
-            className={cn(roundBtn, 'right-2 bottom-2 z-[3] bg-black/45 text-white opacity-0 group-focus-within/fc:opacity-100 group-hover/fc:opacity-100 [@media(hover:none)]:opacity-100')}
+            className={cn(roundBtn, 'right-2 bottom-2 z-[3] bg-black/45 text-white opacity-0 backdrop-blur-sm group-focus-within/fc:opacity-100 group-hover/fc:opacity-100 [@media(hover:none)]:opacity-100')}
           >
             <Play className="fill-current" strokeWidth={0} />
           </button>

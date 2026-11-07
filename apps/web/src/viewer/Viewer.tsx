@@ -3,6 +3,7 @@ import { useNavigate } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
 import { mediaUrls, type EditorJob, type EditorModelId, type MediaItem } from '@luvia/contracts';
 import { call, ApiError, type CallOptions } from '@/lib/api';
+import { createOperationId } from '@/lib/operation-id';
 import { invalidate, q, queryClient } from '@/lib/query';
 import { useServerEvents } from '@/lib/events';
 import { useIsAdmin, usePreferences, useUpdatePreferences } from '@/stores/session';
@@ -601,7 +602,7 @@ function ViewerDialog({ scope }: { scope: ViewerScope }) {
   const confirmDelete = useCallback(async () => {
     const it = itemRef.current;
     if (!it.source) return;
-    const operationId = deleteOpRef.current ?? crypto.randomUUID();
+    const operationId = deleteOpRef.current ?? createOperationId();
     deleteOpRef.current = operationId;
     setDeletePending(true);
     setDeleteError(null);
@@ -729,7 +730,7 @@ function ViewerDialog({ scope }: { scope: ViewerScope }) {
   const replaceEditorResult = useCallback(async () => {
     const it = itemRef.current;
     if (!it.source) return;
-    const operationId = replaceOpRef.current ?? crypto.randomUUID();
+    const operationId = replaceOpRef.current ?? createOperationId();
     replaceOpRef.current = operationId;
     setSavePending(true); setSaveError(null);
     try {

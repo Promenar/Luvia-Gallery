@@ -47,9 +47,18 @@ beforeEach(() => {
   });
 });
 
-afterEach(() => { cleanup(); queryClient.clear(); });
+afterEach(() => { cleanup(); queryClient.clear(); vi.unstubAllGlobals(); });
 
 describe('FailuresSection', () => {
+  it('HTTP 环境没有 randomUUID 时仍可打开删除确认', async () => {
+    const randomValues = crypto.getRandomValues.bind(crypto);
+    vi.stubGlobal('crypto', { getRandomValues: randomValues });
+    render(createElement(QueryClientProvider, { client: queryClient }, createElement(FailuresSection)));
+    await screen.findByText('IMG_0001.jpg');
+    fireEvent.click(screen.getByRole('button', { name: '删除' }));
+    expect(await screen.findByRole('alertdialog')).toBeTruthy();
+  });
+
   it('列出失败记录，查看原图时把原因带进查看器', async () => {
     render(createElement(QueryClientProvider, { client: queryClient }, createElement(FailuresSection)));
     expect(await screen.findByText('IMG_0001.jpg')).toBeTruthy();

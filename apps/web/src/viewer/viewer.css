@@ -71,7 +71,7 @@ dialog.lv-viewer.is-thm { color: var(--fg); --vb-hover: color-mix(in oklab, var(
 .lv-viewer.is-thm .lv-vsep { background: color-mix(in oklab, var(--fg) 16%, transparent); }
 
 /* 左右翻页 */
-.lv-vn { position: absolute; top: 50%; z-index: 3; transform: translateY(-50%); width: 46px; height: 46px; border-radius: 50%; display: grid; place-items: center; background: var(--vn-bg); color: inherit; border: 0; }
+.lv-vn { position: absolute; top: 50%; z-index: 3; transform: translateY(-50%); width: 46px; height: 46px; border-radius: 50%; display: grid; place-items: center; background: var(--vn-bg); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); color: inherit; border: 0; }
 .lv-vn:hover { background: var(--vb-hover); }
 .lv-vn.l { left: 18px; } .lv-vn.r { right: 18px; }
 .lv-viewer.is-info .lv-vn.r { right: 378px; }
@@ -133,8 +133,10 @@ dialog.lv-viewer.is-thm { color: var(--fg); --vb-hover: color-mix(in oklab, var(
 .lv-mediaerr-actions { display: flex; justify-content: center; flex-wrap: wrap; gap: 8px; }
 
 /* 查看器内的删除确认：保持在顶层对话框内部 */
-.lv-confirm-scrim { position: absolute; inset: 0; z-index: 8; display: grid; place-items: center; padding: 16px; background: rgb(0 0 0 / .42); backdrop-filter: blur(2px); -webkit-backdrop-filter: blur(2px); }
-.lv-confirm { width: min(400px, 100%); padding: 22px; border-radius: calc(var(--r3) + 2px); background: rgb(24 24 26 / .84); backdrop-filter: blur(28px) saturate(1.4); -webkit-backdrop-filter: blur(28px) saturate(1.4); border: 1px solid rgb(255 255 255 / .12); box-shadow: 0 30px 80px -30px rgb(0 0 0 / .85); color: #fff; }
+.lv-confirm-scrim { position: absolute; inset: 0; z-index: 8; display: grid; place-items: center; padding: 16px; background: rgb(0 0 0 / .32); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); animation: lv-confirm-fade .2s ease-out; }
+.lv-confirm { width: min(400px, 100%); padding: 22px; border-radius: calc(var(--r3) + 2px); background: rgb(24 24 26 / .72); backdrop-filter: blur(28px) saturate(1.4); -webkit-backdrop-filter: blur(28px) saturate(1.4); border: 1px solid rgb(255 255 255 / .12); box-shadow: 0 30px 80px -30px rgb(0 0 0 / .85); color: #fff; animation: lv-confirm-enter .22s cubic-bezier(.2, .8, .2, 1); }
+@keyframes lv-confirm-fade { from { opacity: 0; } }
+@keyframes lv-confirm-enter { from { opacity: 0; transform: translateY(8px) scale(.98); } }
 .lv-confirm h2 { margin: 0; font-size: 16px; font-weight: 600; }
 .lv-confirm-name { margin: 8px 0 0; font-size: 13px; color: rgb(255 255 255 / .8); overflow-wrap: anywhere; }
 .lv-confirm p { margin: 10px 0 0; font-size: 12.5px; line-height: 1.55; color: rgb(255 255 255 / .66); }
@@ -170,9 +172,9 @@ dialog.lv-viewer.is-thm { color: var(--fg); --vb-hover: color-mix(in oklab, var(
 .lv-mini img { display: block; width: 100%; height: 100%; opacity: .75; pointer-events: none; }
 .lv-mini i { position: absolute; border: 1.5px solid #fff; box-shadow: 0 0 0 999px rgb(0 0 0 / .4); border-radius: 2px; pointer-events: none; }
 
-.lv-chip { position: absolute; left: 50%; top: 74px; transform: translateX(-50%); z-index: 4; font-size: 12px; padding: 4px 12px; border-radius: 999px; background: rgb(0 0 0 / .6); color: #fff; opacity: 0; transition: opacity .2s; pointer-events: none; }
+.lv-chip { position: absolute; left: 50%; top: 74px; transform: translateX(-50%); z-index: 4; font-size: 12px; padding: 4px 12px; border-radius: 999px; background: rgb(0 0 0 / .6); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); color: #fff; opacity: 0; transition: opacity .2s; pointer-events: none; }
 .lv-chip.show { opacity: 1; }
-.lv-rot-hint { position: absolute; left: 50%; top: 74px; transform: translateX(-50%); z-index: 4; font-size: 12px; padding: 4px 12px; border-radius: 999px; background: rgb(0 0 0 / .6); color: #fff; opacity: 0; transition: opacity .2s; pointer-events: none; }
+.lv-rot-hint { position: absolute; left: 50%; top: 74px; transform: translateX(-50%); z-index: 4; font-size: 12px; padding: 4px 12px; border-radius: 999px; background: rgb(0 0 0 / .6); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); color: #fff; opacity: 0; transition: opacity .2s; pointer-events: none; }
 .lv-rot-hint.show { opacity: 1; }
 
 /* 移动端编辑入口：旋转、修复、删除收进一个菜单，避免顶栏挤压文件名 */

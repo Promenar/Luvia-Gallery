@@ -144,7 +144,7 @@ export function AppearanceStudio() {
   return (
     <Dialog.Root open={open} onOpenChange={setOpen}>
       <Dialog.Portal>
-        <Dialog.Backdrop className="fixed inset-0 z-50 bg-black/10 transition-opacity duration-300 data-[ending-style]:opacity-0 data-[starting-style]:opacity-0 max-md:bg-scrim" />
+        <Dialog.Backdrop className="fixed inset-0 z-50 bg-black/10 backdrop-blur-[3px] transition-opacity duration-300 data-[ending-style]:opacity-0 data-[starting-style]:opacity-0 max-md:bg-scrim" />
         <Dialog.Popup
           className={cn(
             'glass fixed top-3.5 right-3.5 bottom-3.5 z-50 w-[340px] overflow-auto overscroll-contain rounded-[calc(var(--r3)+4px)] px-[18px] pt-[18px] pb-[22px] text-fg shadow-[0_30px_70px_-20px_rgba(0,0,0,.55)] outline-none',
