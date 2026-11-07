@@ -27,6 +27,10 @@ async function setup() {
 
 const source = (row: Row) => ({ size: row.size, modifiedAt: row.modified_at, generation: row.cache_generation });
 const body = (row: Row, operationId = 'delete-operation-1') => ({ confirm: true, source: source(row), operationId });
+async function setOperationParent(db: ReturnType<typeof openDatabase>, root: string, operationId: string) {
+  const parent = await stat(root, { bigint: true });
+  db.prepare('UPDATE media_operations SET parent_dev=?,parent_ino=? WHERE operation_id=?').run(parent.dev.toString(), parent.ino.toString(), operationId);
+}
 
 test('删除原文件需要管理员会话与 CSRF，并清理索引、缓存和失败记录', async () => {
   const { root, db, app, headers, row } = await setup();
@@ -226,6 +230,7 @@ test('移动待删文件后中断，同一操作可恢复并完成删除', async
     db.prepare(`INSERT INTO media_operations(operation_id,media_id,library_id,relative_path,source_size,source_modified,source_generation,state,created_at,updated_at)
       VALUES (?,?,'lib',?,?,?,?,'pending',unixepoch(),unixepoch())`)
       .run(operationId, row.id, row.relative_path, row.size, row.modified_at, row.cache_generation);
+    await setOperationParent(db, root, operationId);
     await mkdir(stage, { mode: 0o700 });
     await rename(path.join(root, 'photo.jpg'), path.join(stage, 'source'));
     const res = await app.inject({ method: 'DELETE', url: `/api/v2/admin/media/${row.id}`, headers, payload: body(row, operationId) });
@@ -243,6 +248,7 @@ test('待处理状态下原路径和暂存文件均缺失时保留索引', async
     db.prepare(`INSERT INTO media_operations(operation_id,media_id,library_id,relative_path,source_size,source_modified,source_generation,state,created_at,updated_at)
       VALUES (?,?,'lib',?,?,?,?,'pending',unixepoch(),unixepoch())`)
       .run(operationId, row.id, row.relative_path, row.size, row.modified_at, row.cache_generation);
+    await setOperationParent(db, root, operationId);
     await rename(path.join(root, 'photo.jpg'), path.join(root, 'moved.jpg'));
     const res = await app.inject({ method: 'DELETE', url: `/api/v2/admin/media/${row.id}`, headers, payload: body(row, operationId) });
     assert.equal(res.json().error.code, 'OPERATION_PARTIAL', res.body);
@@ -259,6 +265,7 @@ test('已提交待删阶段但文件仍在暂存区时先删除文件再清理�
     db.prepare(`INSERT INTO media_operations(operation_id,media_id,library_id,relative_path,source_size,source_modified,source_generation,state,created_at,updated_at)
       VALUES (?,?,'lib',?,?,?,?,'file_deleted',unixepoch(),unixepoch())`)
       .run(operationId, row.id, row.relative_path, row.size, row.modified_at, row.cache_generation);
+    await setOperationParent(db, root, operationId);
     await mkdir(stage, { mode: 0o700 });
     await rename(path.join(root, 'photo.jpg'), path.join(stage, 'source'));
     const identity = await stat(path.join(stage, 'source'), { bigint: true });
@@ -280,6 +287,7 @@ test('待删暂存区不可见或文件被替换时不清理索引或删除替�
     db.prepare(`INSERT INTO media_operations(operation_id,media_id,library_id,relative_path,source_size,source_modified,source_generation,state,stage_state,stage_dev,stage_ino,stage_mtime_ns,created_at,updated_at)
       VALUES (?,?,'lib',?,?,?,?,'file_deleted','prepared',?,?,?,unixepoch(),unixepoch())`)
       .run(operationId, row.id, row.relative_path, row.size, row.modified_at, row.cache_generation, identity.dev.toString(), identity.ino.toString(), identity.mtimeNs.toString());
+    await setOperationParent(db, root, operationId);
     const request = { method: 'DELETE' as const, url: `/api/v2/admin/media/${row.id}`, headers, payload: body(row, operationId) };
     const missing = await app.inject(request);
     assert.equal(missing.json().error.code, 'OPERATION_PARTIAL', missing.body);
@@ -304,5 +312,23 @@ test('实际删除后数据库提交失败时保留索引并报告待人工核�
     assert.equal(retry.json().error.code, 'OPERATION_PARTIAL', retry.body);
     assert.ok(db.prepare('SELECT 1 FROM files WHERE id=?').get(row.id));
     await assert.rejects(stat(path.join(root, 'photo.jpg')));
+  } finally { await app.close(); db.close(); await rm(root, { recursive: true, force: true }); }
+});
+
+test('恢复删除时父目录身份变化则保留暂存文件与索引', async () => {
+  const { root, db, app, headers, row } = await setup();
+  try {
+    const operationId = 'delete-parent-changed';
+    const stage = path.join(root, `.luvia-delete-${createHash('sha256').update(operationId).digest('hex')}`);
+    const fileIdentity = await stat(path.join(root, 'photo.jpg'), { bigint: true });
+    db.prepare(`INSERT INTO media_operations(operation_id,media_id,library_id,relative_path,source_size,source_modified,source_generation,state,stage_state,stage_dev,stage_ino,stage_mtime_ns,parent_dev,parent_ino,created_at,updated_at)
+      VALUES (?,?,'lib',?,?,?,?,'file_deleted','prepared',?,?,?,?,?,unixepoch(),unixepoch())`)
+      .run(operationId, row.id, row.relative_path, row.size, row.modified_at, row.cache_generation, fileIdentity.dev.toString(), fileIdentity.ino.toString(), fileIdentity.mtimeNs.toString(), '0', '0');
+    await mkdir(stage, { mode: 0o700 });
+    await rename(path.join(root, 'photo.jpg'), path.join(stage, 'source'));
+    const res = await app.inject({ method: 'DELETE', url: `/api/v2/admin/media/${row.id}`, headers, payload: body(row, operationId) });
+    assert.equal(res.json().error.code, 'OPERATION_PARTIAL', res.body);
+    assert.equal(await readFile(path.join(stage, 'source'), 'utf8'), 'a small file');
+    assert.ok(db.prepare('SELECT 1 FROM files WHERE id=?').get(row.id));
   } finally { await app.close(); db.close(); await rm(root, { recursive: true, force: true }); }
 });

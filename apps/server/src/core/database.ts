@@ -661,7 +661,7 @@ export function openDatabase(filename: string, options: { readonly?: boolean; bo
         CREATE INDEX IF NOT EXISTS media_operations_media ON media_operations(media_id, created_at DESC);
         CREATE UNIQUE INDEX IF NOT EXISTS media_operations_active ON media_operations(media_id) WHERE state IN ('pending','file_deleted')`);
         const operationColumns = new Set((db.pragma('table_info(media_operations)') as { name: string }[]).map((column) => column.name));
-        for (const name of ['stage_state', 'stage_dev', 'stage_ino', 'stage_mtime_ns']) {
+        for (const name of ['stage_state', 'stage_dev', 'stage_ino', 'stage_mtime_ns', 'parent_dev', 'parent_ino']) {
           if (!operationColumns.has(name)) db.exec(`ALTER TABLE media_operations ADD COLUMN ${name} TEXT`);
         }
         // 编辑器作业保存在缓存目录；结果过期后由清理任务回收，不引用 files，媒体删除后仍可追踪。
