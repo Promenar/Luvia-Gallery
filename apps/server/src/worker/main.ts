@@ -1,5 +1,4 @@
 import { monitorEventLoopDelay } from 'node:perf_hooks';
-import { HealthWindow } from '../core/health-window.ts';
 import { detectMounts } from '../core/mounts.ts';
 import { installFatalHandlers, openRuntime } from '../core/runtime.ts';
 import { probeFfmpeg } from './ffmpeg.ts';
@@ -56,11 +55,11 @@ const mounts = process.platform === 'darwin'
 const allowedRoots = mounts.filter((entry) => entry.kind === 'candidate').map((entry) => entry.containerPath);
 const loop = monitorEventLoopDelay({ resolution: 20 });
 loop.enable();
-const healthWindow = new HealthWindow();
+let poolStarted = false;
 const heartbeat = () => {
   const p99 = loop.percentile(99) / 1e6;
   loop.reset();
-  writeWorkerHeartbeat(runtime.db, p99, undefined, undefined, undefined, healthWindow.observe(p99));
+  if (poolStarted && !stopController.signal.aborted) writeWorkerHeartbeat(runtime.db, p99);
 };
 heartbeat();
 const heartbeatTimer = setInterval(heartbeat, 5000);
@@ -124,15 +123,18 @@ try {
   const ffmpeg = await withFfmpegSlot(runtime.db, owner, (signal) => probeFfmpeg('ffmpeg', signal), { signal: stopController.signal });
   runtime.db.prepare("INSERT INTO settings(key,value) VALUES('worker.ffmpeg',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(JSON.stringify(ffmpeg));
   logger.info({ ctx: { type: ffmpeg.encoder } }, '视频编码器已选择');
+  poolStarted = true;
+  heartbeat();
   await runWorkerPool(runtime.db, { owner, allowedRoots, legacyDir: runtime.legacyDir, systemRoots: [runtime.dataDir, runtime.cacheDir], configuredMediaRoots: runtime.mediaRoots, cacheDir: runtime.cacheDir, signal: stopController.signal,
     log: (level, message, ctx) => logger[level]({ ctx }, message) });
 } finally {
   stopController.abort();
+  clearInterval(heartbeatTimer);
   clearInterval(pruneTimer);
   await pruneTask;
   await watchLoop.stop();
   await Promise.all([sampling, backfill, cacheCleanup, timelineRebuild]);
-  clearInterval(heartbeatTimer); clearInterval(pruneTimer); clearInterval(scanTimer); clearInterval(reconcileTimer); clearInterval(eventTimer); clearInterval(priorityTimer); clearInterval(folderTimer); clearInterval(hlsTimer); clearInterval(maintenanceTimer);
+  clearInterval(pruneTimer); clearInterval(scanTimer); clearInterval(reconcileTimer); clearInterval(eventTimer); clearInterval(priorityTimer); clearInterval(folderTimer); clearInterval(hlsTimer); clearInterval(maintenanceTimer);
   await Promise.all([hlsCleanup, maintenance, stopCheckpointer()]); stopProcessRunner(); loop.disable(); runtime.db.close();
   if (shutdownDeadline) clearTimeout(shutdownDeadline);
 }

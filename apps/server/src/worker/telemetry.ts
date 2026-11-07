@@ -5,7 +5,7 @@ import { isTransientSqliteError } from '../core/sqlite-errors.ts';
 type Memory = Pick<NodeJS.MemoryUsage, 'rss' | 'heapTotal' | 'heapUsed' | 'external' | 'arrayBuffers'>;
 
 /** 仅记录数值指标，便于区分 V8 堆与进程内其它内存的增长。 */
-export function writeWorkerHeartbeat(db: Database.Database, eventLoopP99Ms: number, at = Date.now() / 1000, memory: Memory = process.memoryUsage(), counters = sharp.counters(), healthy = eventLoopP99Ms <= 50): void {
+export function writeWorkerHeartbeat(db: Database.Database, eventLoopP99Ms: number, at = Date.now() / 1000, memory: Memory = process.memoryUsage(), counters = sharp.counters(), healthy = true): void {
   const { rss, heapTotal, heapUsed, external, arrayBuffers } = memory;
   const timeout = db.pragma('busy_timeout', { simple: true }) as number;
   try {
