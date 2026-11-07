@@ -90,6 +90,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
   const trustProxy = proxyValue === '' || proxyValue === 'false' || proxyHops === 0
     ? false : (_address: string, hop: number) => hop < proxyHops;
   const app = Fastify({ logger: false, trustProxy, routerOptions: { maxParamLength: 8192 } });
+  app.addContentTypeParser('application/octet-stream', (_req, payload, done) => done(null, payload));
   await app.register(cookie);
   const identities = new WeakMap<FastifyRequest, Identity>();
   const queries = new QueryExecutor(db);
@@ -258,6 +259,9 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     const identity = authenticateRequest(req);
     if (v2 && req.method !== 'GET' && req.method !== 'HEAD' && identity?.kind === 'session' && req.headers[CSRF_HEADER.toLowerCase()] !== '1') {
       fail(403, 'FORBIDDEN', '请求缺少安全标头');
+    }
+    if (req.method === 'POST' && url.pathname === '/api/v2/editor/uploads' && (identity?.kind !== 'session' || identity.user.role !== 'admin')) {
+      fail(identity ? 403 : 401, identity ? 'FORBIDDEN' : 'UNAUTHORIZED', identity ? '需要管理员会话' : '请先登录');
     }
     if (identity) identities.set(req, identity);
   });
@@ -1442,11 +1446,35 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
   register('createEditorJob', async (req, _reply, body) => {
     const user = requireUser(req).user;
     try {
-      return await requireEditor().create({ userId: user.id, mediaId: body.mediaId, source: body.source, model: body.model, mask: body.mask });
+      return await requireEditor().create({ userId: user.id, ...body });
     } catch (error) {
       if (error instanceof EditorError) return fail(error.statusCode, error.code, error.message);
       throw error;
     }
+  });
+  register('importEditorResult', async (req, _reply, body) => {
+    const user = requireUser(req).user;
+    const { id } = req.params as { id: string };
+    try { return await requireEditor().importExternal(id, user.id, body); }
+    catch (error) { if (error instanceof EditorError) return fail(error.statusCode, error.code, error.message); throw error; }
+  });
+  app.post('/api/v2/editor/uploads', { bodyLimit: 128 * 1024 * 1024 }, async (req) => {
+    const user = requireUser(req).user;
+    const { name } = req.query as { name?: string };
+    try {
+      if (!req.body || typeof (req.body as NodeJS.ReadableStream).pipe !== 'function') return fail(400, 'VALIDATION', '请求必须包含图片数据');
+      return await requireEditor().uploads.create(user.id, name ?? '', req.body as import('node:stream').Readable);
+    } catch (error) { if (error instanceof EditorError) return fail(error.statusCode, error.code, error.message); throw error; }
+  });
+  app.get('/api/v2/editor/uploads/:id/source', async (req, reply) => {
+    const identity = identities.get(req);
+    if (!identity) return fail(401, 'UNAUTHORIZED', '请先登录');
+    if (identity.kind !== 'session' || identity.user.role !== 'admin') return fail(403, 'FORBIDDEN', '需要管理员会话');
+    const { id } = req.params as { id: string };
+    try {
+      const source = await requireEditor().uploads.source(id, identity.user.id);
+      return reply.header('Cache-Control', 'private, no-store').header('Content-Length', String(source.size)).type(source.mime).send(createReadStream(source.path));
+    } catch (error) { if (error instanceof EditorError) return fail(error.statusCode, error.code, error.message); throw error; }
   });
   register('getEditorJob', async (req) => {
     const user = requireUser(req).user;

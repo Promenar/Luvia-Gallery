@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { Eraser, RotateCcw, Save, Trash2, Undo2, X } from 'lucide-react';
 import type { EditorJob, EditorModel, EditorModelId } from '@luvia/contracts';
 import { cn } from '@/lib/cn';
@@ -27,11 +28,18 @@ export type EditorDockProps = {
   onSave: () => void;
   onCompare: (down: boolean) => void;
   comparing: boolean;
-  /** 已保存的副本名；用于把“未保存”改成明确的结果。 */
+  /** 已保存/已导入的结果名；用于把“未保存”改成明确的结果。 */
   savedName: string | null;
+  /** 结果动作的文案与图标（查看器为保存副本，独立页为导入媒体库）。 */
+  resultActionLabel?: string;
+  resultActionIcon?: ReactNode;
+  unsavedText?: string;
+  savedText?: string;
   writeAvailable: boolean;
   writeReason: string | null;
-  onDone: () => void;
+  /** 独立页没有查看器可退出，可隐藏“完成”。 */
+  showDone?: boolean;
+  onDone?: () => void;
 };
 
 /** 查看器底部的修复工具栏：蒙版工具、模型、作业状态与保存副本。 */
@@ -41,6 +49,9 @@ export function EditorDock(props: EditorDockProps) {
   const done = job?.status === 'succeeded';
   const progress = createPending ? 0 : Math.max(0, Math.min(1, job?.progress ?? 0));
   const stage = createPending ? '正在提交作业' : job?.status === 'queued' ? '排队中' : job?.stage ?? '正在推理';
+  const resultText = props.savedName
+    ? props.savedText ?? `已保存 ${props.savedName}`
+    : props.unsavedText ?? '修复预览 · 未保存';
 
   return (
     <div className="lv-editor" role="toolbar" aria-label="图像修复工具栏">
@@ -59,9 +70,9 @@ export function EditorDock(props: EditorDockProps) {
         </div>
       ) : done ? (
         <div className="lv-ed-row">
-          <span className="lv-ed-result"><i aria-hidden />{props.savedName ? `已保存 ${props.savedName}` : '修复预览 · 未保存'}</span>
+          <span className="lv-ed-result"><i aria-hidden />{resultText}</span>
           <button type="button" className="lv-ed-primary" disabled={!props.writeAvailable} title={props.writeReason ?? undefined} onClick={props.onSave}>
-            <Save />保存副本
+            {props.resultActionIcon ?? <Save />}{props.resultActionLabel ?? '保存副本'}
           </button>
           <button type="button" className="lv-ed-tool" onClick={props.onReset}><RotateCcw />重新生成</button>
           <button
@@ -75,7 +86,9 @@ export function EditorDock(props: EditorDockProps) {
           >
             {props.comparing ? '正在看原图' : '按住对比'}
           </button>
-          <button type="button" className="lv-ed-tool" onClick={props.onDone}>完成</button>
+          {props.showDone !== false && props.onDone && (
+            <button type="button" className="lv-ed-tool" onClick={props.onDone}>完成</button>
+          )}
         </div>
       ) : (
         <div className="lv-ed-row">

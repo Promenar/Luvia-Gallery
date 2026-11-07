@@ -1,0 +1,51 @@
+/* 外部图片修复页：拖放区、舞台与导入侧栏。 */
+
+.ue-drop {
+  display: grid; place-items: center; gap: 10px; width: 100%; min-height: 480px; padding: 32px 24px;
+  border: 1px dashed var(--line-2); border-radius: var(--r3); background: var(--surface); color: var(--fg);
+  text-align: center; transition: border-color .18s ease, background .18s ease, transform .18s ease;
+}
+.ue-drop:hover, .ue-drop.is-drag { border-color: color-mix(in oklab, var(--accent) 55%, var(--line-2)); background: color-mix(in oklab, var(--accent) 5%, var(--surface)); }
+.ue-drop:active { transform: scale(.998); }
+.ue-drop b { font-size: 17px; font-weight: 600; }
+.ue-drop-desc { display: block; max-width: 58ch; font-size: 13px; line-height: 1.6; color: var(--muted); }
+.ue-drop small { font-size: 12px; color: var(--muted); }
+.ue-drop-icon { display: grid; place-items: center; width: 60px; height: 60px; border-radius: 18px; background: var(--accent-soft); color: var(--accent); }
+.ue-drop-action { display: inline-flex; align-items: center; height: 34px; padding: 0 15px; border-radius: 999px; background: var(--accent); color: var(--accent-fg); font-size: 13px; font-weight: 600; }
+
+.ue-drop-overlay {
+  position: fixed; inset: 0; z-index: 40; display: grid; place-items: center; pointer-events: none;
+  background: color-mix(in oklab, var(--bg) 55%, transparent); backdrop-filter: blur(6px);
+}
+.ue-drop-overlay::before { content: ''; position: absolute; inset: 18px; border: 2px dashed color-mix(in oklab, var(--accent) 55%, transparent); border-radius: var(--r3); }
+.ue-drop-overlay span { position: relative; padding: 12px 20px; border-radius: 999px; background: var(--raised); border: 1px solid var(--line-2); font-size: 14px; font-weight: 600; box-shadow: 0 20px 50px -20px rgb(0 0 0 / .6); }
+
+.ue-layout { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 16px; align-items: start; min-width: 0; }
+.ue-stage { position: relative; height: min(68vh, 760px); min-height: 430px; overflow: hidden; border: 1px solid var(--line); border-radius: var(--r3); background: #0b0c0e; }
+.ue-frame { position: absolute; overflow: hidden; border-radius: 2px; box-shadow: 0 30px 80px -20px rgb(0 0 0 / .7); background: #000; }
+.ue-frame > img { display: block; width: 100%; height: 100%; object-fit: contain; user-select: none; -webkit-user-drag: none; }
+.ue-frame .lv-mask { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 2; }
+.ue-compare { position: absolute; left: 50%; top: 12px; transform: translateX(-50%); z-index: 3; padding: 3px 10px; border-radius: 999px; background: rgb(0 0 0 / .55); color: #fff; font-size: 11.5px; pointer-events: none; }
+.ue-side { display: grid; gap: 14px; min-width: 0; }
+.ue-form { display: grid; gap: 12px; padding: 16px 18px 18px; }
+.ue-target { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; min-width: 0; padding: 9px 11px; border-radius: var(--r2); background: var(--sunken); border: 1px solid var(--line); font-size: 12px; color: var(--muted); }
+.ue-target b { color: var(--fg-2); font-weight: 600; }
+.ue-note { font-size: 12px; line-height: 1.5; color: var(--muted); }
+.ue-meta { display: grid; gap: 7px; margin: 0; font-size: 12.5px; }
+.ue-meta > div { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 10px; }
+.ue-meta dt { color: var(--muted); }
+.ue-meta dd { margin: 0; color: var(--fg-2); overflow-wrap: anywhere; }
+.ue-import { display: grid; gap: 10px; font-size: 13px; }
+.ue-import > div { display: grid; grid-template-columns: 62px minmax(0, 1fr); gap: 10px; padding-bottom: 9px; border-bottom: 1px solid var(--line); }
+.ue-import span { color: var(--muted); }
+.ue-import b { font-weight: 500; color: var(--fg-2); }
+
+@media (max-width: 1023px) {
+  .ue-layout { grid-template-columns: minmax(0, 1fr); }
+  .ue-stage { height: min(58vh, 560px); min-height: 360px; }
+}
+@media (max-width: 759px) {
+  .ue-drop { min-height: 360px; padding: 28px 18px; }
+  .ue-stage { height: min(56vh, 480px); min-height: 330px; }
+  .ue-form { padding: 14px 16px 16px; }
+}

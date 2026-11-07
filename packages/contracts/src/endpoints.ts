@@ -90,6 +90,7 @@ export const endpoints = {
   // 图像修复编辑器（写操作仅管理员会话）
   editorCapabilities: d({ method: 'GET', path: '/api/v2/editor/capabilities', auth: 'admin', response: E.EditorCapabilities }),
   createEditorJob: d({ method: 'POST', path: '/api/v2/editor/jobs', auth: 'admin', body: E.CreateEditorJobBody, response: E.EditorJob }),
+  importEditorResult: d({ method: 'POST', path: '/api/v2/editor/jobs/:id/import', auth: 'admin', body: E.ImportEditorResultBody, response: E.SaveEditorCopyResult }),
   getEditorJob: d({ method: 'GET', path: '/api/v2/editor/jobs/:id', auth: 'admin', response: E.EditorJob }),
   cancelEditorJob: d({ method: 'POST', path: '/api/v2/editor/jobs/:id/cancel', auth: 'admin', response: E.EditorJob }),
   saveEditorCopy: d({ method: 'POST', path: '/api/v2/editor/jobs/:id/save-copy', auth: 'admin', body: E.SaveEditorCopyBody, response: E.SaveEditorCopyResult }),

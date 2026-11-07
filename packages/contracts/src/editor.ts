@@ -64,12 +64,10 @@ export const EditorMask = z.object({
 });
 export type EditorMask = z.infer<typeof EditorMask>;
 
-export const CreateEditorJobBody = z.object({
-  mediaId: z.string().min(1),
-  source: MediaSourceVersion,
-  model: EditorModelId,
-  mask: EditorMask,
-}).strict();
+export const CreateEditorJobBody = z.union([
+  z.object({ mediaId: z.string().min(1), source: MediaSourceVersion, model: EditorModelId, mask: EditorMask }).strict(),
+  z.object({ uploadId: z.string().min(1), model: EditorModelId, mask: EditorMask }).strict(),
+]);
 export type CreateEditorJobBody = z.infer<typeof CreateEditorJobBody>;
 
 export const SaveEditorCopyBody = z.object({
@@ -88,3 +86,18 @@ export const SaveEditorCopyResult = z.object({
 export type SaveEditorCopyResult = z.infer<typeof SaveEditorCopyResult>;
 
 export const editorResultUrl = (id: string) => `/api/v2/editor/jobs/${encodeURIComponent(id)}/result`;
+
+export const EditorUpload = z.object({
+  id: z.string(), name: z.string(), width: z.number().int().positive(), height: z.number().int().positive(),
+  mime: z.string(), sourceUrl: z.string(), expiresAt: IsoDateTime,
+});
+export type EditorUpload = z.infer<typeof EditorUpload>;
+export const ImportEditorResultBody = z.object({
+  libraryId: z.string().min(1), folder: z.string().max(4096), name: z.string().trim().min(1).max(255),
+  operationId: z.string().min(8).max(128),
+}).strict();
+export type ImportEditorResultBody = z.infer<typeof ImportEditorResultBody>;
+
+/** 原始字节上传保留 XHR 进度，返回 JSON；原图访问要求同一管理员会话。 */
+export const editorUploadUrl = (name: string) => `/api/v2/editor/uploads?name=${encodeURIComponent(name)}`;
+export const editorUploadSourceUrl = (id: string) => `/api/v2/editor/uploads/${encodeURIComponent(id)}/source`;

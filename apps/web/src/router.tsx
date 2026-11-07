@@ -14,6 +14,7 @@ const FavoritesPage = lazy(() => import('@/pages/favorites/FavoritesPage'));
 const AlbumsPage = lazy(() => import('@/pages/albums/AlbumsPage'));
 const AlbumPage = lazy(() => import('@/pages/albums/AlbumPage'));
 const AdminPage = lazy(() => import('@/pages/admin/AdminPage'));
+const ExternalEditorPage = lazy(() => import('@/pages/editor/ExternalEditorPage'));
 
 const rootRoute = createRootRoute({ component: RootLayout });
 
@@ -51,13 +52,23 @@ const adminRoute = createRoute({
     if (state.user?.role !== 'admin') throw redirect({ to: '/' });
   },
 });
+/** 外部图片修复：未入库图片的上传、蒙版修复与导入；仅管理员。 */
+const editorRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/editor',
+  component: ExternalEditorPage,
+  beforeLoad: async () => {
+    const state = await queryClient.ensureQueryData(authStateQuery);
+    if (state.user?.role !== 'admin') throw redirect({ to: '/' });
+  },
+});
 
 export const loginSearch = z.object({ next: z.string().optional() });
 const loginRoute = createRoute({ getParentRoute: () => rootRoute, path: '/login', validateSearch: loginSearch, component: LoginPage });
 const setupRoute = createRoute({ getParentRoute: () => rootRoute, path: '/setup', component: SetupPage });
 
 const routeTree = rootRoute.addChildren([
-  appRoute.addChildren([indexRoute, photosRoute, foldersRoute, favoritesRoute, albumsRoute, albumRoute, adminRoute]),
+  appRoute.addChildren([indexRoute, photosRoute, foldersRoute, favoritesRoute, albumsRoute, albumRoute, editorRoute, adminRoute]),
   loginRoute,
   setupRoute,
 ]);
