@@ -60,12 +60,14 @@ async def limit_requests(request: Request, call_next):
     receive = request.receive
     deadline = asyncio.get_running_loop().time() + UPLOAD_TIMEOUT_SECONDS
     body_complete = False
+    upload_timed_out = False
     async def receive_with_deadline():
-        nonlocal body_complete
+        nonlocal body_complete, upload_timed_out
         if body_complete:
             return await receive()
         remaining = deadline - asyncio.get_running_loop().time()
         if remaining <= 0:
+            upload_timed_out = True
             raise HTTPException(408, '上传超时')
         try:
             message = await asyncio.wait_for(receive(), timeout=remaining)
@@ -73,10 +75,14 @@ async def limit_requests(request: Request, call_next):
                 body_complete = True
             return message
         except TimeoutError as error:
+            upload_timed_out = True
             raise HTTPException(408, '上传超时') from error
     request._receive = receive_with_deadline
     try:
-        return await call_next(request)
+        response = await call_next(request)
+        if upload_timed_out:
+            return JSONResponse({'detail': '上传超时'}, status_code=408)
+        return response
     finally:
         lane.release()
 
