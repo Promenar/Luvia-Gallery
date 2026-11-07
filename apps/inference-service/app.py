@@ -5,6 +5,7 @@ import gc
 import hmac
 import io
 import logging
+import math
 import os
 import sys
 import threading
@@ -14,8 +15,8 @@ from types import SimpleNamespace
 
 import numpy as np
 import torch
-from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
-from fastapi.responses import Response
+from fastapi import FastAPI, File, Form, Header, HTTPException, Request, UploadFile
+from fastapi.responses import JSONResponse, Response
 from PIL import Image, ImageOps
 
 MODEL_DIR = Path(os.environ.get('MODEL_DIR', '/models'))
@@ -38,6 +39,27 @@ model_status = {}
 def authenticate(value):
     if TOKEN and not hmac.compare_digest(value or '', 'Bearer ' + TOKEN):
         raise HTTPException(401, '未授权')
+
+
+@app.middleware('http')
+async def limit_requests(request: Request, call_next):
+    if TOKEN and not hmac.compare_digest(request.headers.get('authorization', ''), 'Bearer ' + TOKEN):
+        return JSONResponse({'detail': '未授权'}, status_code=401)
+    if request.method != 'POST' or request.url.path != '/v1/inpaint':
+        return await call_next(request)
+    try:
+        length = int(request.headers.get('content-length', ''))
+    except ValueError:
+        return JSONResponse({'detail': '请求缺少有效长度'}, status_code=411)
+    if length < 0 or length > 2 * MAX_BYTES + 65536:
+        return JSONResponse({'detail': '请求体超过大小限制'}, status_code=413)
+    if lane.locked():
+        return JSONResponse({'detail': '推理服务正忙'}, status_code=429)
+    await lane.acquire()
+    try:
+        return await call_next(request)
+    finally:
+        lane.release()
 
 
 def device():
@@ -71,6 +93,19 @@ def read_image(data, mode):
         return np.asarray(ImageOps.exif_transpose(image).convert(mode)).copy()
 
 
+def resize_mask(mask, width, height):
+    """缩小蒙版时扩展覆盖范围，防止细线在采样时消失。"""
+    import cv2
+    source = mask.astype(np.uint8) * 255
+    if width < mask.shape[1] or height < mask.shape[0]:
+        kernel = (max(1, math.ceil(mask.shape[1] / width) + 1), max(1, math.ceil(mask.shape[0] / height) + 1))
+        source = cv2.dilate(source, np.ones((kernel[1], kernel[0]), dtype=np.uint8))
+    result = np.asarray(Image.fromarray(source).resize((width, height), Image.Resampling.NEAREST)).copy()
+    if mask.any() and not result.any():
+        raise ValueError('蒙版缩放后不可用')
+    return result
+
+
 def run_model(model_id, image, mask):
     """只在用户蒙版内合成结果，输入输出保持相同尺寸。"""
     height, width = mask.shape
@@ -91,7 +126,7 @@ def run_model(model_id, image, mask):
         import torch.nn.functional as functional
         model = torch.jit.load(str(MODEL_DIR / MODEL_FILES[model_id]), map_location=target).eval()
         # 局部裁剪并限制模型输入，降低显存消耗；最终画布仍保留原始尺寸。
-        ys, xs = np.where(selected)
+        ys, xs = np.flatnonzero(selected.any(axis=1)), np.flatnonzero(selected.any(axis=0))
         margin = max(64, int(max(xs.max() - xs.min(), ys.max() - ys.min()) * 0.25))
         x0, x1 = max(0, int(xs.min()) - margin), min(width, int(xs.max()) + margin + 1)
         y0, y1 = max(0, int(ys.min()) - margin), min(height, int(ys.max()) + margin + 1)
@@ -99,7 +134,7 @@ def run_model(model_id, image, mask):
         scale = min(1.0, 1024 / max(crop.shape[:2]))
         rw, rh = max(8, round(crop.shape[1] * scale)), max(8, round(crop.shape[0] * scale))
         resized = np.asarray(Image.fromarray(crop).resize((rw, rh), Image.Resampling.LANCZOS)).copy()
-        mask_small = np.asarray(Image.fromarray(local_mask.astype(np.uint8) * 255).resize((rw, rh), Image.Resampling.NEAREST)).copy()
+        mask_small = resize_mask(local_mask, rw, rh)
         x = torch.from_numpy(resized.transpose(2, 0, 1)).unsqueeze(0).float().to(target) / 255
         m = torch.from_numpy(mask_small).unsqueeze(0).unsqueeze(0).float().to(target) / 255
         padding = (0, (8 - rw % 8) % 8, 0, (8 - rh % 8) % 8)
@@ -181,21 +216,22 @@ async def inpaint(model: str = Form(...), jobId: str = Form(...), image: UploadF
         active_jobs.add(jobId)
     try:
         image_data = await image.read(MAX_BYTES + 1); mask_data = await mask.read(MAX_BYTES + 1)
-        source, selection = await asyncio.to_thread(lambda: (read_image(image_data, 'RGB'), read_image(mask_data, 'L')))
-        if source.shape[:2] != selection.shape:
+        original, selection = await asyncio.to_thread(lambda: (read_image(image_data, 'RGBA'), read_image(mask_data, 'L')))
+        if original.shape[:2] != selection.shape:
             raise ValueError('图片和蒙版尺寸不一致')
-        async with lane:
-            with cancel_lock:
-                if jobId in cancelled:
-                    cancelled.discard(jobId)
-                    raise HTTPException(409, '作业已取消')
-            result = await asyncio.to_thread(run_serial, model, source, selection)
-            with cancel_lock:
-                if jobId in cancelled:
-                    cancelled.discard(jobId)
-                    raise HTTPException(409, '作业已取消')
-        output = io.BytesIO(); Image.fromarray(result).save(output, format='PNG')
-        return Response(output.getvalue(), media_type='image/png')
+        with cancel_lock:
+            if jobId in cancelled:
+                raise HTTPException(409, '作业已取消')
+        result = await asyncio.to_thread(run_serial, model, original[:, :, :3].copy(), selection)
+        def encode():
+            rgba = np.dstack((result, original[:, :, 3])); output = io.BytesIO()
+            Image.fromarray(rgba).save(output, format='PNG')
+            return output.getvalue()
+        data = await asyncio.to_thread(encode)
+        with cancel_lock:
+            if jobId in cancelled:
+                raise HTTPException(409, '作业已取消')
+        return Response(data, media_type='image/png')
     except ValueError as error:
         raise HTTPException(400, str(error)) from error
     finally:

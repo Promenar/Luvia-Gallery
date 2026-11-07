@@ -49,6 +49,8 @@ class Tests(unittest.TestCase):
                 self.assertEqual(Image.open(io.BytesIO(response.content)).size, (16, 16))
                 wrong = {'image': files['image'], 'mask': ('mask.png', png(mask[:8]), 'image/png')}
                 self.assertEqual(client.post('/v1/inpaint', data={'model': 'migan', 'jobId': 'job-2'}, files=wrong, headers=headers).status_code, 400)
+                oversized = {**headers, 'content-length': str(service.MAX_BYTES * 2 + 65537)}
+                self.assertEqual(client.post('/v1/inpaint', data={'model': 'migan', 'jobId': 'job-3'}, files=files, headers=oversized).status_code, 413)
 
     def test_transparency_and_concurrent_admission(self):
         image = np.full((16, 16, 4), 60, dtype=np.uint8)
@@ -68,6 +70,13 @@ class Tests(unittest.TestCase):
                     self.assertEqual(response.status_code, 429, response.text)
                 finally:
                     service.lane = service.asyncio.Semaphore(1)
+
+    def test_thin_mask_survives_downsampling(self):
+        mask = np.zeros((5000, 8000), dtype=np.uint8)
+        mask[:, 7999] = 1
+        resized = service.resize_mask(mask, 1024, 640)
+        self.assertTrue(resized.any())
+        self.assertTrue(resized[:, -1].all())
 
 
 if __name__ == '__main__':
