@@ -35,6 +35,14 @@ cancelled = set()
 active_jobs = set()
 cancel_lock = threading.Lock()
 model_status = {}
+background_tasks = set()
+
+
+async def run_blocking(function, *args):
+    task = asyncio.create_task(asyncio.to_thread(function, *args))
+    background_tasks.add(task)
+    task.add_done_callback(background_tasks.discard)
+    return await asyncio.shield(task)
 
 
 def authenticate(value):
@@ -84,6 +92,8 @@ async def limit_requests(request: Request, call_next):
             return JSONResponse({'detail': '上传超时'}, status_code=408)
         return response
     finally:
+        if background_tasks:
+            await asyncio.shield(asyncio.gather(*list(background_tasks), return_exceptions=True))
         lane.release()
 
 
@@ -269,18 +279,18 @@ async def inpaint(model: str = Form(...), jobId: str = Form(...), image: UploadF
         active_jobs.add(jobId)
     try:
         image_data = await image.read(MAX_BYTES + 1); mask_data = await mask.read(MAX_BYTES + 1)
-        (original, profile), selection = await asyncio.to_thread(lambda: (read_source(image_data), read_image(mask_data, 'L')))
+        (original, profile), selection = await run_blocking(lambda: (read_source(image_data), read_image(mask_data, 'L')))
         if original.shape[:2] != selection.shape:
             raise ValueError('图片和蒙版尺寸不一致')
         with cancel_lock:
             if jobId in cancelled:
                 raise HTTPException(409, '作业已取消')
-        result = await asyncio.to_thread(run_serial, model, original[:, :, :3].copy(), selection)
+        result = await run_blocking(run_serial, model, original[:, :, :3].copy(), selection)
         def encode():
             rgba = np.dstack((result, original[:, :, 3])); output = io.BytesIO()
             Image.fromarray(rgba).save(output, format='PNG', **({'icc_profile': profile} if profile else {}))
             return output.getvalue()
-        data = await asyncio.to_thread(encode)
+        data = await run_blocking(encode)
         with cancel_lock:
             if jobId in cancelled:
                 raise HTTPException(409, '作业已取消')
