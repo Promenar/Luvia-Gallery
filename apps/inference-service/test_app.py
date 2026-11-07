@@ -5,7 +5,7 @@ from unittest.mock import patch
 import httpx
 import numpy as np
 from fastapi.testclient import TestClient
-from PIL import Image
+from PIL import Image, ImageCms
 
 import app as service
 
@@ -71,6 +71,19 @@ class Tests(unittest.TestCase):
                     self.assertEqual(response.status_code, 429, response.text)
                 finally:
                     service.lane = service.asyncio.Semaphore(1)
+
+    def test_rgb_profile_survives_repair(self):
+        image = Image.new('RGB', (16, 16), (50, 80, 100))
+        profile = ImageCms.ImageCmsProfile(ImageCms.createProfile('sRGB')).tobytes()
+        buffer = io.BytesIO(); image.save(buffer, format='PNG', icc_profile=profile)
+        mask = np.full((16, 16), 255, dtype=np.uint8)
+        with patch.object(service, 'TOKEN', ''), patch.object(service, 'available', return_value=(True, None)), \
+             patch.object(service, 'run_serial', side_effect=lambda _model, source, _mask: source):
+            with TestClient(service.app) as client:
+                files = {'image': ('image.png', buffer.getvalue(), 'image/png'), 'mask': ('mask.png', png(mask), 'image/png')}
+                response = client.post('/v1/inpaint', data={'model': 'migan', 'jobId': 'icc'}, files=files)
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertEqual(Image.open(io.BytesIO(response.content)).info.get('icc_profile'), profile)
 
     def test_thin_mask_survives_downsampling(self):
         mask = np.zeros((5000, 8000), dtype=np.uint8)
