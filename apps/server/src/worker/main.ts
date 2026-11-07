@@ -1,4 +1,5 @@
 import { monitorEventLoopDelay } from 'node:perf_hooks';
+import { HealthWindow } from '../core/health-window.ts';
 import { detectMounts } from '../core/mounts.ts';
 import { installFatalHandlers, openRuntime } from '../core/runtime.ts';
 import { probeFfmpeg } from './ffmpeg.ts';
@@ -55,10 +56,11 @@ const mounts = process.platform === 'darwin'
 const allowedRoots = mounts.filter((entry) => entry.kind === 'candidate').map((entry) => entry.containerPath);
 const loop = monitorEventLoopDelay({ resolution: 20 });
 loop.enable();
+const healthWindow = new HealthWindow();
 const heartbeat = () => {
   const p99 = loop.percentile(99) / 1e6;
   loop.reset();
-  writeWorkerHeartbeat(runtime.db, p99);
+  writeWorkerHeartbeat(runtime.db, p99, undefined, undefined, undefined, healthWindow.observe(p99));
 };
 heartbeat();
 const heartbeatTimer = setInterval(heartbeat, 5000);

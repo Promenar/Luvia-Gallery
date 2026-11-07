@@ -3,11 +3,19 @@ import { setTimeout as delay } from 'node:timers/promises';
 import type Database from 'better-sqlite3';
 import { readSettings } from '../core/settings.ts';
 import { runProcess } from './process-runner.ts';
-import { renewLease } from '../core/sqlite-errors.ts';
+import { isTransientSqliteError, renewLease } from '../core/sqlite-errors.ts';
 
 const now = () => Math.floor(Date.now() / 1000);
+function withoutBusyWait<T>(db: Database.Database, action: () => T): T {
+  const timeout = db.pragma('busy_timeout', { simple: true }) as number;
+  try { db.pragma('busy_timeout = 0'); return action(); }
+  finally { db.pragma(`busy_timeout = ${timeout}`); }
+}
 export class FfmpegExitError extends Error {
   constructor() { super('FFmpeg 执行失败'); }
+}
+export class NoVideoPacketsError extends FfmpegExitError {
+  constructor() { super(); this.message = '未发现可读取的视频包，请检查原文件'; }
 }
 async function withSlot<T>(db: Database.Database, owner: string, kind: 'ffmpeg' | 'thumbnail', operation: (signal: AbortSignal, assertSlot: () => void) => Promise<T>, options: { signal?: AbortSignal; assertLease?: () => void } = {}): Promise<T> {
   const id = randomUUID();
@@ -19,7 +27,8 @@ async function withSlot<T>(db: Database.Database, owner: string, kind: 'ffmpeg' 
       await delay(50, undefined, { signal: options.signal });
       continue;
     }
-    const acquired = db.transaction(() => {
+    let acquired = false;
+    try { acquired = withoutBusyWait(db, () => db.transaction(() => {
       options.assertLease?.();
       const count = (db.prepare('SELECT count(*) AS n FROM ffmpeg_slots WHERE kind=?').get(kind) as { n: number }).n;
       const workers = readSettings(db).workers;
@@ -32,7 +41,8 @@ async function withSlot<T>(db: Database.Database, owner: string, kind: 'ffmpeg' 
       }
       db.prepare('INSERT INTO ffmpeg_slots(id,owner,lease_expires_at,kind) VALUES (?,?,?,?)').run(id, owner, now() + 30, kind);
       return true;
-    }).immediate();
+    }).immediate()); }
+    catch (error) { if (!isTransientSqliteError(error)) throw error; }
     if (acquired) break;
     await delay(50, undefined, { signal: options.signal });
   }
@@ -47,7 +57,7 @@ async function withSlot<T>(db: Database.Database, owner: string, kind: 'ffmpeg' 
   const heartbeat = setInterval(() => renewLease(() => {
     options.assertLease?.();
     // 到期后只要槽位行尚未被删除或接管，原持有者仍可续租。
-    return db.prepare('UPDATE ffmpeg_slots SET lease_expires_at=? WHERE id=? AND owner=?').run(now() + 30, id, owner).changes > 0;
+    return withoutBusyWait(db, () => db.prepare('UPDATE ffmpeg_slots SET lease_expires_at=? WHERE id=? AND owner=?').run(now() + 30, id, owner).changes > 0);
   }, () => local.abort()), 5000);
   heartbeat.unref();
   try {
@@ -56,7 +66,8 @@ async function withSlot<T>(db: Database.Database, owner: string, kind: 'ffmpeg' 
     return result;
   } finally {
     clearInterval(heartbeat);
-    db.prepare('DELETE FROM ffmpeg_slots WHERE id=? AND owner=?').run(id, owner);
+    try { withoutBusyWait(db, () => db.prepare('DELETE FROM ffmpeg_slots WHERE id=? AND owner=?').run(id, owner)); }
+    catch (error) { if (!isTransientSqliteError(error)) throw error; /* 租约到期后可被回收。 */ }
   }
 }
 

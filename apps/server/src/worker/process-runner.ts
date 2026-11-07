@@ -40,7 +40,7 @@ export function stopProcessRunner() {
 }
 
 /** 通过代理启动外部程序并等待结束；取消时终止程序。只在 capture 时收集标准输出。 */
-export async function runProcess(file: string, args: string[], options: { timeoutMs: number; maxBuffer?: number; capture?: boolean; signal?: AbortSignal }): Promise<ProcessResult> {
+export async function runProcess(file: string, args: string[], options: { timeoutMs: number; maxBuffer?: number; capture?: boolean; binary?: boolean; inputBase64?: string; signal?: AbortSignal }): Promise<ProcessResult> {
   options.signal?.throwIfAborted();
   const child = startProcessRunner();
   const id = ++nextId;
@@ -49,7 +49,7 @@ export async function runProcess(file: string, args: string[], options: { timeou
     options.signal?.addEventListener('abort', abort, { once: true });
     pending.set(id, { resolve, cleanup: () => options.signal?.removeEventListener('abort', abort) });
     child.ref(); child.channel?.ref();
-    child.send({ type: 'run', id, file, args, path: process.env.PATH, timeoutMs: options.timeoutMs, maxBuffer: options.maxBuffer ?? 1024 * 1024, capture: !!options.capture }, (error) => {
+    child.send({ type: 'run', id, file, args, path: process.env.PATH, timeoutMs: options.timeoutMs, maxBuffer: options.maxBuffer ?? 1024 * 1024, capture: !!options.capture, binary: !!options.binary, inputBase64: options.inputBase64 }, (error) => {
       if (error) settle(id, { code: null, signal: null, stdout: '', error: 'runner' });
     });
   });
