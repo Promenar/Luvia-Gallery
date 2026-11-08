@@ -71,7 +71,7 @@ dialog.lv-viewer.is-thm { color: var(--fg); --vb-hover: color-mix(in oklab, var(
 .lv-viewer.is-thm .lv-vsep { background: color-mix(in oklab, var(--fg) 16%, transparent); }
 
 /* 左右翻页 */
-.lv-vn { position: absolute; top: 50%; z-index: 3; transform: translateY(-50%); width: 46px; height: 46px; border-radius: 50%; display: grid; place-items: center; background: var(--vn-bg); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); color: inherit; border: 0; }
+.lv-vn { position: absolute; top: 50%; z-index: 3; transform: translateY(-50%); width: 46px; height: 46px; border-radius: 50%; display: grid; place-items: center; background: var(--vn-bg); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); color: inherit; border: 0; }
 .lv-vn:hover { background: var(--vb-hover); }
 .lv-vn.l { left: 18px; } .lv-vn.r { right: 18px; }
 .lv-viewer.is-info .lv-vn.r { right: 378px; }
@@ -81,7 +81,7 @@ dialog.lv-viewer.is-thm { color: var(--fg); --vb-hover: color-mix(in oklab, var(
 .lv-viewer.is-idle :is(.lv-vt, .lv-vn, .lv-sspill, .lv-zhud, .lv-vidbar, .lv-mini, .lv-play) { opacity: 0; pointer-events: none; }
 
 /* 信息侧栏 */
-.lv-sheet { --scrollbar-thumb: rgb(255 255 255 / .3); --scrollbar-thumb-hover: rgb(255 255 255 / .48); position: absolute; z-index: 3; top: 66px; right: 14px; bottom: 96px; width: 348px; border-radius: var(--r3); padding: 20px; background: rgb(22 22 24 / .62); backdrop-filter: blur(24px) saturate(1.4); -webkit-backdrop-filter: blur(24px) saturate(1.4); border: 1px solid rgb(255 255 255 / .1); transform: translateX(calc(100% + 20px)); transition: transform .35s cubic-bezier(.2, .8, .2, 1), visibility 0s .35s; visibility: hidden; overflow: auto; overscroll-behavior: contain; color: #fff; user-select: text; -webkit-user-select: text; }
+.lv-sheet { --scrollbar-thumb: rgb(255 255 255 / .3); --scrollbar-thumb-hover: rgb(255 255 255 / .48); position: absolute; z-index: 3; top: 66px; right: 14px; bottom: 96px; width: 348px; border-radius: var(--r3); padding: 20px; background: rgb(22 22 24 / .62); -webkit-backdrop-filter: blur(24px) saturate(1.4); backdrop-filter: blur(24px) saturate(1.4); border: 1px solid rgb(255 255 255 / .1); transform: translateX(calc(100% + 20px)); transition: transform .35s cubic-bezier(.2, .8, .2, 1), visibility 0s .35s; visibility: hidden; overflow: auto; overscroll-behavior: contain; color: #fff; user-select: text; -webkit-user-select: text; }
 .lv-viewer.is-info .lv-sheet { transform: none; visibility: visible; transition: transform .35s cubic-bezier(.2, .8, .2, 1); }
 .lv-sheet h4 { margin: 0 0 2px; font-size: 16px; font-weight: 600; word-break: break-all; }
 .lv-sheet .when { font-size: 12.5px; color: rgb(255 255 255 / .7); }
@@ -108,15 +108,15 @@ dialog.lv-viewer.is-thm { color: var(--fg); --vb-hover: color-mix(in oklab, var(
 .lv-viewer.is-info .lv-film { right: 362px; }
 
 /* 视频 */
-.lv-play { position: absolute; z-index: 3; left: 50%; top: 50%; transform: translate(-50%, -50%); width: 76px; height: 76px; border-radius: 50%; background: rgb(255 255 255 / .18); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); display: grid; place-items: center; color: #fff; border: 0; }
+.lv-play { position: absolute; z-index: 3; left: 50%; top: 50%; transform: translate(-50%, -50%); width: 76px; height: 76px; border-radius: 50%; background: rgb(255 255 255 / .18); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); display: grid; place-items: center; color: #fff; border: 0; }
 .lv-play svg { width: 30px; height: 30px; }
-.lv-vidbar { position: absolute; left: 50%; bottom: 100px; transform: translateX(-50%); z-index: 3; width: min(560px, calc(100% - 32px)); display: flex; align-items: center; gap: 10px; padding: 6px 12px 6px 6px; border-radius: 999px; background: rgb(0 0 0 / .5); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); color: #fff; font-size: 12px; font-variant-numeric: tabular-nums; }
+.lv-vidbar { position: absolute; left: 50%; bottom: 100px; transform: translateX(-50%); z-index: 3; width: min(560px, calc(100% - 32px)); display: flex; align-items: center; gap: 10px; padding: 6px 12px 6px 6px; border-radius: 999px; background: rgb(0 0 0 / .5); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); color: #fff; font-size: 12px; font-variant-numeric: tabular-nums; }
 .lv-vidbar .lv-vb { width: 32px; height: 32px; border-radius: 999px; }
 .lv-vidbar .tr { flex: 1; height: 18px; display: flex; align-items: center; cursor: pointer; touch-action: none; }
 .lv-vidbar .tr > span { position: relative; display: block; width: 100%; height: 4px; border-radius: 4px; background: rgb(255 255 255 / .25); overflow: hidden; }
 .lv-vidbar .tr i { position: absolute; left: 0; top: 0; bottom: 0; background: #fff; }
 .lv-vidbar .tr:focus-visible { outline-offset: 4px; }
-.lv-vmsg { position: absolute; z-index: 4; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(400px, calc(100% - 32px)); padding: 20px; border-radius: var(--r3); background: rgb(20 20 22 / .78); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); border: 1px solid rgb(255 255 255 / .12); color: #fff; text-align: center; font-size: 13.5px; }
+.lv-vmsg { position: absolute; z-index: 4; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(400px, calc(100% - 32px)); padding: 20px; border-radius: var(--r3); background: rgb(20 20 22 / .78); -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px); border: 1px solid rgb(255 255 255 / .12); color: #fff; text-align: center; font-size: 13.5px; }
 .lv-vmsg b { display: block; font-size: 15px; margin-bottom: 6px; }
 .lv-vmsg p { margin: 0 0 14px; color: rgb(255 255 255 / .72); }
 .lv-btn { display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 16px; border-radius: 999px; background: var(--accent); color: var(--accent-fg); font-weight: 600; text-decoration: none; border: 0; transition: filter .12s ease, background .12s ease; }
@@ -125,7 +125,7 @@ dialog.lv-viewer.is-thm { color: var(--fg); --vb-hover: color-mix(in oklab, var(
 .lv-btn.ghost:hover { background: rgb(255 255 255 / .16); }
 
 /* 原图不可读 */
-.lv-mediaerr { position: absolute; z-index: 3; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(400px, calc(100% - 32px)); padding: 22px 22px 20px; border-radius: var(--r3); background: rgb(20 20 22 / .78); backdrop-filter: blur(24px) saturate(1.4); -webkit-backdrop-filter: blur(24px) saturate(1.4); border: 1px solid rgb(255 255 255 / .12); box-shadow: 0 30px 80px -30px rgb(0 0 0 / .8); color: #fff; text-align: center; }
+.lv-mediaerr { position: absolute; z-index: 3; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(400px, calc(100% - 32px)); padding: 22px 22px 20px; border-radius: var(--r3); background: rgb(20 20 22 / .78); -webkit-backdrop-filter: blur(24px) saturate(1.4); backdrop-filter: blur(24px) saturate(1.4); border: 1px solid rgb(255 255 255 / .12); box-shadow: 0 30px 80px -30px rgb(0 0 0 / .8); color: #fff; text-align: center; }
 .lv-mediaerr-ic { display: grid; place-items: center; width: 36px; height: 36px; margin: 0 auto 10px; border-radius: 12px; background: rgb(255 255 255 / .08); color: rgb(255 255 255 / .72); }
 .lv-mediaerr-ic svg { width: 19px; height: 19px; }
 .lv-mediaerr b { display: block; font-size: 15px; font-weight: 600; }
@@ -133,8 +133,8 @@ dialog.lv-viewer.is-thm { color: var(--fg); --vb-hover: color-mix(in oklab, var(
 .lv-mediaerr-actions { display: flex; justify-content: center; flex-wrap: wrap; gap: 8px; }
 
 /* 查看器内的删除确认：保持在顶层对话框内部 */
-.lv-confirm-scrim { position: absolute; inset: 0; z-index: 8; display: grid; place-items: center; padding: 16px; background: rgb(0 0 0 / .32); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); animation: lv-confirm-fade .2s ease-out; }
-.lv-confirm { width: min(400px, 100%); padding: 22px; border-radius: calc(var(--r3) + 2px); background: rgb(24 24 26 / .72); backdrop-filter: blur(28px) saturate(1.4); -webkit-backdrop-filter: blur(28px) saturate(1.4); border: 1px solid rgb(255 255 255 / .12); box-shadow: 0 30px 80px -30px rgb(0 0 0 / .85); color: #fff; animation: lv-confirm-enter .22s cubic-bezier(.2, .8, .2, 1); }
+.lv-confirm-scrim { position: absolute; inset: 0; z-index: 8; display: grid; place-items: center; padding: 16px; background: rgb(0 0 0 / .32); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); animation: lv-confirm-fade .2s ease-out; }
+.lv-confirm { width: min(400px, 100%); padding: 22px; border-radius: calc(var(--r3) + 2px); background: rgb(24 24 26 / .72); -webkit-backdrop-filter: blur(28px) saturate(1.4); backdrop-filter: blur(28px) saturate(1.4); border: 1px solid rgb(255 255 255 / .12); box-shadow: 0 30px 80px -30px rgb(0 0 0 / .85); color: #fff; animation: lv-confirm-enter .22s cubic-bezier(.2, .8, .2, 1); }
 @keyframes lv-confirm-fade { from { opacity: 0; } }
 @keyframes lv-confirm-enter { from { opacity: 0; transform: translateY(8px) scale(.98); } }
 .lv-confirm h2 { margin: 0; font-size: 16px; font-weight: 600; }
@@ -147,7 +147,7 @@ dialog.lv-viewer.is-thm { color: var(--fg); --vb-hover: color-mix(in oklab, var(
 .lv-btn:disabled { opacity: .5; pointer-events: none; }
 
 /* 幻灯片药丸 */
-.lv-sspill { position: absolute; left: 50%; bottom: 22px; transform: translateX(-50%); z-index: 4; display: none; align-items: center; gap: 2px; padding: 6px 6px 6px 16px; border-radius: 999px; background: rgb(20 20 22 / .62); backdrop-filter: blur(20px) saturate(1.4); -webkit-backdrop-filter: blur(20px) saturate(1.4); border: 1px solid rgb(255 255 255 / .12); color: #fff; white-space: nowrap; box-shadow: 0 18px 40px -18px rgb(0 0 0 / .6); max-width: calc(100% - 16px); }
+.lv-sspill { position: absolute; left: 50%; bottom: 22px; transform: translateX(-50%); z-index: 4; display: none; align-items: center; gap: 2px; padding: 6px 6px 6px 16px; border-radius: 999px; background: rgb(20 20 22 / .62); -webkit-backdrop-filter: blur(20px) saturate(1.4); backdrop-filter: blur(20px) saturate(1.4); border: 1px solid rgb(255 255 255 / .12); color: #fff; white-space: nowrap; box-shadow: 0 18px 40px -18px rgb(0 0 0 / .6); max-width: calc(100% - 16px); }
 .lv-viewer.is-ss .lv-sspill { display: flex; }
 .lv-sspill .ssl { display: flex; flex-direction: column; line-height: 1.25; margin-right: 10px; max-width: 240px; min-width: 0; }
 .lv-sspill .ssl b { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
@@ -159,7 +159,7 @@ dialog.lv-viewer.is-thm { color: var(--fg); --vb-hover: color-mix(in oklab, var(
 .lv-ssint button.on { background: #fff; color: #111; opacity: 1; }
 
 /* 缩放 HUD 与小地图 */
-.lv-zhud { position: absolute; right: 18px; bottom: 22px; z-index: 4; display: flex; align-items: center; gap: 2px; padding: 4px; border-radius: 999px; background: rgb(20 20 22 / .62); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); border: 1px solid rgb(255 255 255 / .12); color: #fff; font-size: 12.5px; }
+.lv-zhud { position: absolute; right: 18px; bottom: 22px; z-index: 4; display: flex; align-items: center; gap: 2px; padding: 4px; border-radius: 999px; background: rgb(20 20 22 / .62); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); border: 1px solid rgb(255 255 255 / .12); color: #fff; font-size: 12.5px; }
 .lv-zhud button { height: 30px; min-width: 30px; padding: 0 9px; border-radius: 999px; display: grid; place-items: center; background: transparent; border: 0; }
 .lv-zhud button:hover { background: rgb(255 255 255 / .14); }
 .lv-zhud svg { width: 16px; height: 16px; }
@@ -172,23 +172,23 @@ dialog.lv-viewer.is-thm { color: var(--fg); --vb-hover: color-mix(in oklab, var(
 .lv-mini img { display: block; width: 100%; height: 100%; opacity: .75; pointer-events: none; }
 .lv-mini i { position: absolute; border: 1.5px solid #fff; box-shadow: 0 0 0 999px rgb(0 0 0 / .4); border-radius: 2px; pointer-events: none; }
 
-.lv-chip { position: absolute; left: 50%; top: 74px; transform: translateX(-50%); z-index: 4; font-size: 12px; padding: 4px 12px; border-radius: 999px; background: rgb(0 0 0 / .6); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); color: #fff; opacity: 0; transition: opacity .2s; pointer-events: none; }
+.lv-chip { position: absolute; left: 50%; top: 74px; transform: translateX(-50%); z-index: 4; font-size: 12px; padding: 4px 12px; border-radius: 999px; background: rgb(0 0 0 / .6); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); color: #fff; opacity: 0; transition: opacity .2s; pointer-events: none; }
 .lv-chip.show { opacity: 1; }
-.lv-rot-hint { position: absolute; left: 50%; top: 74px; transform: translateX(-50%); z-index: 4; font-size: 12px; padding: 4px 12px; border-radius: 999px; background: rgb(0 0 0 / .6); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); color: #fff; opacity: 0; transition: opacity .2s; pointer-events: none; }
+.lv-rot-hint { position: absolute; left: 50%; top: 74px; transform: translateX(-50%); z-index: 4; font-size: 12px; padding: 4px 12px; border-radius: 999px; background: rgb(0 0 0 / .6); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); color: #fff; opacity: 0; transition: opacity .2s; pointer-events: none; }
 .lv-rot-hint.show { opacity: 1; }
 
 /* 移动端编辑入口：旋转、修复、删除收进一个菜单，避免顶栏挤压文件名 */
-.lv-edit-sheet { position: absolute; right: 12px; top: 58px; z-index: 7; width: 190px; padding: 6px; border-radius: 14px; background: rgb(24 24 26 / .9); backdrop-filter: blur(24px) saturate(1.4); -webkit-backdrop-filter: blur(24px) saturate(1.4); border: 1px solid rgb(255 255 255 / .12); box-shadow: 0 20px 50px -16px rgb(0 0 0 / .7); color: #fff; display: grid; gap: 2px; animation: lv-cin .12s ease; }
+.lv-edit-sheet { position: absolute; right: 12px; top: 58px; z-index: 7; width: 190px; padding: 6px; border-radius: 14px; background: rgb(24 24 26 / .9); -webkit-backdrop-filter: blur(24px) saturate(1.4); backdrop-filter: blur(24px) saturate(1.4); border: 1px solid rgb(255 255 255 / .12); box-shadow: 0 20px 50px -16px rgb(0 0 0 / .7); color: #fff; display: grid; gap: 2px; animation: lv-cin .12s ease; }
 .lv-edit-sheet button { display: flex; align-items: center; gap: 10px; width: 100%; height: 40px; padding: 0 10px; border-radius: 8px; border: 0; background: transparent; color: #fff; font-size: 13px; text-align: left; }
 .lv-edit-sheet button:hover, .lv-edit-sheet button:focus-visible { background: rgb(255 255 255 / .1); outline: none; }
 .lv-edit-sheet button.danger { color: var(--bad); }
 .lv-edit-sheet svg { width: 16px; height: 16px; opacity: .8; flex: none; }
 
-.lv-toast { position: absolute; left: 50%; bottom: 112px; transform: translateX(-50%); z-index: 6; max-width: min(520px, calc(100% - 32px)); padding: 10px 16px; border-radius: 12px; background: rgb(30 30 32 / .9); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); border: 1px solid rgb(255 255 255 / .12); color: #fff; font-size: 13px; text-align: center; opacity: 0; transition: opacity .2s, translate .2s; translate: 0 6px; pointer-events: none; }
+.lv-toast { position: absolute; left: 50%; bottom: 112px; transform: translateX(-50%); z-index: 6; max-width: min(520px, calc(100% - 32px)); padding: 10px 16px; border-radius: 12px; background: rgb(30 30 32 / .9); -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px); border: 1px solid rgb(255 255 255 / .12); color: #fff; font-size: 13px; text-align: center; opacity: 0; transition: opacity .2s, translate .2s; translate: 0 6px; pointer-events: none; }
 .lv-toast.show { opacity: 1; translate: 0 0; }
 
 /* 右键菜单 */
-.lv-menu { position: fixed; z-index: 60; min-width: 236px; padding: 6px; border-radius: 12px; background: rgb(30 30 32 / .86); backdrop-filter: blur(24px) saturate(1.5); -webkit-backdrop-filter: blur(24px) saturate(1.5); border: 1px solid rgb(255 255 255 / .12); box-shadow: 0 20px 50px -12px rgb(0 0 0 / .7); color: #fff; font-size: 13px; animation: lv-cin .12s ease; }
+.lv-menu { position: fixed; z-index: 60; min-width: 236px; padding: 6px; border-radius: 12px; background: rgb(30 30 32 / .86); -webkit-backdrop-filter: blur(24px) saturate(1.5); backdrop-filter: blur(24px) saturate(1.5); border: 1px solid rgb(255 255 255 / .12); box-shadow: 0 20px 50px -12px rgb(0 0 0 / .7); color: #fff; font-size: 13px; animation: lv-cin .12s ease; }
 @keyframes lv-cin { from { opacity: 0; transform: scale(.97); } }
 .lv-menu button { display: flex; align-items: center; gap: 10px; width: 100%; height: 34px; padding: 0 10px; border-radius: 8px; text-align: left; background: transparent; border: 0; }
 .lv-menu button svg { width: 16px; height: 16px; opacity: .8; flex: none; }
