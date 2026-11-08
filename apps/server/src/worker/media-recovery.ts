@@ -3,7 +3,7 @@ import { lstat } from 'node:fs/promises';
 import type Database from 'better-sqlite3';
 import { cacheKey, cachePath, enqueueMediaTask } from '../core/media-cache.ts';
 import { publishJob } from '../core/job-view.ts';
-import { mediaIgnored } from '../core/media-failures.ts';
+import { mediaIgnored, recordMediaFailure } from '../core/media-failures.ts';
 
 export type RecoveryResult = { metadataCandidates: number; thumbnailCandidates: number; skippedExisting: number; skippedEmpty: number; skippedUnavailable: number; metadataSkippedBusy: number; metadataReset: number; thumbnailQueued: number; nextCursor: string | null };
 type Row = { id: string; library_id: string; size: number; modified_at: number; cache_generation: number; thumb_ready: number; metadata_status: string };
@@ -15,18 +15,29 @@ export async function recoverMissingMedia(db: Database.Database, cacheDir: strin
   const found = db.prepare(`SELECT f.id,f.library_id,f.size,f.modified_at,f.cache_generation,f.thumb_ready,f.metadata_status
     FROM files f JOIN libraries l ON l.id=f.library_id AND l.enabled=1
     WHERE f.id>? AND f.missing_at_ms IS NULL AND f.media_type IN ('image','video') AND (f.thumb_ready=0 OR f.metadata_status='failed') ORDER BY f.id LIMIT ?`).all(options.after ?? '', limit + 1) as Row[];
+  const variant = { kind: 'thumb', size: 's' } as const;
   const rows = found.slice(0, limit);
   const result: RecoveryResult = { metadataCandidates: 0, thumbnailCandidates: 0, skippedExisting: 0, skippedEmpty: 0, skippedUnavailable: 0, metadataSkippedBusy: 0, metadataReset: 0, thumbnailQueued: 0, nextCursor: found.length > limit ? rows[rows.length - 1]!.id : null };
   const metadata: Row[] = []; const thumbs: Row[] = [];
-  const variant = { kind: 'thumb', size: 's' } as const;
+  const diagnostics: { row: Row; variant: { kind: 'thumb'; size: 's' } | { kind: 'metadata' }; reason: string }[] = [];
   for (const row of rows) {
-    if (!row.size) { result.skippedEmpty++; continue; }
+    if (!row.size) {
+      result.skippedEmpty++;
+      const reason = '媒体库索引显示源文件为空，请检查或重新扫描';
+      if (row.thumb_ready === 0) diagnostics.push({ row, variant, reason });
+      if (row.metadata_status === 'failed') diagnostics.push({ row, variant: { kind: 'metadata' }, reason });
+      continue;
+    }
     if (row.metadata_status === 'failed' && !mediaIgnored(db, row, { kind: 'metadata' })) { result.metadataCandidates++; metadata.push(row); }
     if (row.thumb_ready !== 0 || mediaIgnored(db, row, variant)) continue;
     const filename = cachePath(cacheDir, row, variant);
     try {
       await lstat(filename);
-      result.skippedExisting++; continue;
+      result.skippedExisting++;
+      if (!db.prepare('SELECT 1 FROM cache_entries WHERE cache_key=?').get(cacheKey(row, variant))) {
+        diagnostics.push({ row, variant, reason: '已有未登记的缩略图，请核验来源；现有缓存未覆盖' });
+      }
+      continue;
     }
     catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') { result.skippedUnavailable++; continue; }
@@ -35,6 +46,22 @@ export async function recoverMissingMedia(db: Database.Database, cacheDir: strin
   }
   if (!options.apply) return result;
   db.transaction(() => {
+    const exists = db.prepare('SELECT id,reason FROM media_failures WHERE media_id=? AND operation=? AND source_size=? AND source_modified=? AND source_generation=?');
+    const stillMissing = db.prepare(`SELECT thumb_ready,metadata_status FROM files WHERE id=? AND size=? AND modified_at=? AND cache_generation=? AND missing_at_ms IS NULL`);
+    for (const item of diagnostics) {
+      const { row, variant, reason } = item;
+      const operation = variant.kind === 'metadata' ? 'metadata' : 'thumb:s';
+      const current = stillMissing.get(row.id, row.size, row.modified_at, row.cache_generation) as { thumb_ready: number; metadata_status: string } | undefined;
+      if (!current || !(variant.kind === 'metadata' ? current.metadata_status === 'failed' : current.thumb_ready === 0)) continue;
+      const previous = exists.get(row.id, operation, row.size, row.modified_at, row.cache_generation) as { id: number; reason: string } | undefined;
+      if (!previous) recordMediaFailure(db, row, variant, reason, reason.includes('未登记') ? { category: 'unknown', errorCode: 'UNINDEXED_CACHE' } : { category: 'unknown' });
+      else if (['拍摄信息读取失败，请检查文件和格式', '媒体处理失败，请检查文件、编码器及存储', '作业执行失败，请检查媒体库及工作进程'].includes(previous.reason)) {
+        db.prepare('UPDATE media_failures SET reason=?,error_code=? WHERE id=?').run(reason, reason.includes('未登记') ? 'UNINDEXED_CACHE' : null, previous.id);
+      }
+      else if (reason.includes('未登记') && !previous.reason.includes('未登记')) {
+        db.prepare("UPDATE media_failures SET reason=?,error_code=CASE WHEN error_code='PARTIAL_DECODE' THEN error_code ELSE 'UNINDEXED_CACHE' END WHERE id=?").run(`${previous.reason}；${reason}`, previous.id);
+      }
+    }
     const libraries = new Map<string, string[]>();
     const reset = db.prepare("UPDATE files SET metadata_status='pending' WHERE id=? AND size=? AND modified_at=? AND cache_generation=? AND metadata_status='failed' AND missing_at_ms IS NULL");
     const busy = db.prepare("SELECT 1 FROM jobs WHERE type='metadata' AND status IN ('queued','running','paused') AND (json_extract(payload,'$.libraryId')=? OR json_extract(payload,'$.libraryId') IS NULL) LIMIT 1");
@@ -56,9 +83,9 @@ export async function recoverMissingMedia(db: Database.Database, cacheDir: strin
       const current = db.prepare("SELECT 1 FROM files WHERE id=? AND size=? AND modified_at=? AND cache_generation=? AND thumb_ready=0 AND missing_at_ms IS NULL").get(row.id, row.size, row.modified_at, row.cache_generation);
       if (!current) return false;
       const key = `media:${cacheKey(row, variant)}`;
-      if (db.prepare("SELECT 1 FROM jobs WHERE dedupe_key=? AND status IN ('queued','running','paused')").get(key)) return false;
+      const exists = !!db.prepare("SELECT 1 FROM jobs WHERE dedupe_key=? AND status IN ('queued','running','paused')").get(key);
       enqueueMediaTask(db, row, variant, { preserveUnindexed: true });
-      return true;
+      return !exists;
     }).immediate();
     if (added) result.thumbnailQueued++;
   }

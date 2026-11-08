@@ -232,3 +232,18 @@ test('已有版本 39 数据库打开时补建按库认领元数据的索引且�
     } finally { upgraded.close(); }
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
+
+test('版本 39 增量补齐元数据处理代次并保留媒体', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'luvia-metadata-generation-upgrade-')); const filename = path.join(dir, 'db.sqlite');
+  try {
+    const old = openDatabase(filename);
+    old.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib','照片','/media')").run();
+    old.prepare("INSERT INTO files(id,library_id,relative_path,folder,name,mime,media_type,size,modified_at,taken_at,taken_at_source) VALUES ('x','lib','x.jpg','lib','x.jpg','image/jpeg','image',10,10,10,'mtime')").run();
+    old.exec('ALTER TABLE files DROP COLUMN metadata_generation'); old.close();
+    const upgraded = openDatabase(filename);
+    try {
+      assert.equal(upgraded.pragma('user_version', { simple: true }), 39);
+      assert.deepEqual(upgraded.prepare('SELECT id,metadata_generation FROM files').all(), [{ id: 'x', metadata_generation: 0 }]);
+    } finally { upgraded.close(); }
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});

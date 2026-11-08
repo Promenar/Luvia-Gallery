@@ -25,6 +25,7 @@ export function enqueueMediaTask(db: Database.Database, source: MediaSource, var
     const result = db.prepare("INSERT OR IGNORE INTO jobs(id,type,label,status,trigger,payload,created_at,dedupe_key,media_background) VALUES (?,?,?,'queued','system',?,unixepoch(),?,?)")
       .run(id, variant.kind === 'preview' ? 'previews' : 'thumbnails', variant.kind === 'preview' ? '生成视频预览' : '生成媒体缓存', JSON.stringify(payload), key, options.waiter ? 0 : 1);
     const job = result.changes ? id : (db.prepare("SELECT id FROM jobs WHERE dedupe_key=? AND status IN ('queued','running','paused')").get(key) as { id: string }).id;
+    if (!result.changes && options.preserveUnindexed) db.prepare("UPDATE jobs SET payload=json_set(payload,'$.preserveUnindexed',json('true')) WHERE id=? AND json_valid(payload)").run(job);
     if (result.changes) publishJob(db, job);
     if (options.interactive) {
       const priority = `priority:${job}`;

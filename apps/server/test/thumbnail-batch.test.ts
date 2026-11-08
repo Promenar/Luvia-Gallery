@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import sharp from 'sharp';
@@ -39,6 +39,17 @@ test('全库缩略图作业直接生成网格两种尺寸并记录宽高，可�
     assert.equal((db.prepare("SELECT count(*) AS n FROM cache_entries WHERE variant='thumb'").get() as { n: number }).n, 2);
     assert.equal((db.prepare('SELECT thumb_ready FROM files').get() as { thumb_ready: number }).thumb_ready, 1);
     assert.deepEqual(await run('again'), { total: 1, done: 1, generated: 0, repaired: 0, dimensions: 0, failed: 0, legacy: 0 });
+    await writeFile(cachePath(cache, source, { kind: 'thumb', size: 's' }), '');
+    const { recordPartialMediaWarning } = await import('../src/core/media-failures.ts');
+    recordPartialMediaWarning(db, source, { kind: 'thumb', size: 's' });
+    const { processThumbnailBackfill } = await import('../src/worker/thumbnail-backfill.ts');
+    db.prepare("INSERT INTO jobs(id,type,label,status,trigger,payload,created_at) VALUES ('interrupted','thumbnails','生成缩略图','running','manual','{}',1)").run();
+    const interrupted = db.prepare("SELECT * FROM jobs WHERE id='interrupted'").get() as Parameters<typeof processThumbnailBackfill>[1];
+    await assert.rejects(processThumbnailBackfill(db, interrupted, { owner: 'worker', cacheDir: cache, allowedRoots: [root], assertLease: () => { throw new Error('模拟中断'); }, signal: new AbortController().signal }), /模拟中断/);
+    assert.equal((db.prepare("SELECT count(*) AS n FROM cache_entries WHERE media_id=? AND relative_path LIKE '%.webp'").get(source.id) as { n: number }).n, 2);
+    db.prepare("DELETE FROM jobs WHERE id='interrupted'").run();
+    assert.deepEqual(await run('repair-empty'), { total: 1, done: 1, generated: 1, repaired: 1, dimensions: 0, failed: 0, legacy: 0 });
+    assert.ok((await sharp(cachePath(cache, source, { kind: 'thumb', size: 's' })).metadata()).width);
     await rm(cachePath(cache, source, { kind: 'thumb', size: 'm' }));
     assert.deepEqual(await run('repair'), { total: 1, done: 1, generated: 1, repaired: 1, dimensions: 0, failed: 0, legacy: 0 });
     assert.ok((await sharp(cachePath(cache, source, { kind: 'thumb', size: 'm' })).metadata()).width);

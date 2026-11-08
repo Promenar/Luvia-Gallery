@@ -83,6 +83,7 @@ export const endpoints = {
   updateSettings: d({ method: 'PATCH', path: '/api/v2/admin/settings', auth: 'admin', body: Ad.AdminSettingsPatch, response: Ad.AdminSettings }),
   listJobs: d({ method: 'GET', path: '/api/v2/admin/jobs', auth: 'admin', query: z.object({ status: Ad.JobStatus.optional(), limit: z.coerce.number().int().min(1).max(200).default(50) }), response: Ad.JobList }),
   listMediaFailures: d({ method: 'GET', path: '/api/v2/admin/media-failures', auth: 'admin', query: z.object({ cursor: z.coerce.number().int().positive().optional(), limit: z.coerce.number().int().min(1).max(200).default(50), ignored: z.enum(['true','false']).optional() }), response: Ad.MediaFailureList }),
+  ignoreMediaFailure: d({ method: 'POST', path: '/api/v2/admin/media-failures/:id/ignore', auth: 'admin', body: Ad.MediaFailureSource, response: z.object({ success: z.literal(true) }) }),
   unignoreMediaFailure: d({ method: 'POST', path: '/api/v2/admin/media-failures/:id/unignore', auth: 'admin', body: Ad.MediaFailureSource, response: z.object({ success: z.literal(true) }) }),
   retryMediaFailure: d({ method: 'POST', path: '/api/v2/admin/media-failures/:id/retry', auth: 'admin', body: Ad.MediaFailureSource, response: z.object({ jobId: z.string() }) }),
   deleteMedia: d({ method: 'DELETE', path: '/api/v2/admin/media/:id', auth: 'admin', body: Ad.DeleteMediaBody, response: Ad.DeleteMediaResult }),

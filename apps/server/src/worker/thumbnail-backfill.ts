@@ -4,13 +4,13 @@ import { findLegacyThumbnail } from '../core/legacy-thumbnail.ts';
 import { cacheKey, cachePath, type Variant } from '../core/media-cache.ts';
 import type { JobRow } from '../core/jobs.ts';
 import { readSettings } from '../core/settings.ts';
-import { withThumbnailSlot } from './ffmpeg-slots.ts';
+import { NoVideoPacketsError, withThumbnailSlot } from './ffmpeg-slots.ts';
 import { generateMediaCache } from './media-cache.ts';
 import { withMediaGenerationLock } from './media-lock.ts';
 import { extractMetadataNow } from './metadata.ts';
 import { waitForWalCapacity } from './wal-checkpoint.ts';
 import { runLanes } from './lanes.ts';
-import { classifyMediaFailure, clearMediaFailure, mediaIgnored, recordMediaFailure } from '../core/media-failures.ts';
+import { classifyMediaFailure, clearMediaFailure, mediaIgnored, recordMediaFailure, recordUnindexedCacheFailure } from '../core/media-failures.ts';
 import { isImageDecodeError } from './image-decoding.ts';
 import { isTransientSqliteError } from '../core/sqlite-errors.ts';
 
@@ -21,7 +21,7 @@ const INTERACTIVE_RESERVE = 2;
 
 type Checkpoint = { lastId: string; total: number; done: number; generated: number; repaired: number; dimensions: number; failed: number; legacy: number };
 type Row = { id: string; size: number; modified_at: number; cache_generation: number; media_type: string; width: number | null; height: number | null; metadata_status: string; root: string; relative_path: string };
-type Task = { kind: 'thumb'; row: Row; variant: Variant; key: string } | { kind: 'dimensions'; row: Row };
+type Task = { kind: 'thumb'; row: Row; variant: Variant; key: string; replaceEmpty?: { dev: bigint; ino: bigint; mtimeNs: bigint } } | { kind: 'dimensions'; row: Row };
 
 function backfillWhere(byLibrary: boolean): string {
   return `f.media_type IN ('image','video') AND f.missing_at_ms IS NULL${byLibrary ? ' AND f.library_id=?' : ''}`;
@@ -66,13 +66,15 @@ export async function processThumbnailBackfill(db: Database.Database, job: JobRo
     for (const variant of BACKFILL_VARIANTS) {
       if (mediaIgnored(db, row, variant)) continue;
       const key = cacheKey(row, variant);
+      let replaceEmpty: { dev: bigint; ino: bigint; mtimeNs: bigint } | undefined;
       if (entry.get(key)) {
-        const info = await lstat(cachePath(options.cacheDir, row, variant)).catch(() => null);
-        if (info?.isFile() && !info.isSymbolicLink() && info.size > 0) continue;
-        db.prepare('DELETE FROM cache_entries WHERE cache_key=?').run(key);
+        const info = await lstat(cachePath(options.cacheDir, row, variant), { bigint: true }).catch(() => null);
+        if (info?.isFile() && !info.isSymbolicLink() && info.size > 0n) continue;
+        if (info?.isFile() && info.size === 0n) replaceEmpty = { dev: info.dev, ino: info.ino, mtimeNs: info.mtimeNs };
+        else db.prepare('DELETE FROM cache_entries WHERE cache_key=?').run(key);
         state.repaired++;
       }
-      tasks.push({ kind: 'thumb', row, variant, key });
+      tasks.push({ kind: 'thumb', row, variant, key, replaceEmpty });
     }
     if (tasks.length === before && (!row.width || !row.height)) tasks.push({ kind: 'dimensions', row });
   }
@@ -114,16 +116,21 @@ export async function processThumbnailBackfill(db: Database.Database, job: JobRo
         const legacyInput = task.variant.kind === 'thumb' ? await legacyOf(task.row) : undefined;
         if (legacyInput && task.variant.kind === 'thumb' && task.variant.size === 'm') continue;
         let usedLegacy = false;
+        let generated: { partialDecode: boolean } | undefined;
         await withMediaGenerationLock(db, options.owner, `media:${task.key}`, async (lockSignal, assertMediaLease) => {
-          if (entry.get(task.key)) return;
+          if (mediaIgnored(db, task.row, task.variant)) return;
+          if (entry.get(task.key) && !task.replaceEmpty) return;
           const payload = { ...source, variant: task.variant };
-          const { fromLegacy } = await withThumbnailSlot(db, options.owner, (inner, assertSlot) => generateMediaCache(db, payload, { owner: options.owner, cacheDir: options.cacheDir, allowedRoots: options.allowedRoots, assertLease: assertSlot, signal: inner, legacyInput }),
+          const result = await withThumbnailSlot(db, options.owner, (inner, assertSlot) => mediaIgnored(db, task.row, task.variant) ? Promise.resolve(undefined) : generateMediaCache(db, payload, { owner: options.owner, cacheDir: options.cacheDir, allowedRoots: options.allowedRoots, assertLease: assertSlot, signal: inner, legacyInput, replaceEmpty: task.replaceEmpty }),
             { signal: lockSignal, assertLease: assertMediaLease });
+          if (!result) return;
+          if (result.keptExisting) return;
+          generated = result;
           state.generated++;
-          if (fromLegacy) { state.legacy++; usedLegacy = true; }
+          if (result.fromLegacy) { state.legacy++; usedLegacy = true; }
         }, { signal, assertLease: options.assertLease });
         thumbnailReady = true;
-        db.transaction(() => { options.assertLease(); clearMediaFailure(db, task.row, task.variant); }).immediate();
+        if (!generated?.partialDecode) db.transaction(() => { options.assertLease(); clearMediaFailure(db, task.row, task.variant, { preservePartial: !generated }); }).immediate();
         // 从 1.x 缩略图缩放时不知道原始宽高，单独读取（图片只读文件头）
         if (usedLegacy && (!task.row.width || !task.row.height)) await readDimensions(task.row);
       } catch (error) {
@@ -132,7 +139,8 @@ export async function processThumbnailBackfill(db: Database.Database, job: JobRo
         options.assertLease();
         if (task.kind === 'thumb' && !thumbnailReady) db.transaction(() => {
           options.assertLease();
-          recordMediaFailure(db, task.row, task.variant, '媒体处理失败，请检查文件、编码器及存储', classifyMediaFailure(error, isImageDecodeError(error)));
+          if ((error as NodeJS.ErrnoException | null)?.code === 'EEXIST') recordUnindexedCacheFailure(db, task.row, task.variant);
+          else recordMediaFailure(db, task.row, task.variant, error instanceof NoVideoPacketsError ? error.message : '媒体处理失败，请检查文件、编码器及存储', classifyMediaFailure(error, error instanceof NoVideoPacketsError || isImageDecodeError(error)));
         }).immediate();
         state.failed++;
       }
