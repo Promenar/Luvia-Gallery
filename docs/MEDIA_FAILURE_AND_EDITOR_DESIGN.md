@@ -8,7 +8,7 @@
 
 - 浏览请求可调用 `enqueueMediaTask`；其去重约束只覆盖排队、运行和暂停的作业，失败后新的请求可以创建新作业。单次批量缩略图遍历在文件失败后继续处理其他文件。此前观察到重复创建，不能据此断定任务无限重试。
 - 图像缩略图由 Sharp/libvips 生成；视频使用 FFmpeg。原文件访问采用媒体 ID、授权检查及 `secureMediaPath`，不接受客户端提交的物理路径。
-- FNOS 生产环境中，API 对 `/media` 和 `/video` 使用可写挂载，worker 保持只读；写入仍受操作系统目录权限限制。58 个缩略图和 40 条拍摄信息缺失仍待逐项诊断。
+- 磁盘删除需要 API 具有媒体库写权限；工作进程的读取和缓存生成不要求媒体库可写。
 - 保留现有缩略图及缓存，不触发全库重建。源文件、缓存键、原图或既有媒体身份不得因启用本功能而批量变化。
 
 ## 前后端职责
@@ -26,7 +26,7 @@
 
 默认同一源版本同一类别**连续失败 3 次**后自动忽略该类别，计数是 3 次实际失败（含首次），不是额外重试 3 次。如引入主动自动重试，须采用延时退避；达到上限后所有自动入口都应检查，包括前台按需缓存、全库任务、元数据批次和恢复任务。请求可立即得知已忽略，不能无限返回 202。因取消、租约丢失、服务停机、SQLite 暂时繁忙导致的放弃不计为媒体处理失败。记录失败和作业状态变更须在同一数据库事务、持有有效租约时完成。自动忽略不删除文件、不阻止其他处理类别和查看原图。
 
-管理员的“重试”重置该类别计数并安排一次定向处理；“解除忽略”仅恢复自动调度，不删除历史文件。恢复前重新检查源版本和媒体权限。列表支持分页、类别、状态、关键词及稳定排序；返回源版本、失败原因和次数，查看器通过现有媒体 ID 打开。缺失、无法解码或访问受限时显示可理解的原因，不能承诺所有原文件均可显示。
+管理员可手动忽略当前源版本的处理项；“重试”重置该类别计数并安排一次定向处理；“解除忽略”将记录移回待处理列表，可手动重试，不删除原文件。宽松解码得到的缩略图可能不完整，质量提示不累计失败次数；忽略质量提示不会阻止缓存淘汰后再生成。源文件修复后重新扫描。恢复前重新检查源版本和媒体权限。列表支持分页与状态筛选，返回源版本、失败原因和次数，查看器通过现有媒体 ID 打开。缺失、无法解码或访问受限时显示可理解的原因，不能承诺所有原文件均可显示。
 
 ## 磁盘删除
 
@@ -62,7 +62,8 @@ FNOS 实测为 32 逻辑线程、GTX 1660 Ti 6 GB；采样时约 4.3 GB 已被�
 | --- | --- | --- |
 | `GET /api/v2/admin/media-failures` | `ignored?`（`true`/`false`）、`cursor?`、`limit?`（1–200） | 草稿已实现：`items`、`nextCursor`、`total`、`counts`；条目包含 `id`、`mediaId`、`libraryId`、`name`、`folder`、`operation`、`source`、`failures`、`ignored`、`category`、可选 `errorCode`、`reason`、`lastFailedAt`。关键词和分类筛选待实现。 |
 | `POST /api/v2/admin/media-failures/:id/retry` | `source`：`{size, modifiedAt, generation}` | 已实现：解除忽略并安排对应缓存或元数据操作，返回 `{jobId}`。 |
-| `POST /api/v2/admin/media-failures/:id/unignore` | `source`：`{size, modifiedAt, generation}` | 已实现：移除该条失败记录，返回 `{success: true}`。 |
+| `POST /api/v2/admin/media-failures/:id/ignore` | `source`：`{size, modifiedAt, generation}` | 已实现：忽略当前源版本的处理项，返回 `{success: true}`。 |
+| `POST /api/v2/admin/media-failures/:id/unignore` | `source`：`{size, modifiedAt, generation}` | 已实现：解除忽略并重置失败次数，保留原因供检查或手动重试，返回 `{success: true}`。 |
 | `DELETE /api/v2/admin/media/:id` | `confirm`、源版本、`operationId` | 已实现：管理员会话 + CSRF；重新校验真实路径、普通文件/非符号链接、实际大小与修改时间、写权限；只读返回 `MEDIA_READ_ONLY`，源变化返回 `MEDIA_CHANGED`；`operationId` 幂等，文件已删但索引失败的 `OPERATION_PARTIAL` 可用同一 ID 重试；成功后清理收藏、相册封面、缓存与索引并发布移除事件。 |
 | `GET /api/v2/editor/capabilities` | 无 | 已实现：探测 `EDITOR_SERVICE_URL` 的 `/v1/models`；未配置或不可达时三个模型均 `available=false` 并给出原因。`write` 按启用媒体库的根目录写权限探测，`mask` 返回后端上限。 |
 | `POST /api/v2/editor/jobs` | `mediaId`、源版本、`model`、蒙版 `{data,width,height}` | 已实现：管理员会话；校验源版本、图片类型、模型上限、蒙版 PNG/字节数/尺寸/宽高比；写入缓存并进入独立推理队列。 |

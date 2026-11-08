@@ -42,6 +42,7 @@ export function failureTone(f: Pick<MediaFailure, 'ignored' | 'failures'>): Tone
 }
 
 /** 传给查看器错误卡片的提示，把“哪一步失败了几次”说清楚。 */
-export function failureHint(f: Pick<MediaFailure, 'operation' | 'failures' | 'reason'>): string {
+export function failureHint(f: Pick<MediaFailure, 'operation' | 'failures' | 'reason' | 'errorCode'>): string {
+  if (f.errorCode === 'PARTIAL_DECODE') return `${operationLabel(f.operation)}：${f.reason}`;
   return `${operationLabel(f.operation)}：连续失败 ${f.failures} 次，${f.reason || '没有返回原因'}`;
 }

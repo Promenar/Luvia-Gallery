@@ -15,7 +15,7 @@ import { processMetadataBatch } from './metadata.ts';
 import { processThumbnailBackfill } from './thumbnail-backfill.ts';
 import { cacheKey, cachePath, cancelUnobservedMediaTask, enqueueMediaTask } from '../core/media-cache.ts';
 import type { Variant } from '../core/media-cache.ts';
-import { classifyMediaFailure, clearMediaFailure, mediaIgnored, recordMediaFailure } from '../core/media-failures.ts';
+import { classifyMediaFailure, clearMediaFailure, mediaIgnored, recordMediaFailure, recordUnindexedCacheFailure } from '../core/media-failures.ts';
 import { generateHls } from './hls.ts';
 import { FfmpegExitError, NoVideoPacketsError, withThumbnailSlot } from './ffmpeg-slots.ts';
 import { isImageDecodeError } from './image-decoding.ts';
@@ -230,26 +230,33 @@ export async function runNextJob(db: Database.Database, options: WorkerOptions):
       const generated = await withMediaGenerationLock(db, options.owner, key, async (signal, assertMediaLease) => {
         if (payload.mediaId && payload.sourceSize !== undefined && payload.sourceModified !== undefined && payload.variant) {
           const source = { id: payload.mediaId, size: payload.sourceSize, modified_at: payload.sourceModified, cache_generation: payload.sourceGeneration ?? 0 };
+          if (mediaIgnored(db, source, payload.variant)) return { generated: false, partialDecode: false, skippedUnindexed: false, skippedIgnored: true };
           const cached = db.prepare(`SELECT 1 FROM cache_entries c JOIN files f ON f.id=c.media_id JOIN libraries l ON l.id=f.library_id AND l.enabled=1
             WHERE c.cache_key=? AND f.size=? AND f.modified_at=? AND f.cache_generation=? AND f.missing_at_ms IS NULL`).get(cacheKey(source, payload.variant), source.size, source.modified_at, source.cache_generation);
           if (cached) {
             const info = await lstat(cachePath(cacheDir, source, payload.variant)).catch(() => null);
-            if (info?.isFile() && !info.isSymbolicLink()) return false;
+            if (info?.isFile() && !info.isSymbolicLink()) return { generated: false, partialDecode: false, skippedUnindexed: false, skippedIgnored: false };
           }
           if (payload.preserveUnindexed) {
-            try { await lstat(cachePath(cacheDir, source, payload.variant)); return false; }
+            try { await lstat(cachePath(cacheDir, source, payload.variant)); return { generated: false, partialDecode: false, skippedUnindexed: true, skippedIgnored: false }; }
             catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
           }
         }
-        const generate = (inner: AbortSignal, guard = assertMediaLease) => generateMediaCache(db, payload, { owner: options.owner, cacheDir, allowedRoots: options.allowedRoots, assertLease: guard, signal: inner, preserveExisting: payload.preserveUnindexed });
-        if (job.type === 'thumbnails') await withThumbnailSlot(db, options.owner, generate, { signal, assertLease: assertMediaLease });
-        else await generate(signal);
-        return true;
+        const generate = (inner: AbortSignal, guard = assertMediaLease) => {
+          if (payload.mediaId && payload.sourceSize !== undefined && payload.sourceModified !== undefined && payload.variant &&
+              mediaIgnored(db, { id: payload.mediaId, size: payload.sourceSize, modified_at: payload.sourceModified, cache_generation: payload.sourceGeneration ?? 0 }, payload.variant)) return Promise.resolve(undefined);
+          return generateMediaCache(db, payload, { owner: options.owner, cacheDir, allowedRoots: options.allowedRoots, assertLease: guard, signal: inner, preserveExisting: payload.preserveUnindexed });
+        };
+        const result = job.type === 'thumbnails' ? await withThumbnailSlot(db, options.owner, generate, { signal, assertLease: assertMediaLease }) : await generate(signal);
+        if (!result) return { generated: false, partialDecode: false, skippedUnindexed: false, skippedIgnored: true };
+        return { generated: !result.keptExisting, partialDecode: result.partialDecode, skippedUnindexed: false, skippedIgnored: false };
       }, { signal: controller.signal, assertLease });
       db.transaction(() => {
-        if (!queue.finish(job.id, { generated: generated ? 1 : 0 })) throw new Error('作业租约已失效');
+        if (!queue.finish(job.id, { generated: generated.generated ? 1 : 0 })) throw new Error('作业租约已失效');
         if (payload.mediaId && payload.sourceSize !== undefined && payload.sourceModified !== undefined && payload.variant) {
-          clearMediaFailure(db, { id: payload.mediaId, size: payload.sourceSize, modified_at: payload.sourceModified, cache_generation: payload.sourceGeneration ?? 0 }, payload.variant);
+          const source = { id: payload.mediaId, size: payload.sourceSize, modified_at: payload.sourceModified, cache_generation: payload.sourceGeneration ?? 0 };
+          if (generated.skippedUnindexed) recordUnindexedCacheFailure(db, source, payload.variant);
+          else if (!generated.partialDecode && !generated.skippedIgnored) clearMediaFailure(db, source, payload.variant, { preservePartial: !generated.generated });
         }
       }).immediate();
     } else if (job.type === 'cache_prune') {
@@ -264,7 +271,9 @@ export async function runNextJob(db: Database.Database, options: WorkerOptions):
   } catch (error) {
     const watchScan = job.type === 'scan' && !!db.prepare('SELECT 1 FROM watch_reconcile_requests WHERE job_id=?').get(job.id);
     const message = watchScan ? safeScanError(error) : error instanceof LegacyIdentityUncertainError ? error.message
-      : job.type === 'previews' && error instanceof NoVideoPacketsError ? error.message
+      : (job.type === 'thumbnails' || job.type === 'previews') && error instanceof NoVideoPacketsError ? error.message
+      : job.type === 'thumbnails' && (error as NodeJS.ErrnoException | null)?.code === 'EEXIST'
+        ? '已有未登记的缩略图，请核验来源；现有缓存未覆盖'
       : (job.type === 'thumbnails' || job.type === 'previews') && error instanceof FfmpegExitError
         ? '媒体处理失败，请检查文件、编码器及存储'
       : (job.type === 'thumbnails' || job.type === 'previews') && isImageDecodeError(error)
@@ -299,7 +308,9 @@ export async function runNextJob(db: Database.Database, options: WorkerOptions):
           let payload: Payload = {};
           try { payload = JSON.parse(job.payload) as Payload; } catch { /* 无效作业负载仍应保留失败状态。 */ }
           if (payload.mediaId && payload.sourceSize !== undefined && payload.sourceModified !== undefined && payload.variant) {
-            recordMediaFailure(db, { id: payload.mediaId, size: payload.sourceSize, modified_at: payload.sourceModified, cache_generation: payload.sourceGeneration ?? 0 }, payload.variant, message, classifyMediaFailure(error, error instanceof NoVideoPacketsError || isImageDecodeError(error)));
+            const source = { id: payload.mediaId, size: payload.sourceSize, modified_at: payload.sourceModified, cache_generation: payload.sourceGeneration ?? 0 };
+            if (payload.variant.kind === 'thumb' && (error as NodeJS.ErrnoException | null)?.code === 'EEXIST') recordUnindexedCacheFailure(db, source, payload.variant);
+            else recordMediaFailure(db, source, payload.variant, message, classifyMediaFailure(error, error instanceof NoVideoPacketsError || isImageDecodeError(error)));
           }
         }
         if (watchScan) finishWatchReconcile(db, job.id, false);

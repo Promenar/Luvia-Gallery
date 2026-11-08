@@ -1,5 +1,5 @@
 import { mkdir, realpath, stat, unlink } from 'node:fs/promises';
-import { linkSync, renameSync } from 'node:fs';
+import { linkSync, lstatSync, renameSync } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
@@ -13,6 +13,7 @@ import { runProcess } from './process-runner.ts';
 import { readSettings } from '../core/settings.ts';
 import { noteThumbnail } from '../core/folder-covers.ts';
 import { isImageDecodeError, isIsoBmffFile, isJpegFile } from './image-decoding.ts';
+import { recordPartialMediaWarning } from '../core/media-failures.ts';
 
 const Variant = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('thumb'), size: z.enum(['s', 'm', 'l']) }),
@@ -29,11 +30,23 @@ const within = (root: string, target: string) => {
 /** 1.x 缩略图短边不小于该值时才用来生成小尺寸（256），略低于 256 的横图（约 300×225）显示差别很小。 */
 export const LEGACY_MIN_SIDE = 192;
 
+/** 只有探测确认没有视频包时才给出确定的文件诊断。 */
+async function rejectEmptyVideo(db: Database.Database, filename: string, options: { owner: string; signal?: AbortSignal; assertLease: () => void }): Promise<void> {
+  const result = await withFfmpegSlot(db, options.owner, (signal) => runProcess('ffprobe',
+    ['-v', 'error', '-protocol_whitelist', 'file,pipe', '-select_streams', 'v:0', '-read_intervals', '%+#1', '-show_entries', 'packet=stream_index', '-of', 'json', filename],
+    { timeoutMs: 15000, maxBuffer: 65536, capture: true, signal }), options);
+  options.signal?.throwIfAborted(); options.assertLease();
+  if (result.code !== 0 || result.error) return;
+  let packets: unknown;
+  try { packets = (JSON.parse(result.stdout) as { packets?: unknown }).packets; } catch { return; }
+  if (Array.isArray(packets) && packets.length === 0) throw new NoVideoPacketsError();
+}
+
 /**
  * 生成缓存文件。legacyInput 为已校验的 1.x 缩略图时，小尺寸缩略图直接从它缩放，不读原文件（原文件只做变化校验）。
- * 返回是否使用了 1.x 缩略图。
+ * 返回是否使用了 1.x 缩略图以及是否进行了不完整解码。
  */
-export async function generateMediaCache(db: Database.Database, payload: unknown, options: { owner: string; cacheDir: string; allowedRoots: string[]; assertLease: () => void; signal?: AbortSignal; legacyInput?: string; preserveExisting?: boolean }): Promise<{ fromLegacy: boolean }> {
+export async function generateMediaCache(db: Database.Database, payload: unknown, options: { owner: string; cacheDir: string; allowedRoots: string[]; assertLease: () => void; signal?: AbortSignal; legacyInput?: string; preserveExisting?: boolean; replaceEmpty?: { dev: bigint; ino: bigint; mtimeNs: bigint } }): Promise<{ fromLegacy: boolean; partialDecode: boolean; keptExisting: boolean }> {
   const task = Task.parse(payload);
   const row = db.prepare(`SELECT f.id,f.size,f.modified_at,f.cache_generation,f.mtime_ms,f.relative_path,f.media_type,f.width,f.height,f.duration_sec,l.root FROM files f
     JOIN libraries l ON l.id=f.library_id WHERE f.id=? AND l.enabled=1 AND f.missing_at_ms IS NULL`).get(task.mediaId) as
@@ -60,7 +73,7 @@ export async function generateMediaCache(db: Database.Database, payload: unknown
   };
   if (task.variant.kind === 'dimensions') {
     if (!recordDimensions(await sharp(filename).metadata(), false)) throw new Error('图片尺寸不可用');
-    return { fromLegacy: false };
+    return { fromLegacy: false, partialDecode: false, keptExisting: false };
   }
   const cacheRoot = path.resolve(options.cacheDir);
   const destination = cachePath(cacheRoot, row, task.variant);
@@ -69,6 +82,7 @@ export async function generateMediaCache(db: Database.Database, payload: unknown
   const frame = `${temp}.jpg`;
   const decoded = `${temp}.png`;
   let hash: string | null = null;
+  let partialDecode = false;
   try {
     let input = filename;
     let fromLegacy = false;
@@ -118,7 +132,18 @@ export async function generateMediaCache(db: Database.Database, payload: unknown
           }
         }
         // 全黑、极短或缺少可用取样时间戳时保留首帧作为封面。
-        if (!selected) await runFfmpeg(db, options.owner, ['-n', '-i', filename, '-map', '0:v:0', '-frames:v', '1', '-threads', '1', '-f', 'image2', '-vcodec', 'mjpeg', frame], options);
+        if (!selected) {
+          try { await runFfmpeg(db, options.owner, ['-n', '-i', filename, '-map', '0:v:0', '-frames:v', '1', '-threads', '1', '-f', 'image2', '-vcodec', 'mjpeg', frame], options); }
+          catch (error) {
+            if (!(error instanceof FfmpegExitError)) throw error;
+            await rejectEmptyVideo(db, filename, options);
+            throw error;
+          }
+          if (!(await stat(frame).catch(() => null))?.size) {
+            await rejectEmptyVideo(db, filename, options);
+            throw new FfmpegExitError();
+          }
+        }
         input = frame;
       }
       const dimension = { s: 256, m: 768, l: 1600 }[task.variant.size];
@@ -139,8 +164,7 @@ export async function generateMediaCache(db: Database.Database, payload: unknown
         if (isoBmff || /unsupported image format/i.test(error instanceof Error ? error.message : '')) {
           await runFfmpeg(db, options.owner, ['-n', '-max_pixels', '100000000', '-i', filename, '-map', '0:v:0', '-frames:v', '1', '-threads', '1', '-f', 'image2', '-vcodec', 'png', decoded], options);
           input = decoded; thumbnail = await render();
-        } else if (jpeg) { lenient = true; thumbnail = await render(); }
-        else throw error;
+        } else { lenient = true; thumbnail = await render(); partialDecode = true; }
       }
       // 不透明缩略图复用生成结果；透明图从原图计算，保留透明度和颜色。
       const placeholder = await sharp(thumbnail.hasAlpha ? input : temp, thumbnail.hasAlpha && lenient ? { failOn: 'none' } : {}).rotate().resize({ width: 100, height: 100, fit: 'inside', withoutEnlargement: true }).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
@@ -172,15 +196,7 @@ export async function generateMediaCache(db: Database.Database, payload: unknown
         try { await attempt(true); }
         catch (finalError) {
           if (!(finalError instanceof FfmpegExitError)) throw finalError;
-          const result = await withFfmpegSlot(db, options.owner, (signal) => runProcess('ffprobe',
-            ['-v', 'error', '-protocol_whitelist', 'file,pipe', '-select_streams', 'v:0', '-read_intervals', '%+#1', '-show_entries', 'packet=stream_index', '-of', 'json', filename],
-            { timeoutMs: 15000, maxBuffer: 65536, capture: true, signal }), options);
-          options.signal?.throwIfAborted(); options.assertLease();
-          if (result.code === 0 && !result.error) {
-            let packets: unknown;
-            try { packets = (JSON.parse(result.stdout) as { packets?: unknown }).packets; } catch { /* 探测输出无效时保留原转码错误。 */ }
-            if (Array.isArray(packets) && packets.length === 0) throw new NoVideoPacketsError();
-          }
+          await rejectEmptyVideo(db, filename, options);
           throw finalError;
         }
       }
@@ -208,12 +224,34 @@ export async function generateMediaCache(db: Database.Database, payload: unknown
     const current = db.prepare('SELECT size,modified_at,cache_generation FROM files WHERE id=? AND missing_at_ms IS NULL').get(row.id) as { size: number; modified_at: number; cache_generation: number } | undefined;
     if (!current || current.size !== row.size || current.modified_at !== row.modified_at || current.cache_generation !== row.cache_generation) throw new Error('媒体已变化');
     const output = await stat(temp);
-    db.transaction(() => {
+    if (partialDecode) db.transaction(() => {
+      options.signal?.throwIfAborted(); options.assertLease();
+      recordPartialMediaWarning(db, row, task.variant);
+    }).immediate();
+    const keptExisting = db.transaction(() => {
       options.signal?.throwIfAborted();
       options.assertLease();
       if (!db.prepare('SELECT 1 FROM files WHERE id=? AND size=? AND modified_at=? AND cache_generation=? AND missing_at_ms IS NULL').get(row.id, row.size, row.modified_at, row.cache_generation)) throw new Error('媒体已变化');
       // 写事务阻止其它 worker 在校验租约与发布文件之间接管。
-      if (options.preserveExisting) linkSync(temp, destination);
+      let sameEmpty = false;
+      if (options.replaceEmpty) {
+        try {
+          const existing = lstatSync(destination, { bigint: true });
+          sameEmpty = existing.isFile() && existing.size === 0n && existing.dev === options.replaceEmpty.dev && existing.ino === options.replaceEmpty.ino && existing.mtimeNs === options.replaceEmpty.mtimeNs;
+        } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+      }
+      let existing = false;
+      let existingUsable = false;
+      if (task.variant.kind === 'thumb' && !sameEmpty) {
+        try { const info = lstatSync(destination); existing = true; existingUsable = info.isFile() && info.size > 0; }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+      }
+      // 浏览可能在生成期间登记已有缓存；已登记的有效缓存直接复用。
+      if (existingUsable && db.prepare('SELECT 1 FROM cache_entries WHERE cache_key=?').get(cacheKey(row, task.variant))) return true;
+      // 与其它发布者共用写事务；已有文件不能在恢复期间被覆盖。
+      const protect = task.variant.kind === 'thumb' && (existing || db.prepare("SELECT 1 FROM jobs WHERE dedupe_key=? AND status IN ('queued','running','paused') AND json_valid(payload) AND json_extract(payload,'$.preserveUnindexed')=1").get(`media:${cacheKey(row, task.variant)}`) ||
+        (!sameEmpty && (options.replaceEmpty || db.prepare("SELECT 1 FROM media_failures WHERE media_id=? AND operation=? AND source_size=? AND source_modified=? AND source_generation=? AND error_code IN ('PARTIAL_DECODE','UNINDEXED_CACHE')").get(row.id, `thumb:${task.variant.size}`, row.size, row.modified_at, row.cache_generation))));
+      if (options.preserveExisting || protect) linkSync(temp, destination);
       else renameSync(temp, destination);
       db.prepare(`INSERT INTO cache_entries(cache_key,relative_path,bytes,last_access_at,media_id,variant,source_size,source_modified) VALUES (?,?,?,?,?,?,?,?)
         ON CONFLICT(cache_key) DO UPDATE SET bytes=excluded.bytes,last_access_at=excluded.last_access_at,media_id=excluded.media_id,variant=excluded.variant,source_size=excluded.source_size,source_modified=excluded.source_modified`)
@@ -222,7 +260,8 @@ export async function generateMediaCache(db: Database.Database, payload: unknown
         .run(hash, row.id, row.size, row.modified_at, row.cache_generation);
       if (hash) noteThumbnail(db, row.id);
       if (task.variant.kind === 'preview') db.prepare('UPDATE files SET has_preview=1 WHERE id=? AND size=? AND modified_at=? AND cache_generation=?').run(row.id, row.size, row.modified_at, row.cache_generation);
+      return false;
     }).immediate();
-    return { fromLegacy };
+    return { fromLegacy, partialDecode, keptExisting };
   } finally { await unlink(temp).catch(() => {}); await unlink(frame).catch(() => {}); await unlink(decoded).catch(() => {}); }
 }

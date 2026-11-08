@@ -292,6 +292,7 @@ interface MockFailure {
   ignored: boolean;
   category: 'missing' | 'permission' | 'decode' | 'storage' | 'unknown';
   reason: string;
+  errorCode?: string;
   lastFailedAt: string;
 }
 
@@ -306,6 +307,7 @@ const mediaFailures: MockFailure[] = [
   { id: '4', mediaId: videoId, operation: 'preview', failures: 1, ignored: false, category: 'storage', reason: '视频预览生成失败，请检查编码器和存储', lastFailedAt: iso(2 * HOUR) },
   { id: '5', mediaId: imageIds[0]!, operation: 'metadata', failures: 2, ignored: false, category: 'permission', reason: '拍摄信息读取失败，请检查文件和格式', lastFailedAt: iso(26 * MIN) },
   { id: '6', mediaId: imageIds[0]!, operation: 'thumb:s', failures: 3, ignored: true, category: 'decode', reason: '图片无法解码，请检查文件完整性及格式支持', lastFailedAt: iso(8 * MIN) },
+  { id: '7', mediaId: imageIds[1]!, operation: 'thumb:s', failures: 0, ignored: false, category: 'decode', errorCode: 'PARTIAL_DECODE', reason: '源文件解码不完整，缩略图可能不完整，请检查原图', lastFailedAt: iso(4 * MIN) },
 ];
 
 function failureView(f: MockFailure) {
@@ -315,7 +317,7 @@ function failureView(f: MockFailure) {
     id: f.id, mediaId: f.mediaId, libraryId: m.libraryId, name: m.name, folder: m.folder,
     operation: f.operation,
     source: { size: m.size, modifiedAt: m.modifiedAt, generation: 0 },
-    failures: f.failures, ignored: f.ignored, category: f.category, reason: f.reason, lastFailedAt: f.lastFailedAt,
+    failures: f.failures, ignored: f.ignored, category: f.category, reason: f.reason, lastFailedAt: f.lastFailedAt, ...(f.errorCode ? { errorCode: f.errorCode } : {}),
   };
 }
 
@@ -478,9 +480,22 @@ export const adminHandlers = [
     if (body.size !== m.size || body.modifiedAt !== m.modifiedAt || body.generation !== 0) {
       return err(409, 'CONFLICT', '媒体已发生变化，请刷新后重试');
     }
+    if (f.errorCode === 'PARTIAL_DECODE') return err(409, 'CONFLICT', '已生成的缩略图可能不完整，请先修复原文件并重新扫描');
     mediaFailures.splice(mediaFailures.indexOf(f), 1);
     await delay(220);
     return HttpResponse.json({ jobId: `job-${Date.now()}` });
+  }),
+  http.post('/api/v2/admin/media-failures/:id/ignore', async ({ params, request }) => {
+    const f = mediaFailures.find((x) => x.id === params.id);
+    if (!f) return err(404, 'NOT_FOUND', '失败记录不存在');
+    const m = db.media.find((x) => x.id === f.mediaId);
+    if (!m) return err(404, 'NOT_FOUND', '媒体记录不存在');
+    const body = await failureSource(request);
+    if (!body) return err(400, 'VALIDATION', '提交的内容不符合要求');
+    if (body.size !== m.size || body.modifiedAt !== m.modifiedAt || body.generation !== 0) return err(409, 'MEDIA_CHANGED', '媒体已发生变化，请刷新后重试');
+    f.ignored = true;
+    await delay(180);
+    return HttpResponse.json({ success: true });
   }),
   http.post('/api/v2/admin/media-failures/:id/unignore', async ({ params, request }) => {
     const f = mediaFailures.find((x) => x.id === params.id);
@@ -492,7 +507,7 @@ export const adminHandlers = [
     if (body.size !== m.size || body.modifiedAt !== m.modifiedAt || body.generation !== 0) {
       return err(409, 'CONFLICT', '媒体已发生变化，请刷新后重试');
     }
-    mediaFailures.splice(mediaFailures.indexOf(f), 1);
+    f.ignored = false; f.failures = 0;
     await delay(180);
     return HttpResponse.json({ success: true });
   }),

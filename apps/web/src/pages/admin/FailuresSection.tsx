@@ -1,6 +1,5 @@
 /**
- * 控制台“处理失败”：按状态筛选、游标分页，查看原图、重试与解除忽略。
- * 删除与修复编辑入口在后续阶段接入；本分区不假设不存在的接口。
+ * 控制台“处理失败”：按状态筛选、查看原图、重试、忽略和删除。
  */
 import { useCallback, useRef, useState } from 'react';
 import { useInfiniteQuery, useMutation } from '@tanstack/react-query';
@@ -74,12 +73,13 @@ function FailureSkeleton() {
   );
 }
 
-function FailureRow({ f, opening, pending, onOpen, onRetry, onUnignore, onDelete }: {
+function FailureRow({ f, opening, pending, onOpen, onRetry, onIgnore, onUnignore, onDelete }: {
   f: MediaFailure;
   opening: boolean;
   pending: boolean;
   onOpen: (origin: HTMLElement) => void;
   onRetry: () => void;
+  onIgnore: () => void;
   onUnignore: () => void;
   onDelete: () => void;
 }) {
@@ -108,20 +108,20 @@ function FailureRow({ f, opening, pending, onOpen, onRetry, onUnignore, onDelete
         </div>
         <small className="mt-0.5 block truncate text-[12px] text-muted" title={f.folder}>{f.folder}</small>
         <small className="mt-0.5 block truncate text-[12px] text-fg-2" title={f.reason || undefined}>
-          <span className="text-muted">{failureCategoryLabel(f.category)}</span>
+          <span className="text-muted">{f.errorCode === 'PARTIAL_DECODE' ? '图片不完整' : failureCategoryLabel(f.category)}</span>
           <span aria-hidden className="mx-1.5 opacity-40">·</span>
           {f.reason || '没有返回原因'}
         </small>
         <div className="mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[12px] text-muted md:hidden">
           <span>{operationLabel(f.operation)}</span>
-          <span className={cn('tabular-nums', tone === 'warn' && 'text-warn')}>失败 {f.failures} 次</span>
+          <span className={cn('tabular-nums', tone === 'warn' && 'text-warn')}>{f.errorCode === 'PARTIAL_DECODE' ? '质量待检查' : `失败 ${f.failures} 次`}</span>
           <span>{time ?? '时间未知'}</span>
         </div>
       </div>
 
       <div className="hidden min-w-0 md:block">
         <span className="block truncate text-[12.5px] text-fg-2">{operationLabel(f.operation)}</span>
-        <span className={cn('mt-0.5 block text-[12px] tabular-nums', tone === 'warn' ? 'text-warn' : 'text-muted')}>失败 {f.failures} 次</span>
+        <span className={cn('mt-0.5 block text-[12px] tabular-nums', tone === 'warn' ? 'text-warn' : 'text-muted')}>{f.errorCode === 'PARTIAL_DECODE' ? '质量待检查' : `失败 ${f.failures} 次`}</span>
       </div>
       <div className="hidden text-[12px] text-muted tabular-nums md:block">{time ?? '时间未知'}</div>
 
@@ -132,12 +132,17 @@ function FailureRow({ f, opening, pending, onOpen, onRetry, onUnignore, onDelete
         <Chip size="sm" variant="ghost" disabled={busy} onClick={(e) => onOpen(e.currentTarget)}>
           <Eye />{opening ? '正在打开…' : '查看原图'}
         </Chip>
-        <Chip size="sm" variant="ghost" disabled={busy} onClick={onRetry}>
+        {f.errorCode !== 'PARTIAL_DECODE' && <Chip size="sm" variant="ghost" disabled={busy} onClick={onRetry}>
           <RotateCcw />重试
-        </Chip>
+        </Chip>}
         {f.ignored && (
           <Chip size="sm" variant="ghost" disabled={busy} onClick={onUnignore}>
             <Undo2 />解除忽略
+          </Chip>
+        )}
+        {!f.ignored && (
+          <Chip size="sm" variant="ghost" disabled={busy} onClick={onIgnore}>
+            <FileWarning />忽略
           </Chip>
         )}
         <Chip size="sm" variant="danger" disabled={busy} onClick={onDelete}>
@@ -190,7 +195,12 @@ export default function FailuresSection() {
   });
   const unignore = useMutation({
     mutationFn: (f: MediaFailure) => call('unignoreMediaFailure', { params: { id: f.id }, body: f.source }),
-    onSuccess: () => { toast.success('已解除忽略，之后的浏览或扫描会重新尝试'); refresh(); },
+    onSuccess: (_result, f) => { toast.success(f.errorCode === 'PARTIAL_DECODE' ? '已解除忽略，图片仍需检查' : '已解除忽略，可手动重试'); refresh(); },
+    onError: (e) => { toast.error(errMsg(e)); refresh(); },
+  });
+  const ignore = useMutation({
+    mutationFn: (f: MediaFailure) => call('ignoreMediaFailure', { params: { id: f.id }, body: f.source }),
+    onSuccess: () => { toast.success('已忽略此处理项，原文件保留'); refresh(); },
     onError: (e) => { toast.error(errMsg(e)); refresh(); },
   });
   const remove = useMutation({
@@ -232,7 +242,7 @@ export default function FailuresSection() {
     <>
       <Section
         title={title}
-      desc="缩略图、预览和拍摄信息连续失败 3 次后自动忽略，不会删除原文件。重试会重新排队一次处理。"
+      desc="缩略图、预览和拍摄信息连续失败 3 次后自动忽略，也可手动忽略。查看原图并确认后可删除原文件。"
       action={
         <div className="flex flex-wrap items-center gap-2">
           <Seg
@@ -260,9 +270,10 @@ export default function FailuresSection() {
                 key={f.id}
                 f={f}
                 opening={opening === f.id}
-                pending={(retry.isPending && retry.variables?.id === f.id) || (unignore.isPending && unignore.variables?.id === f.id) || (remove.isPending && remove.variables?.failure.id === f.id)}
+                pending={(retry.isPending && retry.variables?.id === f.id) || (ignore.isPending && ignore.variables?.id === f.id) || (unignore.isPending && unignore.variables?.id === f.id) || (remove.isPending && remove.variables?.failure.id === f.id)}
                 onOpen={(origin) => void openOriginal(f, origin)}
                 onRetry={() => retry.mutate(f)}
+                onIgnore={() => ignore.mutate(f)}
                 onUnignore={() => unignore.mutate(f)}
                 onDelete={() => { setDeleteError(null); setDeleteTarget({ failure: f, operationId: createOperationId() }); }}
               />

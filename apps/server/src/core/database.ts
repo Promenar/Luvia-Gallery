@@ -772,6 +772,8 @@ export function openDatabase(filename: string, options: { readonly?: boolean; bo
           db.exec("CREATE INDEX IF NOT EXISTS job_events_log_id ON job_events(id) WHERE event_type='log'");
         }
         const fileColumns = new Set((db.pragma('table_info(files)') as { name: string }[]).map((column) => column.name));
+        // 独立于媒体版本，用于使忽略前在途的拍摄信息读取失效；旧程序可忽略新增列。
+        if (!fileColumns.has('metadata_generation')) db.exec('ALTER TABLE files ADD COLUMN metadata_generation INTEGER NOT NULL DEFAULT 0');
         if (fileColumns.has('library_id') && fileColumns.has('metadata_status')) db.exec('CREATE INDEX IF NOT EXISTS files_library_metadata ON files(library_id, metadata_status, id)');
         // 拍摄信息按修改时间倒序读取（与默认时间线顺序一致）；界面正在显示的文件记入 metadata_priority 优先读取
         if (fileColumns.has('library_id') && fileColumns.has('metadata_status') && fileColumns.has('modified_at')) {

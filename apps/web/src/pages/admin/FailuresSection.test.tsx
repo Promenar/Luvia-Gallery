@@ -42,6 +42,7 @@ beforeEach(() => {
     if (name === 'listMediaFailures') return page(opts?.query?.ignored === 'true' ? [ignored] : [failure]);
     if (name === 'mediaDetail') return detail;
     if (name === 'retryMediaFailure') return { jobId: 'job-1' };
+    if (name === 'ignoreMediaFailure') return { success: true };
     if (name === 'unignoreMediaFailure') return { success: true };
     throw new Error(`unexpected ${name}`);
   });
@@ -50,6 +51,25 @@ beforeEach(() => {
 afterEach(() => { cleanup(); queryClient.clear(); vi.unstubAllGlobals(); });
 
 describe('FailuresSection', () => {
+  it('可按当前源版本手动忽略失败项', async () => {
+    render(createElement(QueryClientProvider, { client: queryClient }, createElement(FailuresSection)));
+    await screen.findByText('IMG_0001.jpg');
+    fireEvent.click(screen.getByRole('button', { name: '忽略' }));
+    await waitFor(() => expect(callMock).toHaveBeenCalledWith('ignoreMediaFailure', { params: { id: '1' }, body: failure.source }));
+  });
+
+  it('宽松解码产生的缩略图标明可能不完整，允许忽略', async () => {
+    const partial = { ...failure, errorCode: 'PARTIAL_DECODE', reason: '源文件解码不完整，缩略图可能不完整，请检查原图' };
+    callMock.mockImplementation(async (name: string) => {
+      if (name === 'listMediaFailures') return page([partial]);
+      throw new Error(`unexpected ${name}`);
+    });
+    render(createElement(QueryClientProvider, { client: queryClient }, createElement(FailuresSection)));
+    expect(await screen.findByText('图片不完整')).toBeTruthy();
+    expect(screen.getByRole('button', { name: '忽略' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: '重试' })).toBeNull();
+  });
+
   it('HTTP 环境没有 randomUUID 时仍可打开删除确认', async () => {
     const randomValues = crypto.getRandomValues.bind(crypto);
     vi.stubGlobal('crypto', { getRandomValues: randomValues });
@@ -104,6 +124,6 @@ describe('FailuresSection', () => {
     fireEvent.click(screen.getByRole('button', { name: '解除忽略' }));
     await waitFor(() => expect(callMock).toHaveBeenCalledWith('unignoreMediaFailure', { params: { id: '2' }, body: ignored.source }));
     await waitFor(() => expect(screen.queryByText('IMG_0001.jpg')).toBeNull());
-    expect(toastSuccess).toHaveBeenCalledWith('已解除忽略，之后的浏览或扫描会重新尝试');
+    expect(toastSuccess).toHaveBeenCalledWith('已解除忽略，可手动重试');
   });
 });

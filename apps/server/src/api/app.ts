@@ -1382,30 +1382,48 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
     const total = query.ignored === undefined ? summary.ignored + summary.unignored : query.ignored === 'true' ? summary.ignored : summary.unignored;
     return { items, nextCursor: rows.length > query.limit ? items.at(-1)!.id : null, total, counts: summary };
   });
-  register('unignoreMediaFailure', async (req, _reply, body) => {
+  register('ignoreMediaFailure', async (req, _reply, body) => {
     const { id } = req.params as { id: string };
     if (!/^[1-9]\d*$/.test(id)) return fail(404, 'NOT_FOUND', '失败记录不存在');
     return db.transaction(() => {
-      const row = db.prepare(`SELECT mf.source_size,mf.source_modified,mf.source_generation,f.size,f.modified_at,f.cache_generation
+      const row = db.prepare(`SELECT mf.media_id,mf.operation,mf.source_size,mf.source_modified,mf.source_generation,f.size,f.modified_at,f.cache_generation
         FROM media_failures mf JOIN files f ON f.id=mf.media_id WHERE mf.rowid=?`).get(id) as {
-          source_size: number; source_modified: number; source_generation: number; size: number; modified_at: number; cache_generation: number;
+          media_id: string; operation: string; source_size: number; source_modified: number; source_generation: number; size: number; modified_at: number; cache_generation: number;
         } | undefined;
       if (!row) return fail(404, 'NOT_FOUND', '失败记录不存在');
       if (body.size !== row.source_size || body.modifiedAt !== row.source_modified || body.generation !== row.source_generation ||
           row.size !== row.source_size || row.modified_at !== row.source_modified || row.cache_generation !== row.source_generation) {
         return fail(409, 'MEDIA_CHANGED', '媒体已发生变化，请刷新后重试');
       }
-      db.prepare('DELETE FROM media_failures WHERE rowid=?').run(id);
+      db.prepare('UPDATE media_failures SET ignored=1 WHERE rowid=?').run(id);
+      if (row.operation === 'metadata') db.prepare("UPDATE files SET metadata_generation=metadata_generation+1,metadata_status=CASE WHEN metadata_status='pending' THEN 'failed' ELSE metadata_status END WHERE id=?").run(row.media_id);
+      return { success: true as const };
+    }).immediate();
+  });
+  register('unignoreMediaFailure', async (req, _reply, body) => {
+    const { id } = req.params as { id: string };
+    if (!/^[1-9]\d*$/.test(id)) return fail(404, 'NOT_FOUND', '失败记录不存在');
+    return db.transaction(() => {
+      const row = db.prepare(`SELECT mf.source_size,mf.source_modified,mf.source_generation,mf.error_code,f.size,f.modified_at,f.cache_generation
+        FROM media_failures mf JOIN files f ON f.id=mf.media_id WHERE mf.rowid=?`).get(id) as {
+          source_size: number; source_modified: number; source_generation: number; error_code: string | null; size: number; modified_at: number; cache_generation: number;
+        } | undefined;
+      if (!row) return fail(404, 'NOT_FOUND', '失败记录不存在');
+      if (body.size !== row.source_size || body.modifiedAt !== row.source_modified || body.generation !== row.source_generation ||
+          row.size !== row.source_size || row.modified_at !== row.source_modified || row.cache_generation !== row.source_generation) {
+        return fail(409, 'MEDIA_CHANGED', '媒体已发生变化，请刷新后重试');
+      }
+      db.prepare('UPDATE media_failures SET ignored=0,failures=0 WHERE rowid=?').run(id);
       return { success: true as const };
     }).immediate();
   });
   register('retryMediaFailure', async (req, _reply, body) => {
     const { id } = req.params as { id: string };
     if (!/^[1-9]\d*$/.test(id)) return fail(404, 'NOT_FOUND', '失败记录不存在');    return db.transaction(() => {
-      const row = db.prepare(`SELECT mf.media_id,mf.operation,mf.source_size,mf.source_modified,mf.source_generation,
+      const row = db.prepare(`SELECT mf.media_id,mf.operation,mf.error_code,mf.source_size,mf.source_modified,mf.source_generation,
         f.size,f.modified_at,f.cache_generation,f.library_id,f.metadata_status FROM media_failures mf JOIN files f ON f.id=mf.media_id
         JOIN libraries l ON l.id=f.library_id AND l.enabled=1 WHERE mf.rowid=? AND f.missing_at_ms IS NULL`).get(id) as {
-          media_id: string; operation: string; source_size: number; source_modified: number; source_generation: number;
+          media_id: string; operation: string; error_code: string | null; source_size: number; source_modified: number; source_generation: number;
           size: number; modified_at: number; cache_generation: number; library_id: string; metadata_status: string;
         } | undefined;
       if (!row) return fail(404, 'NOT_FOUND', '失败记录不存在');
@@ -1413,6 +1431,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
           row.size !== row.source_size || row.modified_at !== row.source_modified || row.cache_generation !== row.source_generation) {
         return fail(409, 'MEDIA_CHANGED', '媒体已发生变化，请刷新后重试');
       }
+      if (row.error_code === 'PARTIAL_DECODE') return fail(409, 'CONFLICT', '已生成的缩略图可能不完整，请先修复原文件并重新扫描');
       if (row.operation === 'metadata') {
         const busy = db.prepare("SELECT 1 FROM jobs WHERE type='metadata' AND status IN ('queued','running','paused') AND (json_extract(payload,'$.libraryId')=? OR json_extract(payload,'$.libraryId') IS NULL) LIMIT 1").get(row.library_id);
         if (busy) return fail(409, 'CONFLICT', '该媒体库已有拍摄信息任务，请稍后重试');
@@ -1434,7 +1453,7 @@ export async function createApp(options: Options): Promise<FastifyInstance> {
         variant = { kind: 'tile', level: Number(tile[1]), col: Number(tile[2]), row: Number(tile[3]) };
       }
       db.prepare('DELETE FROM media_failures WHERE rowid=?').run(id);
-      const jobId = enqueueMediaTask(db, { id: row.media_id, size: row.size, modified_at: row.modified_at, cache_generation: row.cache_generation }, variant);
+      const jobId = enqueueMediaTask(db, { id: row.media_id, size: row.size, modified_at: row.modified_at, cache_generation: row.cache_generation }, variant, { preserveUnindexed: variant.kind === 'thumb' });
       return { jobId };
     }).immediate();
   });

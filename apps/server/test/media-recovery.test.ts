@@ -1,17 +1,18 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import sharp from 'sharp';
 import { openDatabase } from '../src/core/database.ts';
-import { cachePath, enqueueMediaTask } from '../src/core/media-cache.ts';
+import { cacheKey, cachePath, enqueueMediaTask } from '../src/core/media-cache.ts';
 import { scanLibrary } from '../src/worker/scan.ts';
 import { generateMediaCache } from '../src/worker/media-cache.ts';
 import { extractMetadataNow } from '../src/worker/metadata.ts';
 import { runNextJob } from '../src/worker/runner.ts';
+import { JobQueue } from '../src/core/jobs.ts';
 
 /** 生成 2×2 的 24 位 BMP，无需依赖外部测试素材。 */
 function bmp(): Buffer {
@@ -50,7 +51,7 @@ test('BMP 和扩展名不符的 BMP 能生成缩略图并读取原始尺寸', as
   } finally { db.close(); await rm(root, { recursive: true, force: true }); await rm(cache, { recursive: true, force: true }); }
 });
 
-test('定向恢复发布期间出现已有文件时绝不覆盖', async () => {
+test('已领取的普通作业合并定向恢复后不会覆盖新出现的缓存', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'luvia-recovery-race-'));
   const cache = await mkdtemp(path.join(tmpdir(), 'luvia-recovery-cache-'));
   const db = openDatabase(':memory:');
@@ -62,12 +63,71 @@ test('定向恢复发布期间出现已有文件时绝不覆盖', async () => {
     const row = db.prepare('SELECT id,size,modified_at,cache_generation FROM files').get() as { id: string; size: number; modified_at: number; cache_generation: number };
     const variant = { kind: 'thumb', size: 's' } as const;
     const target = cachePath(cache, row, variant);
+    const queued = enqueueMediaTask(db, row, variant);
+    assert.equal(new JobQueue(db, 'worker').claim()?.id, queued);
+    assert.equal(enqueueMediaTask(db, row, variant, { preserveUnindexed: true }), queued);
     let appeared = false;
     await assert.rejects(generateMediaCache(db, { mediaId: row.id, sourceSize: row.size, sourceModified: row.modified_at, sourceGeneration: row.cache_generation, variant },
-      { owner: 'test', cacheDir: cache, allowedRoots: [root], preserveExisting: true, assertLease: () => { if (db.inTransaction && !appeared) { writeFileSync(target, 'existing'); appeared = true; } } }), { code: 'EEXIST' });
+      { owner: 'test', cacheDir: cache, allowedRoots: [root], assertLease: () => { if (db.inTransaction && !appeared) { writeFileSync(target, 'existing'); appeared = true; } } }), { code: 'EEXIST' });
     assert.equal(await readFile(target, 'utf8'), 'existing');
     assert.equal((db.prepare('SELECT count(*) AS n FROM cache_entries').get() as { n: number }).n, 0);
   } finally { db.close(); await rm(root, { recursive: true, force: true }); await rm(cache, { recursive: true, force: true }); }
+});
+
+test('普通缩略图发布也保留未登记的既有缓存', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'luvia-orphan-normal-'));
+  const cache = await mkdtemp(path.join(tmpdir(), 'luvia-orphan-cache-'));
+  const db = openDatabase(':memory:');
+  try {
+    await sharp({ create: { width: 8, height: 8, channels: 3, background: '#abc' } }).jpeg().toFile(path.join(root, 'photo.jpg'));
+    db.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib','测试',?)").run(root);
+    await scanLibrary(db, { id: 'lib', root }, { allowedRoots: [root] });
+    db.prepare('UPDATE files SET width=8,height=8').run();
+    const row = db.prepare('SELECT id,size,modified_at,cache_generation FROM files').get() as { id: string; size: number; modified_at: number; cache_generation: number };
+    const variant = { kind: 'thumb', size: 's' } as const;
+    const target = cachePath(cache, row, variant);
+    let appeared = false;
+    await assert.rejects(generateMediaCache(db, { mediaId: row.id, sourceSize: row.size, sourceModified: row.modified_at, sourceGeneration: row.cache_generation, variant },
+      { owner: 'test', cacheDir: cache, allowedRoots: [root], assertLease: () => { if (db.inTransaction && !appeared) { writeFileSync(target, 'existing'); appeared = true; } } }), { code: 'EEXIST' });
+    assert.equal(await readFile(target, 'utf8'), 'existing');
+    assert.equal((db.prepare('SELECT count(*) AS n FROM cache_entries').get() as { n: number }).n, 0);
+  } finally { db.close(); await rm(root, { recursive: true, force: true }); await rm(cache, { recursive: true, force: true }); }
+});
+
+test('浏览请求在生成期间登记旧缓存时仍保留旧缓存', async () => {
+  const { createApp } = await import('../src/api/app.ts');
+  const { writeSettings } = await import('../src/core/settings.ts');
+  const root = await mkdtemp(path.join(tmpdir(), 'luvia-orphan-browser-'));
+  const cache = await mkdtemp(path.join(tmpdir(), 'luvia-orphan-browser-cache-'));
+  const db = openDatabase(':memory:');
+  const app = await createApp({ db, legacyPending: false, cacheDir: cache });
+  try {
+    await sharp({ create: { width: 16, height: 16, channels: 3, background: '#abc' } }).jpeg().toFile(path.join(root, 'photo.jpg'));
+    db.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib','测试',?)").run(root);
+    await scanLibrary(db, { id: 'lib', root }, { allowedRoots: [root] });
+    writeSettings(db, { workers: { thumbnailConcurrency: 1 } });
+    const row = db.prepare('SELECT id,size,modified_at,cache_generation FROM files').get() as { id: string; size: number; modified_at: number; cache_generation: number };
+    const variant = { kind: 'thumb', size: 's' } as const;
+    const target = cachePath(cache, row, variant);
+    await mkdir(path.dirname(target), { recursive: true });
+    const existing = await sharp({ create: { width: 16, height: 16, channels: 3, background: '#f00' } }).webp().toBuffer();
+    await writeFile(target, existing);
+    const setup = await app.inject({ method: 'POST', url: '/api/v2/auth/setup', payload: { username: 'admin', password: 'test password' } });
+    const headers = { cookie: (setup.headers['set-cookie'] as string).split(';')[0]! };
+    const job = enqueueMediaTask(db, row, variant);
+    db.prepare("INSERT INTO ffmpeg_slots(id,owner,lease_expires_at,kind) VALUES ('occupied','other',unixepoch()+30,'thumbnail')").run();
+    const work = runNextJob(db, { owner: 'worker', cacheDir: cache, allowedRoots: [root], legacyDir: root, systemRoots: [] });
+    const locked = db.prepare('SELECT 1 FROM media_generation_locks WHERE cache_key=?');
+    for (let i = 0; i < 100 && !locked.get(`media:${cacheKey(row, variant)}`); i++) await new Promise(resolve => setTimeout(resolve, 10));
+    assert.ok(locked.get(`media:${cacheKey(row, variant)}`));
+    const response = await app.inject({ method: 'GET', url: `/api/v2/media/${row.id}/thumb?size=s`, headers });
+    db.prepare("DELETE FROM ffmpeg_slots WHERE id='occupied'").run();
+    await work;
+    assert.equal(response.statusCode, 200);
+    assert.deepEqual(await readFile(target), existing);
+    assert.equal((db.prepare('SELECT count(*) AS n FROM cache_entries').get() as { n: number }).n, 1);
+    assert.deepEqual(db.prepare('SELECT status,result FROM jobs WHERE id=?').get(job), { status: 'succeeded', result: '{"generated":0}' });
+  } finally { await app.close(); db.close(); await rm(root, { recursive: true, force: true }); await rm(cache, { recursive: true, force: true }); }
 });
 
 test('可宽松解码的截断 JPEG 能生成缩略图，原文件保持不变', async () => {
@@ -128,7 +188,7 @@ test('无法解码的图片报告可理解的失败原因，且不发布缓存',
   } finally { db.close(); await rm(root, { recursive: true, force: true }); await rm(cache, { recursive: true, force: true }); }
 });
 
-test('严重损坏的 PNG 不发布可能缺失的缩略图', async () => {
+test('PNG 校验错误可恢复时发布缩略图并记录质量提示', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'luvia-recovery-png-'));
   const cache = await mkdtemp(path.join(tmpdir(), 'luvia-recovery-cache-'));
   const db = openDatabase(':memory:');
@@ -140,10 +200,56 @@ test('严重损坏的 PNG 不发布可能缺失的缩略图', async () => {
     db.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib','测试',?)").run(root);
     await scanLibrary(db, { id: 'lib', root }, { allowedRoots: [root] });
     const row = db.prepare('SELECT id,size,modified_at,cache_generation FROM files').get() as { id: string; size: number; modified_at: number; cache_generation: number };
-    await assert.rejects(generateMediaCache(db, { mediaId: row.id, sourceSize: row.size, sourceModified: row.modified_at, sourceGeneration: row.cache_generation, variant: { kind: 'thumb', size: 's' } },
-      { owner: 'test', cacheDir: cache, allowedRoots: [root], assertLease: () => {} }));
-    assert.equal((db.prepare('SELECT count(*) AS n FROM cache_entries').get() as { n: number }).n, 0);
+    const result = await generateMediaCache(db, { mediaId: row.id, sourceSize: row.size, sourceModified: row.modified_at, sourceGeneration: row.cache_generation, variant: { kind: 'thumb', size: 's' } },
+      { owner: 'test', cacheDir: cache, allowedRoots: [root], assertLease: () => {} });
+    assert.equal(result.partialDecode, true);
+    assert.equal((db.prepare('SELECT count(*) AS n FROM cache_entries').get() as { n: number }).n, 1);
+    assert.deepEqual(db.prepare('SELECT error_code,category FROM media_failures').get(), { error_code: 'PARTIAL_DECODE', category: 'decode' });
     assert.deepEqual(await readFile(path.join(root, 'broken.png')), png);
+  } finally { db.close(); await rm(root, { recursive: true, force: true }); await rm(cache, { recursive: true, force: true }); }
+});
+
+test('部分解码的缓存发布后中断，重新浏览仍保留质量提示', async () => {
+  const { createApp } = await import('../src/api/app.ts');
+  const root = await mkdtemp(path.join(tmpdir(), 'luvia-partial-crash-source-'));
+  const cache = await mkdtemp(path.join(tmpdir(), 'luvia-partial-crash-cache-'));
+  const db = openDatabase(':memory:');
+  try {
+    const png = await sharp({ create: { width: 32, height: 32, channels: 3, background: '#abc' } }).png().toBuffer();
+    const idat = png.indexOf('IDAT'); const length = png.readUInt32BE(idat - 4);
+    png[idat + 4 + length] = png[idat + 4 + length]! ^ 1;
+    await writeFile(path.join(root, 'partial.png'), png);
+    db.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib','测试',?)").run(root);
+    await scanLibrary(db, { id: 'lib', root }, { allowedRoots: [root] });
+    const row = db.prepare('SELECT id,size,modified_at,cache_generation FROM files').get() as { id: string; size: number; modified_at: number; cache_generation: number };
+    const variant = { kind: 'thumb', size: 's' } as const;
+    const interrupted = new Proxy(db, { get(target, key) {
+      if (key === 'prepare') return (sql: string) => {
+        if (sql.includes('INSERT INTO cache_entries')) throw new Error('模拟缓存发布后中断');
+        return target.prepare(sql);
+      };
+      const value = Reflect.get(target, key, target);
+      return typeof value === 'function' ? value.bind(target) : value;
+    } });
+    await assert.rejects(generateMediaCache(interrupted, { mediaId: row.id, sourceSize: row.size, sourceModified: row.modified_at, sourceGeneration: row.cache_generation, variant },
+      { owner: 'test', cacheDir: cache, allowedRoots: [root], assertLease: () => {} }), /模拟缓存发布后中断/);
+    assert.equal((db.prepare('SELECT count(*) AS n FROM cache_entries').get() as { n: number }).n, 0);
+    assert.ok((await readFile(cachePath(cache, row, variant))).length > 0);
+    assert.equal((db.prepare('SELECT error_code FROM media_failures WHERE media_id=?').get(row.id) as { error_code: string }).error_code, 'PARTIAL_DECODE');
+    for (const preserveUnindexed of [true, false]) {
+      const job = enqueueMediaTask(db, row, variant, { preserveUnindexed });
+      await runNextJob(db, { owner: 'worker', cacheDir: cache, allowedRoots: [root], legacyDir: root, systemRoots: [] });
+      assert.ok(['succeeded', 'failed'].includes((db.prepare('SELECT status FROM jobs WHERE id=?').get(job) as { status: string }).status));
+      assert.deepEqual(db.prepare('SELECT error_code,failures FROM media_failures WHERE media_id=?').get(row.id), { error_code: 'PARTIAL_DECODE', failures: 0 });
+    }
+    const app = await createApp({ db, legacyPending: false, cacheDir: cache });
+    try {
+      const setup = await app.inject({ method: 'POST', url: '/api/v2/auth/setup', payload: { username: 'admin', password: 'test password' } });
+      const headers = { cookie: (setup.headers['set-cookie'] as string).split(';')[0]! };
+      const response = await app.inject({ method: 'GET', url: `/api/v2/media/${row.id}/thumb?size=s`, headers });
+      assert.equal(response.statusCode, 200);
+      assert.deepEqual(db.prepare('SELECT error_code,ignored FROM media_failures WHERE media_id=?').get(row.id), { error_code: 'PARTIAL_DECODE', ignored: 0 });
+    } finally { await app.close(); }
   } finally { db.close(); await rm(root, { recursive: true, force: true }); await rm(cache, { recursive: true, force: true }); }
 });
 
@@ -183,6 +289,11 @@ test('视频流没有数据包时，预览任务报告可操作的失败原因',
     const job = db.prepare('SELECT status,error FROM jobs WHERE id=?').get(id) as { status: string; error: string };
     assert.equal(job.status, 'failed');
     assert.match(job.error, /未发现可读取的视频包/);
+    const thumbJob = enqueueMediaTask(db, row, { kind: 'thumb', size: 's' });
+    await runNextJob(db, { owner: 'test', cacheDir: cache, allowedRoots: [root], legacyDir: root, systemRoots: [] });
+    const failure = db.prepare("SELECT reason,category FROM media_failures WHERE media_id=? AND operation='thumb:s'").get(row.id) as { reason: string; category: string };
+    assert.equal((db.prepare('SELECT status FROM jobs WHERE id=?').get(thumbJob) as { status: string }).status, 'failed');
+    assert.match(failure.reason, /未发现可读取的视频包/); assert.equal(failure.category, 'decode');
     assert.equal((db.prepare('SELECT count(*) AS n FROM cache_entries').get() as { n: number }).n, 0);
   } finally { db.close(); await rm(root, { recursive: true, force: true }); await rm(cache, { recursive: true, force: true }); }
 });

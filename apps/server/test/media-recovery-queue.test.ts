@@ -6,7 +6,7 @@ import path from 'node:path';
 import sharp from 'sharp';
 import { openDatabase } from '../src/core/database.ts';
 import { JobQueue } from '../src/core/jobs.ts';
-import { cachePath } from '../src/core/media-cache.ts';
+import { cachePath, enqueueMediaTask } from '../src/core/media-cache.ts';
 import { enqueueMetadata, runNextJob } from '../src/worker/runner.ts';
 import { recoverMissingMedia } from '../src/worker/media-recovery.ts';
 
@@ -31,12 +31,18 @@ test('定向恢复只领取非空失败项，不覆盖已有缓存且重复执�
     assert.equal((db.prepare("SELECT metadata_status FROM files WHERE id='recover'").get() as { metadata_status: string }).metadata_status, 'failed');
     const applied = await recoverMissingMedia(db, cache, { apply: true });
     assert.equal(applied.metadataReset, 1); assert.equal(applied.thumbnailQueued, 1);
+    assert.deepEqual(db.prepare("SELECT operation,reason FROM media_failures WHERE media_id='empty' ORDER BY operation").all(), [
+      { operation: 'metadata', reason: '媒体库索引显示源文件为空，请检查或重新扫描' },
+      { operation: 'thumb:s', reason: '媒体库索引显示源文件为空，请检查或重新扫描' },
+    ]);
+    assert.match((db.prepare("SELECT reason FROM media_failures WHERE media_id='orphan'").get() as { reason: string }).reason, /未登记/);
     assert.equal((db.prepare("SELECT metadata_status FROM files WHERE id='recover'").get() as { metadata_status: string }).metadata_status, 'pending');
     assert.equal((db.prepare("SELECT metadata_status FROM files WHERE id='empty'").get() as { metadata_status: string }).metadata_status, 'failed');
     assert.equal((db.prepare("SELECT count(*) AS n FROM jobs WHERE type='thumbnails' AND status='queued'").get() as { n: number }).n, 1);
     assert.equal((db.prepare("SELECT count(*) AS n FROM jobs WHERE type='metadata' AND status='queued'").get() as { n: number }).n, 1);
     const again = await recoverMissingMedia(db, cache, { apply: true });
     assert.equal(again.metadataReset, 0); assert.equal(again.thumbnailQueued, 0);
+    assert.deepEqual(db.prepare("SELECT failures FROM media_failures WHERE media_id='empty' ORDER BY operation").all(), [{ failures: 1 }, { failures: 1 }]);
     assert.equal(await readFile(existing, 'utf8'), 'existing cache');
     // 排队之后出现未登记的同名文件时，领取者也不能覆盖它。
     const late = cachePath(cache, { id: 'recover', size: 10, modified_at: 10, cache_generation: 0 }, { kind: 'thumb', size: 's' });
@@ -44,6 +50,7 @@ test('定向恢复只领取非空失败项，不覆盖已有缓存且重复执�
     await runNextJob(db, { owner: 'test', cacheDir: cache, allowedRoots: ['/synthetic'], legacyDir: '/synthetic', systemRoots: [] });
     assert.equal(await readFile(late, 'utf8'), 'late cache');
     assert.equal((db.prepare("SELECT status FROM jobs WHERE type='thumbnails'").get() as { status: string }).status, 'succeeded');
+    assert.match((db.prepare("SELECT reason FROM media_failures WHERE media_id='recover' AND operation='thumb:s'").get() as { reason: string }).reason, /未登记/);
   } finally { db.close(); await rm(cache, { recursive: true, force: true }); }
 });
 
@@ -58,6 +65,41 @@ test('定向元数据恢复结束后不触发全库视频预览生成', async ()
     assert.equal((db.prepare("SELECT status FROM jobs WHERE id='repair'").get() as { status: string }).status, 'succeeded');
     assert.equal((db.prepare("SELECT count(*) AS n FROM jobs WHERE type='previews'").get() as { n: number }).n, 0);
   } finally { db.close(); await rm(root, { recursive: true, force: true }); }
+});
+
+test('定向恢复细化已有泛化原因并保留失败次数和忽略状态', async () => {
+  const { recordMediaFailure } = await import('../src/core/media-failures.ts');
+  const cache = await mkdtemp(path.join(tmpdir(), 'luvia-recovery-diagnostic-'));
+  const db = openDatabase(':memory:');
+  try {
+    db.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib','测试','/synthetic')").run();
+    db.prepare(`INSERT INTO files(id,library_id,relative_path,folder,name,mime,media_type,size,modified_at,taken_at,taken_at_source,thumb_ready,metadata_status)
+      VALUES ('empty','lib','empty.jpg','lib','empty.jpg','image/jpeg','image',0,10,10,'mtime',0,'failed')`).run();
+    const row = { id: 'empty', size: 0, modified_at: 10, cache_generation: 0 };
+    recordMediaFailure(db, row, { kind: 'metadata' }, '拍摄信息读取失败，请检查文件和格式');
+    recordMediaFailure(db, row, { kind: 'metadata' }, '拍摄信息读取失败，请检查文件和格式');
+    db.prepare("UPDATE media_failures SET ignored=1 WHERE operation='metadata'").run();
+    await recoverMissingMedia(db, cache, { apply: true });
+    assert.deepEqual(db.prepare("SELECT reason,failures,ignored FROM media_failures WHERE operation='metadata'").get(),
+      { reason: '媒体库索引显示源文件为空，请检查或重新扫描', failures: 2, ignored: 1 });
+  } finally { db.close(); await rm(cache, { recursive: true, force: true }); }
+});
+
+test('定向恢复对已经领取的同键任务启用缓存保留', async () => {
+  const cache = await mkdtemp(path.join(tmpdir(), 'luvia-recovery-dedupe-'));
+  const db = openDatabase(':memory:');
+  try {
+    db.prepare("INSERT INTO libraries(id,name,root) VALUES ('lib','测试','/synthetic')").run();
+    db.prepare(`INSERT INTO files(id,library_id,relative_path,folder,name,mime,media_type,size,modified_at,taken_at,taken_at_source,thumb_ready,metadata_status)
+      VALUES ('a','lib','a.jpg','lib','a.jpg','image/jpeg','image',10,10,10,'mtime',0,'done')`).run();
+    const row = { id: 'a', size: 10, modified_at: 10, cache_generation: 0 };
+    const id = enqueueMediaTask(db, row, { kind: 'thumb', size: 's' });
+    assert.equal(new JobQueue(db, 'worker').claim()?.id, id);
+    const result = await recoverMissingMedia(db, cache, { apply: true });
+    assert.equal(result.thumbnailQueued, 0);
+    assert.equal(JSON.parse((db.prepare('SELECT payload FROM jobs WHERE id=?').get(id) as { payload: string }).payload).preserveUnindexed, true);
+    assert.equal((db.prepare("SELECT count(*) AS n FROM jobs WHERE status IN ('queued','running','paused')").get() as { n: number }).n, 1);
+  } finally { db.close(); await rm(cache, { recursive: true, force: true }); }
 });
 
 test('定向元数据作业只读取指定文件', async () => {

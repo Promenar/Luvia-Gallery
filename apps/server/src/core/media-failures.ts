@@ -25,7 +25,7 @@ export function classifyMediaFailure(error: unknown, decode = false): { category
 }
 
 export function mediaIgnored(db: Database.Database, source: MediaSource, variant: FailureVariant): boolean {
-  return !!db.prepare(`SELECT 1 FROM media_failures WHERE media_id=? AND operation=? AND source_size=? AND source_modified=? AND source_generation=? AND ignored=1`).get(...args(source, variant));
+  return !!db.prepare(`SELECT 1 FROM media_failures WHERE media_id=? AND operation=? AND source_size=? AND source_modified=? AND source_generation=? AND ignored=1 AND (error_code IS NULL OR error_code<>'PARTIAL_DECODE')`).get(...args(source, variant));
 }
 
 /** 调用方负责在租约保护的事务中调用；源版本已变化时不计入新文件。 */
@@ -39,6 +39,23 @@ export function recordMediaFailure(db: Database.Database, source: MediaSource, v
     .run(...args(source, variant), reason, diagnostic.category, diagnostic.errorCode ?? null, source.id, source.size, source.modified_at, source.cache_generation ?? 0);
 }
 
-export function clearMediaFailure(db: Database.Database, source: MediaSource, variant: FailureVariant): void {
-  db.prepare('DELETE FROM media_failures WHERE media_id=? AND operation=? AND source_size=? AND source_modified=? AND source_generation=?').run(...args(source, variant));
+/** 可部分解码属于质量提示，不累计失败次数，也不阻止缓存淘汰后的再生成。 */
+export function recordPartialMediaWarning(db: Database.Database, source: MediaSource, variant: Variant): void {
+  db.prepare(`INSERT INTO media_failures(media_id,operation,source_size,source_modified,source_generation,failures,ignored,reason,last_failed_at,category,error_code)
+    SELECT ?,?,?,?,?,0,0,'源文件解码不完整，缩略图可能不完整，请检查原图',unixepoch(),'decode','PARTIAL_DECODE'
+    WHERE EXISTS (SELECT 1 FROM files WHERE id=? AND size=? AND modified_at=? AND cache_generation=? AND missing_at_ms IS NULL)
+    ON CONFLICT(media_id,operation,source_size,source_modified,source_generation) DO UPDATE SET
+      failures=0,reason=excluded.reason,last_failed_at=excluded.last_failed_at,category=excluded.category,error_code=excluded.error_code`)
+    .run(...args(source, variant), source.id, source.size, source.modified_at, source.cache_generation ?? 0);
+}
+
+/** 缓存冲突不能覆盖已持久化的部分解码提示。 */
+export function recordUnindexedCacheFailure(db: Database.Database, source: MediaSource, variant: FailureVariant): void {
+  const previous = db.prepare('SELECT error_code FROM media_failures WHERE media_id=? AND operation=? AND source_size=? AND source_modified=? AND source_generation=?').get(...args(source, variant)) as { error_code: string | null } | undefined;
+  if (previous?.error_code === 'PARTIAL_DECODE') return;
+  recordMediaFailure(db, source, variant, '已有未登记的缩略图，请核验来源；现有缓存未覆盖', { category: 'unknown', errorCode: 'UNINDEXED_CACHE' });
+}
+
+export function clearMediaFailure(db: Database.Database, source: MediaSource, variant: FailureVariant, options: { preservePartial?: boolean } = {}): void {
+  db.prepare(`DELETE FROM media_failures WHERE media_id=? AND operation=? AND source_size=? AND source_modified=? AND source_generation=? AND ignored=0${options.preservePartial ? " AND (error_code IS NULL OR error_code<>'PARTIAL_DECODE')" : ''}`).run(...args(source, variant));
 }
