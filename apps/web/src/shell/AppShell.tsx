@@ -1,5 +1,6 @@
 import { Suspense, useEffect } from 'react';
-import { Link, Outlet, useRouterState } from '@tanstack/react-router';
+import { Link, Outlet, useCanGoBack, useRouter, useRouterState } from '@tanstack/react-router';
+import { ArrowLeft, ArrowUp } from 'lucide-react';
 import { create } from 'zustand';
 import { cn } from '@/lib/cn';
 import { startEvents, stopEvents } from '@/lib/events';
@@ -9,6 +10,7 @@ import { Viewer } from '@/viewer/Viewer';
 import { AppearanceStudio } from '@/pages/appearance/AppearanceStudio';
 import { ADMIN_NAV, AppearanceIcon, EDITOR_NAV, PRIMARY_NAV, type NavItem } from './nav';
 import { thumbMemory } from '@/components/media/thumb-memory';
+import { parentPath } from '@/pages/folders/paths';
 
 /** 外观面板开关（右侧抽屉，不是独立页面）。 */
 export const useStudio = create<{ open: boolean; setOpen: (v: boolean) => void }>((set) => ({
@@ -41,7 +43,12 @@ function RailButton({ item, active }: { item: NavItem; active: boolean }) {
 }
 
 export function AppShell() {
-  const pathname = useRouterState({ select: (s) => s.location.pathname });
+  const location = useRouterState({ select: (s) => s.location });
+  const { pathname } = location;
+  const router = useRouter();
+  const canGoBack = useCanGoBack();
+  const folderPath = typeof location.search.path === 'string' ? location.search.path : '';
+  const folderNavClass = 'grid size-11 place-items-center rounded-xl text-muted hover:bg-accent-soft hover:text-fg disabled:opacity-35 disabled:hover:bg-transparent disabled:hover:text-muted';
   const isAdmin = useIsAdmin();
   const user = useUser();
   const viewerOpen = useViewer((s) => s.open);
@@ -67,6 +74,20 @@ export function AppShell() {
         >
           <AppearanceIcon className="size-[18px]" strokeWidth={1.7} />
         </button>
+        {pathname === '/folders' && (
+          <>
+            <button type="button" aria-label="上一级文件夹" title="上一级文件夹"
+              className={folderNavClass} disabled={!folderPath}
+              onClick={() => void router.navigate({ to: '/folders', search: { path: parentPath(folderPath) } })}>
+              <ArrowUp className="size-[18px]" strokeWidth={1.7} />
+            </button>
+            <button type="button" aria-label="返回上一页" title="返回上一页"
+              className={folderNavClass} disabled={!canGoBack}
+              onClick={() => router.history.back()}>
+              <ArrowLeft className="size-[18px]" strokeWidth={1.7} />
+            </button>
+          </>
+        )}
         <div aria-label={user?.username} title={user?.username} className="mt-2 size-[30px] rounded-full bg-[linear-gradient(140deg,#8b7660,#3d4c5c)]" />
       </nav>
 
