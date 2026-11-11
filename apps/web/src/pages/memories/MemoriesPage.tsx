@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { mediaUrls, type MediaItem, type Memories } from '@luvia/contracts';
 import { q } from '@/lib/query';
@@ -23,42 +23,48 @@ function Section({ title, note, children }: { title: string; note?: string; chil
   );
 }
 
-/** “那年今日”：每年一张卡片，点击用该年的媒体打开查看器。 */
+/** 每年打开首页时独立抽选封面，点击从该项开始浏览。 */
+function OnThisDayCard({ group: { year, count, items }, libNames }: {
+  group: Memories['onThisDay'][number];
+  libNames: ReadonlyMap<string, string>;
+}) {
+  const [sample] = useState(Math.random);
+  const candidates = items.filter(canThumb);
+  const cover = candidates[Math.floor(sample * candidates.length)] ?? items[0];
+  if (!cover) return null;
+  const ph = thumbhashUrl(cover);
+  const place = folderLabel(cover.folder, libNames);
+  return (
+    <button
+      type="button"
+      aria-label={`${year} 年的这几天，${place}，共 ${count} 项`}
+      onClick={(e) => openViewer({ label: `${year} 年的回忆`, items }, items.indexOf(cover), { originEl: e.currentTarget })}
+      onMouseEnter={() => setDynamicFrom(cover)}
+      onFocus={() => setDynamicFrom(cover)}
+      className="group/mc relative aspect-[3/4] cursor-pointer overflow-hidden rounded-[var(--r3)] bg-sunken bg-cover text-left after:absolute after:inset-0 after:bg-[linear-gradient(transparent_40%,rgba(0,0,0,.7))]"
+      style={{ backgroundImage: ph ? `url(${ph})` : undefined }}
+    >
+      {canThumb(cover) && (
+        <img
+          src={mediaUrls.thumb(cover.id, 'm', cover.thumbVersion)}
+          alt=""
+          loading="lazy"
+          decoding="async"
+          draggable={false}
+          className="absolute inset-0 size-full object-cover transition-transform duration-500 ease-[cubic-bezier(.2,.8,.2,1)] group-hover/mc:scale-105"
+        />
+      )}
+      <span className="absolute bottom-9 left-3.5 z-[1] font-display text-[58px] leading-[.8] font-extrabold text-white max-md:text-[46px]">{year}</span>
+      <span className="absolute right-3 bottom-[13px] left-3.5 z-[1] truncate text-[12.5px] text-white/85">{place} · {count.toLocaleString('zh-CN')} 项</span>
+    </button>
+  );
+}
+
 function OnThisDay({ data }: { data: Memories['onThisDay'] }) {
   const libNames = useLibraryNames();
   return (
     <div className="grid auto-cols-[220px] grid-flow-col gap-3.5 overflow-x-auto pb-2 [scrollbar-width:thin] max-md:auto-cols-[150px] max-md:gap-2.5">
-      {data.map((g) => {
-        const cover = g.items.find((m) => m.mediaType === 'image') ?? g.items[0];
-        if (!cover) return null;
-        const ph = thumbhashUrl(cover);
-        const place = folderLabel(cover.folder, libNames);
-        return (
-          <button
-            key={g.year}
-            type="button"
-            aria-label={`${g.year} 年的这几天，${place}，共 ${g.count} 项`}
-            onClick={(e) => openViewer({ label: `${g.year} 年的照片`, items: g.items }, 0, { originEl: e.currentTarget })}
-            onMouseEnter={() => setDynamicFrom(cover)}
-            onFocus={() => setDynamicFrom(cover)}
-            className="group/mc relative aspect-[3/4] cursor-pointer overflow-hidden rounded-[var(--r3)] bg-sunken bg-cover text-left after:absolute after:inset-0 after:bg-[linear-gradient(transparent_40%,rgba(0,0,0,.7))]"
-            style={{ backgroundImage: ph ? `url(${ph})` : undefined }}
-          >
-            {canThumb(cover) && (
-              <img
-                src={mediaUrls.thumb(cover.id, 'm', cover.thumbVersion)}
-                alt=""
-                loading="lazy"
-                decoding="async"
-                draggable={false}
-                className="absolute inset-0 size-full object-cover transition-transform duration-500 ease-[cubic-bezier(.2,.8,.2,1)] group-hover/mc:scale-105"
-              />
-            )}
-            <span className="absolute bottom-9 left-3.5 z-[1] font-display text-[58px] leading-[.8] font-extrabold text-white max-md:text-[46px]">{g.year}</span>
-            <span className="absolute right-3 bottom-[13px] left-3.5 z-[1] truncate text-[12.5px] text-white/85">{place} · {g.count.toLocaleString('zh-CN')} 项</span>
-          </button>
-        );
-      })}
+      {data.map((group) => <OnThisDayCard key={group.year} group={group} libNames={libNames} />)}
     </div>
   );
 }
