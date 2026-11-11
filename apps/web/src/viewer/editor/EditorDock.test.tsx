@@ -1,7 +1,8 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, renderHook, screen } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import type { EditorJob } from '@luvia/contracts';
 import { EditorDock, type EditorDockProps } from './EditorDock';
+import { useRepairContinuation } from './useRepairContinuation';
 
 afterEach(cleanup);
 const props = (): EditorDockProps => ({
@@ -36,4 +37,39 @@ it('自动预览可进入蒙版修正', () => {
   render(<EditorDock {...props()} job={{ ...finished, outcome: 'detected', resultUrl: '/result' }} onAdjust={onAdjust} />);
   fireEvent.click(screen.getByRole('button', { name: '调整蒙版' }));
   expect(onAdjust).toHaveBeenCalledOnce();
+});
+
+it('结果工具栏可以开始下一轮，手绘期间可以返回上一步', () => {
+  const onContinue = vi.fn(), onBack = vi.fn(), onAuto = vi.fn();
+  const options = props();
+  const { rerender } = render(<EditorDock {...options} job={{ ...finished, outcome: 'detected', resultUrl: '/result' }} onContinue={onContinue} />);
+  const compare = screen.getByRole('button', { name: '按住对比' });
+  fireEvent.keyDown(compare, { key: ' ' });
+  fireEvent.keyUp(compare, { key: ' ' });
+  expect(vi.mocked(options.onCompare).mock.calls).toEqual([[true], [false]]);
+  fireEvent.click(screen.getByRole('button', { name: '继续修复' }));
+  expect(onContinue).toHaveBeenCalledOnce();
+  rerender(<EditorDock {...options} continuing onCancelAdjust={onBack} onAuto={onAuto} />);
+  expect(screen.queryByRole('button', { name: 'SLBR 自动修复' })).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: '返回预览' }));
+  expect(onBack).toHaveBeenCalledOnce();
+});
+
+it('下一轮失败保留底图，成功后可以继续使用新结果', () => {
+  const first: EditorJob = { ...finished, resultUrl: '/first', outcome: 'detected' };
+  const second = { ...first, id: 'second', resultUrl: '/second' };
+  const failed: EditorJob = { ...second, status: 'failed', resultUrl: null };
+  const restore = vi.fn();
+  const { result, rerender } = renderHook(({ job }) => useRepairContinuation(job, restore), { initialProps: { job: first } });
+  act(() => result.current.begin());
+  rerender({ job: failed });
+  expect(result.current.base).toBe(first);
+  act(() => result.current.back());
+  expect(restore).toHaveBeenCalledWith(first.id);
+  rerender({ job: first });
+  act(() => result.current.begin());
+  rerender({ job: second });
+  expect(result.current.base).toBeNull();
+  act(() => result.current.begin());
+  expect(result.current.base).toBe(second);
 });

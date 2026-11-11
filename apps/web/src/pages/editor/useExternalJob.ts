@@ -60,6 +60,7 @@ export function useExternalJob() {
   return {
     job,
     jobId,
+    restore: (id: string) => { setJobId(id); setCreateError(null); },
     create,
     cancel,
     reset,

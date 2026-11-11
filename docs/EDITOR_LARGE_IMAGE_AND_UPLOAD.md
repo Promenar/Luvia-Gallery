@@ -18,6 +18,7 @@ JSON 作业与导入接口以 `packages/contracts` 为准；原始字节上传�
 
 1. `POST /api/v2/editor/uploads?name=<URL编码文件名>`：请求体为 `application/octet-stream` 图片字节。返回 `{id,name,width,height,mime,sourceUrl,expiresAt}`；`sourceUrl` 仅当前用户可访问。文件选择器、拖放和剪贴板均转换为同一上传流程。
 2. `POST /api/v2/editor/jobs` 接受现有 `{mediaId,source,model,mask}`，或外部图片 `{uploadId,model,mask}`。作业查询、取消、结果预览和能力接口沿用现有接口；上传 ID 不可替换内容。
+   预览后的「继续修复」以 `mask: {mode: 'continue', baseJobId, changes}` 提交新的手绘蒙版。底图是同一用户、同一原图版本的上一轮结果，保存与导入仍使用最后一轮作业。取消或失败可返回上一轮预览。
 3. `POST /api/v2/editor/jobs/:id/import`：提交 `{libraryId,folder,name,operationId}`，`folder` 是所选媒体库下的相对路径，空字符串表示库根；返回 `{status,mediaId,name,folder}`。允许创建所选库内不存在的文件夹，禁止覆盖；返回的 `folder` 同样是库内相对路径。结果已写盘但索引未完成时返回 `pending`，后台尝试恢复。
 4. 文件超限、类型不支持、空间不足、权限不足、过期、目标只读与无效目录均返回可展示的稳定错误码；上传和作业支持取消，关闭页面不会自动导入。
 5. `POST /api/v2/editor/jobs/:id/replace-original`：提交 `{confirm:true,source,operationId}`，返回媒体 ID、新源版本和缩略图版本。Linux 服务端支持已入库单帧 JPEG、PNG、WebP；其他平台的能力接口说明不可用原因。校验源文件身份和内容，保留媒体 ID，更新索引并排队生成新缩略图。CMYK 原图覆盖时转换为 sRGB，成品颜色与修复预览一致。

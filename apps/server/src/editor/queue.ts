@@ -1,7 +1,7 @@
 import type Database from 'better-sqlite3';
 import { createHash, randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
-import { access, mkdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import { access, link, mkdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import sharp from 'sharp';
 import type { EditorCapabilities, EditorJob, EditorMaskInput, EditorModel, SaveEditorCopyResult } from '@luvia/contracts';
@@ -189,7 +189,7 @@ export class EditorQueue {
       throw new EditorError(409, 'MODEL_UNAVAILABLE', '图片超过所选模型的输入上限');
     }
     let maskPng: Buffer | null = null;
-    const changes = 'mode' in input.mask ? input.mask.mode === 'adjust' ? input.mask.changes : null : input.mask;
+    const changes = 'mode' in input.mask ? input.mask.mode === 'auto' ? null : input.mask.changes : input.mask;
     if (changes) {
       if (changes.width > this.config.maskMaxEdge || changes.height > this.config.maskMaxEdge) {
         throw new EditorError(400, 'INVALID_MASK', `蒙版尺寸超过 ${this.config.maskMaxEdge} 像素上限`);
@@ -230,18 +230,33 @@ export class EditorQueue {
     const dir = this.jobDir(id);
     await mkdir(dir, { recursive: true });
     const maskPath = path.join(dir, 'mask.png');
-    if (maskPng) await writeFile(maskPath, maskPng);
     try {
+      let sourceDigest: string | null = null;
+      if ('mode' in input.mask && input.mask.mode === 'continue') {
+        const base = this.owned(input.mask.baseJobId, input.userId);
+        if (base.media_id !== file.id || base.source_size !== file.size || base.source_modified !== file.modified_at ||
+            base.source_generation !== file.cache_generation || !base.source_sha256) {
+          throw new EditorError(409, 'MEDIA_CHANGED', '上一轮结果与当前图片版本不一致');
+        }
+        const result = await this.result(base.id, input.userId);
+        // 独立持有只读底图，上一轮结果被缓存回收时仍可执行。
+        await link(result.path, path.join(dir, 'input')).catch((error: NodeJS.ErrnoException) => {
+          if (error.code === 'ENOENT') throw new EditorError(404, 'NOT_FOUND', '上一轮修复结果已过期');
+          throw error;
+        });
+        sourceDigest = base.source_sha256;
+      }
+      if (maskPng) await writeFile(maskPath, maskPng);
       this.db.transaction(() => {
         if (upload) {
           const changed = this.db.prepare("UPDATE editor_uploads SET expires_at=MAX(expires_at,?) WHERE id=? AND user_id=? AND state='ready' AND expires_at>?")
             .run(now() + this.config.jobTtlSeconds, upload.id, input.userId, now());
           if (!changed.changes) throw new EditorError(404, 'NOT_FOUND', '上传图片不存在或已过期');
         }
-        this.db.prepare(`INSERT INTO editor_jobs(id,user_id,media_id,library_id,source_size,source_modified,source_generation,model,status,progress,mask_path,created_at,mask_mode,mask_threshold,mask_bytes,outcome)
-          VALUES (?,?,?,?,?,?,?,?,'queued',0,?,?,?,?,?,?)`).run(id, input.userId, file.id, file.library_id,
-          file.size, file.modified_at, file.cache_generation, input.model, maskPath, now(),
-          'mode' in input.mask ? input.mask.mode : 'manual', automatic && 'mode' in input.mask && input.mask.mode === 'auto' ? input.mask.threshold : null,
+        this.db.prepare(`INSERT INTO editor_jobs(id,user_id,media_id,library_id,source_size,source_modified,source_generation,source_sha256,model,status,progress,mask_path,created_at,mask_mode,mask_threshold,mask_bytes,outcome)
+          VALUES (?,?,?,?,?,?,?,?,?,'queued',0,?,?,?,?,?,?)`).run(id, input.userId, file.id, file.library_id,
+          file.size, file.modified_at, file.cache_generation, sourceDigest, input.model, maskPath, now(),
+          'mode' in input.mask && input.mask.mode !== 'continue' ? input.mask.mode : 'manual', automatic && 'mode' in input.mask && input.mask.mode === 'auto' ? input.mask.threshold : null,
           maskPng?.length ?? 0, 'mode' in input.mask && input.mask.mode === 'adjust' ? 'detected' : null);
       }).immediate();
     } catch (error) {
@@ -297,9 +312,16 @@ export class EditorQueue {
           (file.mtime_ms !== null && info.mtimeMs !== file.mtime_ms)))) {
         throw new EditorError(409, 'MEDIA_CHANGED', '原图已发生变化，请重新生成');
       }
-      const originalBytes = await readFile(original);
+      let originalBytes = await readFile(original);
+      const sourceDigest = createHash('sha256').update(originalBytes).digest('hex');
+      if (job.source_sha256) {
+        if (job.source_sha256 !== sourceDigest) throw new EditorError(409, 'MEDIA_CHANGED', '原图内容已发生变化，请重新生成');
+        const input = path.join(dir, 'input');
+        originalBytes = await readFile(input);
+        await rm(input, { force: true });
+      }
       this.db.prepare('UPDATE editor_jobs SET source_sha256=? WHERE id=? AND status=\'running\'')
-        .run(createHash('sha256').update(originalBytes).digest('hex'), job.id);
+        .run(sourceDigest, job.id);
       const originalMeta = await sharp(originalBytes).metadata();
       if (originalMeta.depth !== 'uchar' || (originalMeta.bitsPerSample ?? 8) > 8) {
         throw new EditorError(409, 'OPERATION_FAILED', '暂不支持高位深图片修复');

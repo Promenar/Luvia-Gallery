@@ -20,6 +20,7 @@ import { EditorDock } from './editor/EditorDock';
 import { MaskCanvas, type MaskCanvasHandle } from './editor/MaskCanvas';
 import { SaveCopyDialog } from './editor/SaveCopyDialog';
 import { useEditorJob } from './editor/useEditorJob';
+import { useRepairContinuation } from './editor/useRepairContinuation';
 import { nextRotation, rotatedSize, rotationLabel, type Rotation } from './rotation';
 import {
   buildOrder, counterText, dedupe, excludeIds, extendOrder, filePath, formatTakenAt, removeFromOrder, reorder, shouldLoadMore, step,
@@ -136,6 +137,8 @@ function ViewerDialog({ scope }: { scope: ViewerScope }) {
     saveCopy: saveEditorCopy, replaceOriginal: replaceEditorOriginal, createPending: editorPending, createError: editorCreateError, queryError: editorQueryError,
     busy: editorBusy,
   } = editor;
+  const { base: continuedFrom, begin: beginContinuation, back: backFromContinuation, reset: resetContinuation } =
+    useRepairContinuation(editorJob, editor.restore);
   const canRepair = isAdmin && !isVideo && availableModels.length > 0;
   const activeModel = models.find((model) => model.id === editorModel) ?? null;
   const maskLimit = capsQuery.data?.mask ?? null;
@@ -167,13 +170,14 @@ function ViewerDialog({ scope }: { scope: ViewerScope }) {
     setEditorOpen(false);
     setHasMask(false);
     setAdjustBase(null);
+    resetContinuation();
     setComparing(false);
     setSaveOpen(false);
     setSaveError(null);
     setSavedCopy(null);
     setMobileEditOpen(false);
     resetEditorJob();
-  }, [item.id, resetEditorJob]);
+  }, [item.id, resetEditorJob, resetContinuation]);
 
   // 几何
   const [rotationState, setRotationState] = useState<{ id: string; deg: Rotation } | null>(null);
@@ -666,11 +670,12 @@ function ViewerDialog({ scope }: { scope: ViewerScope }) {
     setComparing(false);
     setHasMask(false);
     setAdjustBase(null);
+    resetContinuation();
     setSaveOpen(false);
     setSaveError(null);
     resetEditorJob();
     useViewerUi.getState().setView(FIT_VIEW, true);
-  }, [editorPending, editorJob?.status, savedCopy, cancelEditorJob, resetEditorJob, say]);
+  }, [editorPending, editorJob?.status, savedCopy, cancelEditorJob, resetEditorJob, resetContinuation, say]);
 
   const generate = useCallback(async () => {
     const it = itemRef.current;
@@ -684,16 +689,17 @@ function ViewerDialog({ scope }: { scope: ViewerScope }) {
     }
     setComparing(false);
     setSavedCopy(null);
+    const changes = { data, width: mask.width, height: mask.height };
     const created = await createEditorJob({
       mediaId: it.id,
       source: it.source,
       model: editorModel,
       mask: adjustBase
-        ? { mode: 'adjust', baseJobId: adjustBase.id, changes: { data, width: mask.width, height: mask.height } }
-        : { data, width: mask.width, height: mask.height },
+        ? { mode: 'adjust', baseJobId: adjustBase.id, changes }
+        : continuedFrom ? { mode: 'continue', baseJobId: continuedFrom.id, changes } : changes,
     });
     if (created) setAdjustBase(null);
-  }, [adjustBase, createEditorJob, editorModel, maskLimit, say]);
+  }, [adjustBase, continuedFrom, createEditorJob, editorModel, maskLimit, say]);
 
   const autoRepair = useCallback(async () => {
     const current = itemRef.current;
@@ -704,10 +710,11 @@ function ViewerDialog({ scope }: { scope: ViewerScope }) {
 
   const resetEditorResult = useCallback(() => {
     resetEditorJob();
+    resetContinuation();
     setAdjustBase(null);
     setComparing(false);
     setSavedCopy(null);
-  }, [resetEditorJob]);
+  }, [resetEditorJob, resetContinuation]);
 
   const saveEditorResult = useCallback(async (name: string) => {
     const it = itemRef.current;
@@ -752,9 +759,12 @@ function ViewerDialog({ scope }: { scope: ViewerScope }) {
     const k = e.key;
     if (deleteOpen) return;
     if (editorOpen) {
-      if (saveOpen) return;
+      if (saveOpen || e.defaultPrevented) return;
       if (k === 'Escape') { e.preventDefault(); closeEditor(); return; }
-      if (k === ' ') { e.preventDefault(); setComparing(true); return; }
+      if (k === ' ' && resultUrl && !continuedFrom && !t.closest('button, a, input, select, textarea, [contenteditable="true"]')) {
+        e.preventDefault();
+        setComparing(true);
+      }
       return;
     }
     if (mobileEditOpen) {
@@ -854,17 +864,17 @@ function ViewerDialog({ scope }: { scope: ViewerScope }) {
         first={item.id === firstIdRef.current}
         rotation={rotation}
         errorHint={scope.errorHint}
-        resultUrl={resultUrl}
+        resultUrl={continuedFrom?.resultUrl ?? resultUrl}
         showOriginal={comparing}
         overlay={editorOpen ? (
           <MaskCanvas
-            key={item.id}
+            key={continuedFrom?.id ?? item.id}
             ref={maskRef}
             item={item}
             rotation={rotation}
             brush={brush}
             erase={erase}
-            active={!resultUrl && !editorBusy}
+            active={(!!continuedFrom || !resultUrl) && !editorBusy}
             maxEdge={maskLimit?.maxEdge ?? 2048}
             baseMaskUrl={adjustBase?.maskUrl}
             onChange={setHasMask}
@@ -1029,7 +1039,7 @@ function ViewerDialog({ scope }: { scope: ViewerScope }) {
             hasMask={hasMask}
             onUndo={() => maskRef.current?.undo()}
             onClear={() => maskRef.current?.clear()}
-            job={adjustBase ? null : editorJob}
+            job={adjustBase || (continuedFrom && editorJob?.id === continuedFrom.id) ? null : editorJob}
             createPending={editorPending}
             error={editorError}
             canGenerate={canGenerate}
@@ -1039,7 +1049,9 @@ function ViewerDialog({ scope }: { scope: ViewerScope }) {
             canAuto={canAuto}
             onAdjust={editorJob?.maskUrl ? () => { setAdjustBase(editorJob); setComparing(false); } : undefined}
             adjusting={!!adjustBase}
-            onCancelAdjust={() => setAdjustBase(null)}
+            onContinue={() => { setHasMask(false); setComparing(false); setErase(false); beginContinuation(); }}
+            continuing={!!continuedFrom}
+            onCancelAdjust={continuedFrom ? backFromContinuation : () => setAdjustBase(null)}
             onCancel={() => void cancelEditorJob()}
             onReset={resetEditorResult}
             onSave={() => { setSaveError(null); setSaveOpen(true); }}

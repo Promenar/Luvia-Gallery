@@ -75,7 +75,9 @@ export const AutomaticEditorMask = z.object({
 }).strict();
 /** 修正图中红色表示增加区域、蓝色表示擦除区域；黑色区域保留原始检测结果。 */
 export const AdjustedEditorMask = z.object({ mode: z.literal('adjust'), baseJobId: z.string().min(1), changes: EditorMask }).strict();
-export const EditorMaskInput = z.union([EditorMask, AutomaticEditorMask, AdjustedEditorMask]);
+/** 在上一轮结果上应用一张新的手绘蒙版。 */
+export const ContinuedEditorMask = z.object({ mode: z.literal('continue'), baseJobId: z.string().min(1), changes: EditorMask }).strict();
+export const EditorMaskInput = z.union([EditorMask, AutomaticEditorMask, AdjustedEditorMask, ContinuedEditorMask]);
 export type EditorMaskInput = z.infer<typeof EditorMaskInput>;
 
 export const CreateEditorJobBody = z.union([
