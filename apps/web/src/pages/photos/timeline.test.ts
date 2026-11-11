@@ -140,6 +140,22 @@ describe('分段覆盖、加载计划与合并', () => {
 });
 
 describe('行布局、偏移查找与滚动锚定', () => {
+  it('近百万媒体的远端月份仍有可达的滚动坐标，加载后保留月份锚点', () => {
+    const { buckets } = dataset(84, () => 1);
+    buckets.forEach((b, i) => { b.count = 11164 + (i === 0 ? 82 : 0); });
+    const m = { ...M, rowHeight: 270 };
+    const target = buckets.findIndex((b) => b.key === '2020-12');
+    const before = buildLayout(buckets, monthStates([], buckets), m);
+    expect(before.total).toBeLessThan(8_000_000);
+    const y = before.monthTop[target]! + 90;
+    expect(monthAtOffset(before, y)?.monthIdx).toBe(target);
+
+    const loaded = seg({ id: 1, startIdx: target, items: [item('target', '2020-12-28T00:00:00Z')] }, buckets);
+    const after = buildLayout(buckets, monthStates([loaded], buckets), m);
+    const anchored = resolveAnchor(after, anchorAt(before, y)!);
+    expect(monthAtOffset(after, anchored!)?.monthIdx).toBe(target);
+    expect(after.rows[after.rowOfItem.get('target')!]?.kind).toBe('tiles');
+  });
   const { items, buckets } = dataset(4, (i) => [30, 0, 12, 8][i]!);
 
   it('月份标题、天标题、图块行与未加载占位依次排列，偏移连续', () => {
