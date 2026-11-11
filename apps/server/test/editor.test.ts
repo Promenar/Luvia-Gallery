@@ -146,6 +146,38 @@ async function waitForJob(app: Awaited<ReturnType<typeof setup>>['app'], headers
   throw new Error('等待修复作业超时');
 }
 
+test('多轮手绘修复沿用上一轮结果并保留原图来源', async () => {
+  const stub = await startStub();
+  stub.setEchoSource();
+  const { root, cache, db, app, headers, row } = await setup(stub.url);
+  try {
+    const original = await readFile(path.join(root, 'photo.jpg'));
+    const run = async (pixel: number, baseJobId?: string) => {
+      const pixels = Buffer.alloc(80);
+      pixels[pixel] = 255;
+      const data = (await sharp(pixels, { raw: { width: 10, height: 8, channels: 1 } }).png().toBuffer()).toString('base64');
+      const mask = { data, width: 10, height: 8 };
+      const res = await app.inject({ method: 'POST', url: '/api/v2/editor/jobs', headers, payload: {
+        mediaId: row.id, source: sourceOf(row), model: 'migan', mask: baseJobId ? { mode: 'continue', baseJobId, changes: mask } : mask,
+      } });
+      assert.equal(res.statusCode, 200, res.body);
+      const result = await waitForJob(app, headers, res.json().id);
+      assert.equal(result.status, 'succeeded', result.error);
+      return result;
+    };
+    const first = await run(1);
+    const second = await run(4, first.id);
+    const third = await run(9, second.id);
+    const result = await app.inject({ method: 'GET', url: third.resultUrl, headers });
+    assert.equal(result.statusCode, 200);
+    const out = await sharp(result.rawPayload).ensureAlpha().raw().toBuffer();
+    for (const pixel of [1, 4, 9]) assert.deepEqual([...out.subarray(pixel * 4, pixel * 4 + 3)], [200, 100, 50]);
+    assert.deepEqual(await readFile(path.join(root, 'photo.jpg')), original);
+    const job = db.prepare('SELECT source_sha256 FROM editor_jobs WHERE id=?').get(third.id);
+    assert.deepEqual(job, { source_sha256: createHash('sha256').update(original).digest('hex') });
+  } finally { await app.close(); db.close(); await stub.close(); await rm(root, { recursive: true, force: true }); await rm(cache, { recursive: true, force: true }); }
+});
+
 test('能力探测只暴露真实可用的模型', async () => {
   const stub = await startStub();
   const { root, cache, db, app, headers } = await setup(stub.url);
@@ -1184,7 +1216,12 @@ test('未入库图片上传、修复并幂等导入新文件夹', async () => {
     const created = await app.inject({ method: 'POST', url: '/api/v2/editor/jobs', headers,
       payload: { uploadId: upload.id, model: 'migan', mask: await maskOf() } });
     assert.equal(created.statusCode, 200, created.body);
-    const job = await waitForJob(app, headers, created.json().id);
+    const initial = await waitForJob(app, headers, created.json().id);
+    assert.equal(initial.status, 'succeeded', JSON.stringify(initial));
+    const continuation = await app.inject({ method: 'POST', url: '/api/v2/editor/jobs', headers,
+      payload: { uploadId: upload.id, model: 'migan', mask: { mode: 'continue', baseJobId: initial.id, changes: await maskOf() } } });
+    assert.equal(continuation.statusCode, 200, continuation.body);
+    const job = await waitForJob(app, headers, continuation.json().id);
     assert.equal(job.status, 'succeeded', JSON.stringify(job));
     const body = { libraryId: 'lib', folder: '新文件夹/子文件夹', name: 'fixed.png', operationId: 'external-import-12345' };
     const outside = await mkdtemp(path.join(tmpdir(), 'luvia-outside-'));

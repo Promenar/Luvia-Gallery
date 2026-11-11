@@ -126,7 +126,8 @@ export const editorHandlers = [
       mediaId = media.id;
     }
     const id = `mock-editor-${++seq}`;
-    const automatic = !!body.mask && typeof body.mask === 'object' && 'mode' in body.mask;
+    const mode = typeof body.mask === 'object' && 'mode' in body.mask ? body.mask.mode : null;
+    const automatic = mode === 'auto' || mode === 'adjust';
     const job: MockJob = { id, mediaId, uploadId, model: body.model, createdAt: Date.now(), cancelled: false, automatic };
     jobs.set(id, job);
     await delay(160);

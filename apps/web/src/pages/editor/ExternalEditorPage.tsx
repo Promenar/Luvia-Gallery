@@ -11,6 +11,7 @@ import { q, queryClient } from '@/lib/query';
 import { useIsAdmin } from '@/stores/session';
 import { EditorDock } from '@/viewer/editor/EditorDock';
 import { MaskCanvas, type MaskCanvasHandle } from '@/viewer/editor/MaskCanvas';
+import { useRepairContinuation } from '@/viewer/editor/useRepairContinuation';
 import { formatBytes } from '@/viewer/sequence';
 import { Chip, Field, Modal, Pill, Section, inputClass } from '@/pages/admin/ui';
 import { errMsg, formatWhen } from '@/pages/admin/format';
@@ -111,6 +112,8 @@ export default function ExternalEditorPage() {
   const [comparing, setComparing] = useState(false);
   const maskRef = useRef<MaskCanvasHandle>(null);
   const editor = useExternalJob();
+  const { base: continuedFrom, begin: beginContinuation, back: backFromContinuation, reset: resetContinuation } =
+    useRepairContinuation(editor.job, editor.restore);
 
   const [libraryId, setLibraryId] = useState('');
   const [folder, setFolder] = useState('');
@@ -126,7 +129,8 @@ export default function ExternalEditorPage() {
   const stageRef = useRef<HTMLDivElement>(null);
   const [stageBox, setStageBox] = useState({ w: 0, h: 0 });
 
-  const resultUrl = !adjustBase && editor.job?.status === 'succeeded' ? editor.job.resultUrl : null;
+  const resultUrl = !adjustBase && !continuedFrom && editor.job?.status === 'succeeded' ? editor.job.resultUrl : null;
+  const previewUrl = continuedFrom?.resultUrl ?? resultUrl;
   const autoModel = models.find((item) => item.id === 'slbr' && item.available && item.features.includes('detect'));
   const library = libraries.find((item) => item.id === libraryId) ?? null;
   const normalizedFolder = normalizeFolder(folder);
@@ -198,12 +202,13 @@ export default function ExternalEditorPage() {
     setUploadError(null);
     setHasMask(false);
     setAdjustBase(null);
+    resetContinuation();
     setComparing(false);
     setImportResult(null);
     setImportOpen(false);
     setImportError(null);
     importOpRef.current = null;
-  }, [editor]);
+  }, [editor, resetContinuation]);
 
   const acceptFile = useCallback(async (file: File) => {
     if (!isImageFile(file)) { toast.error('请选择 JPEG、PNG、WebP 或 GIF 图片'); return; }
@@ -222,6 +227,7 @@ export default function ExternalEditorPage() {
     setFileSize(file.size);
     setHasMask(false);
     setAdjustBase(null);
+    resetContinuation();
     setComparing(false);
     setImportResult(null);
     setImportOpen(false);
@@ -240,7 +246,7 @@ export default function ExternalEditorPage() {
     } finally {
       if (uploadAbort.current === controller) { setUploading(false); uploadAbort.current = null; }
     }
-  }, [editor, libraries, libraryId]);
+  }, [editor, libraries, libraryId, resetContinuation]);
 
   useEffect(() => {
     const onPaste = (event: ClipboardEvent) => {
@@ -266,11 +272,12 @@ export default function ExternalEditorPage() {
     }
     setComparing(false);
     setImportResult(null);
+    const changes = { data, width: mask.width, height: mask.height };
     const created = await editor.create(upload.id, model, adjustBase
-      ? { mode: 'adjust', baseJobId: adjustBase.id, changes: { data, width: mask.width, height: mask.height } }
-      : { data, width: mask.width, height: mask.height });
+      ? { mode: 'adjust', baseJobId: adjustBase.id, changes }
+      : continuedFrom ? { mode: 'continue', baseJobId: continuedFrom.id, changes } : changes);
     if (created) setAdjustBase(null);
-  }, [adjustBase, editor, maskLimit, model, upload]);
+  }, [adjustBase, continuedFrom, editor, maskLimit, model, upload]);
 
   const autoRepair = useCallback(async () => {
     if (!upload) return;
@@ -281,9 +288,10 @@ export default function ExternalEditorPage() {
   const resetResult = useCallback(() => {
     editor.reset();
     setAdjustBase(null);
+    resetContinuation();
     setComparing(false);
     setImportResult(null);
-  }, [editor]);
+  }, [editor, resetContinuation]);
 
   const handleImport = useCallback(async () => {
     const job = editor.job;
@@ -428,13 +436,13 @@ export default function ExternalEditorPage() {
               {frame && (
                 <div className="ue-frame" style={{ left: frame.left, top: frame.top, width: frame.width, height: frame.height }}>
                   <img
-                    src={comparing ? upload.sourceUrl : resultUrl ?? upload.sourceUrl}
+                    src={comparing ? upload.sourceUrl : previewUrl ?? upload.sourceUrl}
                     alt={upload.name}
                     draggable={false}
-                    onError={() => toast.error(resultUrl ? '修复结果加载失败，请重新生成' : '图片预览加载失败')}
+                    onError={() => toast.error(previewUrl ? '修复结果加载失败，请重新生成' : '图片预览加载失败')}
                   />
                   <MaskCanvas
-                    key={upload.id}
+                    key={continuedFrom?.id ?? upload.id}
                     ref={maskRef}
                     item={{ id: upload.id, width: upload.width, height: upload.height }}
                     rotation={0}
@@ -459,7 +467,7 @@ export default function ExternalEditorPage() {
                 hasMask={hasMask}
                 onUndo={() => maskRef.current?.undo()}
                 onClear={() => maskRef.current?.clear()}
-                job={adjustBase ? null : editor.job}
+                job={adjustBase || (continuedFrom && editor.job?.id === continuedFrom.id) ? null : editor.job}
                 createPending={editor.createPending}
                 error={jobError}
                 canGenerate={canGenerate}
@@ -469,7 +477,9 @@ export default function ExternalEditorPage() {
                 canAuto={canAuto}
                 onAdjust={editor.job?.maskUrl ? () => { setAdjustBase(editor.job); setComparing(false); } : undefined}
                 adjusting={!!adjustBase}
-                onCancelAdjust={() => setAdjustBase(null)}
+                onContinue={() => { setHasMask(false); setComparing(false); setErase(false); beginContinuation(); }}
+                continuing={!!continuedFrom}
+                onCancelAdjust={continuedFrom ? backFromContinuation : () => setAdjustBase(null)}
                 onCancel={() => void editor.cancel()}
                 onReset={resetResult}
                 onSave={() => { setImportError(null); setImportOpen(true); }}

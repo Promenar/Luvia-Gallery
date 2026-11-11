@@ -27,6 +27,8 @@ export type EditorDockProps = {
   canAuto?: boolean;
   onAdjust?: () => void;
   adjusting?: boolean;
+  onContinue?: () => void;
+  continuing?: boolean;
   onCancelAdjust?: () => void;
   onCancel: () => void;
   onReset: () => void;
@@ -81,9 +83,7 @@ export function EditorDock(props: EditorDockProps) {
       ) : done ? (
         <div className="lv-ed-row">
           <span className="lv-ed-result"><i aria-hidden />{resultText}</span>
-          <button type="button" className="lv-ed-primary" disabled={!props.writeAvailable} title={props.writeReason ?? undefined} onClick={props.onSave}>
-            {props.resultActionIcon ?? <Save />}{props.resultActionLabel ?? '保存副本'}
-          </button>
+          {job?.resultUrl && props.onContinue && <button type="button" className="lv-ed-tool" onClick={props.onContinue}>继续修复</button>}
           <button type="button" className="lv-ed-tool" onClick={props.onReset}><RotateCcw />重新生成</button>
           {job?.maskUrl && props.onAdjust && <button type="button" className="lv-ed-tool" onClick={props.onAdjust}>调整蒙版</button>}
           <button
@@ -94,12 +94,26 @@ export function EditorDock(props: EditorDockProps) {
             onPointerUp={() => props.onCompare(false)}
             onPointerLeave={() => props.onCompare(false)}
             onPointerCancel={() => props.onCompare(false)}
+            onKeyDown={(event) => {
+              if (event.key !== ' ' && event.key !== 'Enter') return;
+              event.preventDefault();
+              if (!event.repeat) props.onCompare(true);
+            }}
+            onKeyUp={(event) => {
+              if (event.key !== ' ' && event.key !== 'Enter') return;
+              event.preventDefault();
+              props.onCompare(false);
+            }}
+            onBlur={() => { if (props.comparing) props.onCompare(false); }}
           >
             {props.comparing ? '正在看原图' : '按住对比'}
           </button>
           {props.showDone !== false && props.onDone && (
             <button type="button" className="lv-ed-tool" onClick={props.onDone}>完成</button>
           )}
+          <button type="button" className="lv-ed-primary" disabled={!props.writeAvailable} title={props.writeReason ?? undefined} onClick={props.onSave}>
+            {props.resultActionIcon ?? <Save />}{props.resultActionLabel ?? '保存副本'}
+          </button>
         </div>
       ) : (
         <div className="lv-ed-row">
@@ -147,8 +161,8 @@ export function EditorDock(props: EditorDockProps) {
           </button>
           <button type="button" className="lv-ed-tool" disabled={!props.hasMask} onClick={props.onUndo}><Undo2 />撤销</button>
           <button type="button" className="lv-ed-tool" disabled={!props.hasMask} onClick={props.onClear}><Trash2 />清除</button>
-          {props.adjusting && props.onCancelAdjust && <button type="button" className="lv-ed-tool" onClick={props.onCancelAdjust}>返回预览</button>}
-          {props.onAuto && !props.adjusting && (
+          {(props.adjusting || props.continuing) && props.onCancelAdjust && <button type="button" className="lv-ed-tool" onClick={props.onCancelAdjust}>返回预览</button>}
+          {props.onAuto && !props.adjusting && !props.continuing && (
             <button type="button" className="lv-ed-tool" disabled={!props.canAuto} onClick={props.onAuto}>SLBR 自动修复</button>
           )}
           <button
