@@ -269,6 +269,9 @@ export function estimateHeight(count: number, m: LayoutMetrics): number {
   return rows * (m.rowHeight + m.gap) + days * m.dayHeight;
 }
 
+// 为实际照片行留出滚动空间；未加载月份按原始估算等比缩短，保持相对疏密。
+const GAP_HEIGHT_BUDGET = 4_000_000;
+
 type DayRows = { day: DayGroup; rows: { cells: JustifiedCell<MediaItem>[]; height: number }[] };
 export type LayoutCache = Map<string, DayRows[]>;
 
@@ -300,6 +303,8 @@ export function buildLayout(buckets: readonly TimelineBucket[], states: readonly
     y += r.height;
   };
   if (m.width <= 0) return { rows, offsets, total: 0, monthTop, monthBottom, rowOfItem };
+  const estimatedHeight = buckets.reduce((total, bucket) => total + estimateHeight(bucket.count, m), 0);
+  const gapScale = Math.min(1, GAP_HEIGHT_BUDGET / estimatedHeight);
   buckets.forEach((b, mi) => {
     const st = states[mi]!;
     if (st.status === 'complete' && st.items.length === 0) return;
@@ -317,7 +322,8 @@ export function buildLayout(buckets: readonly TimelineBucket[], states: readonly
     }
     if (st.status !== 'complete') {
       const remaining = Math.max(1, b.count - st.items.length);
-      push({ kind: 'gap', key: `g:${b.key}:${st.items.length}`, monthIdx: mi, height: estimateHeight(remaining, m), remaining });
+      const height = Math.max(m.rowHeight + m.dayHeight, Math.round(estimateHeight(remaining, m) * gapScale));
+      push({ kind: 'gap', key: `g:${b.key}:${st.items.length}`, monthIdx: mi, height, remaining });
     }
     monthBottom[mi] = y;
   });

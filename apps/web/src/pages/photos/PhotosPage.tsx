@@ -47,7 +47,6 @@ function useNarrow() {
   );
 }
 
-const reduceMotion = () => document.documentElement.dataset.reduceMotion === 'on';
 const EMPTY_SNAPSHOT: TimelineSnapshot = { segments: [], version: 0 };
 const noopSubscribe = () => () => {};
 
@@ -175,8 +174,13 @@ export default function PhotosPage() {
   const vItems = v.getVirtualItems();
   const current = layout.rows.length ? monthAtOffset(layout, scrollTop - TOP + PROBE) : null;
 
-  /* ---------- 视口内未加载的月份 → 加载 ---------- */
-  const gapKey = vItems.map((vi) => layout.rows[vi.index]).filter((r) => r?.kind === 'gap').map((r) => r!.monthIdx).join(',');
+  /* ---------- 按实际像素预取，避免虚拟列表的行级超扫命中远处月份 ---------- */
+  const prefetchEnd = scrollTop + (scrollEl?.clientHeight ?? 0) * 1.5;
+  const gapKey = vItems.flatMap(({ index }) => {
+    const row = layout.rows[index];
+    const top = TOP + layout.offsets[index]!;
+    return row?.kind === 'gap' && top < prefetchEnd && top + row.height > scrollTop ? [row.monthIdx] : [];
+  }).join(',');
   useEffect(() => {
     if (!store || !gapKey) return;
     const t = setTimeout(() => gapKey.split(',').forEach((m) => store.ensure(Number(m))), 80);
@@ -188,12 +192,12 @@ export default function PhotosPage() {
       const el = scrollRef.current;
       const top = layoutRef.current.monthTop[monthIdx];
       if (!el || top == null || top < 0) return;
-      const target = TOP + top - (narrow ? 64 : 0);
-      const smooth = !dragging && !reduceMotion() && Math.abs(target - el.scrollTop) < el.clientHeight * 3;
-      el.scrollTo({ top: target, behavior: smooth ? 'smooth' : 'auto' });
-      anchorRef.current = anchorAt(layoutRef.current, target - TOP + PROBE);
+      el.scrollTo({ top: TOP + top - (narrow ? 64 : 0), behavior: 'instant' });
+      anchorRef.current = anchorAt(layoutRef.current, el.scrollTop - TOP + PROBE);
+      setScrollTop(el.scrollTop);
+      if (!dragging && states[monthIdx]?.status === 'unloaded') store?.ensure(monthIdx);
     },
-    [TOP, narrow],
+    [TOP, narrow, states, store],
   );
 
   /* ---------- 选择 ---------- */
@@ -520,7 +524,7 @@ export default function PhotosPage() {
 
       <div
         ref={setScrollNode}
-        className="absolute inset-0 overflow-x-hidden overflow-y-auto [scrollbar-width:thin] max-md:scrollbar-none"
+        className="absolute inset-0 overflow-x-hidden overflow-y-auto [overflow-anchor:none] [scrollbar-width:thin] max-md:scrollbar-none"
       >
         {body}
         <div style={{ paddingLeft: PAD_L, paddingRight: PAD_R }}>

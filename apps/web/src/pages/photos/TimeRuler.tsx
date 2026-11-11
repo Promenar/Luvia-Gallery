@@ -21,7 +21,7 @@ export interface TimeRulerProps {
   buckets: readonly TimelineBucket[];
   /** 当前所在月份（桶索引）与月内进度。 */
   current: { monthIdx: number; progress: number } | null;
-  /** 跳到某月；dragging 为真时连续跳转（不做平滑滚动）。 */
+  /** 立即跳到某月；连续拖动时由最终停留的视口加载。 */
   onJump: (monthIdx: number, dragging: boolean) => void;
 }
 
