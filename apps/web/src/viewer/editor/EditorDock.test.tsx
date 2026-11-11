@@ -25,6 +25,33 @@ it('只有能力可用时才能启动自动修复', () => {
   expect(onAuto).toHaveBeenCalledOnce();
 });
 
+it('排队和推理保留笔刷、模型和原生成按钮，取消后恢复编辑', () => {
+  const options = { ...props(), hasMask: true, canGenerate: true };
+  const { rerender } = render(<EditorDock {...options} />);
+  const brush = screen.getByRole<HTMLInputElement>('slider', { name: '笔刷大小' });
+  const model = screen.getByRole<HTMLButtonElement>('radio', { name: 'SLBR' });
+  const action = screen.getByRole<HTMLButtonElement>('button', { name: '生成预览' });
+  rerender(<EditorDock {...options} createPending />);
+  expect(screen.getByRole('button', { name: '取消' })).toBe(action);
+  expect(action.getAttribute('aria-disabled')).toBe('true');
+  fireEvent.click(action);
+  expect(options.onCancel).not.toHaveBeenCalled();
+  expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBeNull();
+  const job = { ...finished, status: 'running' as const, progress: 0.42, stage: '正在推理' };
+  rerender(<EditorDock {...options} job={job} />);
+  expect(screen.getByRole('slider', { name: '笔刷大小' })).toBe(brush);
+  expect(screen.getByRole('radio', { name: 'SLBR' })).toBe(model);
+  expect(brush.disabled).toBe(true);
+  expect(model.disabled).toBe(true);
+  expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('42');
+  expect(screen.getByRole('button', { name: '取消' })).toBe(action);
+  fireEvent.click(action);
+  expect(options.onCancel).toHaveBeenCalledOnce();
+  rerender(<EditorDock {...options} job={{ ...job, status: 'cancelled' }} />);
+  expect(brush.disabled).toBe(false);
+  expect(screen.getByRole('button', { name: '生成预览' })).toBe(action);
+});
+
 it('未检测到水印时不显示保存副本', () => {
   render(<EditorDock {...props()} job={finished} />);
   expect(screen.getByText('未检测到水印')).toBeTruthy();

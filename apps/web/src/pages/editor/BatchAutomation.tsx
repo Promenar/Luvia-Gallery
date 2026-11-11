@@ -50,7 +50,7 @@ export function BatchCreateDialog({ items, onClose, onCreated }: {
             <label className="flex items-start gap-2"><input type="radio" name="batch-mode" checked={mode === 'auto'} onChange={() => setMode('auto')} />自动保存检测到水印的结果</label>
           </Field>
           <Field label={`检测阈值 ${threshold}`} hint="较低的阈值会选中更多区域；最终效果请结合预览判断。">
-            <input aria-label="检测阈值" type="range" min={1} max={254} value={threshold} onChange={(event) => setThreshold(Number(event.target.value))} />
+            <input aria-label="检测阈值" type="range" className="luvia-range" min={1} max={254} value={threshold} onChange={(event) => setThreshold(Number(event.target.value))} />
           </Field>
           <Field label="保存到媒体库" htmlFor="batch-library">
             <select id="batch-library" className={inputClass} value={target} onChange={(event) => setLibraryId(event.target.value)}>
@@ -194,7 +194,7 @@ function ReviewDialog({ batch, item, onClose, onAction, pending }: {
         <div className="mt-3 flex flex-wrap items-center gap-2">
           {!editing ? <><Chip size="sm" onClick={() => setComparing(!comparing)}>{comparing ? '查看修复结果' : '查看原图'}</Chip>
             {job.data.maskUrl && <Chip size="sm" onClick={() => setEditing(true)}>调整蒙版</Chip>}</>
-            : <><label className="flex items-center gap-2 text-[12px] text-muted">笔刷<input type="range" min={6} max={56} value={brush} onChange={(event) => setBrush(Number(event.target.value))} /></label>
+            : <><label className="flex items-center gap-2 text-[12px] text-muted">笔刷<input type="range" className="luvia-range" min={6} max={56} value={brush} onChange={(event) => setBrush(Number(event.target.value))} /></label>
               <Chip size="sm" onClick={() => setErase(!erase)}>{erase ? '切回涂抹' : '擦除'}</Chip>
               <Chip size="sm" disabled={!hasChanges} onClick={() => mask.current?.undo()}>撤销</Chip>
               <Chip size="sm" disabled={busy} onClick={() => { setEditing(false); adjustment.reset(); }}>返回</Chip>

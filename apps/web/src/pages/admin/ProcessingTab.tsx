@@ -20,7 +20,7 @@ function Range({ id, min, max, step = 1, value, onCommit, suffix = '' }: { id: s
   const [local, set] = useDeferredCommit(value, onCommit);
   return (
     <>
-      <input id={id} type="range" min={min} max={max} step={step} value={local} onChange={(e) => set(Number(e.target.value))} className="min-w-0 flex-1 accent-[var(--accent)]" />
+      <input id={id} type="range" min={min} max={max} step={step} value={local} onChange={(e) => set(Number(e.target.value))} className="luvia-range min-w-0 flex-1" />
       <output htmlFor={id} className="min-w-[52px] text-right text-[13px] tabular-nums">{local}{suffix}</output>
     </>
   );

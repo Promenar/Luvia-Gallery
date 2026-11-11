@@ -146,6 +146,22 @@
   }
   .scrollbar-none { scrollbar-width: none; }
   .scrollbar-none::-webkit-scrollbar { display: none; }
+
+  .luvia-range { height: 28px; accent-color: var(--accent); cursor: pointer; }
+  .luvia-range:disabled { opacity: .45; cursor: default; }
+  @media (forced-colors: none) {
+    .luvia-range { appearance: none; background: transparent; }
+    .luvia-range::-webkit-slider-runnable-track { height: 4px; border-radius: 999px; background: var(--range-track, var(--line-2)); }
+    .luvia-range::-moz-range-track { height: 4px; border-radius: 999px; background: var(--range-track, var(--line-2)); }
+    .luvia-range::-webkit-slider-thumb {
+      appearance: none; width: 14px; height: 14px; margin-top: -5px;
+      border: 1px solid var(--range-thumb-border, var(--surface)); border-radius: 50%; background: var(--accent);
+    }
+    .luvia-range::-moz-range-thumb {
+      box-sizing: border-box; width: 14px; height: 14px;
+      border: 1px solid var(--range-thumb-border, var(--surface)); border-radius: 50%; background: var(--accent);
+    }
+  }
 }
 
 @keyframes luvia-page-enter { from { opacity: 0; } to { opacity: 1; } }

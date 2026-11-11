@@ -183,7 +183,7 @@ export function AppearanceStudio() {
                     aria-labelledby={id}
                     aria-valuetext={DENSITY_LABELS[prefs.density]}
                     onChange={(e) => { const density = Number(e.target.value); if (density !== prefs.density) save({ density }); }}
-                    className="min-w-0 flex-1 accent-[var(--accent)]"
+                    className="luvia-range min-w-0 flex-1"
                   />
                   <span className="w-8 shrink-0 text-right text-xs text-muted">{DENSITY_LABELS[prefs.density]}</span>
                 </div>

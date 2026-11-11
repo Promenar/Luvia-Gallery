@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { EditorMaskInput, EditorModelId } from '@luvia/contracts';
 import { ApiError, call } from '@/lib/api';
 import { createExternalEditorJob } from './external-api';
@@ -8,6 +8,7 @@ const message = (error: unknown) => error instanceof ApiError ? error.message : 
 
 /** 外部图片（未入库）的作业生命周期；查询/取消沿用现有编辑器接口。 */
 export function useExternalJob() {
+  const queryClient = useQueryClient();
   const [jobId, setJobId] = useState<string | null>(null);
   const [createPending, setCreatePending] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
@@ -33,6 +34,7 @@ export function useExternalJob() {
         void call('cancelEditorJob', { params: { id: created.id } }).catch(() => {});
         return null;
       }
+      queryClient.setQueryData(['editorJob', created.id], created);
       setJobId(created.id);
       return created;
     } catch (error) {
@@ -41,7 +43,7 @@ export function useExternalJob() {
     } finally {
       if (generation.current === current) setCreatePending(false);
     }
-  }, []);
+  }, [queryClient]);
 
   const cancel = useCallback(async () => {
     if (!jobId) return;

@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { CreateEditorJobBody, MediaSourceVersion } from '@luvia/contracts';
 import { ApiError, call } from '@/lib/api';
 
@@ -10,6 +10,7 @@ const message = (error: unknown) => error instanceof ApiError ? error.message : 
  * 结果地址由后端返回，图片请求仍走会话 Cookie。
  */
 export function useEditorJob() {
+  const queryClient = useQueryClient();
   const [jobId, setJobId] = useState<string | null>(null);
   const [createPending, setCreatePending] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
@@ -28,6 +29,7 @@ export function useEditorJob() {
     setCreateError(null);
     try {
       const created = await call('createEditorJob', { body });
+      queryClient.setQueryData(['editorJob', created.id], created);
       setJobId(created.id);
       return created;
     } catch (error) {
@@ -36,7 +38,7 @@ export function useEditorJob() {
     } finally {
       setCreatePending(false);
     }
-  }, []);
+  }, [queryClient]);
 
   const cancel = useCallback(async () => {
     if (!jobId) return;
