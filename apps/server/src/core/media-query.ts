@@ -214,24 +214,36 @@ export class MediaReader {
     return { cameras, years, types };
   }
 
-  async memories(context: Context) {
-    const today = new Date();
-    const day = `${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-    const currentYear = today.getFullYear();
-    const filter = MediaListQuery.parse({});
-    const condition = where(filter, context, this.db);
+  async memories(context: Context, today = new Date()) {
+    const month = today.getMonth();
+    const date = today.getDate();
+    const { oldest } = this.db.prepare('SELECT min(taken_at) AS oldest FROM files').get() as { oldest: number | null };
+    const days: [year: number, from: number, to: number][] = [];
+    if (oldest !== null) {
+      const firstYear = new Date(oldest * 1000).getFullYear();
+      for (let year = today.getFullYear() - 1; year >= firstYear; year--) {
+        const start = new Date(0);
+        start.setFullYear(year, month, date);
+        start.setHours(0, 0, 0, 0);
+        if (start.getMonth() !== month || start.getDate() !== date) continue;
+        const end = new Date(start);
+        end.setDate(end.getDate() + 1);
+        end.setHours(0, 0, 0, 0);
+        days.push([year, start.getTime() / 1000, end.getTime() / 1000]);
+      }
+    }
+    const condition = where(MediaListQuery.parse({}), context, this.db);
     const [groups, recent] = await this.executor.run([
-      { sql: `SELECT CAST(strftime('%Y',f.taken_at,'unixepoch','localtime') AS INTEGER) AS year,count(*) AS count FROM files f
-        WHERE ${condition.sql} AND strftime('%m-%d',f.taken_at,'unixepoch','localtime')=?
-        AND CAST(strftime('%Y',f.taken_at,'unixepoch','localtime') AS INTEGER)<? GROUP BY year ORDER BY year DESC`, params: [...condition.params, day, currentYear] },
+      // 每年只在拍摄时间索引中读取当天的范围；按文件逐行计算月日会扫描全库。
+      { sql: `WITH days AS (SELECT value ->> 0 AS year, value ->> 1 AS start, value ->> 2 AS end FROM json_each(?))
+        SELECT year, start AS "from", end AS "to",
+          (SELECT count(*) FROM files f INDEXED BY files_taken_id WHERE f.taken_at>=days.start AND f.taken_at<days.end AND ${condition.sql}) AS count
+        FROM days ORDER BY year DESC`, params: [JSON.stringify(days), ...condition.params] },
       { sql: `${selection} WHERE ${condition.sql} ORDER BY f.created_at DESC,f.id ASC LIMIT 12`, params: [context.id, ...condition.params] },
-    ]) as [{ year: number; count: number }[], FileRow[]];
-    const onThisDay = groups.map(({ year, count }) => {
-      const start = new Date(0); start.setFullYear(year, today.getMonth(), today.getDate()); start.setHours(0, 0, 0, 0);
-      const end = new Date(start); end.setDate(end.getDate() + 1);
-      const from = Math.floor(start.getTime() / 1000); const to = Math.floor(end.getTime() / 1000);
-      return { year, count, items: this.page(MediaListQuery.parse({ from, to, limit: 12 }), context).items };
-    });
+    ]) as [{ year: number; from: number; to: number; count: number }[], FileRow[]];
+    const onThisDay = groups.filter(({ count }) => count > 0).map(({ year, from, to, count }) => ({
+      year, count, items: this.page(MediaListQuery.parse({ from, to, limit: 12 }), context).items,
+    }));
     return { onThisDay, recentlyAdded: recent.map(item), shuffle: this.random(RandomQuery.parse({ count: 12 }), context).items };
   }
 
