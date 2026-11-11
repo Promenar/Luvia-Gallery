@@ -111,7 +111,7 @@ function WallpaperCard({ tokens, onCreate }: { tokens: ApiToken[]; onCreate: () 
             </>
           )}
           <Lb htmlFor={intId}>切换间隔 <output htmlFor={intId} className="font-normal text-muted tabular-nums">{formatSeconds(INTERVAL_STEPS[stepLocal]!)}</output></Lb>
-          <input id={intId} type="range" min={0} max={INTERVAL_STEPS.length - 1} step={1} value={stepLocal} aria-valuetext={formatSeconds(INTERVAL_STEPS[stepLocal]!)} onChange={(e) => setStep(Number(e.target.value))} className="w-full accent-[var(--accent)]" />
+          <input id={intId} type="range" min={0} max={INTERVAL_STEPS.length - 1} step={1} value={stepLocal} aria-valuetext={formatSeconds(INTERVAL_STEPS[stepLocal]!)} onChange={(e) => setStep(Number(e.target.value))} className="luvia-range w-full" />
           <small className="-mt-1.5 text-[12px] text-muted">新版壁纸端读取这个间隔，旧版壁纸端按它自己的设置切换。</small>
           <label className="flex items-center justify-between gap-2.5 text-[13px] text-fg-2">只用横向照片<Switch checked={wp.landscapeOnly} onCheckedChange={(v) => save.mutate({ landscapeOnly: v })} aria-label="只用横向照片" /></label>
           <label className="flex items-center justify-between gap-2.5 text-[13px] text-fg-2">包含视频<Switch checked={wp.includeVideos} onCheckedChange={(v) => save.mutate({ includeVideos: v })} aria-label="包含视频" /></label>

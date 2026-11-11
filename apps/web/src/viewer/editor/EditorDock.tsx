@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { Eraser, RotateCcw, Save, Trash2, Undo2, X } from 'lucide-react';
+import { Eraser, RotateCcw, Save, Trash2, Undo2 } from 'lucide-react';
 import type { EditorJob, EditorModel, EditorModelId } from '@luvia/contracts';
 import { cn } from '@/lib/cn';
 import './editor.css';
@@ -53,8 +53,9 @@ export type EditorDockProps = {
 export function EditorDock(props: EditorDockProps) {
   const { job, createPending } = props;
   const busy = createPending || job?.status === 'queued' || job?.status === 'running';
-  const done = job?.status === 'succeeded';
-  const progress = createPending ? 0 : Math.max(0, Math.min(1, job?.progress ?? 0));
+  const done = !busy && job?.status === 'succeeded';
+  const indeterminate = createPending || job?.status === 'queued';
+  const progress = Math.round(Math.max(0, Math.min(1, job?.progress ?? 0)) * 100);
   const stage = createPending ? '正在提交作业' : job?.status === 'queued' ? '排队中' : job?.stage ?? '正在推理';
   const resultText = props.savedName
     ? props.savedText ?? `已保存 ${props.savedName}`
@@ -63,19 +64,14 @@ export function EditorDock(props: EditorDockProps) {
   return (
     <div className="lv-editor" role="toolbar" aria-label="图像修复工具栏">
       {(busy || done) && (
-        <div className={cn('lv-ed-progress', (createPending || job?.status === 'queued') && 'indeterminate')} aria-hidden>
-          <i style={{ width: `${Math.round(progress * 100)}%` }} />
+        <div className={cn('lv-ed-progress', indeterminate && 'indeterminate')}
+          role={busy ? 'progressbar' : undefined} aria-label={busy ? stage : undefined}
+          aria-valuenow={busy && !indeterminate ? progress : undefined} aria-hidden={busy ? undefined : true}>
+          <i style={{ width: `${progress}%` }} />
         </div>
       )}
 
-      {busy ? (
-        <div className="lv-ed-row lv-ed-status">
-          <span className="lv-ed-dot" aria-hidden />
-          <span className="lv-ed-stage">{stage}</span>
-          <span className="lv-ed-pct" aria-hidden>{Math.round(progress * 100)}%</span>
-          <button type="button" className="lv-ed-tool" onClick={props.onCancel}><X />取消</button>
-        </div>
-      ) : done && job?.outcome === 'no_detection' ? (
+      {done && job?.outcome === 'no_detection' ? (
         <div className="lv-ed-row">
           <span className="lv-ed-result">未检测到水印</span>
           <button type="button" className="lv-ed-tool" onClick={props.onReset}>手动涂抹</button>
@@ -126,7 +122,7 @@ export function EditorDock(props: EditorDockProps) {
                   type="button"
                   role="radio"
                   aria-checked={on}
-                  disabled={!model.available}
+                  disabled={busy || !model.available}
                   title={model.available ? undefined : model.reason ?? '该模型不可用'}
                   className={on ? 'on' : undefined}
                   onClick={() => props.onModel(model.id)}
@@ -145,6 +141,8 @@ export function EditorDock(props: EditorDockProps) {
               max={56}
               step={2}
               value={props.brush}
+              className="luvia-range"
+              disabled={busy}
               aria-label="笔刷大小"
               onChange={(event) => props.onBrush(Number(event.target.value))}
             />
@@ -154,25 +152,28 @@ export function EditorDock(props: EditorDockProps) {
             type="button"
             className={cn('lv-ed-tool', props.erase && 'on')}
             aria-pressed={props.erase}
+            disabled={busy}
             title={props.erase ? '切回涂抹' : '擦除蒙版'}
             onClick={() => props.onErase(!props.erase)}
           >
             <Eraser />擦除
           </button>
-          <button type="button" className="lv-ed-tool" disabled={!props.hasMask} onClick={props.onUndo}><Undo2 />撤销</button>
-          <button type="button" className="lv-ed-tool" disabled={!props.hasMask} onClick={props.onClear}><Trash2 />清除</button>
-          {(props.adjusting || props.continuing) && props.onCancelAdjust && <button type="button" className="lv-ed-tool" onClick={props.onCancelAdjust}>返回预览</button>}
+          <button type="button" className="lv-ed-tool" disabled={busy || !props.hasMask} onClick={props.onUndo}><Undo2 />撤销</button>
+          <button type="button" className="lv-ed-tool" disabled={busy || !props.hasMask} onClick={props.onClear}><Trash2 />清除</button>
+          {(props.adjusting || props.continuing) && props.onCancelAdjust && <button type="button" className="lv-ed-tool" disabled={busy} onClick={props.onCancelAdjust}>返回预览</button>}
           {props.onAuto && !props.adjusting && !props.continuing && (
-            <button type="button" className="lv-ed-tool" disabled={!props.canAuto} onClick={props.onAuto}>SLBR 自动修复</button>
+            <button type="button" className="lv-ed-tool" disabled={busy || !props.canAuto} onClick={props.onAuto}>SLBR 自动修复</button>
           )}
           <button
             type="button"
-            className="lv-ed-primary"
-            disabled={!props.hasMask || !props.canGenerate || props.createPending}
-            title={props.generateHint ?? undefined}
-            onClick={props.onGenerate}
+            className="lv-ed-primary lv-ed-generate"
+            disabled={!busy && (!props.hasMask || !props.canGenerate)}
+            aria-disabled={createPending || undefined}
+            title={busy ? stage : props.generateHint ?? undefined}
+            onClick={busy ? (createPending ? undefined : props.onCancel) : props.onGenerate}
           >
-            {props.createPending ? '正在提交…' : props.adjusting ? '应用蒙版' : '生成预览'}
+            {busy ? <>取消{!indeterminate && <span aria-hidden className="lv-ed-pct">{progress}%</span>}</>
+              : props.adjusting ? '应用蒙版' : '生成预览'}
           </button>
         </div>
       )}
