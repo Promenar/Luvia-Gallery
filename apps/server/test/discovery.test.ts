@@ -3,6 +3,45 @@ import assert from 'node:assert/strict';
 import { Memories, SearchSuggest } from '@luvia/contracts';
 import { openDatabase } from '../src/core/database.ts';
 import { createApp } from '../src/api/app.ts';
+import { MediaReader } from '../src/core/media-query.ts';
+import { QueryExecutor, type Statement } from '../src/core/query-executor.ts';
+
+test('那年今日使用拍摄时间范围索引，并排除闰日以外的日期及不可见媒体', async () => {
+  const db = openDatabase(':memory:');
+  const plans: string[] = [];
+  class ExplainExecutor extends QueryExecutor {
+    override run(statements: Statement[]) {
+      for (const { sql, params } of statements) {
+        const rows = db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...params) as { detail: string }[];
+        plans.push(...rows.map(({ detail }) => detail));
+      }
+      return super.run(statements);
+    }
+  }
+  try {
+    db.exec("INSERT INTO libraries(id,name,root,enabled) VALUES ('lib','照片','/fixture',1),('off','关闭','/disabled',0)");
+    const insert = db.prepare(`INSERT INTO files(id,library_id,relative_path,folder,name,mime,media_type,size,modified_at,taken_at,taken_at_source,missing_at_ms)
+      VALUES (?,?,?,?,?,'image/jpeg','image',1,0,?,'metadata',?)`);
+    const day = (year: number, month: number, date: number, hour = 0) => new Date(year, month - 1, date, hour).getTime() / 1000;
+    const add = (id: string, time: number, folder = 'lib/公开', library = 'lib', missing: number | null = null) =>
+      insert.run(id, library, `${id}.jpg`, folder, `${id}.jpg`, time, missing);
+    for (let i = 0; i < 13; i++) add(`photo-${i}`, day(2020, 2, 29) + i);
+    add('earlier-year', day(2016, 2, 29));
+    add('before', day(2020, 2, 29) - 1);
+    add('after', day(2020, 3, 1));
+    add('non-leap', day(2021, 3, 1));
+    add('current', day(2024, 2, 29));
+    add('private', day(2020, 2, 29, 12), 'lib/私密');
+    add('disabled', day(2020, 2, 29, 12), 'off', 'off');
+    add('missing', day(2020, 2, 29, 12), 'lib/公开', 'lib', 1);
+    const reader = new MediaReader(db, new ExplainExecutor(db));
+    const result = await reader.memories({ id: 'test', allowedPaths: ['lib/公开', 'off'] }, new Date(2024, 1, 29, 12));
+    assert.ok(plans.some((plan) => /SEARCH f USING INDEX files_taken_id \(taken_at>\? AND taken_at<\?\)/.test(plan)), plans.join('\n'));
+    assert.deepEqual(result.onThisDay.map(({ year, count }) => [year, count]), [[2020, 13], [2016, 1]]);
+    assert.deepEqual(result.onThisDay[0]?.items.map(({ id }) => id), Array.from({ length: 12 }, (_, i) => `photo-${12 - i}`));
+    assert.deepEqual(result.onThisDay[1]?.items.map(({ id }) => id), ['earlier-year']);
+  } finally { db.close(); }
+});
 
 test('回忆与搜索联想只返回用户可见内容', async () => {
   const db = openDatabase(':memory:'); const app = await createApp({ db, legacyPending: false });
