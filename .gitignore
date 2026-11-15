@@ -53,6 +53,25 @@ macos-widget/.build/
 # SSH 私钥挂载目录（docker-compose 热更新引导使用，防止误提交）
 ssh/
 
+# 本地编程助手/代理产物（不随公开仓库分发）
+.claude/
+.codebuddy/
+.playwright-mcp/
+.superpowers/
+.qoder/
+
+# Android 本地 SDK 配置
+**/local.properties
+
+# 服务端本地运行数据
+apps/server/data/
+*.sqlite-shm
+*.sqlite-wal
+
+# Gradle 构建产物
+native-ui/build/
+mobile/build/
+
 # ZCode video-agent 插件产物
 .video_agent/
 

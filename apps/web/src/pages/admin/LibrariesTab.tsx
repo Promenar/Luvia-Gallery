@@ -187,7 +187,7 @@ function LibrarySettings({ lib, open, onOpenChange }: { lib: Library; open: bool
             ? <>只影响显示。{lib.hostRootSource === 'manual' ? '当前为手动填写，清空后恢复自动识别。' : `自动识别为 ${autoHost}，经过多层挂载、识别不准时在这里改正。`}</>
             : '没有从容器挂载信息识别到宿主机路径，可以手动填写，只影响显示。'}
         >
-          <input id={ids.host} className={inputClass} value={host} placeholder={autoHost ?? '/mnt/Photos'} onChange={(e) => setHost(e.target.value)} />
+          <input id={ids.host} className={inputClass} value={host} placeholder={autoHost ?? '/mnt/photos'} onChange={(e) => setHost(e.target.value)} />
         </Field>
         <Field label="跳过的目录" htmlFor={ids.ex} hint="目录名或相对路径的通配规则，用逗号或换行分隔，例如 @eaDir, .*, 导出/草稿">
           <textarea id={ids.ex} rows={2} className={cn(inputClass, 'h-auto resize-y py-2 leading-relaxed')} value={exclude} onChange={(e) => setExclude(e.target.value)} />
@@ -328,7 +328,7 @@ function AddDirectoryDialog({ open, onOpenChange }: { open: boolean; onOpenChang
     <Modal open={open} onOpenChange={onOpenChange} title="添加目录" desc="Luvia 只能读取已经挂载进容器的目录。要添加宿主机上的其它目录，先在 docker-compose.yml 里挂载，再重启容器。" footer={<Chip onClick={() => onOpenChange(false)}>关闭</Chip>}>
       <div className="grid gap-3.5">
         <Field label="宿主机上的目录" htmlFor={ids.host} hint="NAS 或服务器上的真实路径。">
-          <input id={ids.host} className={inputClass} value={host} placeholder="/mnt/Music" autoComplete="off" spellCheck={false} onChange={(e) => setHost(e.target.value)} />
+          <input id={ids.host} className={inputClass} value={host} placeholder="/mnt/music" autoComplete="off" spellCheck={false} onChange={(e) => setHost(e.target.value)} />
         </Field>
         <Field label="容器内的名称" htmlFor={ids.c} hint={r.containerPath ? `挂载到容器内的 ${r.containerPath}` : '只填名称时放在 /media/ 下，也可以填完整路径。'}>
           <input id={ids.c} className={inputClass} value={cname} placeholder="music" autoComplete="off" spellCheck={false} onChange={(e) => { setTouched(true); setCname(e.target.value); }} />
@@ -390,7 +390,7 @@ function Rules() {
               />
               <span className="text-[13px] text-muted">天</span>
             </SettingRow>
-            <SettingRow title="向家庭成员显示宿主机路径" desc="关闭后，只有管理员能在文件夹页看到 /vol1/... 这样的真实路径。">
+            <SettingRow title="向家庭成员显示宿主机路径" desc="关闭后，只有管理员能在文件夹页看到 /mnt/... 这样的真实路径。">
               <Switch checked={s.data.folders.exposeHostPaths} onCheckedChange={(v) => upd.mutate({ folders: { exposeHostPaths: v } })} aria-label="向家庭成员显示宿主机路径" />
             </SettingRow>
           </>

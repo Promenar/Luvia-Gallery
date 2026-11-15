@@ -33,12 +33,12 @@ async function parse<T extends z.ZodType>(schema: T, request: Request): Promise<
 interface MockMount { containerPath: string; hostPath: string | null; kind: 'library' | 'candidate' | 'system' | 'other'; libraryId: string | null; readOnly: boolean; mediaEstimate: number | null; fs: string }
 
 const mounts: MockMount[] = [
-  { containerPath: '/media/photos', hostPath: '/mnt/Photos', kind: 'library', libraryId: 'photos', readOnly: true, mediaEstimate: null, fs: 'ext4' },
-  { containerPath: '/media/phone', hostPath: '/mnt/Backup/Phone', kind: 'library', libraryId: 'phone', readOnly: true, mediaEstimate: null, fs: 'cifs' },
-  { containerPath: '/media/videos', hostPath: '/mnt/Videos', kind: 'candidate', libraryId: null, readOnly: true, mediaEstimate: 31_200, fs: 'ext4' },
-  { containerPath: '/media/scans', hostPath: '/mnt/Documents/Scans', kind: 'candidate', libraryId: null, readOnly: false, mediaEstimate: 2_400, fs: 'ext4' },
-  { containerPath: '/data', hostPath: '/vol1/docker/luvia/data', kind: 'system', libraryId: null, readOnly: false, mediaEstimate: null, fs: 'ext4' },
-  { containerPath: '/cache', hostPath: '/vol1/docker/luvia/cache', kind: 'system', libraryId: null, readOnly: false, mediaEstimate: null, fs: 'ext4' },
+  { containerPath: '/media/photos', hostPath: '/mnt/photos', kind: 'library', libraryId: 'photos', readOnly: true, mediaEstimate: null, fs: 'ext4' },
+  { containerPath: '/media/phone', hostPath: '/mnt/phone', kind: 'library', libraryId: 'phone', readOnly: true, mediaEstimate: null, fs: 'cifs' },
+  { containerPath: '/media/videos', hostPath: '/mnt/videos', kind: 'candidate', libraryId: null, readOnly: true, mediaEstimate: 31_200, fs: 'ext4' },
+  { containerPath: '/media/scans', hostPath: '/mnt/scans', kind: 'candidate', libraryId: null, readOnly: false, mediaEstimate: 2_400, fs: 'ext4' },
+  { containerPath: '/data', hostPath: '/mnt/luvia/data', kind: 'system', libraryId: null, readOnly: false, mediaEstimate: null, fs: 'ext4' },
+  { containerPath: '/cache', hostPath: '/mnt/luvia/cache', kind: 'system', libraryId: null, readOnly: false, mediaEstimate: null, fs: 'ext4' },
   { containerPath: '/etc/hosts', hostPath: '/var/lib/docker/containers/3f1c…/hosts', kind: 'other', libraryId: null, readOnly: false, mediaEstimate: null, fs: 'ext4' },
   { containerPath: '/etc/hostname', hostPath: '/var/lib/docker/containers/3f1c…/hostname', kind: 'other', libraryId: null, readOnly: false, mediaEstimate: null, fs: 'ext4' },
   { containerPath: '/etc/resolv.conf', hostPath: '/var/lib/docker/containers/3f1c…/resolv.conf', kind: 'other', libraryId: null, readOnly: false, mediaEstimate: null, fs: 'ext4' },

@@ -7,8 +7,8 @@ import {
 
 describe('composeVolume', () => {
   it('只填名称时挂到 /media/ 下并默认只读', () => {
-    const r = composeVolume('/mnt/Music/', 'music');
-    expect(r).toEqual({ ok: true, line: '- /mnt/Music:/media/music:ro', containerPath: '/media/music', error: null });
+    const r = composeVolume('/mnt/music/', 'music');
+    expect(r).toEqual({ ok: true, line: '- /mnt/music:/media/music:ro', containerPath: '/media/music', error: null });
   });
   it('容器内填绝对路径时原样使用，可关闭只读', () => {
     expect(composeVolume('/mnt/a', '/media/photos/2024', false).line).toBe('- /mnt/a:/media/photos/2024');
@@ -17,17 +17,17 @@ describe('composeVolume', () => {
     expect(composeVolume('./photos', 'photos').ok).toBe(true);
   });
   it('含空格时整体加引号', () => {
-    expect(composeVolume('/vol1/My Photos', '家庭照片').line).toBe('- "/vol1/My Photos:/media/家庭照片:ro"');
+    expect(composeVolume('/mnt/My Photos', '家庭照片').line).toBe('- "/mnt/My Photos:/media/家庭照片:ro"');
   });
   it('拒绝相对路径、冒号、系统目录与 ..', () => {
     expect(composeVolume('vol1/a', 'a').error).toMatch(/以 \/ 开头/);
     expect(composeVolume('C:/Photos', 'a').error).toMatch(/以 \/ 开头/);
-    expect(composeVolume('/vol1/a:b', 'a').error).toMatch(/冒号/);
-    expect(composeVolume('/vol1/a', '/data').error).toMatch(/系统目录/);
-    expect(composeVolume('/vol1/a', '/etc/x').error).toMatch(/系统目录/);
-    expect(composeVolume('/vol1/a', '/media/../data').error).toMatch(/\.\./);
+    expect(composeVolume('/mnt/a:b', 'a').error).toMatch(/冒号/);
+    expect(composeVolume('/mnt/a', '/data').error).toMatch(/系统目录/);
+    expect(composeVolume('/mnt/a', '/etc/x').error).toMatch(/系统目录/);
+    expect(composeVolume('/mnt/a', '/media/../data').error).toMatch(/\.\./);
     expect(composeVolume('', 'a').ok).toBe(false);
-    expect(composeVolume('/vol1/a', '').error).toMatch(/容器内的名称/);
+    expect(composeVolume('/mnt/a', '').error).toMatch(/容器内的名称/);
   });
   it('推荐的容器内名称取最后一级目录并去掉空白', () => {
     expect(suggestContainerName('/mnt/My Music/')).toBe('my-music');

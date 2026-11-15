@@ -1,4 +1,4 @@
-# 生产 NAS 主机 开发调试覆盖文件：叠加在仓库根 docker-compose.yml 之上使用。
+# NAS 开发调试覆盖文件：叠加在仓库根 docker-compose.yml 之上使用。
 #
 #   docker compose -p luvia-v2-dev -f docker-compose.yml -f deploy/compose.fnos-dev.yml up -d
 #

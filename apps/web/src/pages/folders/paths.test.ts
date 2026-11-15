@@ -8,22 +8,21 @@ describe('宿主机面包屑分段', () => {
     const r = hostCrumbs({
       path: 'photos/2025/2025-09 上海',
       breadcrumbs: bc(['照片库', 'photos'], ['2025', 'photos/2025'], ['2025-09 上海', 'photos/2025/2025-09 上海']),
-      hostRoot: '/mnt/Photos',
-      hostPath: '/mnt/Photos/2025/2025-09 上海',
+      hostRoot: '/mnt/photos',
+      hostPath: '/mnt/photos/2025/2025-09 上海',
     });
     expect(r.mode).toBe('host');
     expect(r.crumbs).toEqual([
-      { kind: 'outside', name: 'vol1' },
-      { kind: 'outside', name: '1000' },
-      { kind: 'link', name: 'Photos', path: 'photos' },
+      { kind: 'outside', name: 'mnt' },
+      { kind: 'link', name: 'photos', path: 'photos' },
       { kind: 'link', name: '2025', path: 'photos/2025' },
       { kind: 'current', name: '2025-09 上海', path: 'photos/2025/2025-09 上海' },
     ]);
   });
 
   it('位于媒体库根时挂载点本身就是当前目录', () => {
-    const r = hostCrumbs({ path: 'phone', breadcrumbs: bc(['手机备份', 'phone']), hostRoot: '/mnt/Backup/Phone/', hostPath: '/mnt/Backup/Phone' });
-    expect(r.crumbs.map((c) => c.kind)).toEqual(['outside', 'outside', 'outside', 'current']);
+    const r = hostCrumbs({ path: 'phone', breadcrumbs: bc(['手机备份', 'phone']), hostRoot: '/mnt/Phone/', hostPath: '/mnt/Phone' });
+    expect(r.crumbs.map((c) => c.kind)).toEqual(['outside', 'current']);
     expect(r.crumbs.at(-1)).toEqual({ kind: 'current', name: 'Phone', path: 'phone' });
   });
 

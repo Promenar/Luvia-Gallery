@@ -54,7 +54,7 @@ test('壁纸设置默认值与媒体库创建参数', () => {
 
 test('媒体库实时监控字段与边界', () => {
   const lib = {
-    id: 'l1', name: '照片库', root: '/media/photos', hostRoot: '/mnt/Photos', hostRootSource: 'auto', exclude: [],
+    id: 'l1', name: '照片库', root: '/media/photos', hostRoot: '/mnt/photos', hostRootSource: 'auto', exclude: [],
     status: 'ok', mediaCount: 1, lastScanAt: null, enabled: true,
     watch: { mode: 'auto', pollIntervalSec: 300, state: 'watching', watchedDirs: 15164, lastEventAt: null, lastReconcileAt: null, degradedReason: null },
   };

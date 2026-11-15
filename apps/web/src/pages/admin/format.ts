@@ -223,7 +223,7 @@ const RESERVED = ['/', '/data', '/cache', '/app', '/proc', '/sys', '/dev', '/etc
 
 export interface VolumeResult {
   ok: boolean;
-  /** 一行卷映射，例如 `- /mnt/Music:/media/music:ro`。 */
+  /** 一行卷映射，例如 `- /mnt/music:/media/music:ro`。 */
   line: string;
   /** 容器内路径（启用后会出现在“检测到的新目录”里）。 */
   containerPath: string;
@@ -241,7 +241,7 @@ export function composeVolume(hostInput: string, containerInput: string, readOnl
   const rawC = containerInput.trim();
   const container = rawC ? trimSlash(rawC.startsWith('/') ? rawC : `/media/${rawC.replace(/^\.?\/*/, '')}`) : '';
   const fail = (error: string): VolumeResult => ({ ok: false, line: '', containerPath: container, error });
-  if (!host) return fail('填写宿主机上的目录路径，例如 /mnt/Music');
+  if (!host) return fail('填写宿主机上的目录路径，例如 /mnt/music');
   if (!/^(\/|\.\.?\/|~\/)/.test(host)) return fail('宿主机路径需要以 / 开头（或以 ./ 表示相对 docker-compose.yml 所在目录）');
   if (host.includes(':')) return fail('宿主机路径里不能有冒号，compose 会把冒号当作分隔符');
   if (!container) return fail('填写容器内的名称，例如 music');

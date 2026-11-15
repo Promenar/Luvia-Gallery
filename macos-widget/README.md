@@ -27,7 +27,7 @@ macOS 悬浮窗相册轮播 App：以圆角浮窗形式在桌面轮播展示 Luv
 ### 1. 打开项目
 
 ```bash
-cd /Users/example/Codex/Luvia-Gallery/macos-widget/LuviaGalleryWidget
+cd macos-widget/LuviaGalleryWidget
 open LuviaGalleryWidget.xcodeproj
 ```
 
@@ -36,6 +36,8 @@ open LuviaGalleryWidget.xcodeproj
 1. 在 Xcode 中选择 **LuviaGalleryWidget** Target
 2. **Signing & Capabilities → + Capability → App Groups**
 3. 添加: `group.com.luvia.gallery`
+
+> 仓库不保存 `DEVELOPMENT_TEAM`。首次编译前请在 **Signing & Capabilities** 中选择你自己的 Team；发布脚本会使用当前 Xcode 的签名配置。
 
 ### 3. 编译运行
 

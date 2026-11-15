@@ -13,8 +13,8 @@ export function rng(seed: number) {
 
 export interface MockLibrary { id: string; name: string; root: string; hostRoot: string }
 export const LIBRARIES: MockLibrary[] = [
-  { id: 'photos', name: '照片库', root: '/media/photos', hostRoot: '/mnt/Photos' },
-  { id: 'phone', name: '手机备份', root: '/media/phone', hostRoot: '/mnt/Backup/Phone' },
+  { id: 'photos', name: '照片库', root: '/media/photos', hostRoot: '/mnt/photos' },
+  { id: 'phone', name: '手机备份', root: '/media/phone', hostRoot: '/mnt/phone' },
 ];
 
 /** 目录：相对路径 → 该目录直接媒体数（0 表示只含子目录的中间层）。 */
