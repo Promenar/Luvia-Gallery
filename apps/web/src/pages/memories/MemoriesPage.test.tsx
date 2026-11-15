@@ -9,6 +9,7 @@ vi.mock('@tanstack/react-query', async (original) => ({
   useQuery: () => ({ data: fixture.data, isPending: false, isError: false }),
 }));
 vi.mock('./Hero', () => ({ Hero: () => null }));
+vi.mock('./ShuffleWall', () => ({ ShuffleWall: () => null }));
 vi.mock('./hooks', () => ({ useHeroData: () => ({}), useLibraryNames: () => new Map() }));
 vi.mock('@/stores/viewer', () => ({ openViewer: fixture.openViewer }));
 vi.mock('@/theme/ThemeProvider', () => ({ setDynamicFrom: () => {} }));

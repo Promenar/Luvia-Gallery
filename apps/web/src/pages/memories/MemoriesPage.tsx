@@ -1,16 +1,16 @@
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { mediaUrls, type MediaItem, type Memories } from '@luvia/contracts';
 import { q } from '@/lib/query';
-import { aspectOf, justifyRows } from '@/components/media/justify';
-import { useDimensionsVersion } from '@/lib/dimensions';
-import { GRID_GAP, useElementWidth, useRowHeight } from '@/components/media/MediaGrid';
+import { aspectOf } from '@/components/media/justify';
+import { useElementWidth, useRowHeight } from '@/components/media/MediaGrid';
 import { canThumb, Thumb, thumbhashUrl } from '@/components/media/Thumb';
 import { openViewer } from '@/stores/viewer';
 import { setDynamicFrom } from '@/theme/ThemeProvider';
 import { Hero } from './Hero';
 import { useHeroData, useLibraryNames } from './hooks';
 import { folderLabel } from './heroSource';
+import { ShuffleWall } from './ShuffleWall';
 
 function Section({ title, note, children }: { title: string; note?: string; children: React.ReactNode }) {
   return (
@@ -90,33 +90,6 @@ function Strip({ items, label }: { items: MediaItem[]; label: string }) {
   );
 }
 
-/** 对齐行布局，最多 maxRows 行。 */
-function Rows({ items, label, maxRows }: { items: MediaItem[]; label: string; maxRows: number }) {
-  const [ref, width] = useElementWidth<HTMLDivElement>();
-  const h = useRowHeight(width || 1000);
-  const dims = useDimensionsVersion();
-  const rows = useMemo(() => justifyRows(items, aspectOf, width, h, GRID_GAP).slice(0, maxRows), [items, width, h, maxRows, dims]);
-  const shown = rows.flatMap((r) => r.cells.map((c) => c.item));
-  return (
-    <div ref={ref} className="flex flex-col" style={{ gap: GRID_GAP }}>
-      {rows.map((r, ri) => (
-        <div key={ri} className="flex" style={{ gap: GRID_GAP }}>
-          {r.cells.map((c) => (
-            <Thumb
-              key={c.item.id}
-              item={c.item}
-              width={Math.floor(c.width)}
-              height={Math.round(c.height)}
-              onMouseEnter={() => setDynamicFrom(c.item)}
-              onClick={(e) => openViewer({ label, items: shown }, shown.indexOf(c.item), { originEl: e.currentTarget })}
-            />
-          ))}
-        </div>
-      ))}
-    </div>
-  );
-}
-
 function CardsSkeleton() {
   return (
     <div aria-hidden className="grid auto-cols-[220px] grid-flow-col gap-3.5 overflow-hidden max-md:auto-cols-[150px]">
@@ -129,11 +102,12 @@ function CardsSkeleton() {
 export default function MemoriesPage() {
   const hero = useHeroData();
   const memQ = useQuery(q('memories'));
+  const [scrollElement, setScrollElement] = useState<HTMLDivElement | null>(null);
   const today = new Date();
   const mem = memQ.data;
 
   return (
-    <div className="h-full overflow-x-hidden overflow-y-auto">
+    <div ref={setScrollElement} className="h-full overflow-x-hidden overflow-y-auto">
       <div className="pb-20">
         <Hero data={hero} />
 
@@ -157,11 +131,7 @@ export default function MemoriesPage() {
           </Section>
         )}
 
-        {mem && mem.shuffle.length > 0 && (
-          <Section title="随便看看" note="从媒体库里随机挑一组">
-            <Rows items={mem.shuffle} label="随便看看" maxRows={2} />
-          </Section>
-        )}
+        <ShuffleWall scrollElement={scrollElement} />
       </div>
     </div>
   );
