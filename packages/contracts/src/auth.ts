@@ -7,6 +7,8 @@ import { MediaSort } from './media.ts';
  * accent 为预设 ID 或自定义 #RRGGBB。
  */
 const ThemeMode = z.enum(['system', 'light', 'dark']);
+/** 一级皮肤：monograph 美术馆画册，cinema 液态光场。 */
+export const ThemeStyle = z.enum(['monograph', 'cinema']);
 /** 中性底色家族：graphite 纯中性、warm 暖灰、cool 冷灰、oled 纯黑（仅影响深色）。 */
 const ThemeBase = z.enum(['graphite', 'warm', 'cool', 'oled']);
 const ThemeAccent = z.union([
@@ -15,15 +17,16 @@ const ThemeAccent = z.union([
 ]);
 /** 圆角风格。 */
 const ThemeRadius = z.enum(['sharp', 'default', 'round']);
-/** 查看器背景：纯黑、跟随主题底色、或取照片主色的氛围光。 */
-const ViewerBackdrop = z.enum(['black', 'theme', 'ambient']);
+/** 查看器背景：纯黑、跟随主题底色、照片主色氛围光或美术馆白墙。 */
+const ViewerBackdrop = z.enum(['black', 'theme', 'ambient', 'gallery']);
 
 /** 主题偏好补丁（无默认值，用于局部更新）。accent=dynamic 表示随当前照片动态取色。 */
 export const ThemePatch = z
-  .object({ mode: ThemeMode, base: ThemeBase, accent: ThemeAccent, radius: ThemeRadius, viewerBackdrop: ViewerBackdrop })
+  .object({ style: ThemeStyle, mode: ThemeMode, base: ThemeBase, accent: ThemeAccent, radius: ThemeRadius, viewerBackdrop: ViewerBackdrop })
   .partial();
 
 export const ThemePreference = z.object({
+  style: ThemeStyle.default('cinema'),
   mode: ThemeMode.default('system'),
   base: ThemeBase.default('graphite'),
   accent: ThemeAccent.default('dynamic'),
@@ -64,7 +67,7 @@ export const Preferences = z.object({
   locale: z.enum(['zh-CN', 'en']).default('zh-CN'),
   /** 网格行高档位 1（最密）–5（最疏）。 */
   density: z.number().int().min(1).max(5).default(3),
-  gridStyle: z.enum(['justified', 'square']).default('justified'),
+  gridStyle: z.enum(['justified', 'square', 'mat']).default('justified'),
   /** 照片时间线的排序与分组依据：modified 文件修改时间（默认，导入后立即可用），taken 拍摄时间（随后台读取逐步完善）。 */
   timelineBasis: z.enum(['modified', 'taken']).default('modified'),
   /** 文件夹、相册、收藏中媒体网格的排序，默认按修改时间从新到旧。 */

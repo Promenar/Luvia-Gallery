@@ -13,11 +13,14 @@ test('列表查询参数解析逗号分隔与默认值', () => {
 
 test('偏好默认值完整且主题接受预设或自定义色', () => {
   const p = defaultPreferences();
+  assert.equal(p.theme.style, 'cinema');
   assert.equal(p.theme.accent, 'dynamic');
+  assert.equal(p.theme.viewerBackdrop, 'ambient');
   assert.equal(p.home.heroSource, 'memories');
   assert.equal(p.slideshow.intervalSec, 5);
   assert.equal(p.folderIncludeSubfolders, false);
   assert.equal(p.density, 3);
+  assert.equal(p.gridStyle, 'justified');
   assert.equal(ThemePreference.parse({ accent: '#3a7bd5' }).accent, '#3a7bd5');
   assert.throws(() => ThemePreference.parse({ accent: 'red' }));
   assert.deepEqual(Preferences.parse({}), p);
@@ -26,6 +29,30 @@ test('偏好默认值完整且主题接受预设或自定义色', () => {
 test('偏好补丁允许局部主题字段', () => {
   const patch = PreferencesPatch.parse({ theme: { accent: 'teal' } });
   assert.deepEqual(patch, { theme: { accent: 'teal' } });
+});
+
+test('旧版主题保留已有字段并补齐默认皮肤', () => {
+  const legacy = { theme: { mode: 'dark', accent: '#3a7bd5', viewerBackdrop: 'black' }, gridStyle: 'square' };
+  const preferences = Preferences.parse(legacy);
+  assert.deepEqual(preferences.theme, { ...defaultPreferences().theme, ...legacy.theme, style: 'cinema' });
+  assert.equal(preferences.gridStyle, 'square');
+});
+
+test('扩展外观字段可分别解析，补丁只包含提交的字段', () => {
+  assert.deepEqual(PreferencesPatch.parse({ theme: { style: 'monograph' } }), { theme: { style: 'monograph' } });
+  assert.deepEqual(PreferencesPatch.parse({ theme: { viewerBackdrop: 'gallery' } }), { theme: { viewerBackdrop: 'gallery' } });
+  assert.deepEqual(PreferencesPatch.parse({ gridStyle: 'mat' }), { gridStyle: 'mat' });
+  const preferences = Preferences.parse({ theme: { style: 'monograph', viewerBackdrop: 'gallery' }, gridStyle: 'mat' });
+  assert.equal(preferences.theme.style, 'monograph');
+  assert.equal(preferences.theme.viewerBackdrop, 'gallery');
+  assert.equal(preferences.gridStyle, 'mat');
+});
+
+test('完整偏好与补丁均拒绝非法外观值', () => {
+  for (const invalid of [{ theme: { style: 'invalid' } }, { theme: { viewerBackdrop: 'invalid' } }, { gridStyle: 'invalid' }]) {
+    assert.equal(Preferences.safeParse(invalid).success, false);
+    assert.equal(PreferencesPatch.safeParse(invalid).success, false);
+  }
 });
 
 test('路由表路径唯一', () => {

@@ -12,12 +12,14 @@ import { useHeroData, useLibraryNames } from './hooks';
 import { folderLabel } from './heroSource';
 import { ShuffleWall } from './ShuffleWall';
 
-function Section({ title, note, children }: { title: string; note?: string; children: React.ReactNode }) {
+function Section({ index, title, note, children }: { index: string; title: string; note?: string; children: React.ReactNode }) {
   return (
-    <section className="mt-[34px] px-11 max-md:px-4">
-      <h2 className="m-0 mb-3.5 flex flex-wrap items-baseline gap-x-3 text-lg font-semibold">
-        {title}{note && <span className="text-[13px] font-normal text-muted">{note}</span>}
-      </h2>
+    <section className="lv-page-inset mx-auto mt-[36px] max-w-[1640px]">
+      <div className="lv-sec-head">
+        <span className="lv-sec-num" aria-hidden>{index}</span>
+        <h2 className="lv-sec-title">{title}</h2>
+        {note && <span className="text-[13px] font-normal text-muted">{note}</span>}
+      </div>
       {children}
     </section>
   );
@@ -41,21 +43,27 @@ function OnThisDayCard({ group: { year, count, items }, libNames }: {
       onClick={(e) => openViewer({ label: `${year} 年的回忆`, items }, items.indexOf(cover), { originEl: e.currentTarget })}
       onMouseEnter={() => setDynamicFrom(cover)}
       onFocus={() => setDynamicFrom(cover)}
-      className="group/mc relative aspect-[3/4] cursor-pointer overflow-hidden rounded-[var(--r3)] bg-sunken bg-cover text-left after:absolute after:inset-0 after:bg-[linear-gradient(transparent_40%,rgba(0,0,0,.7))]"
-      style={{ backgroundImage: ph ? `url(${ph})` : undefined }}
+      className="group/mc lv-otd-card lv-spotlight-item cursor-pointer text-left"
     >
-      {canThumb(cover) && (
-        <img
-          src={mediaUrls.thumb(cover.id, 'm', cover.thumbVersion)}
-          alt=""
-          loading="lazy"
-          decoding="async"
-          draggable={false}
-          className="absolute inset-0 size-full object-cover transition-transform duration-500 ease-[cubic-bezier(.2,.8,.2,1)] group-hover/mc:scale-105"
-        />
-      )}
-      <span className="absolute bottom-9 left-3.5 z-[1] font-display text-[58px] leading-[.8] font-extrabold text-white max-md:text-[46px]">{year}</span>
-      <span className="absolute right-3 bottom-[13px] left-3.5 z-[1] truncate text-[12.5px] text-white/85">{place} · {count.toLocaleString('zh-CN')} 项</span>
+      <div
+        className="lv-otd-thumb bg-cover bg-center"
+        style={{ backgroundImage: ph ? `url(${ph})` : undefined }}
+      >
+        {canThumb(cover) && (
+          <img
+            src={mediaUrls.thumb(cover.id, 'm', cover.thumbVersion)}
+            alt=""
+            loading="lazy"
+            decoding="async"
+            draggable={false}
+            className="size-full object-cover transition-transform duration-500 ease-[var(--ease-cinema)] group-hover/mc:scale-105"
+          />
+        )}
+      </div>
+      <div className="lv-otd-meta">
+        <span className="lv-otd-year">{year}</span>
+        <span className="lv-otd-place truncate">{place} · {count.toLocaleString('zh-CN')} 项</span>
+      </div>
     </button>
   );
 }
@@ -63,7 +71,7 @@ function OnThisDayCard({ group: { year, count, items }, libNames }: {
 function OnThisDay({ data }: { data: Memories['onThisDay'] }) {
   const libNames = useLibraryNames();
   return (
-    <div className="grid auto-cols-[220px] grid-flow-col gap-3.5 overflow-x-auto pb-2 [scrollbar-width:thin] max-md:auto-cols-[150px] max-md:gap-2.5">
+    <div className="lv-spotlight-group grid auto-cols-[224px] grid-flow-col gap-4 overflow-x-auto px-0.5 pt-1 pb-3 [scrollbar-width:thin] max-md:auto-cols-[156px] max-md:gap-3">
       {data.map((group) => <OnThisDayCard key={group.year} group={group} libNames={libNames} />)}
     </div>
   );
@@ -74,7 +82,7 @@ function Strip({ items, label }: { items: MediaItem[]; label: string }) {
   const [ref, width] = useElementWidth<HTMLDivElement>();
   const h = useRowHeight(width || 1000);
   return (
-    <div ref={ref} className="flex gap-[3px] overflow-x-auto pb-2 [scrollbar-width:thin]">
+    <div ref={ref} className="flex gap-1.5 overflow-x-auto pb-2.5 [scrollbar-width:thin]">
       {items.map((m, i) => (
         <Thumb
           key={m.id}
@@ -92,13 +100,13 @@ function Strip({ items, label }: { items: MediaItem[]; label: string }) {
 
 function CardsSkeleton() {
   return (
-    <div aria-hidden className="grid auto-cols-[220px] grid-flow-col gap-3.5 overflow-hidden max-md:auto-cols-[150px]">
+    <div aria-hidden className="grid auto-cols-[224px] grid-flow-col gap-4 overflow-hidden max-md:auto-cols-[156px]">
       {Array.from({ length: 6 }, (_, i) => <div key={i} className="aspect-[3/4] animate-pulse rounded-[var(--r3)] bg-sunken" />)}
     </div>
   );
 }
 
-/** 首页（回忆）：大图轮播、那年今日、最近添加、随便看看。 */
+/** 首页（回忆）：双皮肤回忆舞台、那年今日、最近添加、随便看看。 */
 export default function MemoriesPage() {
   const hero = useHeroData();
   const memQ = useQuery(q('memories'));
@@ -108,17 +116,17 @@ export default function MemoriesPage() {
 
   return (
     <div ref={setScrollElement} className="h-full overflow-x-hidden overflow-y-auto">
-      <div className="pb-20">
+      <div className="pb-24">
         <Hero data={hero} />
 
-        <Section title="那年今日" note={`每年的 ${today.getMonth() + 1} 月 ${today.getDate()} 日前后`}>
+        <Section index="01" title="那年今日" note={`每年的 ${today.getMonth() + 1} 月 ${today.getDate()} 日前后`}>
           {memQ.isPending ? <CardsSkeleton /> : memQ.isError ? (
             <p className="m-0 text-sm text-muted">
               回忆没有加载出来：{memQ.error.message}。
               <button type="button" onClick={() => void memQ.refetch()} className="ml-1 font-semibold text-accent underline-offset-4 hover:underline">重新加载</button>
             </p>
           ) : mem && mem.onThisDay.length > 0 ? <OnThisDay data={mem.onThisDay} /> : (
-            <div className="rounded-[var(--r3)] border border-dashed border-line-2 px-5 py-8 text-center">
+            <div className="rounded-[var(--r3)] border border-dashed border-line-2 bg-surface/50 px-5 py-8 text-center">
               <p className="m-0 text-[15px] font-semibold text-fg-2">往年的今天还没有照片</p>
               <p className="mx-auto mt-1.5 mb-0 max-w-md text-[13px] text-muted">媒体库里有往年这几天拍的照片时，这里会每年显示一张。</p>
             </div>
@@ -126,7 +134,7 @@ export default function MemoriesPage() {
         </Section>
 
         {mem && mem.recentlyAdded.length > 0 && (
-          <Section title="最近添加" note={`最新加入媒体库的 ${mem.recentlyAdded.length} 项`}>
+          <Section index="02" title="最近添加" note={`最新加入媒体库的 ${mem.recentlyAdded.length} 项`}>
             <Strip items={mem.recentlyAdded} label="最近添加" />
           </Section>
         )}

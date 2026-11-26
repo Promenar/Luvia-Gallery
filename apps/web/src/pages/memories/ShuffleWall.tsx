@@ -47,7 +47,6 @@ export function fillShuffleRows(
     sumHeight += rowHeight;
     height += rowHeight + gap;
     if (height >= viewportHeight) break;
-    // 极端情况下防止把整池都塞进一屏；正常的 100 张远小于这个上限。
     if (visible.length >= 40) break;
   }
 
@@ -81,7 +80,7 @@ function useElementHeight(element: HTMLElement | null): number {
 
 function ShuffleSkeleton() {
   return (
-    <div aria-hidden className="grid w-full grid-cols-3 gap-1 md:grid-cols-4">
+    <div aria-hidden className="grid w-full grid-cols-3 gap-1.5 md:grid-cols-4">
       {Array.from({ length: 16 }, (_, index) => (
         <div key={index} className="aspect-[3/2] animate-pulse rounded-[var(--r1)] bg-sunken" />
       ))}
@@ -91,7 +90,7 @@ function ShuffleSkeleton() {
 
 function ShuffleEmpty() {
   return (
-    <div className="w-full rounded-[var(--r3)] border border-dashed border-line-2 px-5 py-10 text-center">
+    <div className="w-full rounded-[var(--r3)] border border-dashed border-line-2 bg-surface/50 px-5 py-10 text-center">
       <Images className="mx-auto mb-3 size-8 text-muted" strokeWidth={1.6} />
       <p className="m-0 text-[15px] font-semibold text-fg-2">媒体库里还没有照片或视频</p>
       <p className="mx-auto mt-1.5 mb-0 max-w-md text-[13px] text-muted">
@@ -103,7 +102,7 @@ function ShuffleEmpty() {
 
 function ShuffleError({ message, onRetry }: { message: string; onRetry: () => void }) {
   return (
-    <div className="w-full rounded-[var(--r3)] border border-dashed border-line-2 px-5 py-10 text-center">
+    <div className="w-full rounded-[var(--r3)] border border-dashed border-line-2 bg-surface/50 px-5 py-10 text-center">
       <p className="m-0 text-sm text-muted">随便看看没有加载出来：{message}。</p>
       <button
         type="button"
@@ -148,7 +147,6 @@ export function ShuffleWall({ scrollElement }: { scrollElement: HTMLElement | nu
   const items = shuffleQ.data?.items ?? [];
   const rows = useMemo(
     () => justifyRows(items, aspectOf, width, rowHeight, GRID_GAP),
-    // dimensionsVersion：补到新宽高后重新排布
     [items, width, rowHeight, dimensionsVersion],
   );
   const fill = useMemo(
@@ -184,7 +182,6 @@ export function ShuffleWall({ scrollElement }: { scrollElement: HTMLElement | nu
   const contentMinHeight = viewportHeight > 0 ? Math.max(0, viewportHeight - headerHeight) : undefined;
   const centered = initialError || empty;
 
-  // 行高取整后可能差几像素：把差额收进最后一行，避免末行被视口切掉。
   const scaledHeights = fill.rows.map((row) => Math.max(40, Math.round(row.height * fill.scale)));
   if (fill.scale < 1 && scaledHeights.length > 0 && contentMinHeight !== undefined) {
     const gaps = GRID_GAP * (scaledHeights.length - 1);
@@ -197,15 +194,16 @@ export function ShuffleWall({ scrollElement }: { scrollElement: HTMLElement | nu
   }
 
   return (
-    <section aria-labelledby="shuffle-wall-title" className="relative mt-[34px]" style={{ minHeight: viewportHeight || undefined }}>
+    <section aria-labelledby="shuffle-wall-title" className="relative mt-[38px]" style={{ minHeight: viewportHeight || undefined }}>
       <div
         ref={headerRef}
-        className="sticky top-0 z-20 border-b border-line bg-bg/85 px-11 py-2.5 backdrop-blur-md max-md:px-4 max-md:py-2"
+        className="lv-page-inset sticky top-0 z-10 border-b border-line bg-bg/85 py-3 backdrop-blur-md"
       >
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 max-md:gap-x-2 max-md:gap-y-1">
-          <h2 id="shuffle-wall-title" className="m-0 text-lg font-semibold max-md:text-[17px]">随便看看</h2>
+        <div className="mx-auto flex max-w-[1640px] flex-wrap items-center gap-x-3 gap-y-1.5 max-md:gap-x-2 max-md:gap-y-1">
+          <span className="lv-sec-num" aria-hidden>03</span>
+          <h2 id="shuffle-wall-title" className="lv-sec-title max-md:text-[18px]">随便看看</h2>
           <span className="text-[13px] text-muted max-md:text-[11.5px]">全库随机 · 图片 + 视频</span>
-          <span className="text-[12.5px] text-muted tabular-nums max-md:text-[11px]" aria-live="polite">{countText}</span>
+          <span className="font-mono text-[12px] text-muted tabular-nums max-md:text-[11px]" aria-live="polite">{countText}</span>
           {refreshError && <span className="text-[11px] text-bad max-md:text-[10.5px]">换一批失败，已保留上一批</span>}
           <button
             type="button"
@@ -214,7 +212,7 @@ export function ShuffleWall({ scrollElement }: { scrollElement: HTMLElement | nu
             aria-label="换一批随机照片和视频"
             aria-busy={refreshing}
             className={cn(
-              'ml-auto inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border border-line-2 bg-surface px-3 text-[12.5px] font-medium text-fg-2 transition-colors max-md:h-9 max-md:px-2.5 max-md:text-[11.5px]',
+              'ml-auto inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border border-line-2 bg-surface px-3.5 text-[12.5px] font-medium text-fg-2 transition-colors max-md:h-9 max-md:px-2.5 max-md:text-[11.5px]',
               'hover:bg-accent-soft hover:text-fg disabled:cursor-default disabled:opacity-55',
             )}
           >
@@ -226,7 +224,7 @@ export function ShuffleWall({ scrollElement }: { scrollElement: HTMLElement | nu
         </div>
       </div>
 
-      <div className="flex flex-col px-11 max-md:px-4" style={{ minHeight: contentMinHeight }}>
+      <div className="lv-page-inset mx-auto flex max-w-[1640px] flex-col pt-2" style={{ minHeight: contentMinHeight }}>
         <div
           ref={gridRef}
           className={cn('flex w-full flex-col', centered && 'flex-1 items-center justify-center')}

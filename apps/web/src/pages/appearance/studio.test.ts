@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { Preferences, PreferencesPatch } from '@luvia/contracts';
 import {
   ACCENT_KEYS, accentKeyOf, accentName, accentSwatch, BACKDROP_OPTIONS, baseSwatch, clampInterval, GRID_OPTIONS,
-  INTERVAL_PRESETS, MODE_OPTIONS, ORDER_OPTIONS, RADIUS_OPTIONS, REDUCE_OPTIONS, START_OPTIONS,
+  INTERVAL_PRESETS, MODE_OPTIONS, ORDER_OPTIONS, RADIUS_OPTIONS, REDUCE_OPTIONS, START_OPTIONS, STYLE_OPTIONS,
 } from './studio';
 
 describe('clampInterval', () => {
@@ -46,7 +46,8 @@ describe('强调色', () => {
 
 describe('选项与契约一致', () => {
   const ok = (patch: unknown) => PreferencesPatch.safeParse(patch).success;
-  it('各分段选项的取值都能通过 PreferencesPatch 校验', () => {
+  it('各分段与双皮肤选项的取值都能通过 PreferencesPatch 校验', () => {
+    STYLE_OPTIONS.forEach((o) => expect(ok({ theme: { style: o.value } })).toBe(true));
     MODE_OPTIONS.forEach((o) => expect(ok({ theme: { mode: o.value } })).toBe(true));
     RADIUS_OPTIONS.forEach((o) => expect(ok({ theme: { radius: o.value } })).toBe(true));
     BACKDROP_OPTIONS.forEach((o) => expect(ok({ theme: { viewerBackdrop: o.value } })).toBe(true));
@@ -55,7 +56,10 @@ describe('选项与契约一致', () => {
     ORDER_OPTIONS.forEach((o) => expect(ok({ slideshow: { order: o.value } })).toBe(true));
     START_OPTIONS.forEach((o) => expect(ok({ startPage: o.value })).toBe(true));
   });
-  it('覆盖起始页全部取值', () => {
+  it('覆盖皮肤、查看器背景、网格排列与起始页全部取值', () => {
+    expect(STYLE_OPTIONS.map((o) => o.value).sort()).toEqual(['cinema', 'monograph']);
+    expect(BACKDROP_OPTIONS.map((o) => o.value)).toContain('gallery');
+    expect(GRID_OPTIONS.map((o) => o.value)).toContain('mat');
     expect(START_OPTIONS.map((o) => o.value).sort()).toEqual([...Preferences.shape.startPage.unwrap().options].sort());
   });
   it('底色色块', () => {

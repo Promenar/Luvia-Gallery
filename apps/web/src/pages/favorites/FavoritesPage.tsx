@@ -83,7 +83,7 @@ function MediaTab({ scroller }: { scroller: HTMLElement | null }) {
       ) : !media.items.length ? (
         <EmptyNote>还没有收藏的照片或视频。打开一张照片，点心形即可收藏；收藏文件夹后，其中的内容也会出现在这里。</EmptyNote>
       ) : (
-        <div className="px-0.5 pt-4 pb-[120px] md:px-11">
+        <div className="lv-page-inset mx-auto max-w-[1640px] pt-4 pb-[120px] max-md:px-1">
           <PagedMediaGrid
             items={media.items}
             scrollElement={scroller}
@@ -139,7 +139,7 @@ export default function FavoritesPage() {
   };
   return (
     <div ref={setScroller} className="h-full overflow-x-hidden overflow-y-auto [scrollbar-width:thin]">
-      <div className="px-4 pt-6 md:px-11 md:pt-12">
+      <div className="lv-page-inset mx-auto max-w-[1640px] pt-6 md:pt-10">
         <Tabs tab={tab} folderCount={favFolders.data?.folders.length} onChange={setTab} />
       </div>
       <div id="fav-panel" role="tabpanel" aria-labelledby={`fav-tab-${tab}`}>

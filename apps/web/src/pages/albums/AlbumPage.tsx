@@ -137,7 +137,7 @@ export default function AlbumPage() {
       </PageHead>
 
       {selecting && (
-        <p className="mx-4 mt-2 mb-0 text-[12.5px] text-muted md:mx-11">点击照片选中或取消，然后从下方移出相册。</p>
+        <p className="lv-page-inset mx-auto mt-2 mb-0 max-w-[1640px] text-[12.5px] text-muted">点击照片选中或取消，然后从下方移出相册。</p>
       )}
 
       {media.isError ? (
@@ -149,7 +149,7 @@ export default function AlbumPage() {
           {manual ? '这个相册还没有内容。到“照片”或文件夹里选中照片，再选择“加入相册”。' : '目前没有符合条件的照片或视频。新照片符合条件后会自动出现在这里，也可以点“编辑条件”放宽条件。'}
         </EmptyNote>
       ) : (
-        <div className="px-0.5 pt-4 pb-[140px] md:px-11">
+        <div className="lv-page-inset mx-auto max-w-[1640px] pt-4 pb-[140px] max-md:px-1">
           <PagedMediaGrid
             items={media.items}
             scrollElement={scroller}

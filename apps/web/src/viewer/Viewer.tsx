@@ -829,6 +829,7 @@ function ViewerDialog({ scope }: { scope: ViewerScope }) {
     'lv-viewer',
     backdrop === 'ambient' && 'is-amb',
     backdrop === 'theme' && 'is-thm',
+    backdrop === 'gallery' && 'is-gallery',
     zoomed && 'is-zoomed',
     dragging && 'is-drag',
     slideshow !== 'off' && 'is-ss',
@@ -882,6 +883,7 @@ function ViewerDialog({ scope }: { scope: ViewerScope }) {
         ) : undefined}
         kenBurns={{ on: prefs.slideshow.kenBurns, sec: intervalSec }}
         onStep={(d) => advance(d)}
+        onDismiss={!editorOpen ? () => requestClose() : undefined}
         onMenu={openMenu}
         onVideoEnded={() => { if (useViewerUi.getState().slideshow === 'playing') advance(1, true); }}
       />

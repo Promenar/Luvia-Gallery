@@ -1,11 +1,12 @@
 import { forwardRef, useEffect, useRef, type ButtonHTMLAttributes, type ReactNode } from 'react';
 import { Search, X } from 'lucide-react';
 import { cn } from '@/lib/cn';
+import { useCommandPalette } from './CommandPalette';
 
 /**
- * 页面顶部的悬浮命令条（玻璃材质，居中悬浮在内容之上）。
+ * 页面顶部的悬浮命令条（双皮肤光学玻璃/画廊材质，居中悬浮在内容与渐进模糊光幕之上）。
  * 结构：左侧标题或范围标签（leading）→ 搜索框（可选）→ 右侧动作插槽（children）。
- * 父元素需要是定位容器（relative），命令条以 absolute 悬浮。
+ * 按 `/` 快速聚焦页内搜索框；点击 `⌘K` 徽标或按 `⌘K / Ctrl+K` 打开全局命令面板。
  */
 export interface CommandBarSearch {
   value: string;
@@ -17,7 +18,7 @@ export interface CommandBarSearch {
   placeholder?: string;
   /** 输入框的无障碍名称，默认“搜索”。 */
   label?: string;
-  /** 注册 ⌘K / Ctrl+K 聚焦搜索框，默认 true。 */
+  /** 注册 `/` 快捷键聚焦页内搜索框，默认 true。 */
   hotkey?: boolean;
 }
 
@@ -35,12 +36,14 @@ const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigat
 
 export function CommandBar({ leading, search, children, className, 'aria-label': ariaLabel = '命令条' }: CommandBarProps) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const openPalette = useCommandPalette((s) => s.setOpen);
   const hotkey = search && search.hotkey !== false;
 
   useEffect(() => {
     if (!hotkey) return;
     const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key.toLowerCase() === 'k') {
+      const target = e.target as HTMLElement | null;
+      if (e.key === '/' && !e.metaKey && !e.ctrlKey && !e.altKey && !target?.closest('input, textarea, select, [contenteditable="true"]')) {
         e.preventDefault();
         inputRef.current?.focus();
         inputRef.current?.select();
@@ -55,7 +58,8 @@ export function CommandBar({ leading, search, children, className, 'aria-label':
       role="toolbar"
       aria-label={ariaLabel}
       className={cn(
-        'glass absolute top-2.5 left-1/2 z-[6] flex w-[calc(100%-24px)] -translate-x-1/2 items-center gap-1.5 rounded-[calc(var(--r3)+4px)] p-1.5 shadow-[0_18px_40px_-18px_rgba(0,0,0,.55)] md:top-3.5 md:w-[min(760px,calc(100%-140px))]',
+        'glass absolute top-2.5 left-1/2 z-[12] flex w-[calc(100%-24px)] -translate-x-1/2 items-center gap-1.5 rounded-full p-1.5 md:top-3.5 md:w-[min(780px,calc(100%-192px))]',
+        '[:root[data-style=monograph]_&]:rounded-[var(--r2)] [:root[data-style=monograph]_&]:md:w-[min(780px,calc(100%-96px))]',
         className,
       )}
     >
@@ -63,14 +67,14 @@ export function CommandBar({ leading, search, children, className, 'aria-label':
       {search && (
         <form
           role="search"
-          className="group/q flex h-9 min-w-0 flex-1 items-center gap-2 rounded-[var(--r3)] px-3 text-muted focus-within:bg-accent-soft focus-within:shadow-[inset_0_0_0_1.5px_var(--accent)]"
+          className="group/q flex h-9 min-w-0 flex-1 items-center gap-2 rounded-full px-3 text-muted transition-colors focus-within:bg-accent-soft focus-within:shadow-[inset_0_0_0_1.5px_var(--accent)] [:root[data-style=monograph]_&]:rounded-[var(--r1)]"
           onSubmit={(e) => {
             e.preventDefault();
             search.onSubmit(search.value.trim());
             inputRef.current?.blur();
           }}
         >
-          <Search className="size-[18px] flex-none" strokeWidth={1.7} aria-hidden />
+          <Search className="size-[17px] flex-none" strokeWidth={1.7} aria-hidden />
           <input
             ref={inputRef}
             type="search"
@@ -102,9 +106,15 @@ export function CommandBar({ leading, search, children, className, 'aria-label':
             </button>
           ) : (
             hotkey && (
-              <kbd className="ml-auto hidden flex-none rounded-[5px] border border-line-2 px-1.5 py-px font-sans text-[11px] md:inline group-focus-within/q:hidden">
+              <button
+                type="button"
+                onClick={() => openPalette(true)}
+                aria-label="打开全局命令面板"
+                title="打开全局命令面板"
+                className="ml-auto hidden flex-none rounded-[5px] border border-line-2 px-1.5 py-px font-mono text-[10.5px] text-muted hover:border-accent hover:text-fg md:inline group-focus-within/q:hidden"
+              >
                 {isMac ? '⌘K' : 'Ctrl K'}
-              </kbd>
+              </button>
             )
           )}
         </form>
@@ -125,7 +135,7 @@ export interface CommandButtonProps extends ButtonHTMLAttributes<HTMLButtonEleme
   icon?: ReactNode;
 }
 
-/** 命令条按钮（原型 `.cb`）。只有图标时务必提供 aria-label。 */
+/** 命令条按钮。只有图标时务必提供 aria-label。 */
 export const CommandButton = forwardRef<HTMLButtonElement, CommandButtonProps>(function CommandButton(
   { active, icon, children, className, type = 'button', ...rest },
   ref,
@@ -135,7 +145,7 @@ export const CommandButton = forwardRef<HTMLButtonElement, CommandButtonProps>(f
       ref={ref}
       type={type}
       className={cn(
-        'flex h-9 flex-none items-center gap-[7px] rounded-[var(--r3)] px-3 text-[13px] whitespace-nowrap text-fg-2 transition-colors hover:bg-accent-soft hover:text-fg disabled:pointer-events-none disabled:opacity-45 [&_svg]:size-[18px] [&_svg]:flex-none',
+        'flex h-9 flex-none items-center gap-[7px] rounded-full px-3 text-[13px] whitespace-nowrap text-fg-2 transition-colors hover:bg-accent-soft hover:text-fg disabled:pointer-events-none disabled:opacity-45 [&_svg]:size-[17px] [&_svg]:flex-none [:root[data-style=monograph]_&]:rounded-[var(--r1)]',
         active && 'bg-accent text-accent-fg hover:bg-accent hover:text-accent-fg',
         className,
       )}

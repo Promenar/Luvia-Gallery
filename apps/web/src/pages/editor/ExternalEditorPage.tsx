@@ -361,11 +361,11 @@ export default function ExternalEditorPage() {
 
       {dragActive && <div className="ue-drop-overlay" aria-hidden><span>松开以添加图片</span></div>}
 
-      <div className="mx-auto grid max-w-[1440px] gap-5 px-4 pt-7 pb-24 md:px-11 md:pt-10">
+      <div className="lv-page-inset mx-auto grid max-w-[1640px] gap-5 pt-6 pb-24 md:pt-10">
         <header className="flex flex-wrap items-start gap-4">
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2.5">
-              <h1 className="m-0 text-[28px] font-semibold tracking-[-0.02em] md:text-[34px]">修复</h1>
+              <h1 className="lv-page-title">修复</h1>
               <Pill tone="accent">{tab === 'single' ? '未入库图片' : '批量处理'}</Pill>
             </div>
             <p className="mt-1 mb-0 max-w-[72ch] text-[13px] text-muted">

@@ -96,13 +96,16 @@ export default function PhotosPage() {
 
   /* ---------- 布局 ---------- */
   const [contentRef, width] = useElementWidth<HTMLDivElement>();
-  const rowH = useRowHeight(width);
-  const gap = narrow ? 2 : 3;
-  const TOP = narrow ? 70 : 78;
-  const BOTTOM = narrow ? 110 : 120;
-  const PAD_L = narrow ? 2 : 18;
-  const PAD_R = narrow ? 2 : 72;
-  const monthHeight = narrow ? 88 : 110;
+  const baseRowH = useRowHeight(width);
+  const isMat = prefs.gridStyle === 'mat';
+  const style = prefs.theme?.style ?? 'cinema';
+  const rowH = isMat ? baseRowH + 30 : baseRowH;
+  const gap = isMat ? (narrow ? 8 : 14) : (narrow ? 2 : 4);
+  const TOP = narrow ? 72 : 84;
+  const BOTTOM = narrow ? 116 : 124;
+  const PAD_L = narrow ? 2 : (style === 'cinema' ? 92 : 34);
+  const PAD_R = narrow ? 2 : 76;
+  const monthHeight = narrow ? 88 : 108;
   // 容器重建（媒体增删）的间隙仍按分桶显示占位，避免内容高度塌陷丢失滚动位置
   const states = useMemo(() => (buckets ? monthStates(store ? segments : [], buckets) : []), [buckets, segments, store]);
   const cacheRef = useRef<LayoutCache>(new Map());
@@ -465,6 +468,7 @@ export default function PhotosPage() {
 
   return (
     <div className="group/page relative h-full overflow-hidden" data-selecting={selecting}>
+      <div className="lv-prog-blur-top" aria-hidden="true" />
       <CommandBar
         aria-label="照片命令条"
         search={{
@@ -590,7 +594,7 @@ export default function PhotosPage() {
           className="pointer-events-none absolute top-0 z-[3]"
           style={{ left: PAD_L, width: width || undefined, transform: `translateY(${stickyIdx.shift}px)` }}
         >
-          <MonthHeader {...monthMeta(stickyIdx.monthIdx)} height={monthHeight} />
+          <MonthHeader {...monthMeta(stickyIdx.monthIdx)} height={monthHeight} sticky />
         </div>
       )}
 
@@ -631,15 +635,20 @@ function CenterNote({ children }: { children: React.ReactNode }) {
   );
 }
 
-function MonthHeader({ year, month, title, count, video, height }: { year: number; month: number; title: string; count: number; video: boolean; height: number }) {
+function MonthHeader({ year, month, title, count, video, height, sticky }: { year: number; month: number; title: string; count: number; video: boolean; height: number; sticky?: boolean }) {
   return (
-    <div className="flex items-end gap-4 bg-[linear-gradient(var(--bg)_70%,transparent)] pt-7 pb-2.5 max-md:pl-3" style={{ height }}>
-      <span className="font-display text-[92px] leading-[.78] font-extrabold tracking-[-.01em] text-fg max-md:text-[64px]">{month}</span>
+    <div className={cn('flex items-end gap-4 pt-7 pb-2.5 max-md:pl-3', sticky && 'bg-[linear-gradient(var(--bg)_62%,transparent)]')} style={{ height }}>
+      <span className="lv-numeral-display text-[68px] leading-[.8] text-fg max-md:text-[52px]">
+        {String(month).padStart(2, '0')}
+      </span>
       <div className="flex min-w-0 flex-col pb-1 leading-[1.35]">
         <b className="truncate text-[15px] font-semibold text-fg">{title}</b>
         <span className="text-[12.5px] text-muted">{count.toLocaleString('zh-CN')} 项{video ? '，含视频' : ''}</span>
       </div>
-      <span className="ml-auto pb-1.5 font-display text-[22px] font-semibold text-muted max-md:pr-3">{year}</span>
+      <span aria-hidden className="hidden h-px flex-1 self-center bg-line [:root[data-style=monograph]_&]:block" />
+      <span className="ml-auto pb-1 font-mono text-[12px] tracking-[0.1em] text-muted max-md:pr-3 [:root[data-style=cinema]_&]:rounded-full [:root[data-style=cinema]_&]:border [:root[data-style=cinema]_&]:border-line [:root[data-style=cinema]_&]:bg-surface [:root[data-style=cinema]_&]:px-3 [:root[data-style=cinema]_&]:py-1 [:root[data-style=monograph]_&]:ml-0">
+        {year}
+      </span>
     </div>
   );
 }

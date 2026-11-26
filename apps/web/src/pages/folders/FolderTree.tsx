@@ -232,7 +232,7 @@ export function FolderTree({ current }: { current: string | undefined }) {
         onPointerEnter={(e) => { if (e.pointerType === 'mouse') window.clearTimeout(closeTimer.current); }}
         onPointerLeave={(e) => { if (e.pointerType === 'mouse' && mode === 'hover') leaveSoon(); }}
         className={cn(
-          'absolute top-3 bottom-3 left-3 z-40 border border-line-2 bg-[color-mix(in_oklab,var(--raised)_90%,transparent)] backdrop-blur-xl backdrop-saturate-150 flex w-[300px] flex-col overflow-hidden rounded-[calc(var(--r3)+2px)] shadow-[0_24px_60px_-20px_rgba(0,0,0,.55),0_2px_8px_-2px_rgba(0,0,0,.25)] will-change-transform motion-reduce:transition-none',
+          'glass absolute top-3 bottom-3 left-3 z-40 flex w-[300px] flex-col overflow-hidden rounded-[calc(var(--r3)+2px)] will-change-transform motion-reduce:transition-none [:root[data-style=cinema]_&]:left-[84px]',
           // Tailwind v4 的平移、缩放写在独立的 translate、scale 属性上，过渡要列出它们，不能只写 transform
           'origin-left transition-[translate,scale,opacity]',
           open

@@ -1,6 +1,13 @@
 /** OKLCH 与 sRGB 互转。L 为 0–1，C 为色度，H 为角度。 */
 export type Oklch = readonly [L: number, C: number, H: number];
 
+export interface DynamicPalette {
+  /** 主强调色（高代表性鲜明色）。 */
+  primary: Oklch | null;
+  /** 副氛围色（与主色色相拉开距离，用于液态光场双色漫反射背景）。 */
+  secondary: Oklch | null;
+}
+
 const lin = (c: number) => {
   const v = c / 255;
   return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
@@ -43,7 +50,7 @@ const inGamut = (L: number, C: number, H: number) => oklchToLinear(L, C, H).ever
 
 /** 逐步降低色度直到落入 sRGB 色域，输出 CSS rgb()。 */
 export function oklchCss(L: number, C: number, H: number, alpha?: number): string {
-  let c = C;
+  let c = Math.max(0, C);
   while (c > 0.002 && !inGamut(L, c, H)) c -= 0.005;
   const [r, g, b] = oklchToLinear(L, Math.max(0, c), H).map(delin) as [number, number, number];
   return alpha == null ? `rgb(${r} ${g} ${b})` : `rgb(${r} ${g} ${b} / ${alpha})`;
@@ -53,6 +60,11 @@ export function oklchCss(L: number, C: number, H: number, alpha?: number): strin
 export function relativeLuminance(L: number, C: number, H: number): number {
   const [r, g, b] = oklchToLinear(L, C, H).map((v) => Math.max(0, Math.min(1, v))) as [number, number, number];
   return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+function hueDistance(a: number, b: number): number {
+  const diff = Math.abs(a - b) % 360;
+  return diff > 180 ? 360 - diff : diff;
 }
 
 /**
@@ -70,4 +82,28 @@ export function dominantOklch(rgba: ArrayLike<number>): Oklch | null {
   }
   if (!best || best[1] < 0.02) return null;
   return [best[0], Math.max(0.06, best[1] * 1.1), best[2]];
+}
+
+/**
+ * 从 RGBA 像素同时提取主色与副氛围色：副色优先选择色相距主色 ≥ 28° 的次优鲜明色，
+ * 以便液态光场双色光球呈现出自然层次。
+ */
+export function paletteFromRGBA(rgba: ArrayLike<number>): DynamicPalette {
+  const primary = dominantOklch(rgba);
+  if (!primary) return { primary: null, secondary: null };
+  let second: Oklch | null = null;
+  let secondScore = -1;
+  for (let i = 0; i + 3 < rgba.length; i += 4) {
+    if ((rgba[i + 3] ?? 255) < 128) continue;
+    const o = rgbToOklch(rgba[i]!, rgba[i + 1]!, rgba[i + 2]!);
+    if (o[1] < 0.018) continue;
+    const dist = hueDistance(o[2], primary[2]);
+    const weight = dist >= 28 ? 1.0 + Math.min(0.6, dist / 180) : 0.25;
+    const score = o[1] * (1 - Math.abs(o[0] - 0.56) * 1.2) * weight;
+    if (score > secondScore) { secondScore = score; second = o; }
+  }
+  const secondary: Oklch = second && second[1] >= 0.018
+    ? [second[0], Math.max(0.05, second[1]), second[2]]
+    : [Math.max(0.42, primary[0] - 0.08), Math.max(0.05, primary[1] * 0.85), (primary[2] + 38) % 360];
+  return { primary, secondary };
 }

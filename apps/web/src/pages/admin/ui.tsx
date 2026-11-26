@@ -48,7 +48,7 @@ export const inputClass = 'h-[34px] w-full min-w-0 rounded-[var(--r2)] border bo
 
 export function Section({ title, desc, action, children, className }: { title: ReactNode; desc?: ReactNode; action?: ReactNode; children?: ReactNode; className?: string }) {
   return (
-    <section className={cn('min-w-0 overflow-hidden rounded-[var(--r3)] border border-line bg-surface', className)}>
+    <section className={cn('lv-panel min-w-0 overflow-hidden', className)}>
       <div className="flex flex-wrap items-start gap-x-4 gap-y-2.5 border-b border-line px-[18px] py-4 last:border-b-0">
         <div className="min-w-0 flex-1 basis-[260px]">
           <h2 className="m-0 text-[15px] font-semibold">{title}</h2>
@@ -63,7 +63,7 @@ export function Section({ title, desc, action, children, className }: { title: R
 
 export function Panel({ title, aside, children, className }: { title: ReactNode; aside?: ReactNode; children: ReactNode; className?: string }) {
   return (
-    <section className={cn('min-w-0 overflow-hidden rounded-[var(--r3)] border border-line bg-surface', className)}>
+    <section className={cn('lv-panel min-w-0 overflow-hidden', className)}>
       <div className="flex items-center gap-2.5 border-b border-line px-[18px] py-3.5 font-semibold">
         <h2 className="m-0 text-[14px] font-semibold">{title}</h2>
         {aside && <span className="ml-auto flex items-center gap-1.5 text-[12px] font-normal text-muted">{aside}</span>}

@@ -57,9 +57,9 @@ export default function AdminPage() {
   return (
     <div className="h-full overflow-y-auto overflow-x-hidden">
       <AdminKeyframes />
-      <div className="mx-auto grid max-w-[1440px] gap-[18px] px-4 pt-8 pb-24 md:px-11 md:pt-12 md:pb-20">
+      <div className="lv-page-inset mx-auto grid max-w-[1640px] gap-[18px] pt-6 pb-24 md:pt-10 md:pb-20">
         <header>
-          <h1 className="m-0 text-[28px] font-semibold tracking-[-0.02em] md:text-[34px]">控制台</h1>
+          <h1 className="lv-page-title">控制台</h1>
           <Subtitle />
         </header>
         <nav role="tablist" aria-label="控制台分区" className="scrollbar-none -mt-0.5 flex gap-0.5 overflow-x-auto border-b border-line">

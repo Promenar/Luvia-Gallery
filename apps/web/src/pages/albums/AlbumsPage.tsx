@@ -15,28 +15,36 @@ import { SmartBadge } from './SmartBadge';
 const subtitle = (a: Album) =>
   formatAlbumRange(a.startAt, a.endAt) ?? (a.kind === 'smart' ? `智能相册：${filterSummary(a.filter).join(' · ') || '全部'}` : '还没有内容');
 
-/** 相册卡片（原型 .ac）：封面铺满，底部渐变上显示名称、时间与数量。 */
-function AlbumCard({ album }: { album: Album }) {
+/**
+ * 双皮肤相册卡片：
+ * - monograph（画册）：博物馆展品画卡（顶部无酸纸白边画幅 + 底部策展铭牌）；
+ * - cinema（液态光场）：全出血圆角大画幅 + 聚光灯微交互。
+ */
+function AlbumCard({ album, index }: { album: Album; index: number }) {
+  const code = album.kind === 'smart' ? 'SMART · AUTO' : `EXH · ${String(index + 1).padStart(2, '0')}`;
   return (
     <Link
       to="/albums/$albumId"
       params={{ albumId: album.id }}
       onMouseEnter={() => setDynamicFrom(album.cover)}
       aria-label={`${album.name}，${album.count} 项${album.kind === 'smart' ? '，智能相册' : ''}`}
-      className="group/ac relative block aspect-[4/3] overflow-hidden rounded-[var(--r3)] bg-sunken after:absolute after:inset-0 after:bg-[linear-gradient(transparent_35%,rgba(0,0,0,.72))] after:content-['']"
+      className="group/ac lv-album-card lv-spotlight-item"
     >
-      {album.cover && (
-        <div className="absolute inset-0 transition-transform duration-[600ms] ease-[cubic-bezier(.2,.8,.2,1)] group-hover/ac:scale-[1.04]">
-          <CoverImage item={album.cover} displayPx={520} />
+      <div className="lv-album-media">
+        {album.cover && (
+          <div className="size-full transition-transform duration-[600ms] ease-[var(--ease-cinema)] group-hover/ac:scale-[1.04]">
+            <CoverImage item={album.cover} displayPx={520} />
+          </div>
+        )}
+        {album.kind === 'smart' && <SmartBadge className="absolute top-3 left-3 z-[2]" />}
+      </div>
+      <div className="lv-album-body">
+        <div className="min-w-0 flex-1">
+          <span className="lv-album-code">{code}</span>
+          <h3 className="lv-album-name m-0 truncate">{album.name}</h3>
+          <small className="lv-album-sub mt-0.5 block truncate text-[12.5px] font-normal">{subtitle(album)}</small>
         </div>
-      )}
-      {album.kind === 'smart' && <SmartBadge className="absolute top-3.5 left-3.5 z-[1]" />}
-      <div className="absolute right-[18px] bottom-4 left-[18px] z-[1] flex items-end gap-3 text-white">
-        <h3 className="m-0 min-w-0 flex-1 text-[19px] font-semibold">
-          <span className="block truncate">{album.name}</span>
-          <small className="mt-0.5 block truncate text-[12.5px] font-normal text-white/78">{subtitle(album)}</small>
-        </h3>
-        <span className="font-display text-[44px] leading-[.8] font-extrabold tabular-nums">{album.count.toLocaleString('zh-CN')}</span>
+        <span className="lv-album-count shrink-0 tabular-nums">{album.count.toLocaleString('zh-CN')}</span>
       </div>
     </Link>
   );
@@ -65,8 +73,8 @@ export default function AlbumsPage() {
         </EmptyNote>
       )}
       {albums.length > 0 && (
-        <div className="grid grid-cols-1 gap-[18px] px-4 pt-6 pb-[120px] sm:grid-cols-[repeat(auto-fill,minmax(300px,1fr))] md:px-11">
-          {albums.map((a) => <AlbumCard key={a.id} album={a} />)}
+        <div className="lv-page-inset lv-spotlight-group mx-auto grid max-w-[1640px] grid-cols-1 gap-[20px] pt-6 pb-[120px] sm:grid-cols-[repeat(auto-fill,minmax(300px,1fr))]">
+          {albums.map((a, i) => <AlbumCard key={a.id} album={a} index={i} />)}
         </div>
       )}
       <AlbumDialog open={creating} onOpenChange={setCreating} />

@@ -9,12 +9,12 @@ import { Empty, IconButton, LiveDot, Panel, Pill, ProgressBar, QueryState, useSa
 
 function Kpi({ value, unit, label, sub }: { value: string; unit?: string; label: string; sub: React.ReactNode }) {
   return (
-    <div className="min-w-0 bg-surface px-5 py-[18px] max-md:px-4">
-      <div className="font-display text-[44px] leading-[.9] font-extrabold tracking-[-0.01em] tabular-nums md:text-[54px]">
-        {value}{unit && <span className="text-[22px] md:text-[26px]"> {unit}</span>}
+    <div className="lv-panel min-w-0 px-5 py-[18px] max-md:px-4">
+      <div className="lv-numeral-display text-[38px] leading-[.95] text-fg tabular-nums md:text-[44px]">
+        {value}{unit && <span className="font-mono text-[16px] font-normal not-italic text-muted md:text-[18px]"> {unit}</span>}
       </div>
-      <div className="mt-2 text-[12.5px] text-muted">{label}</div>
-      <div className="text-[12.5px] text-fg-2">{sub}</div>
+      <div className="mt-2.5 text-[12.5px] font-medium text-fg-2">{label}</div>
+      <div className="mt-0.5 text-[12px] text-muted">{sub}</div>
     </div>
   );
 }
@@ -25,7 +25,7 @@ function Kpis({ o, graceDays, thumbFixing }: { o: AdminOverview; graceDays: numb
   const metaRatio = o.metadata.total ? o.metadata.indexed / o.metadata.total : 1;
   const metaLeft = o.metadata.total - o.metadata.indexed;
   return (
-    <div className="grid grid-cols-2 gap-px overflow-hidden rounded-[var(--r3)] border border-line bg-line lg:grid-cols-5 [&>*:last-child:nth-child(odd)]:max-lg:col-span-2">
+    <div className="grid grid-cols-2 gap-3.5 lg:grid-cols-5 [&>*:last-child:nth-child(odd)]:max-lg:col-span-2">
       <Kpi value={num(o.media.total)} label="媒体总数" sub={`图片 ${num(o.media.images)}，视频 ${num(o.media.videos)}${o.media.audio ? `，音频 ${num(o.media.audio)}` : ''}`} />
       <Kpi value={pct(o.thumbnails.coverage)} label="缩略图覆盖" sub={o.thumbnails.missing ? <>缺失 {num(o.thumbnails.missing)}{thumbFixing && <>，<em className="text-ok not-italic">修复中</em></>}</> : '全部就绪'} />
       <Kpi value={pct(metaRatio)} label="拍摄信息已读取" sub={metaLeft > 0 ? `还剩 ${num(metaLeft)} 项` : '全部读取完成'} />

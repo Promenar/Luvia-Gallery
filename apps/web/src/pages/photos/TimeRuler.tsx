@@ -93,13 +93,13 @@ export function TimeRuler({ buckets, current, onJump }: TimeRulerProps) {
           const showHist = y.height >= 54;
           return (
             <div key={y.year} className="group/yr absolute right-0 left-0 flex flex-col items-end" style={{ top: y.top, height: y.height }}>
-              <b className={cn('font-display text-[13px] leading-none font-semibold text-muted group-hover/yr:text-fg', on && 'text-accent group-hover/yr:text-accent')}>{y.year}</b>
+              <b className={cn('font-mono text-[11px] leading-none font-semibold tracking-wider text-muted transition-colors group-hover/yr:text-fg', on && 'text-accent group-hover/yr:text-accent')}>{y.year}</b>
               {showHist && (
-                <div aria-hidden className="mt-[3px] flex w-full flex-col items-end gap-px">
+                <div aria-hidden className="mt-[4px] flex w-full flex-col items-end gap-[2px]">
                   {y.counts.map((c, s) => (
                     <i
                       key={s}
-                      className={cn('block h-[2px] rounded-[2px] bg-line-2', on && c > 0 && 'bg-[color-mix(in_oklab,var(--accent)_65%,transparent)]')}
+                      className={cn('block h-[2px] rounded-full bg-line-2 transition-colors', on && c > 0 && 'bg-[color-mix(in_oklab,var(--accent)_72%,transparent)]')}
                       style={{ width: `${c > 0 ? Math.max(14, (c / maxCount) * 100) : 6}%`, opacity: c > 0 ? 1 : 0.35 }}
                     />
                   ))}

@@ -60,7 +60,7 @@ function LibraryRoots() {
           {isAdmin ? <>到<Link to="/admin" search={{ tab: 'libraries' }} className="text-accent underline underline-offset-2">控制台的媒体库</Link>添加目录并扫描后，这里会列出它们。</> : '请联系管理员添加媒体库或开放访问权限。'}
         </EmptyNote>
       )}
-      <div className="grid grid-cols-1 gap-[18px] px-4 pt-6 pb-[120px] md:grid-cols-[repeat(auto-fill,minmax(360px,1fr))] md:px-11">
+      <div className="lv-page-inset mx-auto grid max-w-[1640px] grid-cols-1 gap-[18px] pt-6 pb-[120px] md:grid-cols-[repeat(auto-fill,minmax(370px,1fr))]">
         {libs.map((l) => {
           const root = roots.get(l.path);
           return (
@@ -69,14 +69,14 @@ function LibraryRoots() {
               to="/folders"
               search={{ path: l.path }}
               onMouseEnter={() => setDynamicFrom(l.cover)}
-              className="group/libc grid grid-cols-[96px_minmax(0,1fr)] items-center gap-3 rounded-[var(--r3)] border border-line bg-surface py-4 pr-5 pl-3 text-left transition-colors hover:border-line-2 md:grid-cols-[150px_minmax(0,1fr)] md:gap-5"
+              className="group/libc lv-panel grid grid-cols-[96px_minmax(0,1fr)] items-center gap-3 py-4 pr-5 pl-3 text-left transition-all duration-300 hover:-translate-y-0.5 hover:border-line-2 md:grid-cols-[150px_minmax(0,1fr)] md:gap-5"
             >
               <FolderStack cover={l.cover} hoverGroup="libc" className="m-2" />
               <div className="min-w-0">
-                <h3 className="m-0 truncate text-lg font-semibold">{l.name}</h3>
+                <h3 className="m-0 truncate text-lg font-semibold text-fg">{l.name}</h3>
                 <dl className="mt-2 mb-0 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-[3px] text-[12.5px] text-fg-2">
-                  {l.hostPath && (<><dt className="text-muted">宿主机</dt><dd className="m-0 break-all">{l.hostPath}</dd></>)}
-                  {root && (<><dt className="text-muted">容器内</dt><dd className="m-0 break-all">{root}</dd></>)}
+                  {l.hostPath && (<><dt className="text-muted">宿主机</dt><dd className="m-0 font-mono text-[11.5px] break-all">{l.hostPath}</dd></>)}
+                  {root && (<><dt className="text-muted">容器内</dt><dd className="m-0 font-mono text-[11.5px] break-all">{root}</dd></>)}
                   <dt className="text-muted">内容</dt><dd className="m-0">{countText(l.mediaCount, l.childCount)}</dd>
                 </dl>
               </div>
@@ -235,7 +235,7 @@ function FolderView({ path, scroller }: { path: string; scroller: HTMLElement | 
               : '这个文件夹是空的。'}
         </EmptyNote>
       ) : (
-        <div className="px-0.5 pt-2 pb-[120px] md:px-11">
+        <div className="lv-page-inset mx-auto max-w-[1640px] pt-2 pb-[120px] max-md:px-1">
           <PagedMediaGrid
             items={media.items}
             scrollElement={scroller}

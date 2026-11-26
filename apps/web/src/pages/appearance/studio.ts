@@ -1,9 +1,24 @@
-/** 外观面板的纯逻辑：取值范围、色块计算与选项定义。 */
+/** 外观面板的纯逻辑：双皮肤选项、取值范围、色块计算与选项定义。 */
 import type { Preferences } from '@luvia/contracts';
 import { ACCENT_NAMES, ACCENTS, BASES } from '@/theme/engine';
 import { oklchCss } from '@/theme/color';
 
 type Theme = Preferences['theme'];
+
+export const STYLE_OPTIONS = [
+  {
+    value: 'cinema',
+    label: '液态光场',
+    english: 'Luminous Cinema',
+    desc: '双色环境光场 · 光学悬浮胶囊',
+  },
+  {
+    value: 'monograph',
+    label: '美术馆画册',
+    english: 'Curatorial Monograph',
+    desc: '静谧展墙 · 衬线编目 · 装裱纸感',
+  },
+] as const satisfies readonly { value: Theme['style']; label: string; english: string; desc: string }[];
 
 export const MODE_OPTIONS = [
   { value: 'system', label: '跟随系统' }, { value: 'light', label: '浅色' }, { value: 'dark', label: '深色' },
@@ -14,11 +29,16 @@ export const RADIUS_OPTIONS = [
 ] as const satisfies readonly { value: Theme['radius']; label: string }[];
 
 export const BACKDROP_OPTIONS = [
-  { value: 'ambient', label: '氛围光' }, { value: 'black', label: '纯黑' }, { value: 'theme', label: '跟随底色' },
+  { value: 'ambient', label: '氛围光' },
+  { value: 'black', label: '纯黑' },
+  { value: 'theme', label: '跟随底色' },
+  { value: 'gallery', label: '画廊白墙' },
 ] as const satisfies readonly { value: Theme['viewerBackdrop']; label: string }[];
 
 export const GRID_OPTIONS = [
-  { value: 'justified', label: '保留原比例' }, { value: 'square', label: '方格' },
+  { value: 'justified', label: '保留原比例' },
+  { value: 'square', label: '方格' },
+  { value: 'mat', label: '画册装裱' },
 ] as const satisfies readonly { value: Preferences['gridStyle']; label: string }[];
 
 export const REDUCE_OPTIONS = [

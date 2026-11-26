@@ -1,0 +1,754 @@
+/* ==========================================================================
+   Luvia Gallery WebUI · 双皮肤视觉系统（skins.css）
+   - cinema（默认 · 液态光场）：双色 OKLCH 环境光场、左侧光学悬浮胶囊 Dock、
+     顶部渐进景深模糊光幕、紧凑悬浮光学景深回忆舞台、聚光灯微交互。
+   - monograph（美术馆画册）：暖炭 / 无酸棉纸静谧展墙、左侧 224px 策展编目侧栏、
+     Instrument Serif 衬线标题、期刊开篇回忆舞台、精装档案封套文件夹、
+     博物馆展品画卡、Passe-partout 无酸装裱画框。
+   ========================================================================== */
+
+/* ---------- 1. 环境层：液态光场双色光球 vs 画册静纸微粒 ---------- */
+.lv-ambient-stage {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  overflow: hidden;
+}
+
+:root[data-style="cinema"] .lv-ambient-orb {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(110px);
+  will-change: transform;
+  transition: background 1.2s ease, opacity 0.8s ease;
+}
+:root[data-style="cinema"] .lv-ambient-orb-1 {
+  width: 58vw;
+  height: 52vh;
+  top: -16vh;
+  left: -8vw;
+  background: radial-gradient(circle, var(--ambient-1) 0%, transparent 72%);
+  opacity: var(--amb-opacity-1);
+}
+:root[data-style="cinema"] .lv-ambient-orb-2 {
+  width: 52vw;
+  height: 50vh;
+  right: -12vw;
+  bottom: -14vh;
+  background: radial-gradient(circle, var(--ambient-2) 0%, transparent 72%);
+  opacity: var(--amb-opacity-2);
+}
+
+:root[data-style="monograph"] .lv-ambient-orb {
+  display: none;
+}
+:root[data-style="monograph"] .lv-ambient-stage::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  opacity: var(--paper-grain-opacity);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.82' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* 顶部渐进景深模糊光幕（液态光场专属，稳居滚动照片之上、命令条之下） */
+.lv-prog-blur-top {
+  display: none;
+}
+:root[data-style="cinema"] .lv-prog-blur-top {
+  display: block;
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 88px;
+  pointer-events: none;
+  z-index: 4;
+  -webkit-backdrop-filter: blur(16px) saturate(1.3);
+  backdrop-filter: blur(16px) saturate(1.3);
+  -webkit-mask-image: linear-gradient(to bottom, rgb(0 0 0 / 1) 0%, rgb(0 0 0 / 0.72) 48%, rgb(0 0 0 / 0) 100%);
+  mask-image: linear-gradient(to bottom, rgb(0 0 0 / 1) 0%, rgb(0 0 0 / 0.72) 48%, rgb(0 0 0 / 0) 100%);
+  background: linear-gradient(to bottom, color-mix(in srgb, var(--bg) 74%, transparent) 0%, transparent 100%);
+}
+
+/* ---------- 2. 导航壳层变体（AppShell） ---------- */
+.lv-shell {
+  position: relative;
+  z-index: 2;
+  height: 100dvh;
+  width: 100%;
+}
+
+/* 画册皮肤：桌面 224px 左侧编目栏 + 展墙内容区 */
+:root[data-style="monograph"] .lv-shell {
+  display: grid;
+  grid-template-columns: 1fr;
+}
+@media (min-width: 768px) {
+  :root[data-style="monograph"] .lv-shell {
+    grid-template-columns: 224px minmax(0, 1fr);
+  }
+}
+
+/* 液态光场皮肤：100% Full-Bleed 画布 + 左侧悬浮光学胶囊 Dock */
+:root[data-style="cinema"] .lv-shell {
+  display: block;
+}
+
+/* 桌面端左侧光学 Dock（仅 cinema） */
+.lv-cinema-dock {
+  display: none;
+}
+@media (min-width: 768px) {
+  :root[data-style="cinema"] .lv-cinema-dock {
+    position: fixed;
+    left: 16px;
+    top: 50%;
+    transform: translateY(-50%);
+    z-index: 24;
+    width: 58px;
+    padding: 10px 7px;
+    border-radius: 999px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    background: var(--glass);
+    -webkit-backdrop-filter: blur(30px) saturate(1.75);
+    backdrop-filter: blur(30px) saturate(1.75);
+    border: 1px solid var(--line-2);
+    box-shadow: var(--glass-highlight), var(--shadow-float);
+  }
+}
+
+/* 桌面端左侧编目边栏（仅 monograph） */
+.lv-monograph-sidebar {
+  display: none;
+}
+@media (min-width: 768px) {
+  :root[data-style="monograph"] .lv-monograph-sidebar {
+    position: relative;
+    z-index: 12;
+    display: flex;
+    flex-direction: column;
+    padding: 22px 15px 18px;
+    background: var(--surface);
+    border-right: 1px solid var(--line);
+    min-height: 0;
+  }
+}
+
+/* 液态光场内容区在桌面端预留左侧悬浮 Dock 安全呼吸距 */
+@media (min-width: 768px) {
+  :root[data-style="cinema"] .lv-page-inset {
+    padding-left: 92px;
+    padding-right: 44px;
+  }
+  :root[data-style="monograph"] .lv-page-inset {
+    padding-left: 44px;
+    padding-right: 44px;
+  }
+}
+@media (max-width: 767px) {
+  .lv-page-inset {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+}
+
+/* ---------- 3. 排版层级（双皮肤共享组件自动变体） ---------- */
+.lv-page-title {
+  margin: 0;
+  line-height: 1.1;
+  word-break: break-word;
+  color: var(--fg);
+}
+:root[data-style="monograph"] .lv-page-title {
+  font-family: var(--font-serif);
+  font-size: clamp(32px, 3.2vw, 44px);
+  font-weight: 400;
+  letter-spacing: -0.015em;
+}
+:root[data-style="cinema"] .lv-page-title {
+  font-family: var(--font-sans);
+  font-size: clamp(28px, 2.8vw, 36px);
+  font-weight: 500;
+  letter-spacing: -0.028em;
+}
+
+.lv-sec-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px 14px;
+  margin-bottom: 18px;
+}
+:root[data-style="monograph"] .lv-sec-head {
+  padding-bottom: 11px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 20px;
+}
+.lv-sec-num {
+  display: none;
+}
+:root[data-style="monograph"] .lv-sec-num {
+  display: inline;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  color: var(--accent);
+}
+.lv-sec-title {
+  margin: 0;
+  color: var(--fg);
+}
+:root[data-style="monograph"] .lv-sec-title {
+  font-family: var(--font-serif);
+  font-size: 27px;
+  font-weight: 400;
+  line-height: 1.1;
+}
+:root[data-style="cinema"] .lv-sec-title {
+  font-family: var(--font-sans);
+  font-size: 21px;
+  font-weight: 550;
+  letter-spacing: -0.02em;
+}
+
+/* KPI 数字与月份数字排版 */
+:root[data-style="monograph"] .lv-numeral-display {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-weight: 400;
+  letter-spacing: -0.02em;
+}
+:root[data-style="cinema"] .lv-numeral-display {
+  font-family: var(--font-sans);
+  font-weight: 250;
+  letter-spacing: -0.04em;
+}
+
+/* ---------- 4. 回忆首页：双皮肤 Hero 舞台 ---------- */
+
+/* B 皮肤（液态光场）：悬浮光学景深舞台（受控锐利画框 520x330，杜绝低分辨率照片拉伸失真） */
+.lv-hero-cinema-wrap {
+  max-width: 1640px;
+  margin: 0 auto;
+  padding-top: 22px;
+}
+.lv-hero-cinema {
+  position: relative;
+  min-height: 410px;
+  border-radius: 26px;
+  overflow: hidden;
+  border: 1px solid var(--line-2);
+  background: var(--surface);
+  box-shadow: var(--glass-highlight), var(--shadow-float);
+  display: grid;
+  grid-template-columns: minmax(290px, 0.92fr) minmax(0, 1.28fr);
+  gap: 32px;
+  align-items: center;
+  padding: 32px 38px;
+}
+.lv-hero-cinema-bg {
+  position: absolute;
+  inset: -18%;
+  background-size: cover;
+  background-position: center;
+  filter: blur(68px) saturate(1.65);
+  transform: scale(1.12);
+  opacity: 0.42;
+  transition: background-image 0.7s ease, opacity 0.5s ease;
+  pointer-events: none;
+}
+:root[data-scheme="light"] .lv-hero-cinema-bg {
+  filter: blur(72px) saturate(1.4) brightness(1.12);
+  opacity: 0.28;
+}
+.lv-hero-cinema-scrim {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    125deg,
+    color-mix(in srgb, var(--bg) 74%, transparent) 0%,
+    color-mix(in srgb, var(--bg) 38%, transparent) 55%,
+    color-mix(in srgb, var(--bg) 58%, transparent) 100%
+  );
+}
+:root[data-scheme="light"] .lv-hero-cinema-scrim {
+  background: linear-gradient(
+    125deg,
+    rgb(255 255 255 / 0.78) 0%,
+    rgb(255 255 255 / 0.48) 55%,
+    rgb(241 244 249 / 0.70) 100%
+  );
+}
+.lv-hero-optical-stage {
+  position: relative;
+  z-index: 3;
+  height: 334px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 14px;
+}
+.lv-hero-optical-card {
+  position: relative;
+  z-index: 2;
+  flex: 1 1 auto;
+  max-width: 520px;
+  height: 330px;
+  border-radius: 18px;
+  overflow: hidden;
+  background: var(--sunken);
+  border: 1px solid color-mix(in srgb, var(--fg) 18%, transparent);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.22), 0 28px 66px -18px rgb(0 0 0 / 0.65);
+  cursor: pointer;
+  transition: transform 0.42s var(--ease-cinema), box-shadow 0.42s ease;
+}
+:root[data-scheme="light"] .lv-hero-optical-card {
+  border-color: rgb(255 255 255 / 0.85);
+  box-shadow: 0 2px 8px rgb(18 28 48 / 0.08), 0 28px 62px -18px rgb(18 28 48 / 0.26);
+}
+.lv-hero-optical-card:hover {
+  transform: translateY(-3px) scale(1.008);
+}
+.lv-hero-optical-peek {
+  position: relative;
+  flex: none;
+  width: 108px;
+  height: 288px;
+  border-radius: 16px;
+  overflow: hidden;
+  border: 1px solid var(--line-2);
+  opacity: 0.64;
+  filter: saturate(0.86);
+  box-shadow: var(--shadow-card);
+  cursor: pointer;
+  transition: width 0.36s var(--ease-cinema), opacity 0.28s ease, filter 0.28s ease, transform 0.32s var(--ease-cinema);
+}
+.lv-hero-optical-peek:hover {
+  width: 126px;
+  opacity: 0.96;
+  filter: saturate(1.04);
+  transform: translateY(-2px);
+}
+@media (max-width: 1024px) {
+  .lv-hero-cinema {
+    grid-template-columns: 1fr;
+    gap: 20px;
+    padding: 22px 20px;
+    min-height: 0;
+    border-radius: 20px;
+  }
+  .lv-hero-optical-stage {
+    height: 230px;
+    justify-content: center;
+  }
+  .lv-hero-optical-card {
+    height: 230px;
+    max-width: 100%;
+    width: 100%;
+  }
+  .lv-hero-optical-peek {
+    display: none;
+  }
+}
+
+/* A 皮肤（美术馆画册）：期刊开篇（Editorial Spread） */
+.lv-hero-monograph {
+  max-width: 1640px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: minmax(290px, 0.92fr) minmax(0, 1.48fr);
+  gap: 38px;
+  align-items: stretch;
+  padding-top: 32px;
+  padding-bottom: 40px;
+  border-bottom: 1px solid var(--line);
+}
+.lv-hero-mono-frame {
+  position: relative;
+  padding: 15px;
+  background: var(--paper-mat);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r2);
+  box-shadow: var(--shadow-card);
+  display: flex;
+  flex-direction: column;
+}
+@media (max-width: 1024px) {
+  .lv-hero-monograph {
+    grid-template-columns: 1fr;
+    gap: 22px;
+    padding-top: 20px;
+    padding-bottom: 28px;
+  }
+}
+
+/* 聚光灯效应（液态光场：悬停某张卡片时其余兄弟轻退让） */
+@media (hover: hover) {
+  :root[data-style="cinema"] .lv-spotlight-group:hover .lv-spotlight-item:not(:hover) {
+    opacity: 0.72;
+    filter: saturate(0.88);
+  }
+}
+.lv-spotlight-item {
+  transition: opacity 0.34s ease, filter 0.34s ease, transform 0.38s var(--ease-cinema), box-shadow 0.38s ease, border-color 0.25s ease;
+}
+
+/* ---------- 5. 那年今日双皮肤卡片 ---------- */
+:root[data-style="monograph"] .lv-otd-card {
+  display: flex;
+  flex-direction: column;
+  padding: 10px 10px 14px;
+  background: var(--paper-mat);
+  border: 1px solid var(--line);
+  border-radius: var(--r2);
+  box-shadow: var(--shadow-card);
+}
+:root[data-style="monograph"] .lv-otd-card:hover {
+  transform: translateY(-4px);
+  border-color: var(--line-2);
+  box-shadow: var(--shadow-float);
+}
+:root[data-style="monograph"] .lv-otd-thumb {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 4 / 5;
+  overflow: hidden;
+  border-radius: 2px;
+  background: var(--sunken);
+}
+:root[data-style="monograph"] .lv-otd-meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 12px;
+  width: 100%;
+}
+:root[data-style="monograph"] .lv-otd-year {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 30px;
+  line-height: 0.9;
+  color: var(--fg);
+}
+:root[data-style="monograph"] .lv-otd-place {
+  font-size: 12px;
+  color: var(--muted);
+  text-align: right;
+}
+
+:root[data-style="cinema"] .lv-otd-card {
+  position: relative;
+  aspect-ratio: 3 / 4;
+  border-radius: var(--r3);
+  overflow: hidden;
+  background: var(--sunken);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-card);
+}
+:root[data-style="cinema"] .lv-otd-card:hover {
+  transform: translateY(-4px) scale(1.015);
+  border-color: var(--line-2);
+  box-shadow: var(--shadow-float), 0 0 0 1px color-mix(in srgb, var(--accent) 32%, transparent);
+}
+:root[data-style="cinema"] .lv-otd-thumb {
+  position: absolute;
+  inset: 0;
+}
+:root[data-style="cinema"] .lv-otd-thumb::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, transparent 42%, rgb(6 7 10 / 0.82) 100%);
+}
+:root[data-style="cinema"] .lv-otd-meta {
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  bottom: 14px;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+:root[data-style="cinema"] .lv-otd-year {
+  font-family: var(--font-sans);
+  font-weight: 250;
+  font-size: 46px;
+  line-height: 0.9;
+  letter-spacing: -0.04em;
+  color: #fff;
+}
+:root[data-style="cinema"] .lv-otd-place {
+  font-size: 12.5px;
+  color: rgb(255 255 255 / 0.82);
+}
+
+/* ---------- 6. 照片网格 · 画廊装裱模式（data-grid="mat"） ---------- */
+:root[data-grid="mat"] .lv-thumb-shell {
+  padding: 8px 8px 26px;
+  background: var(--paper-mat);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  box-shadow: var(--shadow-card);
+}
+:root[data-grid="mat"] .lv-thumb-mat-caption {
+  display: flex;
+}
+.lv-thumb-mat-caption {
+  display: none;
+}
+
+/* ---------- 7. 文件夹双皮肤封面叠片（Archival Folio vs 3-Layer Cinema Stack） ---------- */
+:root[data-style="monograph"] .lv-folio-stack {
+  position: relative;
+  aspect-ratio: 4 / 3;
+  padding: 12px 14px 0;
+}
+:root[data-style="monograph"] .lv-folio-back {
+  display: block;
+  position: absolute;
+  inset: 0 8px 10px;
+  background: var(--sunken);
+  border: 1px solid var(--line-2);
+  border-radius: 5px 5px 3px 3px;
+}
+:root[data-style="monograph"] .lv-folio-back::before {
+  content: "";
+  position: absolute;
+  top: -7px;
+  left: 14px;
+  width: 44%;
+  height: 8px;
+  background: var(--sunken);
+  border: 1px solid var(--line-2);
+  border-bottom: 0;
+  border-radius: 4px 4px 0 0;
+}
+:root[data-style="monograph"] .lv-folio-layer-3 {
+  display: none;
+}
+:root[data-style="monograph"] .lv-folio-layer-2 {
+  position: absolute;
+  left: 20px;
+  right: 20px;
+  top: 6px;
+  bottom: 20px;
+  border-radius: 2px;
+  overflow: hidden;
+  opacity: 0.74;
+  border: 3px solid var(--paper-mat);
+  box-shadow: var(--shadow-card);
+  transition: transform 0.42s var(--ease-editorial);
+}
+:root[data-style="monograph"] .lv-folio-layer-1 {
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  top: 14px;
+  bottom: 12px;
+  border-radius: 2px;
+  overflow: hidden;
+  border: 4px solid var(--paper-mat);
+  box-shadow: var(--shadow-card);
+  transition: transform 0.42s var(--ease-editorial);
+}
+:root[data-style="monograph"] .lv-folio-pocket {
+  display: block;
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 36%;
+  background: linear-gradient(180deg, var(--surface) 0%, var(--raised) 100%);
+  border: 1px solid var(--line-2);
+  border-radius: 3px 3px 6px 6px;
+  box-shadow: 0 -6px 18px -10px rgb(0 0 0 / 0.25);
+  z-index: 3;
+}
+:root[data-style="monograph"] .lv-folio-pocket::before {
+  content: "";
+  position: absolute;
+  top: -1px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 42px;
+  height: 7px;
+  background: var(--bg);
+  border: 1px solid var(--line-2);
+  border-top: 0;
+  border-radius: 0 0 999px 999px;
+}
+:root[data-style="monograph"] .group\/fc:hover .lv-folio-layer-1,
+:root[data-style="monograph"] .group\/libc:hover .lv-folio-layer-1 {
+  transform: translateY(-9px);
+}
+:root[data-style="monograph"] .group\/fc:hover .lv-folio-layer-2,
+:root[data-style="monograph"] .group\/libc:hover .lv-folio-layer-2 {
+  transform: translateY(-15px) rotate(-1.5deg);
+}
+
+:root[data-style="cinema"] .lv-folio-stack {
+  position: relative;
+  aspect-ratio: 4 / 3;
+}
+:root[data-style="cinema"] .lv-folio-back,
+:root[data-style="cinema"] .lv-folio-pocket {
+  display: none;
+}
+:root[data-style="cinema"] .lv-folio-layer-3,
+:root[data-style="cinema"] .lv-folio-layer-2,
+:root[data-style="cinema"] .lv-folio-layer-1 {
+  position: absolute;
+  inset: 0;
+  border-radius: var(--r2);
+  overflow: hidden;
+  border: 1px solid var(--line-2);
+  box-shadow: var(--shadow-card);
+  transition: transform 0.45s var(--ease-cinema), filter 0.35s ease, box-shadow 0.35s ease;
+}
+:root[data-style="cinema"] .lv-folio-layer-3 {
+  transform: rotate(-6deg) translate(-7px, 4px) scale(0.92);
+  filter: brightness(0.7);
+}
+:root[data-style="cinema"] .lv-folio-layer-2 {
+  transform: rotate(5deg) translate(8px, 2px) scale(0.95);
+  filter: brightness(0.84);
+}
+:root[data-style="cinema"] .group\/fc:hover .lv-folio-layer-3,
+:root[data-style="cinema"] .group\/libc:hover .lv-folio-layer-3 {
+  transform: rotate(-11deg) translate(-16px, 2px) scale(0.92);
+}
+:root[data-style="cinema"] .group\/fc:hover .lv-folio-layer-2,
+:root[data-style="cinema"] .group\/libc:hover .lv-folio-layer-2 {
+  transform: rotate(10deg) translate(18px, -2px) scale(0.95);
+}
+:root[data-style="cinema"] .group\/fc:hover .lv-folio-layer-1,
+:root[data-style="cinema"] .group\/libc:hover .lv-folio-layer-1 {
+  transform: translateY(-6px);
+  box-shadow: var(--shadow-float);
+}
+
+/* ---------- 8. 相册双皮肤卡片（Museum Exhibit Plate vs Full-Bleed Cinema Card） ---------- */
+:root[data-style="monograph"] .lv-album-card {
+  display: flex;
+  flex-direction: column;
+  background: var(--paper-mat);
+  border: 1px solid var(--line);
+  border-radius: var(--r2);
+  overflow: hidden;
+  box-shadow: var(--shadow-card);
+  transition: transform 0.36s var(--ease-editorial), box-shadow 0.36s ease, border-color 0.25s ease;
+}
+:root[data-style="monograph"] .lv-album-card:hover {
+  transform: translateY(-4px);
+  border-color: var(--line-2);
+  box-shadow: var(--shadow-float);
+}
+:root[data-style="monograph"] .lv-album-media {
+  position: relative;
+  aspect-ratio: 4 / 3;
+  overflow: hidden;
+  background: var(--sunken);
+  margin: 12px 12px 0;
+  border-radius: 2px;
+}
+:root[data-style="monograph"] .lv-album-body {
+  padding: 14px 16px 18px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--fg);
+}
+:root[data-style="monograph"] .lv-album-code {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.14em;
+  color: var(--accent);
+  margin-bottom: 4px;
+}
+:root[data-style="monograph"] .lv-album-name {
+  font-family: var(--font-serif);
+  font-size: 24px;
+  font-weight: 400;
+  line-height: 1.15;
+  color: var(--fg);
+}
+:root[data-style="monograph"] .lv-album-sub {
+  color: var(--muted);
+}
+:root[data-style="monograph"] .lv-album-count {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 32px;
+  line-height: 0.85;
+  color: var(--muted);
+}
+
+:root[data-style="cinema"] .lv-album-card {
+  position: relative;
+  display: block;
+  aspect-ratio: 4 / 3;
+  border-radius: var(--r3);
+  overflow: hidden;
+  background: var(--sunken);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-card);
+  transition: transform 0.38s var(--ease-cinema), box-shadow 0.38s ease, border-color 0.25s ease;
+}
+:root[data-style="cinema"] .lv-album-card:hover {
+  transform: translateY(-4px);
+  border-color: var(--line-2);
+  box-shadow: var(--shadow-float);
+}
+:root[data-style="cinema"] .lv-album-media {
+  position: absolute;
+  inset: 0;
+}
+:root[data-style="cinema"] .lv-album-media::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, transparent 36%, rgb(6 7 11 / 0.84) 100%);
+}
+:root[data-style="cinema"] .lv-album-body {
+  position: absolute;
+  left: 18px;
+  right: 18px;
+  bottom: 16px;
+  z-index: 2;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  color: #fff;
+}
+:root[data-style="cinema"] .lv-album-code {
+  display: none;
+}
+:root[data-style="cinema"] .lv-album-name {
+  font-family: var(--font-sans);
+  font-size: 19px;
+  font-weight: 550;
+  letter-spacing: -0.015em;
+  color: #fff;
+}
+:root[data-style="cinema"] .lv-album-sub {
+  color: rgb(255 255 255 / 0.76);
+}
+:root[data-style="cinema"] .lv-album-count {
+  font-family: var(--font-sans);
+  font-weight: 250;
+  font-size: 40px;
+  line-height: 0.84;
+  letter-spacing: -0.04em;
+  color: rgb(255 255 255 / 0.9);
+}

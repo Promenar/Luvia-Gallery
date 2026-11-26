@@ -102,6 +102,56 @@ test('偏好补丁深度合并并保留未修改字段', async () => {
   } finally { await app.close(); db.close(); }
 });
 
+test('旧版外观偏好可读取、补齐默认皮肤并逐项持久化', async () => {
+  const db = openDatabase(':memory:');
+  const app = await createApp({ db, legacyPending: false });
+  try {
+    const setup = await app.inject({ method: 'POST', url: '/api/v2/auth/setup', headers: header, payload: { username: 'admin', password: 'test password' } });
+    assert.equal(setup.statusCode, 200);
+    const { id } = setup.json().user;
+    const cookie = (setup.headers['set-cookie'] as string).split(';')[0]!;
+    const legacyTheme = { mode: 'dark', base: 'warm', accent: 'teal', radius: 'round', viewerBackdrop: 'black' };
+    db.prepare('UPDATE users SET preferences=? WHERE id=?').run(JSON.stringify({ theme: legacyTheme, gridStyle: 'square' }), id);
+    const selectPreferences = db.prepare('SELECT preferences FROM users WHERE id=?');
+    const readStored = () => (selectPreferences.get(id) as { preferences: string }).preferences;
+    const read = await app.inject({ method: 'GET', url: '/api/v2/auth/state', headers: { cookie } });
+    assert.equal(read.statusCode, 200);
+    const initial = read.json().user.preferences;
+    const theme = { ...legacyTheme, style: 'cinema' };
+    assert.deepEqual(initial.theme, theme);
+    assert.equal(initial.gridStyle, 'square');
+    assert.deepEqual(JSON.parse(readStored()), { theme: legacyTheme, gridStyle: 'square' });
+
+    const patch = (payload: object) => app.inject({ method: 'PATCH', url: '/api/v2/me/preferences', headers: { ...header, cookie }, payload });
+    const updated = { ...initial, density: 2 };
+    const monograph = { ...updated, theme: { ...theme, style: 'monograph' } };
+    const gallery = { ...monograph, theme: { ...monograph.theme, viewerBackdrop: 'gallery' } };
+    const mat = { ...gallery, gridStyle: 'mat' };
+    for (const [payload, expected] of [
+      [{ density: 2 }, updated],
+      [{ theme: { style: 'monograph' } }, monograph],
+      [{ theme: { viewerBackdrop: 'gallery' } }, gallery],
+      [{ gridStyle: 'mat' }, mat],
+    ] as const) {
+      const response = await patch(payload);
+      assert.equal(response.statusCode, 200);
+      assert.deepEqual(response.json(), expected);
+      assert.deepEqual(JSON.parse(readStored()), expected);
+    }
+
+    const stored = readStored();
+    for (const invalid of [{ theme: { style: 'invalid' } }, { theme: { viewerBackdrop: 'invalid' } }, { gridStyle: 'invalid' }]) {
+      const response = await patch(invalid);
+      assert.equal(response.statusCode, 400);
+      assert.equal(response.json().error.code, 'VALIDATION');
+      assert.equal(readStored(), stored);
+    }
+    const reread = await app.inject({ method: 'GET', url: '/api/v2/auth/state', headers: { cookie } });
+    assert.equal(reread.statusCode, 200);
+    assert.deepEqual(reread.json().user.preferences, mat);
+  } finally { await app.close(); db.close(); }
+});
+
 test('壁纸令牌可创建并合并修改，普通令牌不接受壁纸配置', async () => {
   const db = openDatabase(':memory:');
   const app = await createApp({ db, legacyPending: false });

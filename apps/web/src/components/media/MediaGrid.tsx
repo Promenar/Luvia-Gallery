@@ -67,7 +67,7 @@ export interface MediaGridProps {
 }
 
 /**
- * 虚拟化的媒体网格（对齐行或方形，跟随偏好 gridStyle 与 density）。
+ * 虚拟化的媒体网格（保留原比例 / 方格 / 画册装裱，跟随偏好 gridStyle 与 density）。
  * 只渲染视口附近的行，十万级列表也能流畅滚动。
  */
 export function MediaGrid({ items, scrollElement, onOpen, onEndReached, hasMore, selectedIds, className }: MediaGridProps) {
@@ -76,17 +76,19 @@ export function MediaGrid({ items, scrollElement, onOpen, onEndReached, hasMore,
   const ownScroll = useRef<HTMLDivElement>(null);
   const [gridEl, setGridEl] = useState<HTMLDivElement | null>(null);
   const scrollMargin = useScrollMargin(scrollElement, gridEl);
-  const rowH = useRowHeight(width);
+  const baseRowH = useRowHeight(width);
+  const isMat = prefs.gridStyle === 'mat';
+  const gap = isMat ? (width < 760 ? 10 : 16) : GRID_GAP;
+  const rowH = isMat ? baseRowH + 30 : baseRowH;
   const dims = useDimensionsVersion();
   const rows = useMemo(
-    () => (prefs.gridStyle === 'square' ? squareRows(items, width, rowH, GRID_GAP) : justifyRows(items, aspectOf, width, rowH, GRID_GAP)),
-    // dims：补到新宽高后重新排布
-    [items, width, rowH, prefs.gridStyle, dims],
+    () => (prefs.gridStyle === 'square' ? squareRows(items, width, rowH, gap) : justifyRows(items, aspectOf, width, rowH, gap)),
+    [items, width, rowH, gap, prefs.gridStyle, dims],
   );
   const v = useVirtualizer({
     count: rows.length,
     getScrollElement: () => scrollElement ?? ownScroll.current,
-    estimateSize: (i) => (rows[i]?.height ?? rowH) + GRID_GAP,
+    estimateSize: (i) => (rows[i]?.height ?? rowH) + gap,
     overscan: 6,
     scrollMargin,
   });
@@ -105,7 +107,7 @@ export function MediaGrid({ items, scrollElement, onOpen, onEndReached, hasMore,
       {vItems.map((vr) => {
         const row = rows[vr.index]!;
         return (
-          <div key={vr.key} className="absolute left-0 flex w-full" style={{ top: vr.start - scrollMargin, gap: GRID_GAP, height: row.height }}>
+          <div key={vr.key} className="absolute left-0 flex w-full" style={{ top: vr.start - scrollMargin, gap, height: row.height }}>
             {row.cells.map((c) => (
               <Thumb
                 key={c.item.id}

@@ -105,15 +105,15 @@ export const TimelineTile = memo(function TimelineTile({ item, width, height, se
           className="pointer-events-none absolute inset-0 size-full rounded-[var(--r1)] object-cover max-md:rounded-none"
         />
       )}
-      <div aria-hidden className="pointer-events-none absolute inset-0 rounded-[var(--r1)] bg-[linear-gradient(transparent_55%,rgba(0,0,0,.55))] opacity-0 transition-opacity duration-[180ms] group-hover/tile:opacity-100 max-md:rounded-none" />
+      <div aria-hidden className="pointer-events-none absolute inset-0 rounded-[var(--r1)] bg-[linear-gradient(transparent_55%,rgba(6,7,10,.62))] opacity-0 transition-opacity duration-[180ms] group-hover/tile:opacity-100 max-md:rounded-none [:root[data-grid=mat]_&]:hidden" />
       {height >= 90 && (
-        <div aria-hidden className="pointer-events-none absolute right-[9px] bottom-[7px] left-[9px] truncate text-[12px] leading-[1.3] text-white opacity-0 [text-shadow:0_1px_2px_rgba(0,0,0,.4)] transition-opacity duration-[180ms] group-hover/tile:opacity-100">
-          {place && <span className="block truncate">{place}</span>}
-          <span className="block truncate">{item.name}</span>
+        <div aria-hidden className="pointer-events-none absolute right-[9px] bottom-[7px] left-[9px] truncate text-[12px] leading-[1.3] text-white opacity-0 [text-shadow:0_1px_2px_rgba(0,0,0,.45)] transition-opacity duration-[180ms] group-hover/tile:opacity-100 [:root[data-grid=mat]_&]:hidden">
+          {place && <span className="block truncate font-medium">{place}</span>}
+          <span className="block truncate opacity-85">{item.name}</span>
         </div>
       )}
       {item.favorite && (
-        <Heart aria-label="已收藏" className="pointer-events-none absolute top-2 left-2 size-[15px] fill-white text-white drop-shadow-[0_1px_2px_rgba(0,0,0,.5)]" strokeWidth={0} />
+        <Heart aria-label="已收藏" className="pointer-events-none absolute top-2.5 right-2.5 size-[15px] fill-white text-white drop-shadow-[0_1px_3px_rgba(0,0,0,.55)]" strokeWidth={0} />
       )}
       <button
         type="button"
@@ -124,10 +124,10 @@ export const TimelineTile = memo(function TimelineTile({ item, width, height, se
           api.toggle(item, e.shiftKey);
         }}
         className={
-          'absolute top-2 left-2 grid size-5 place-items-center rounded-full border-2 transition-opacity duration-150 focus-visible:opacity-100 ' +
+          'absolute top-2.5 left-2.5 grid size-5 place-items-center rounded-full border-2 transition-opacity duration-150 focus-visible:opacity-100 ' +
           (selected
             ? 'border-accent bg-accent text-accent-fg opacity-100'
-            : 'border-white/85 bg-black/20 text-transparent opacity-0 group-hover/tile:opacity-100 group-data-[selecting=true]/page:opacity-100')
+            : 'border-white/85 bg-black/28 text-transparent opacity-0 group-hover/tile:opacity-100 group-data-[selecting=true]/page:opacity-100')
         }
       >
         <Check className="size-3" strokeWidth={3} />

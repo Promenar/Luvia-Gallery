@@ -4,35 +4,46 @@ import { thumbHashToRGBA } from 'thumbhash';
 import type { MediaItem } from '@luvia/contracts';
 import { usePreferences } from '@/stores/session';
 import { applyTheme, computeTheme } from './engine';
-import { dominantOklch, type Oklch } from './color';
+import { paletteFromRGBA, type DynamicPalette, type Oklch } from './color';
 
-/** 当前“动态强调色”的来源颜色。页面在主图切换、悬停或查看器换图时调用 setDynamicFrom。 */
-export const useDynamicColor = create<{ color: Oklch | null; set: (c: Oklch | null) => void }>((set) => ({
+/** 当前“动态强调色与双色环境光场”的来源色板。页面在主图切换、悬停或查看器换图时调用 setDynamicFrom。 */
+export const useDynamicColor = create<{
+  color: Oklch | null;
+  secondary: Oklch | null;
+  set: (c: Oklch | null, secondary?: Oklch | null) => void;
+}>((set) => ({
   color: null,
-  set: (color) => set({ color }),
+  secondary: null,
+  set: (color, secondary = null) => set({ color, secondary }),
 }));
 
-const cache = new Map<string, Oklch | null>();
+const cache = new Map<string, DynamicPalette>();
 
-/** 由媒体的 ThumbHash 计算主色（无需下载图片）；没有 ThumbHash 时保持当前颜色。 */
-export function colorFromMedia(m: Pick<MediaItem, 'id' | 'thumbhash'>): Oklch | null | undefined {
+/** 由媒体的 ThumbHash 计算主色与副氛围色（无需下载图片）；没有 ThumbHash 时保持当前色板。 */
+export function paletteFromMedia(m: Pick<MediaItem, 'id' | 'thumbhash'>): DynamicPalette | undefined {
   if (!m.thumbhash) return undefined;
-  if (cache.has(m.id)) return cache.get(m.id);
+  const key = `${m.id}:${m.thumbhash}`;
+  if (cache.has(key)) return cache.get(key);
   try {
     const bin = Uint8Array.from(atob(m.thumbhash), (c) => c.charCodeAt(0));
     const { rgba } = thumbHashToRGBA(bin);
-    const c = dominantOklch(rgba);
-    cache.set(m.id, c);
-    return c;
+    const palette = paletteFromRGBA(rgba);
+    if (cache.size > 4000) cache.clear();
+    cache.set(key, palette);
+    return palette;
   } catch {
     return undefined;
   }
 }
 
+export function colorFromMedia(m: Pick<MediaItem, 'id' | 'thumbhash'>): Oklch | null | undefined {
+  return paletteFromMedia(m)?.primary;
+}
+
 export function setDynamicFrom(m: Pick<MediaItem, 'id' | 'thumbhash'> | null | undefined) {
   if (!m) return;
-  const c = colorFromMedia(m);
-  if (c !== undefined) useDynamicColor.getState().set(c);
+  const palette = paletteFromMedia(m);
+  if (palette !== undefined) useDynamicColor.getState().set(palette.primary, palette.secondary);
 }
 
 const mql = typeof matchMedia === 'function' ? matchMedia('(prefers-color-scheme: dark)') : null;
@@ -43,19 +54,24 @@ const subscribe = (cb: () => void) => {
 const systemDark = () => mql?.matches ?? true;
 
 export function useIsDark() {
-  const mode = usePreferences().theme.mode;
+  const mode = usePreferences().theme?.mode ?? 'system';
   const sys = useSyncExternalStore(subscribe, systemDark, () => true);
   return mode === 'dark' ? true : mode === 'light' ? false : sys;
 }
 
-/** 把用户偏好与动态色写入 :root 的 CSS 变量。 */
+export function useThemeStyle() {
+  return usePreferences().theme?.style ?? 'cinema';
+}
+
+/** 把用户偏好与双色动态光场写入 :root 的 CSS 变量与数据属性。 */
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const prefs = usePreferences();
   const dark = useIsDark();
   const dynamic = useDynamicColor((s) => s.color);
+  const dynamicSecondary = useDynamicColor((s) => s.secondary);
   useEffect(() => {
-    applyTheme(computeTheme({ theme: prefs.theme, dark, dynamic }));
-  }, [prefs.theme, dark, dynamic]);
+    applyTheme(computeTheme({ theme: prefs.theme, dark, dynamic, dynamicSecondary }));
+  }, [prefs.theme, dark, dynamic, dynamicSecondary]);
   useEffect(() => {
     const root = document.documentElement;
     root.dataset.density = String(prefs.density);

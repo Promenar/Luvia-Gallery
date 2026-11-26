@@ -51,7 +51,7 @@ interface Shown { item: MediaItem; rect: Rect; src: string | undefined; rotation
 /**
  * 舞台：当前媒体（图片或视频）与缩放层、换图交叉淡化、指针手势（拖动、双指捏合、滑动翻页、双击/双击触摸切换缩放）、滚轮缩放与右键菜单入口。
  */
-export function Stage({ item, ctx, frameRef, first, rotation, errorHint, resultUrl, showOriginal, overlay, kenBurns, onStep, onMenu, onVideoEnded }: {
+export function Stage({ item, ctx, frameRef, first, rotation, errorHint, resultUrl, showOriginal, overlay, kenBurns, onStep, onDismiss, onMenu, onVideoEnded }: {
   item: MediaItem;
   ctx: ZoomCtx;
   frameRef: React.RefObject<HTMLDivElement | null>;
@@ -69,6 +69,8 @@ export function Stage({ item, ctx, frameRef, first, rotation, errorHint, resultU
   overlay?: React.ReactNode;
   kenBurns: { on: boolean; sec: number };
   onStep: (dir: 1 | -1) => void;
+  /** 未缩放时向下轻拖关闭查看器。 */
+  onDismiss?: () => void;
   onMenu: (x: number, y: number) => void;
   onVideoEnded: () => void;
 }) {
@@ -173,12 +175,13 @@ export function Stage({ item, ctx, frameRef, first, rotation, errorHint, resultU
     return () => el.removeEventListener('wheel', onWheel);
   }, []);
 
-  // 指针手势
+  // 指针手势（含未缩放时的自然跟手下拉关闭与水平轻滑阻尼）
   const ptrs = useRef(new Map<number, { x: number; y: number }>());
   const pinch = useRef<{ d: number; z: number } | null>(null);
   const drag = useRef<{ x: number; y: number; ox: number; oy: number } | null>(null);
   const down = useRef<{ x: number; y: number; t: number; type: string } | null>(null);
   const lastTap = useRef<{ x: number; y: number; t: number } | null>(null);
+  const [pull, setPull] = useState<{ dx: number; dy: number } | null>(null);
 
   const onPointerDown = (e: React.PointerEvent) => {
     if (e.button === 2) return;
@@ -192,6 +195,7 @@ export function Stage({ item, ctx, frameRef, first, rotation, errorHint, resultU
       pinch.current = { d: Math.hypot(a.x - b.x, a.y - b.y) || 1, z: ui.view.z };
       drag.current = null;
       down.current = null;
+      setPull(null);
     } else if (pts.length === 1) {
       drag.current = { x: e.clientX, y: e.clientY, ox: ui.view.x, oy: ui.view.y };
       down.current = { x: e.clientX, y: e.clientY, t: performance.now(), type: e.pointerType };
@@ -214,6 +218,13 @@ export function Stage({ item, ctx, frameRef, first, rotation, errorHint, resultU
     if (d && isZoomed(ui.view)) {
       if (!ui.dragging) ui.set({ dragging: true });
       ui.setView(clampPan({ z: ui.view.z, x: d.ox + e.clientX - d.x, y: d.oy + e.clientY - d.y }, c.rect, c.viewport));
+    } else if (d && !isZoomed(ui.view) && !overlay && !isReduceMotion()) {
+      const dx = e.clientX - d.x;
+      const dy = e.clientY - d.y;
+      if (Math.hypot(dx, dy) > 10) {
+        if (onDismiss && dy > 0 && dy > Math.abs(dx) * 1.15) setPull({ dx: dx * 0.25, dy: Math.min(220, dy * 0.85) });
+        else if (Math.abs(dx) > Math.abs(dy) * 1.2) setPull({ dx: Math.max(-140, Math.min(140, dx * 0.45)), dy: 0 });
+      }
     }
   };
 
@@ -222,6 +233,7 @@ export function Stage({ item, ctx, frameRef, first, rotation, errorHint, resultU
     ptrs.current.delete(e.pointerId);
     const ui = useViewerUi.getState();
     if (ui.dragging) ui.set({ dragging: false });
+    setPull(null);
     if (pinch.current) {
       if (ptrs.current.size < 2) pinch.current = null;
       drag.current = null;
@@ -235,9 +247,15 @@ export function Stage({ item, ctx, frameRef, first, rotation, errorHint, resultU
     const dx = e.clientX - dn.x;
     const dy = e.clientY - dn.y;
     const dt = performance.now() - dn.t;
-    if (!isZoomed(ui.view) && Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) && dt < 600) {
-      onStep(dx < 0 ? 1 : -1);
-      return;
+    if (!isZoomed(ui.view) && !overlay) {
+      if (onDismiss && dy > 110 && dy > Math.abs(dx) * 1.3 && dt < 700) {
+        onDismiss();
+        return;
+      }
+      if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) && dt < 600) {
+        onStep(dx < 0 ? 1 : -1);
+        return;
+      }
     }
     // 触摸双击：鼠标由 dblclick 处理
     if (dn.type !== 'mouse' && Math.hypot(dx, dy) < 10 && dt < 300) {
@@ -295,8 +313,15 @@ export function Stage({ item, ctx, frameRef, first, rotation, errorHint, resultU
       <div
         key={item.id}
         ref={frameRef}
-        className={`lv-frame${first ? '' : ' lv-fin'}${rotAnim ? ' lv-rot-anim' : ''}`}
-        style={{ left: r.x, top: r.y, width: r.w, height: r.h }}
+        className={`lv-frame${first ? '' : ' lv-fin'}${rotAnim ? ' lv-rot-anim' : ''}${pull ? ' lv-pulling' : ''}`}
+        style={{
+          left: r.x,
+          top: r.y,
+          width: r.w,
+          height: r.h,
+          transform: pull ? `translate(${pull.dx}px, ${pull.dy}px) scale(${Math.max(0.86, 1 - Math.abs(pull.dy) / 900)})` : undefined,
+          opacity: pull && pull.dy > 0 ? Math.max(0.45, 1 - pull.dy / 360) : undefined,
+        }}
       >
         <div className={kbOn ? 'lv-kb on' : 'lv-kb'} style={{ '--kbd': `${kenBurns.sec}s` } as React.CSSProperties}>
           <div

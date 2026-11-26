@@ -13,12 +13,33 @@ dialog.lv-viewer {
 }
 dialog.lv-viewer::backdrop { background: transparent; }
 dialog.lv-viewer.is-thm { color: var(--fg); --vb-hover: color-mix(in oklab, var(--fg) 12%, transparent); --vn-bg: color-mix(in oklab, var(--fg) 10%, transparent); }
+dialog.lv-viewer.is-gallery { color: #1b1815; --vb-hover: rgb(27 24 21 / 0.09); --vn-bg: rgb(252 250 245 / 0.88); }
 .lv-viewer.is-idle { cursor: none; }
 
-.lv-base { position: absolute; inset: 0; background: #000; }
+.lv-base { position: absolute; inset: 0; background: #060608; transition: background-color .4s ease; }
 .lv-viewer.is-thm .lv-base { background: var(--bg); }
-.lv-bd { position: absolute; inset: -10%; background-size: cover; background-position: center; filter: blur(70px) saturate(1.5) brightness(.55); transform: scale(1.1); opacity: 0; transition: opacity .6s; }
+.lv-viewer.is-gallery .lv-base { background: #f3efe6; }
+.lv-bd { position: absolute; inset: -10%; background-size: cover; background-position: center; filter: blur(80px) saturate(1.55) brightness(.48); transform: scale(1.1); opacity: 0; transition: opacity .6s; }
 .lv-viewer.is-amb .lv-bd { opacity: 1; }
+
+/* 美术馆白墙展厅模式：无酸白卡装裱画框与浅色阅读面板 */
+.lv-viewer.is-gallery .lv-rot { padding: 18px; background: #fdfbf7; border-radius: 2px; box-shadow: 0 2px 6px rgb(30 24 18 / 0.08), 0 26px 64px -18px rgb(30 24 18 / 0.28); }
+.lv-viewer.is-gallery .lv-vt { background: linear-gradient(rgb(243 239 230 / 0.94), transparent); }
+.lv-viewer.is-gallery .lv-vsep { background: rgb(27 24 21 / 0.16); }
+.lv-viewer.is-gallery .lv-vn { border: 1px solid rgb(27 24 21 / 0.12); box-shadow: 0 8px 24px -10px rgb(30 24 18 / 0.2); }
+.lv-viewer.is-gallery .lv-sheet { background: rgb(250 247 240 / 0.94); border-color: rgb(27 24 21 / 0.14); color: #1b1815; }
+.lv-viewer.is-gallery .lv-sheet .when,
+.lv-viewer.is-gallery .lv-sheet dt,
+.lv-viewer.is-gallery .lv-sheet .ex small,
+.lv-viewer.is-gallery .lv-sheet .note { color: rgb(27 24 21 / 0.6); }
+.lv-viewer.is-gallery .lv-sheet .ex { background: rgb(27 24 21 / 0.05); }
+.lv-viewer.is-gallery .lv-sheet .lnk { text-decoration-color: rgb(27 24 21 / 0.3); }
+.lv-viewer.is-gallery .lv-sheet .lnk:hover { text-decoration-color: #1b1815; }
+.lv-viewer.is-gallery .lv-zhud,
+.lv-viewer.is-gallery .lv-sspill { background: rgb(250 247 240 / 0.9); border-color: rgb(27 24 21 / 0.14); color: #1b1815; }
+.lv-viewer.is-gallery .lv-zhud button:hover { background: rgb(27 24 21 / 0.08); }
+.lv-frame { transition: transform .3s var(--ease-cinema), opacity .22s ease; }
+.lv-frame.lv-pulling { transition: none; }
 
 /* 控件层：覆盖全屏但不拦截指针，空白处的滚轮与拖动落到舞台 */
 .lv-chrome { position: absolute; inset: 0; z-index: 3; pointer-events: none; }

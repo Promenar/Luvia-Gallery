@@ -1,33 +1,71 @@
 @import "tailwindcss";
 @import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
+@import "@fontsource/instrument-serif/400.css";
+@import "@fontsource/instrument-serif/400-italic.css";
 @import "@fontsource-variable/big-shoulders-display";
+@import "./skins.css";
 
 /*
- * 设计令牌。实际取值由主题引擎（src/theme/engine.ts）在运行时写入 :root，
- * 这里的值只是首帧（偏好加载前）的深色默认，与引擎 graphite + 深色输出一致。
- * 字体：界面与密集网格只用无衬线 Geist；年份、月份等大数字用窄体 Big Shoulders Display 承担视觉记忆点。
+ * Luvia Gallery WebUI · 双皮肤设计令牌与现代平台底座
+ * 运行时由 src/theme/engine.ts 计算 OKLCH 令牌写入 :root，
+ * 首帧默认值与默认皮肤 cinema（液态光场）深色模式保持一致，避免首屏闪烁。
  */
-@property --accent { syntax: '<color>'; inherits: true; initial-value: #bfbfbf; }
-@property --accent-soft { syntax: '<color>'; inherits: true; initial-value: #bfbfbf22; }
-@property --bg { syntax: '<color>'; inherits: true; initial-value: #121213; }
-@property --surface { syntax: '<color>'; inherits: true; initial-value: #19191b; }
-@property --raised { syntax: '<color>'; inherits: true; initial-value: #212124; }
+@property --accent { syntax: '<color>'; inherits: true; initial-value: #6d9df6; }
+@property --accent-soft { syntax: '<color>'; inherits: true; initial-value: rgb(109 157 246 / 0.18); }
+@property --ambient-1 { syntax: '<color>'; inherits: true; initial-value: #3a5b88; }
+@property --ambient-2 { syntax: '<color>'; inherits: true; initial-value: #764a35; }
+@property --bg { syntax: '<color>'; inherits: true; initial-value: #070709; }
+@property --surface { syntax: '<color>'; inherits: true; initial-value: rgb(18 19 24 / 0.74); }
+@property --raised { syntax: '<color>'; inherits: true; initial-value: rgb(28 30 38 / 0.84); }
 
 :root {
-  --bg: #121213; --surface: #19191b; --raised: #212124; --sunken: #0c0c0d;
-  --fg: #f1f1ef; --fg-2: #c4c4c1; --muted: #8d8d8a;
-  --line: rgb(255 255 255 / 0.08); --line-2: rgb(255 255 255 / 0.15);
-  --accent: #bfbfbf; --accent-fg: #111; --accent-soft: rgb(191 191 191 / 0.16);
-  --glass: rgb(24 24 26 / 0.62); --scrim: rgb(0 0 0 / 0.5);
-  --ok: #62c08f; --warn: #e0a948; --bad: #ec6a5e;
-  --r1: 6px; --r2: 10px; --r3: 16px;
+  --bg: #070709;
+  --surface: rgb(18 19 24 / 0.74);
+  --raised: rgb(28 30 38 / 0.84);
+  --sunken: rgb(11 12 16 / 0.88);
+  --paper-mat: #1b1916;
+  --fg: #f5f6fa;
+  --fg-2: #c5cad6;
+  --muted: #838a9c;
+  --line: rgb(255 255 255 / 0.085);
+  --line-2: rgb(255 255 255 / 0.16);
+  --accent: #6d9df6;
+  --accent-fg: #0b0d12;
+  --accent-soft: rgb(109 157 246 / 0.18);
+  --ambient-1: #3a5b88;
+  --ambient-2: #764a35;
+  --glass: rgb(18 19 25 / 0.66);
+  --scrim: rgb(3 4 7 / 0.64);
+  --glass-highlight: inset 0 1px 0 rgb(255 255 255 / 0.15), inset 0 -1px 0 rgb(255 255 255 / 0.04);
+  --shadow-card: 0 12px 32px -14px rgb(0 0 0 / 0.62);
+  --shadow-float: 0 24px 64px -18px rgb(0 0 0 / 0.82), 0 4px 16px -4px rgb(0 0 0 / 0.45);
+  --amb-opacity-1: 0.22;
+  --amb-opacity-2: 0.16;
+  --paper-grain-opacity: 0;
+  --ok: #5bc28c;
+  --warn: #e0aa4e;
+  --bad: #e8685c;
+  --r1: 8px;
+  --r2: 14px;
+  --r3: 22px;
   --row: 180px;
-  /* 抽屉弹出用的弹簧缓动：先冲过约 4% 再回落 */
+  --ease-editorial: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-cinema: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  /* 抽屉与弹层弹簧缓动 */
   --ease-spring: linear(0, 0.08 3%, 0.3 8%, 0.62 15%, 0.86 23%, 0.98 31%, 1.03 39%, 1.04 46%, 1.025 56%, 1.005 70%, 1);
-  color-scheme: dark;
-  transition: --accent 0.45s ease, --accent-soft 0.45s ease, --bg 0.45s ease, --surface 0.45s ease, --raised 0.45s ease;
+  color-scheme: dark light;
+  transition:
+    --accent 0.72s ease,
+    --accent-soft 0.72s ease,
+    --ambient-1 1.1s ease,
+    --ambient-2 1.1s ease,
+    --bg 0.45s ease,
+    --surface 0.45s ease,
+    --raised 0.45s ease;
 
-  /* shadcn 组件（components/kit）使用的语义名映射到同一套令牌 */
+  /* shadcn/Base UI 组件语义令牌映射 */
   --background: var(--bg);
   --foreground: var(--fg);
   --card: var(--surface);
@@ -45,6 +83,7 @@
   --ring: var(--accent);
   --radius: var(--r2);
 }
+
 :root[data-density="1"] { --row: 120px; }
 :root[data-density="2"] { --row: 150px; }
 :root[data-density="3"] { --row: 180px; }
@@ -60,12 +99,15 @@
 
 @theme inline {
   --font-sans: "Geist Variable", "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", "Microsoft YaHei", system-ui, sans-serif;
+  --font-serif: "Instrument Serif", "Songti SC", "STSong", "Noto Serif SC", "Source Han Serif SC", Georgia, serif;
+  --font-mono: "Geist Mono Variable", ui-monospace, SFMono-Regular, Menlo, monospace;
   --font-display: "Big Shoulders Display Variable", "Geist Variable", "PingFang SC", sans-serif;
 
   --color-bg: var(--bg);
   --color-surface: var(--surface);
   --color-raised: var(--raised);
   --color-sunken: var(--sunken);
+  --color-paper-mat: var(--paper-mat);
   --color-fg: var(--fg);
   --color-fg-2: var(--fg-2);
   --color-muted: var(--muted);
@@ -104,21 +146,22 @@
 
 @layer base {
   *, ::before, ::after { box-sizing: border-box; }
+  /* 滚动条：遵循现代标准，不对 scrollbar-color 施加过渡以避免 WebKit 闪烁 */
   * {
     scrollbar-width: thin;
-    scrollbar-color: var(--scrollbar-thumb, color-mix(in srgb, var(--fg) 30%, transparent)) transparent;
+    scrollbar-color: var(--scrollbar-thumb, color-mix(in srgb, var(--fg) 26%, transparent)) transparent;
   }
   @supports not (scrollbar-color: auto) {
     ::-webkit-scrollbar { width: 10px; height: 10px; }
     ::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
     ::-webkit-scrollbar-thumb {
-      background: var(--scrollbar-thumb, color-mix(in srgb, var(--fg) 30%, transparent));
+      background: var(--scrollbar-thumb, color-mix(in srgb, var(--fg) 26%, transparent));
       background-clip: padding-box;
       border: 3px solid transparent;
       border-radius: 999px;
     }
     ::-webkit-scrollbar-thumb:hover {
-      background-color: var(--scrollbar-thumb-hover, color-mix(in srgb, var(--fg) 48%, transparent));
+      background-color: var(--scrollbar-thumb-hover, color-mix(in srgb, var(--fg) 44%, transparent));
     }
   }
   html, body, #root { height: 100%; }
@@ -128,21 +171,37 @@
     color: var(--fg);
     font-family: var(--font-sans);
     font-size: 14px;
-    line-height: 1.5;
+    line-height: 1.55;
     -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
     font-variant-numeric: tabular-nums;
+    accent-color: var(--accent);
   }
   button { font: inherit; color: inherit; cursor: pointer; }
+  button:active:not(:disabled):not([data-no-press]) {
+    transform: scale(0.975);
+  }
   :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
-  ::selection { background: var(--accent-soft); }
+  ::selection { background: var(--accent-soft); color: var(--fg); }
 }
 
 @layer utilities {
   .glass {
     background: var(--glass);
-    -webkit-backdrop-filter: blur(28px) saturate(1.4);
-    backdrop-filter: blur(28px) saturate(1.4);
+    -webkit-backdrop-filter: blur(28px) saturate(1.6);
+    backdrop-filter: blur(28px) saturate(1.6);
     border: 1px solid var(--line-2);
+    box-shadow: var(--glass-highlight), var(--shadow-float);
+  }
+  .lv-panel {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--r3);
+    box-shadow: var(--glass-highlight), var(--shadow-card);
+  }
+  :root[data-style="cinema"] .lv-panel {
+    -webkit-backdrop-filter: blur(22px) saturate(1.5);
+    backdrop-filter: blur(22px) saturate(1.5);
   }
   .scrollbar-none { scrollbar-width: none; }
   .scrollbar-none::-webkit-scrollbar { display: none; }
@@ -151,23 +210,47 @@
   .luvia-range:disabled { opacity: .45; cursor: default; }
   @media (forced-colors: none) {
     .luvia-range { appearance: none; background: transparent; }
-    .luvia-range::-webkit-slider-runnable-track { height: 4px; border-radius: 999px; background: var(--range-track, var(--line-2)); }
-    .luvia-range::-moz-range-track { height: 4px; border-radius: 999px; background: var(--range-track, var(--line-2)); }
+    .luvia-range::-webkit-slider-runnable-track { height: 3.5px; border-radius: 999px; background: var(--range-track, var(--line-2)); }
+    .luvia-range::-moz-range-track { height: 3.5px; border-radius: 999px; background: var(--range-track, var(--line-2)); }
     .luvia-range::-webkit-slider-thumb {
-      appearance: none; width: 14px; height: 14px; margin-top: -5px;
-      border: 1px solid var(--range-thumb-border, var(--surface)); border-radius: 50%; background: var(--accent);
+      appearance: none; width: 14px; height: 14px; margin-top: -5.25px;
+      border: 2px solid var(--range-thumb-border, var(--surface)); border-radius: 50%; background: var(--accent);
+      box-shadow: 0 2px 6px rgb(0 0 0 / 0.35);
     }
     .luvia-range::-moz-range-thumb {
       box-sizing: border-box; width: 14px; height: 14px;
-      border: 1px solid var(--range-thumb-border, var(--surface)); border-radius: 50%; background: var(--accent);
+      border: 2px solid var(--range-thumb-border, var(--surface)); border-radius: 50%; background: var(--accent);
     }
   }
 }
 
-@keyframes luvia-page-enter { from { opacity: 0; } to { opacity: 1; } }
-.luvia-page > * { animation: luvia-page-enter .22s ease-out; }
+/* 渐进柔焦显影：从 ThumbHash 占位丝滑聚焦至清晰图 */
+.lv-photo-img {
+  opacity: 0;
+  filter: blur(6px);
+  transform: scale(1.02);
+  transition: opacity 0.36s ease-out, filter 0.48s var(--ease-editorial), transform 0.48s var(--ease-editorial);
+}
+.lv-photo-img.is-loaded {
+  opacity: 1;
+  filter: blur(0px);
+  transform: scale(1);
+}
 
-:root[data-reduce-motion="on"] *, :root[data-reduce-motion="on"] *::before, :root[data-reduce-motion="on"] *::after {
+@keyframes luvia-page-enter {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.luvia-page > * { animation: luvia-page-enter 0.28s var(--ease-editorial); }
+
+/* 精准响应减少动态偏好：关闭位移、模糊与自动动画，保留颜色反馈 */
+@media (prefers-reduced-motion: reduce) {
+  .lv-photo-img { filter: none; transform: none; transition: opacity 0.16s ease; }
+  .luvia-page > * { animation: none; }
+}
+:root[data-reduce-motion="on"] *,
+:root[data-reduce-motion="on"] *::before,
+:root[data-reduce-motion="on"] *::after {
   animation-duration: 0.01ms !important;
   transition-duration: 0.01ms !important;
 }
